@@ -17,6 +17,8 @@ use eframe::egui;
 
 fn main() -> Result<()> {
     let mut native_options = eframe::NativeOptions::default();
+    native_options.renderer = eframe::Renderer::Wgpu;
+    native_options.wgpu_options.power_preference = wgpu::PowerPreference::HighPerformance;
 
     // Size the window to 80% of the primary monitor and center it (cross-platform + HiDPI aware).
     let mut win_w = 1280.0 * 0.85;
@@ -54,7 +56,7 @@ fn main() -> Result<()> {
     let _ = eframe::run_native(
         "Motioner UI",
         native_options,
-        Box::new(|_cc| Box::new(ui::create_app())),
+        Box::new(|cc| Box::new(ui::create_app(cc))),
     );
     Ok(())
 }

@@ -1,4 +1,5 @@
 use crate::app_state::{AppState, PanelTab};
+use crate::scene::{get_shape_mut, Shape};
 use crate::{canvas, code_panel, dsl, scene_graph, timeline};
 use eframe::egui;
 
@@ -6,9 +7,23 @@ pub struct MyApp {
     state: AppState,
 }
 
-pub fn create_app() -> MyApp {
+pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
+    let state = AppState::default();
+    
+    // Check if we have wgpu access
+    #[cfg(feature = "wgpu")]
+    if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {
+        let device = &wgpu_render_state.device;
+        let target_format = wgpu_render_state.target_format;
+        
+        // We'll insert our custom resources into the callback_resources map
+        use crate::canvas::GpuResources;
+        let mut renderer = wgpu_render_state.renderer.write();
+        renderer.callback_resources.insert(GpuResources::new(device, target_format));
+    }
+
     MyApp {
-        state: AppState::default(),
+        state,
     }
 }
 
@@ -228,26 +243,21 @@ impl eframe::App for MyApp {
 
             let mut panel = egui::SidePanel::left("multifunction_panel")
                 .resizable(true)
-                .default_width(250.0);
+                .width_range(150.0..=600.0)
+                .default_width(state.sidebar_width);
 
             // If animating (opening or closing), force the width with elastic effect
-            if t < 1.0 {
-                // ...existing code...
+            if t > 0.0 && t < 1.0 {
                 // Elastic / BackOut Easing
-                // This creates the "Overshoot" when opening and "Anticipation" when closing
-                let c1 = 1.7;
+                let c1 = 1.2; // Slightly less overshoot than before
                 let c3 = c1 + 1.0;
                 let ease_t = 1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2);
 
-                // Allow width to go slightly larger than 250.0 (overshoot)
-                let width = 250.0 * ease_t;
-                // Ensure it doesn't go negative
-                let width = width.max(0.0);
-
-                panel = panel.exact_width(width).resizable(false);
+                let width = state.sidebar_width * ease_t;
+                panel = panel.exact_width(width.max(0.0)).resizable(false);
             }
 
-            panel.show(ctx, |ui| {
+            let panel_res = panel.show(ctx, |ui| {
                 ui.set_enabled(main_ui_enabled);
 
                 // While animating, we might want to clip content so it doesn't overflow/squish weirdly
@@ -274,22 +284,13 @@ impl eframe::App for MyApp {
                         ui.ctx().request_repaint();
 
                         // Allocate the entire space so the panel doesn't shrink
-                        let panel_rect = ui.available_rect_before_wrap();
-                        ui.allocate_rect(panel_rect, egui::Sense::hover());
+                        let rect = ui.available_rect_before_wrap();
+                        ui.allocate_rect(rect, egui::Sense::hover());
 
                         // Easing for slide
                         let ease_switch = 1.0 - (1.0 - switch_t).powi(2);
 
-                        // Old Tab (Source) - Slide Out to Left
-                        // New Tab (Target) - Slide In from Right
-                        // Or if we want a "Push" effect:
-                        // Old moves 0 -> -Width
-                        // New moves +Width -> 0
-
-                        let width = panel_rect.width();
-                        let _height = panel_rect.height();
-                        // Use panel_rect for child UIs to match exact allocated space
-                        let rect = panel_rect;
+                        let width = rect.width();
 
                         // Render Old Tab
                         if let Some(source) = state.transition_source_tab {
@@ -297,8 +298,6 @@ impl eframe::App for MyApp {
                             let old_rect = rect.translate(egui::vec2(old_offset, 0.0));
 
                             let mut child_ui = ui.child_ui(old_rect, *ui.layout());
-                            // child_ui.multiply_opacity(1.0 - ease_switch); // Available in newer egui, but maybe not 0.26 or exposed differently
-                            // Just use visual transparency
                             child_ui.visuals_mut().widgets.noninteractive.weak_bg_fill =
                                 egui::Color32::from_black_alpha(
                                     ((1.0 - ease_switch) * 255.0) as u8,
@@ -307,41 +306,28 @@ impl eframe::App for MyApp {
                             render_tab_content(&mut child_ui, source, state);
                         }
 
-                        // Render New Tab
-                        // Note: Because we use child_ui with translate, they don't block each other's layout space if we are careful,
-                        // but normally in egui immediate mode, drawing widgets advances the cursor.
-                        // Ideally we render them in overlapping layers.
-
                         let new_offset = width * (1.0 - ease_switch);
                         let new_rect = rect.translate(egui::vec2(new_offset, 0.0));
 
-                        // We need to create a UI that thinks it is at new_rect but doesn't interact with the previous one layout-wise.
-                        // Using allocate_ui_at_rect usually pushes the parent cursor.
-                        // Since we are inside a SidePanel, we can just overlay.
-
-                        // Force a new layer/clip for the second one?
-                        // Simplest hack: Just draw them. 'child_ui' creates a nested UI region.
-
                         let mut child_ui = ui.child_ui(new_rect, *ui.layout());
-                        child_ui.set_enabled(main_ui_enabled); // Inherit enabled state explicitly
-                                                               // child_ui.set_clip_rect(rect); // Clip to parent so it slides in
-                                                               // child_ui.set_opacity(ease_switch); // Fade in - use multiply_opacity or color tint
-                                                               // This is 0.26, set_opacity doesn't exist.
-                                                               // We rely on the movement mainly.
+                        child_ui.set_enabled(main_ui_enabled);
 
                         render_tab_content(&mut child_ui, tab_to_show, state);
                     } else {
                         // Standard Static Render
-                        // If fully minimized, render normally. If animating, render normally (will be overlaid)
                         if fs_t <= 0.0 {
                             render_tab_content(ui, tab_to_show, state);
                         } else {
-                            // Placeholder to keep layout size
                             ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
                         }
                     }
                 }
             });
+
+            // Update stored width only when not animating and fully open
+            if t >= 1.0 && !is_fullscreen {
+                state.sidebar_width = panel_res.response.rect.width();
+            }
 
             // 4. Handle Fullscreen Animation / Overlay
             if fs_t > 0.0 {
@@ -466,6 +452,10 @@ impl eframe::App for MyApp {
             crate::project_settings::show(ctx, state);
         }
 
+        if state.modifier_active_path.is_some() {
+            show_modifier_modal(ctx, state);
+        }
+
         // Welcome/Startup Modal
         crate::welcome_modal::show(ctx, state);
 
@@ -508,18 +498,188 @@ impl eframe::App for MyApp {
 fn render_tab_content(ui: &mut egui::Ui, tab: PanelTab, state: &mut AppState) {
     match tab {
         PanelTab::SceneGraph => {
-            ui.heading("Scene Graph");
-            ui.separator();
             scene_graph::show(ui, state);
         }
         PanelTab::Code => {
-            // ui.heading("Generated Code"); // Header inside the panel now?
-            // User requested "En la ventana generated code debemos poder editar el codigo..."
-            // The header "Generated Code" is outside the code_panel::show.
-            // code_panel::show draws the save button row.
-            ui.heading("Generated Code");
-            ui.separator();
             code_panel::show(ui, state);
         }
+    }
+}
+
+fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
+    let mut open = true;
+    let path = match &state.modifier_active_path {
+        Some(p) => p.clone(),
+        None => return,
+    };
+
+    egui::Window::new("🔧 Element Modifiers")
+        .open(&mut open)
+        .resizable(true)
+        .collapsible(true)
+        .default_width(280.0)
+        .show(ctx, |ui| {
+            if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
+                ui.add_space(4.0);
+                
+                let earliest_spawn = shape.spawn_time();
+
+                match shape {
+                    Shape::Circle { name, x, y, radius, color, spawn_time, visible } => {
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("⭕").size(18.0));
+                                    ui.label(egui::RichText::new("Circle Parameters").strong().size(14.0));
+                                });
+                                ui.separator();
+                                
+                                egui::Grid::new("circle_grid")
+                                    .num_columns(2)
+                                    .spacing([12.0, 8.0])
+                                    .show(ui, |ui| {
+                                        ui.label("Name:");
+                                        ui.text_edit_singleline(name);
+                                        ui.end_row();
+
+                                        ui.label("Visible:");
+                                        ui.checkbox(visible, "");
+                                        ui.end_row();
+
+                                        ui.label("Spawn Time:");
+                                        ui.add(egui::Slider::new(spawn_time, 0.0..=state.duration_secs).suffix("s"));
+                                        ui.end_row();
+
+                                        ui.label("Position X:");
+                                        let mut val_x = *x * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_x, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *x = val_x / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Position Y:");
+                                        let mut val_y = *y * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_y, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *y = val_y / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Radius:");
+                                        let mut val_r = *radius * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_r, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *radius = val_r / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Color:");
+                                        ui.color_edit_button_srgba_unmultiplied(color);
+                                        ui.end_row();
+                                    });
+                                
+                                ui.add_space(4.0);
+                            });
+                        });
+                    }
+                    Shape::Rect { name, x, y, w, h, color, spawn_time, visible } => {
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("⬜").size(18.0));
+                                    ui.label(egui::RichText::new("Rectangle Parameters").strong().size(14.0));
+                                });
+                                ui.separator();
+
+                                egui::Grid::new("rect_grid")
+                                    .num_columns(2)
+                                    .spacing([12.0, 8.0])
+                                    .show(ui, |ui| {
+                                        ui.label("Name:");
+                                        ui.text_edit_singleline(name);
+                                        ui.end_row();
+
+                                        ui.label("Visible:");
+                                        ui.checkbox(visible, "");
+                                        ui.end_row();
+
+                                        ui.label("Spawn Time:");
+                                        ui.add(egui::Slider::new(spawn_time, 0.0..=state.duration_secs).suffix("s"));
+                                        ui.end_row();
+
+                                        ui.label("Position X:");
+                                        let mut val_x = *x * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_x, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *x = val_x / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Position Y:");
+                                        let mut val_y = *y * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_y, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *y = val_y / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Width:");
+                                        let mut val_w = *w * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_w, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *w = val_w / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Height:");
+                                        let mut val_h = *h * 100.0;
+                                        if ui.add(egui::Slider::new(&mut val_h, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                            *h = val_h / 100.0;
+                                        }
+                                        ui.end_row();
+
+                                        ui.label("Color:");
+                                        ui.color_edit_button_srgba_unmultiplied(color);
+                                        ui.end_row();
+                                    });
+                                
+                                ui.add_space(4.0);
+                            });
+                        });
+                    }
+                    Shape::Group { name, children: _, visible } => {
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("📦").size(18.0));
+                                    ui.label(egui::RichText::new("Group Parameters").strong().size(14.0));
+                                });
+                                ui.separator();
+
+                                egui::Grid::new("group_grid")
+                                    .num_columns(2)
+                                    .spacing([12.0, 8.0])
+                                    .show(ui, |ui| {
+                                        ui.label("Visible:");
+                                        ui.checkbox(visible, "");
+                                        ui.end_row();
+
+                                        ui.label("Name:");
+                                        ui.text_edit_singleline(name);
+                                        ui.end_row();
+
+                                        ui.label("Earliest Spawn:");
+                                        ui.label(egui::RichText::new(format!("{:.2}s", earliest_spawn)).weak());
+                                        ui.end_row();
+                                    });
+                                
+                                ui.add_space(4.0);
+                            });
+                        });
+                    }
+                }
+            } else {
+                ui.label("No element found at this path.");
+                state.modifier_active_path = None;
+            }
+        });
+
+    if !open {
+        state.modifier_active_path = None;
     }
 }

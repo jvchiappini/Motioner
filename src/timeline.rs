@@ -136,6 +136,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             let label = match shape {
                 Shape::Circle { .. } => format!("Circle #{}", i),
                 Shape::Rect { .. } => format!("Rect #{}", i),
+                Shape::Group { .. } => format!("Group #{}", i),
             };
             track_painter.text(
                 egui::pos2(track_area_rect.left() + 4.0, y + 4.0),

@@ -58,8 +58,11 @@ Razonamiento: mantener el renderer independiente permite reuse, testing y despli
 - **Scene graph** ligero: capas, transforms, shapes, text, materiales y keyframes.
 - **API** pública: `render_frame(project, time, size) -> FrameBuffer`.
 - **Backends**:
-  - CPU raster (portable, pruebas)
-  - GPU (`wgpu`) para efectos y rendimiento
+  - CPU raster (portable, fallback)
+  - GPU (`wgpu`) — Backend principal. Utiliza un pipeline de fragment shaders (WGSL) con Signed Distance Fields (SDF) para renderizado de alta fidelidad, permitiendo:
+    - **Infinite Canvas**: Rejilla infinita estilo CAD con paneo y zoom.
+    - **Low-res Preview**: Rasterización controlada con Anti-Aliasing (AA) basado en la resolución física de salida.
+    - **Magnifier/Color Picker**: Herramienta de inspección por GPU (Lupa 8x) con rejilla de píxeles y muestreo de color exacto (paridad CPU/GPU).
 - **Determinismo**: outputs reproducibles (hashable) para tests y caching.
 
 ---
