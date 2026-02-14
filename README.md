@@ -1,244 +1,282 @@
-<!-- Badges (replace/enable as you add CI, crates, license, etc.) -->
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
+<div align="center">
 
-# Motioner — editor / prototipo de animaciones
+# 🎬 Motioner
 
-Motioner es un prototipo ligero escrito en **Rust** para diseñar, previsualizar y exportar animaciones. Está pensado como punto de partida para experimentar con timelines, render por capas y export frame‑by‑frame para generar vídeos mediante `ffmpeg`.
+### **Modern Animation Editor & Prototyping Tool**
 
-> Presentación breve: interfaz rápida con `egui`, exportación por frames y un flujo de trabajo pensado para extensiones (GPU rendering, plugins, export avanzados).
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/jvchiappini/Motioner/pulls)
 
----
+**Create. Animate. Export.**
 
-🎯 **Qué hace Motioner**
+*A lightweight, high-performance animation editor built in Rust*
 
-- Interfaz de usuario ligera con `egui` (eframe)
-- Previsualización interactiva (timeline + escenas)
-- Exportación frame‑by‑frame → `ffmpeg` (genera MP4 desde PNG)
-- Código modular y fácil de extender para integrar `wgpu`/GPU rendering
-
-
-✨ **Para quién**
-
-- Desarrolladores y creadores que necesitan un prototipo rápido para generar animaciones programáticas
-- Proyectos que requieren exportar renders como secuencia de imágenes para post‑procesado o encoding
-
+[Features](#-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap)
 
 ---
 
+</div>
 
-Características principales
+## 📸 Preview
 
-- Timeline y edición básica de escenas
-- Export por frames (PNG) con encuadre a vídeo vía `ffmpeg`
-- Código en Rust pensado para experimentar (facilidad para añadir render por GPU)
-- Herramientas de desarrollo y scripts auxiliares en `scripts/`
+> **Coming Soon**: Screenshots, demos, and GIF previews will be added here
 
-
----
-
-
-Requisitos
-
-- Rust (stable) — instalado con `rustup`
-- `ffmpeg` disponible en `PATH` (se invoca desde la app para generar MP4)
-- (Opcional) Drivers/SDK para GPU si integras `wgpu` en el futuro
-
----
-
-## Quickstart
-
-Windows / PowerShell:
-
-```powershell
-# Ejecutar en modo desarrollo
-cargo run
-
-# Modo release (optimizado)
-cargo run --release
 ```
-
-Uso: abre la ventana, ajusta FPS/duración/escena y pulsa `Exportar video` para crear la secuencia y encodificarla con `ffmpeg`.
-
----
-
-## Ejemplo de export manual (si prefieres reproducir el flujo)
-
-1. Ejecuta la app y usa la opción Exportar → genera una carpeta `out/frames` con PNGs.
-2. En terminal, encadena con ffmpeg:
-
-```powershell
-ffmpeg -framerate 30 -i out/frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p out/movie.mp4
+┌─────────────────────────────────────────┐
+│  🎥  Motioner - Animation Editor        │
+├─────────────────────────────────────────┤
+│                                         │
+│   [Preview demos and screenshots]       │
+│   [Interactive timeline showcase]       │
+│   [Export workflow visualization]       │
+│                                         │
+└─────────────────────────────────────────┘
 ```
 
 ---
 
-## Desarrollo
+## ✨ Features
 
-- Formatea: `cargo fmt`
-- Linter: `cargo clippy`
-- Compilar release: `cargo build --release`
+### 🚀 **Core Capabilities**
+- **🎨 Intuitive UI** — Fast, responsive interface built with `egui` and `eframe`
+- **⏱️ Timeline Editor** — Interactive timeline for precise animation control
+- **👁️ Live Preview** — Real-time visualization of your animations
+- **💾 Frame Export** — Export animations as PNG sequences
+- **🎞️ Video Encoding** — Automatic MP4 generation via `ffmpeg` integration
 
-Estructura relevante:
+### 🛠️ **Developer-Friendly**
+- **🦀 Pure Rust** — Modern, safe, and performant codebase
+- **🔌 Modular Architecture** — Easy to extend and customize
+- **⚡ GPU-Ready** — Prepared for `wgpu` GPU rendering integration
+- **📦 Zero-Config Build** — Just `cargo run` and you're ready
 
-- `src/` — código fuente principal
-- `scripts/` — utilidades (p. ej. `rewrite_git_author.py`)
-- `target/` — artefactos de compilación
-
----
-
-## Contribuir
-
-- Abre un issue si encuentras bugs o propones features.
-- Crea una rama descriptiva `feat/xxx` o `fix/xxx` y envía un PR.
-- Sigue mensajes de commit claros (pref. Conventional Commits).
-
-¿Quieres que añada un `CONTRIBUTING.md` y plantillas de PR? Puedo generarlas.
-
----
-
-## Roadmap (ideas)
-
-- Integración `wgpu` para render por GPU
-- Timeline avanzado (clips, keyframes, easing)
-- Export por capas y soporte de audio
-- Formato de proyecto + import/export de escenas
+### 🎯 **Perfect For**
+- Creating programmatic animations
+- Rapid prototyping of motion graphics
+- Frame-by-frame animation workflows
+- Post-production pipelines requiring image sequences
 
 ---
 
-## Licencia
+## 🚀 Quick Start
 
-Actualmente no hay un `LICENSE` en el repo; ¿prefieres **MIT** o **Apache-2.0**? Dime cuál y lo agrego.
+### Prerequisites
 
----
+| Tool | Purpose | Installation |
+|------|---------|--------------|
+| **Rust** (stable) | Build and run | [Install rustup](https://rustup.rs/) |
+| **ffmpeg** | Video encoding | [Download ffmpeg](https://ffmpeg.org/download.html) |
 
-## Contacto
-
-- Mantenedor: `@jvchiappini` — abre issues o PRs en GitHub.
-
----
-
-_Nota_: la carpeta `docs/` fue eliminada; si quieres que publique documentación pública (GitHub Pages) puedo recrearla y configurar el workflow.
-
-
-
-Quickstart (Windows — PowerShell)
-
-1) Compilar y ejecutar (modo desarrollo):
+### Installation
 
 ```powershell
-cargo run
-```
-
-2) Ejecutar release (optimizado):
-
-```powershell
-cargo run --release
-```
-
-3) Exportar video desde la UI: ajustar FPS/duración → botón `Exportar video`.
-
-Servir la documentación local
-
-Para abrir `docs/index.html` correctamente (evitar problemas CORS) puedes servir la carpeta `docs` localmente:
-
-```powershell
-# script incluido (Windows)
-serve-docs.cmd
-
-# alternativa con Python
-python -m http.server 8000 --directory docs
-```
-
-Abrir en el navegador: `http://localhost:8000/docs/`
-
----
-
-Desarrollo y contribución
-
-- Clona el repo, crea una rama por feature y abre un PR.
-- Sigue mensajes de commit descriptivos (conventional style recomendado).
-
-![Rust](https://img.shields.io/badge/rust-stable-orange.svg)
-
-# Motioner
-
-Editor prototipo de animaciones construido en Rust. Motioner permite crear, previsualizar y exportar animaciones mediante un flujo de trabajo frame‑by‑frame pensado para integración con herramientas de post‑producción.
-
-## Características
-
-- Interfaz rápida basada en `egui` (eframe)
-- Timeline y edición básica de escenas
-- Previsualización en tiempo real
-- Exportación por frames (PNG) y encodificación con `ffmpeg` (MP4)
-- Estructura modular preparada para añadir render por GPU (`wgpu`)
-
-## Requisitos
-
-- Rust (stable) — instalado con `rustup`
-- `ffmpeg` disponible en `PATH`
-
-## Quickstart
-
-1. Clona el repositorio:
-
-```bash
+# Clone the repository
 git clone https://github.com/jvchiappini/Motioner.git
 cd Motioner
-```
 
-2. Ejecuta en modo desarrollo:
-
-```powershell
+# Run in development mode
 cargo run
-```
 
-3. Ejecuta en modo release (optimizado):
-
-```powershell
+# Or build optimized release version
 cargo run --release
 ```
 
-4. En la UI: ajustar FPS/duración/escena → `Exportar video`.
+### 🎬 Basic Workflow
 
-## Export manual (ejemplo)
-
-Si la app genera frames en `out/frames`:
+1. **Launch** the application
+2. **Configure** your animation (FPS, duration, scene settings)
+3. **Preview** in real-time
+4. **Export** to video or image sequence
 
 ```powershell
-ffmpeg -framerate 30 -i out/frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p out/movie.mp4
+# The app handles everything, or manually encode with:
+ffmpeg -framerate 30 -i out/frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p output.mp4
 ```
 
-## Desarrollo
+---
 
-- Formatear: `cargo fmt`
-- Linter: `cargo clippy`
-- Compilar (release): `cargo build --release`
+## 📁 Project Structure
 
-### Estructura relevante
+```
+Motioner/
+├── 📄 Cargo.toml              # Project dependencies and metadata
+├── 📄 LICENSE                 # MIT License
+├── 📄 README.md              # You are here!
+├── 📄 rust-toolchain.toml    # Rust version specification
+├── 📂 assets/                # Application assets and resources
+├── 📂 src/                   # Source code
+│   ├── 🦀 main.rs           # Application entry point
+│   ├── 🦀 app_state.rs      # Application state management
+│   ├── 🦀 canvas.rs         # Drawing canvas implementation
+│   ├── 🦀 timeline.rs       # Timeline editor logic
+│   ├── 🦀 scene.rs          # Scene management
+│   ├── 🦀 renderer.rs       # Rendering engine
+│   ├── 🦀 ui.rs             # UI components
+│   └── 📂 animations/       # Animation presets and templates
+└── 📂 target/               # Build artifacts (auto-generated)
+```
 
-- `src/` — código fuente
-- `scripts/` — utilidades y herramientas de mantenimiento
-- `target/` — artefactos de compilación
+---
 
-## Contribuir
+## 🛠️ Development
 
-- Abrir issues para bugs o propuestas
-- Crear ramas `feat/xxx` o `fix/xxx` y enviar PRs
-- Mantener commits claros y agregar pruebas cuando aplique
+### Essential Commands
 
-## Roadmap (prioritario)
+```powershell
+# Format code
+cargo fmt
 
-- Integración `wgpu` para render por GPU
-- Timeline avanzado con keyframes y easing
-- Export por capas y soporte de audio
+# Run linter
+cargo clippy
 
-## Licencia
+# Build release version
+cargo build --release
 
-License: Not specified
+# Run tests (when available)
+cargo test
+```
 
-## Contacto
+### Code Quality
 
-- Mantenedor: `@jvchiappini`
+This project follows Rust best practices:
+- ✅ Format code with `rustfmt`
+- ✅ Lint with `clippy`
+- ✅ Use semantic commit messages
+- ✅ Write tests for new features
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how you can help:
+
+### 🐛 Report Bugs
+Open an [issue](https://github.com/jvchiappini/Motioner/issues) with:
+- Clear description
+- Steps to reproduce
+- Expected vs actual behavior
+
+### 💡 Suggest Features
+Share your ideas via [issues](https://github.com/jvchiappini/Motioner/issues) or [discussions](https://github.com/jvchiappini/Motioner/discussions)
+
+### 🔧 Submit Pull Requests
+
+```powershell
+# 1. Fork and clone
+git clone https://github.com/YOUR_USERNAME/Motioner.git
+
+# 2. Create a feature branch
+git checkout -b feat/amazing-feature
+
+# 3. Make your changes and commit
+git commit -m "feat: add amazing feature"
+
+# 4. Push and open a PR
+git push origin feat/amazing-feature
+```
+
+**Branch naming conventions:**
+- `feat/` — New features
+- `fix/` — Bug fixes
+- `docs/` — Documentation updates
+- `refactor/` — Code refactoring
+
+---
+
+## 🗺️ Roadmap
+
+### 🎯 **Phase 1: Core Features** (Current)
+- [x] Basic timeline editor
+- [x] Frame-by-frame export
+- [x] FFmpeg integration
+- [x] Live preview
+
+### 🚀 **Phase 2: Enhanced Editing**
+- [ ] GPU-accelerated rendering with `wgpu`
+- [ ] Advanced keyframe editor
+- [ ] Easing functions and curves
+- [ ] Layer system
+
+### 🎨 **Phase 3: Professional Tools**
+- [ ] Audio track support
+- [ ] Effects and filters
+- [ ] Export presets
+- [ ] Project file format (.motioner)
+
+### 🌟 **Phase 4: Advanced Features**
+- [ ] Plugin system
+- [ ] Scripting API
+- [ ] Real-time collaboration
+- [ ] Cloud export options
+
+---
+
+## 📚 Documentation
+
+Comprehensive documentation is now available using mdBook!
+
+### 📖 Read Online
+Documentation will be automatically published to GitHub Pages (coming soon).
+
+### 🏗️ Build Locally
+
+```powershell
+# Install mdBook
+cargo install mdbook
+
+# Build and serve documentation
+cd docs
+mdbook serve --open
+```
+
+Documentation includes:
+- 📘 **User Guide** — Getting started, interface, animations, and export
+- 🛠️ **Developer Guide** — Architecture, building, API reference, and contributing
+- 🚀 **Advanced Topics** — GPU rendering, custom animations, performance
+- 💡 **Examples** — Practical code examples and tutorials
+- 📋 **Reference** — Shortcuts, configuration, troubleshooting, and FAQ
+
+### Quick Links
+- 📖 [Documentation Source](./docs/) — Browse documentation files
+- 💻 [Code Documentation](https://github.com/jvchiappini/Motioner/tree/main/src) — Well-commented source code
+- 💬 [Discussions](https://github.com/jvchiappini/Motioner/discussions) — Community Q&A
+- 🐛 [Issues](https://github.com/jvchiappini/Motioner/issues) — Report bugs and request features
+
+---
+
+## 📄 License
+
+This project is licensed under the **Apache License 2.0** - see the [LICENSE](./LICENSE) file for details.
+
+---
+
+## 👨‍💻 Author & Maintainer
+
+**José Valentino Chiappini**
+- GitHub: [@jvchiappini](https://github.com/jvchiappini)
+- Project: [Motioner](https://github.com/jvchiappini/Motioner)
+
+---
+
+## 🙏 Acknowledgments
+
+Built with amazing open-source technologies:
+- [Rust](https://www.rust-lang.org/) — Systems programming language
+- [egui](https://github.com/emilk/egui) — Immediate mode GUI framework
+- [wgpu](https://wgpu.rs/) — GPU graphics API
+- [FFmpeg](https://ffmpeg.org/) — Multimedia framework
+
+---
+
+<div align="center">
+
+**⭐ Star this repo if you find it useful!**
+
+Made with ❤️ and Rust 🦀
+
+[Report Bug](https://github.com/jvchiappini/Motioner/issues) • [Request Feature](https://github.com/jvchiappini/Motioner/issues) • [View Roadmap](#-roadmap)
+
+</div>
 
 

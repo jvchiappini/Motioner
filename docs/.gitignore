@@ -1,0 +1,10 @@
+# mdBook build output
+book/
+
+# Backup files
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
