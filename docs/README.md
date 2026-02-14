@@ -143,7 +143,7 @@ cargo install mdbook-toc          # Generate TOCs
 - Use tables for structured data
 
 ### Code Blocks
-```markdown
+
 ```rust
 // Good: Clear, commented code
 fn create_scene() -> Scene {
@@ -152,7 +152,7 @@ fn create_scene() -> Scene {
     scene
 }
 ```
-```
+
 
 ## 🔗 Useful Links
 
