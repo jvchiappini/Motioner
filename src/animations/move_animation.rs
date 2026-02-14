@@ -64,12 +64,7 @@ impl MoveAnimation {
     ///
     /// - `base_x`, `base_y` are the element's base position (used as the animation origin).
     /// - Returned times are clamped to [start, end] and spaced by 1/fps seconds.
-    pub fn positions_by_frame(
-        &self,
-        base_x: f32,
-        base_y: f32,
-        fps: u32,
-    ) -> Vec<(f32, f32, f32)> {
+    pub fn positions_by_frame(&self, base_x: f32, base_y: f32, fps: u32) -> Vec<(f32, f32, f32)> {
         if fps == 0 {
             return Vec::new();
         }
