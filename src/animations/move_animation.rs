@@ -60,6 +60,47 @@ impl MoveAnimation {
         }
     }
 
+    /// Return a list of (time, x, y) sampled at `fps` between `start` and `end` (inclusive).
+    ///
+    /// - `base_x`, `base_y` are the element's base position (used as the animation origin).
+    /// - Returned times are clamped to [start, end] and spaced by 1/fps seconds.
+    pub fn positions_by_frame(
+        &self,
+        base_x: f32,
+        base_y: f32,
+        fps: u32,
+    ) -> Vec<(f32, f32, f32)> {
+        if fps == 0 {
+            return Vec::new();
+        }
+
+        let step = 1.0f32 / (fps as f32);
+        // protect against degenerate ranges
+        if (self.end - self.start).abs() < std::f32::EPSILON {
+            let (x, y) = self.sample_position(base_x, base_y, self.end);
+            return vec![(self.end, x, y)];
+        }
+
+        let mut out = Vec::new();
+        // start from the first frame time >= start, include final frame at `end`
+        let mut t = self.start;
+        while t <= self.end + 1e-6 {
+            let (x, y) = self.sample_position(base_x, base_y, t);
+            out.push((t, x, y));
+            t += step;
+        }
+
+        // ensure exact `end` is present
+        if let Some((last_t, _, _)) = out.last() {
+            if (*last_t - self.end).abs() > 1e-6 {
+                let (x, y) = self.sample_position(base_x, base_y, self.end);
+                out.push((self.end, x, y));
+            }
+        }
+
+        out
+    }
+
     /// Produce the DSL snippet for this animation (indent must include trailing spaces if needed).
     pub fn to_dsl_snippet(&self, element_name: &str, indent: &str) -> String {
         // match previous formatting used by `scene::to_dsl_impl`
@@ -75,6 +116,47 @@ impl MoveAnimation {
         out.push_str(&format!("{}    }}\n", indent));
         out.push_str(&format!("{}}}", indent));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_at_end_returns_target() {
+        let ma = MoveAnimation {
+            to_x: 0.7,
+            to_y: 0.5,
+            start: 0.0,
+            end: 5.0,
+            easing: Easing::Linear,
+        };
+
+        let (x, y) = ma.sample_position(0.5, 0.5, 5.0);
+        assert!((x - 0.7).abs() < 1e-6);
+        assert!((y - 0.5).abs() < 1e-6);
+
+        // times after end stay at target
+        let (x2, y2) = ma.sample_position(0.5, 0.5, 6.0);
+        assert!((x2 - 0.7).abs() < 1e-6);
+        assert!((y2 - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn positions_by_frame_samples_edges() {
+        let ma = MoveAnimation {
+            to_x: 1.0,
+            to_y: 0.0,
+            start: 0.0,
+            end: 1.0,
+            easing: Easing::Linear,
+        };
+
+        let frames = ma.positions_by_frame(0.0, 1.0, 2);
+        // fps=2 -> step=0.5 -> expect times [0.0, 0.5, 1.0]
+        let times: Vec<f32> = frames.iter().map(|(t, _, _)| *t).collect();
+        assert_eq!(times, vec![0.0, 0.5, 1.0]);
     }
 }
 

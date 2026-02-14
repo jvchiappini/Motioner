@@ -210,86 +210,24 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                         }
                     }
                 } else if next.starts_with("move") {
-                    // consume 'move {' line
+                    // consume 'move {', collect inner lines and delegate parsing to shared helper
                     lines.next();
-                    let mut easing_kind = crate::scene::Easing::Linear;
-                    let mut start_at: Option<f32> = None;
-                    let mut end_time: Option<f32> = None;
-                    let mut end_x: Option<f32> = None;
-                    let mut end_y: Option<f32> = None;
-
+                    let mut inner: Vec<&str> = Vec::new();
                     while let Some(bline) = lines.next() {
                         let b = bline.trim();
                         if b == "}" { break; }
-                        if b.starts_with("type") && b.contains('=') {
-                            if let Some(eq) = b.find('=') {
-                                let val = b[eq+1..].trim().trim_matches(',').to_lowercase();
-                                if val.contains("linear") { easing_kind = crate::scene::Easing::Linear; }
-                            }
-                        } else if b.starts_with("startAt") && b.contains('=') {
-                            if let Some(eq) = b.find('=') {
-                                if let Ok(v) = b[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                    start_at = Some(v);
-                                }
-                            }
-                        } else if b.starts_with("end") && b.contains('{') {
-                            while let Some(eline) = lines.next() {
-                                let e = eline.trim();
-                                if e == "}" { break; }
-                                if e.starts_with("time") && e.contains('=') {
-                                    if let Some(eq) = e.find('=') {
-                                        if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                            end_time = Some(v);
-                                        }
-                                    }
-                                }
-                                if e.starts_with("x") && e.contains('=') {
-                                    if let Some(eq) = e.find('=') {
-                                        if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                            end_x = Some(v);
-                                        }
-                                    }
-                                }
-                                if e.starts_with("y") && e.contains('=') {
-                                    if let Some(eq) = e.find('=') {
-                                        if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                            end_y = Some(v);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        inner.push(b);
                     }
-
-                    if let Some(last) = shapes.last_mut() {
-                        if let (Some(sa), Some(et), Some(ex), Some(ey)) = (start_at, end_time, end_x, end_y) {
+                    if let Some(parsed) = crate::animations::move_animation::parse_move_block(&inner) {
+                        if let Some(last) = shapes.last_mut() {
                             match last {
                                 Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-                                    animations.push(crate::scene::Animation::Move { to_x: ex, to_y: ey, start: sa, end: et, easing: easing_kind });
+                                    animations.push(crate::scene::Animation::Move { to_x: parsed.to_x, to_y: parsed.to_y, start: parsed.start, end: parsed.end, easing: parsed.easing });
                                 }
                                 _ => {}
                             }
                         }
                     }
-                } else if next.starts_with("move") {
-                            // consume 'move {', collect inner lines and delegate parsing
-                            lines.next();
-                            let mut inner: Vec<&str> = Vec::new();
-                            while let Some(bline) = lines.next() {
-                                let b = bline.trim();
-                                if b == "}" { break; }
-                                inner.push(b);
-                            }
-                            if let Some(parsed) = crate::animations::move_animation::parse_move_block(&inner) {
-                                if let Some(last) = shapes.last_mut() {
-                                    match last {
-                                        Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-                                            animations.push(crate::scene::Animation::Move { to_x: parsed.to_x, to_y: parsed.to_y, start: parsed.start, end: parsed.end, easing: parsed.easing });
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
                 }
             }
         } else if line.starts_with("rect(") && line.ends_with(")") {
@@ -399,4 +337,72 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
     }
 
     shapes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_top_level_move_and_attach() {
+        let src = r##"size(1280, 720)
+timeline { fps = 60; duration = 5 }
+
+circle(name = "Circle", x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00)
+move {
+    element = "Circle"
+    type = linear
+    startAt = 0.000
+    end {
+        time = 5.000
+        x = 0.700
+        y = 0.500
+    }
+}
+"##;
+
+        let shapes = parse_dsl(src);
+        assert_eq!(shapes.len(), 1);
+        match &shapes[0] {
+            crate::scene::Shape::Circle { animations, x, y, .. } => {
+                assert_eq!(*x, 0.5);
+                assert_eq!(*y, 0.5);
+                assert_eq!(animations.len(), 1);
+                if let crate::scene::Animation::Move { to_x, to_y, start, end, .. } = animations[0] {
+                    assert_eq!(start, 0.0);
+                    assert_eq!(end, 5.0);
+                    assert!((to_x - 0.7).abs() < 1e-6);
+                    assert!((to_y - 0.5).abs() < 1e-6);
+                } else {
+                    panic!("expected Move animation");
+                }
+            }
+            _ => panic!("expected a circle"),
+        }
+    }
+
+    #[test]
+    fn animated_xy_interpolates_for_move() {
+        let src = r##"size(1280, 720)
+timeline { fps = 60; duration = 5 }
+
+circle(name = "Circle", x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00)
+move {
+    element = "Circle"
+    type = linear
+    startAt = 0.000
+    end {
+        time = 5.000
+        x = 0.700
+        y = 0.500
+    }
+}
+"##;
+
+        let shapes = parse_dsl(src);
+        // sample at t = 2.5 (halfway) => x should be 0.6
+        let (x, y) = crate::animations::animations_manager::animated_xy_for(&shapes[0], 2.5, 5.0);
+        assert!((x - 0.6).abs() < 1e-5, "expected x ~= 0.6 but got {}", x);
+        assert!((y - 0.5).abs() < 1e-5, "expected y ~= 0.5 but got {}", y);
+    }
 }

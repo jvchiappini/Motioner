@@ -12,30 +12,12 @@ pub fn animated_xy_for(shape: &Shape, project_time: f32, _project_duration: f32)
             x, y, animations, ..
         } => {
             // prefer the last animation that matches this time (same behaviour as before)
+            // Prefer the last animation that matches this time. Use MoveAnimation's
+            // sampling implementation to avoid duplicating interpolation logic.
             for a in animations.iter().rev() {
-                if let crate::scene::Animation::Move {
-                    to_x,
-                    to_y,
-                    start,
-                    end,
-                    ..
-                } = a
-                {
-                    if project_time >= *start && project_time <= *end {
-                        // interpolate from base to target
-                        let local_t = if (*end - *start).abs() < std::f32::EPSILON {
-                            1.0
-                        } else {
-                            (project_time - *start) / (*end - *start)
-                        };
-                        let ix = *x + local_t * (to_x - *x);
-                        let iy = *y + local_t * (to_y - *y);
-                        return (ix, iy);
-                    } else if project_time > *end {
-                        return (*to_x, *to_y);
-                    } else if project_time < *start {
-                        return (*x, *y);
-                    }
+                if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(a) {
+                    let (ix, iy) = ma.sample_position(*x, *y, project_time);
+                    return (ix, iy);
                 }
             }
             (*x, *y)
