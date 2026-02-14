@@ -177,93 +177,92 @@ fn render_node(
 
     let drag_id = Id::new("scene_drag").with(&path);
 
-    // ── Row content ──
-    let render_row = |ui: &mut egui::Ui, state: &mut AppState| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+    // ── Row content (without settings button) ──
+    let render_row_content = |ui: &mut egui::Ui, state: &mut AppState| {
+        ui.spacing_mut().item_spacing.x = 4.0;
 
-            // Visibility toggle
-            let vis_text = if is_visible { "👁" } else { "🚫" };
-            if ui
-                .add(
-                    egui::Button::new(egui::RichText::new(vis_text).small().color(if is_visible {
-                        Color32::WHITE
-                    } else {
-                        Color32::GRAY
-                    }))
-                    .frame(false),
-                )
-                .clicked()
-            {
+        // Visibility toggle
+        let vis_text = if is_visible { "👁" } else { "🚫" };
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new(vis_text).small().color(if is_visible {
+                    Color32::WHITE
+                } else {
+                    Color32::GRAY
+                }))
+                .frame(false),
+            )
+            .clicked()
+        {
+            if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, &path) {
+                shape.set_visible(!is_visible);
+            }
+        }
+
+        // Name / Rename
+        if is_renaming {
+            let text_id = ui.make_persistent_id(("rename_text", &path));
+            let available_width = ui.available_width().max(50.0);
+            let res = ui.add(
+                egui::TextEdit::singleline(&mut state.rename_buffer)
+                    .id(text_id)
+                    .desired_width(available_width)
+                    .lock_focus(true),
+            );
+            // Request focus on first render when entering rename mode
+            if !res.has_focus() {
+                res.request_focus();
+            }
+            if res.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, &path) {
-                    shape.set_visible(!is_visible);
-                }
-            }
-
-            // Name / Rename
-            if is_renaming {
-                let res = ui.add(
-                    egui::TextEdit::singleline(&mut state.rename_buffer)
-                        .desired_width(f32::INFINITY),
-                );
-                if res.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, &path) {
-                        match shape {
-                            Shape::Group { name, .. } => *name = state.rename_buffer.clone(),
-                            Shape::Circle { name, .. } => *name = state.rename_buffer.clone(),
-                            Shape::Rect { name, .. } => *name = state.rename_buffer.clone(),
-                        }
+                    match shape {
+                        Shape::Group { name, .. } => *name = state.rename_buffer.clone(),
+                        Shape::Circle { name, .. } => *name = state.rename_buffer.clone(),
+                        Shape::Rect { name, .. } => *name = state.rename_buffer.clone(),
                     }
-                    state.renaming_path = None;
                 }
-            } else {
-                let mut job = egui::text::LayoutJob::default();
-                job.append(
-                    icon,
-                    0.0,
-                    egui::TextFormat {
-                        color: if is_visible {
-                            icon_color
-                        } else {
-                            Color32::from_gray(80)
-                        },
-                        ..Default::default()
-                    },
-                );
-                job.append(
-                    &format!(" {}", node_name),
-                    0.0,
-                    egui::TextFormat {
-                        color: if is_selected {
-                            Color32::WHITE
-                        } else if is_visible {
-                            Color32::from_gray(200)
-                        } else {
-                            Color32::from_gray(100)
-                        },
-                        ..Default::default()
-                    },
-                );
-
-                let label_res = ui.add(egui::Label::new(job).selectable(false));
-
-                // Selection highlight — subtle blue tint
-                if is_selected {
-                    ui.painter().rect_filled(
-                        label_res.rect.expand2(egui::vec2(20.0, 2.0)),
-                        2.0,
-                        Color32::from_rgba_premultiplied(60, 120, 200, 30),
-                    );
-                }
+                state.renaming_path = None;
             }
+        } else {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                icon,
+                0.0,
+                egui::TextFormat {
+                    color: if is_visible {
+                        icon_color
+                    } else {
+                        Color32::from_gray(80)
+                    },
+                    ..Default::default()
+                },
+            );
+            job.append(
+                &format!(" {}", node_name),
+                0.0,
+                egui::TextFormat {
+                    color: if is_selected {
+                        Color32::WHITE
+                    } else if is_visible {
+                        Color32::from_gray(200)
+                    } else {
+                        Color32::from_gray(100)
+                    },
+                    ..Default::default()
+                },
+            );
 
-            // Settings button
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙").clicked() {
-                    state.modifier_active_path = Some(path.clone());
-                }
-            });
-        });
+            let label_res = ui.add(egui::Label::new(job).selectable(false));
+
+            // Selection highlight — subtle blue tint
+            if is_selected {
+                ui.painter().rect_filled(
+                    label_res.rect.expand2(egui::vec2(20.0, 2.0)),
+                    2.0,
+                    Color32::from_rgba_premultiplied(60, 120, 200, 30),
+                );
+            }
+        }
     };
 
     // ── Render node with drag source ──
@@ -282,11 +281,21 @@ fn render_node(
         let (zone_res, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
             coll_state
                 .show_header(ui, |ui| {
-                    let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
-                        render_row(ui, state);
+                    ui.horizontal(|ui| {
+                        let drag_res =
+                            dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
+                                render_row_content(ui, state);
+                            });
+                        group_clicked.set(drag_res.response.clicked());
+                        group_double_clicked.set(drag_res.response.double_clicked());
+
+                        // Settings button OUTSIDE drag source
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("⚙").clicked() {
+                                state.modifier_active_path = Some(path.clone());
+                            }
+                        });
                     });
-                    group_clicked.set(drag_res.response.clicked());
-                    group_double_clicked.set(drag_res.response.double_clicked());
                 })
                 .body(|ui| {
                     for i in 0..children_count {
@@ -320,15 +329,25 @@ fn render_node(
             }
         }
     } else {
-        let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
-            render_row(ui, state);
+        ui.horizontal(|ui| {
+            let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
+                render_row_content(ui, state);
+            });
+
+            if drag_res.response.double_clicked() {
+                state.renaming_path = Some(path.clone());
+                state.rename_buffer = node_name.clone();
+            } else if drag_res.response.clicked() {
+                state.selected_node_path = Some(path.clone());
+            }
+
+            // Settings button OUTSIDE drag source
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("⚙").clicked() {
+                    state.modifier_active_path = Some(path.clone());
+                }
+            });
         });
-        if drag_res.response.double_clicked() {
-            state.renaming_path = Some(path.clone());
-            state.rename_buffer = node_name.clone();
-        } else if drag_res.response.clicked() {
-            state.selected_node_path = Some(path.clone());
-        }
     }
 }
 

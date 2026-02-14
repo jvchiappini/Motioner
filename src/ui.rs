@@ -9,22 +9,22 @@ pub struct MyApp {
 
 pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
     let state = AppState::default();
-    
+
     // Check if we have wgpu access
     #[cfg(feature = "wgpu")]
     if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {
         let device = &wgpu_render_state.device;
         let target_format = wgpu_render_state.target_format;
-        
+
         // We'll insert our custom resources into the callback_resources map
         use crate::canvas::GpuResources;
         let mut renderer = wgpu_render_state.renderer.write();
-        renderer.callback_resources.insert(GpuResources::new(device, target_format));
+        renderer
+            .callback_resources
+            .insert(GpuResources::new(device, target_format));
     }
 
-    MyApp {
-        state,
-    }
+    MyApp { state }
 }
 
 impl eframe::App for MyApp {
@@ -241,8 +241,11 @@ impl eframe::App for MyApp {
             }
             let fs_t = state.code_anim_t;
 
+            // Disable panel resizing when renaming to prevent conflicts
+            let allow_resize = state.renaming_path.is_none();
+
             let mut panel = egui::SidePanel::left("multifunction_panel")
-                .resizable(true)
+                .resizable(allow_resize)
                 .width_range(150.0..=600.0)
                 .default_width(state.sidebar_width);
 
@@ -255,6 +258,9 @@ impl eframe::App for MyApp {
 
                 let width = state.sidebar_width * ease_t;
                 panel = panel.exact_width(width.max(0.0)).resizable(false);
+            } else if !allow_resize {
+                // When renaming, lock the panel to its current width
+                panel = panel.exact_width(state.sidebar_width).resizable(false);
             }
 
             let panel_res = panel.show(ctx, |ui| {
@@ -324,8 +330,8 @@ impl eframe::App for MyApp {
                 }
             });
 
-            // Update stored width only when not animating and fully open
-            if t >= 1.0 && !is_fullscreen {
+            // Update stored width only when not animating, fully open, and not renaming
+            if t >= 1.0 && !is_fullscreen && state.renaming_path.is_none() {
                 state.sidebar_width = panel_res.response.rect.width();
             }
 
@@ -521,19 +527,31 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
         .show(ctx, |ui| {
             if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
                 ui.add_space(4.0);
-                
+
                 let earliest_spawn = shape.spawn_time();
 
                 match shape {
-                    Shape::Circle { name, x, y, radius, color, spawn_time, visible } => {
+                    Shape::Circle {
+                        name,
+                        x,
+                        y,
+                        radius,
+                        color,
+                        spawn_time,
+                        visible,
+                    } => {
                         ui.group(|ui| {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("⭕").size(18.0));
-                                    ui.label(egui::RichText::new("Circle Parameters").strong().size(14.0));
+                                    ui.label(
+                                        egui::RichText::new("Circle Parameters")
+                                            .strong()
+                                            .size(14.0),
+                                    );
                                 });
                                 ui.separator();
-                                
+
                                 egui::Grid::new("circle_grid")
                                     .num_columns(2)
                                     .spacing([12.0, 8.0])
@@ -547,26 +565,53 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                         ui.end_row();
 
                                         ui.label("Spawn Time:");
-                                        ui.add(egui::Slider::new(spawn_time, 0.0..=state.duration_secs).suffix("s"));
+                                        ui.add(
+                                            egui::Slider::new(
+                                                spawn_time,
+                                                0.0..=state.duration_secs,
+                                            )
+                                            .suffix("s"),
+                                        );
                                         ui.end_row();
 
                                         ui.label("Position X:");
                                         let mut val_x = *x * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_x, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_x, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *x = val_x / 100.0;
                                         }
                                         ui.end_row();
 
                                         ui.label("Position Y:");
                                         let mut val_y = *y * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_y, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_y, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *y = val_y / 100.0;
                                         }
                                         ui.end_row();
 
                                         ui.label("Radius:");
                                         let mut val_r = *radius * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_r, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_r, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *radius = val_r / 100.0;
                                         }
                                         ui.end_row();
@@ -575,17 +620,30 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                         ui.color_edit_button_srgba_unmultiplied(color);
                                         ui.end_row();
                                     });
-                                
+
                                 ui.add_space(4.0);
                             });
                         });
                     }
-                    Shape::Rect { name, x, y, w, h, color, spawn_time, visible } => {
+                    Shape::Rect {
+                        name,
+                        x,
+                        y,
+                        w,
+                        h,
+                        color,
+                        spawn_time,
+                        visible,
+                    } => {
                         ui.group(|ui| {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("⬜").size(18.0));
-                                    ui.label(egui::RichText::new("Rectangle Parameters").strong().size(14.0));
+                                    ui.label(
+                                        egui::RichText::new("Rectangle Parameters")
+                                            .strong()
+                                            .size(14.0),
+                                    );
                                 });
                                 ui.separator();
 
@@ -602,33 +660,67 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                         ui.end_row();
 
                                         ui.label("Spawn Time:");
-                                        ui.add(egui::Slider::new(spawn_time, 0.0..=state.duration_secs).suffix("s"));
+                                        ui.add(
+                                            egui::Slider::new(
+                                                spawn_time,
+                                                0.0..=state.duration_secs,
+                                            )
+                                            .suffix("s"),
+                                        );
                                         ui.end_row();
 
                                         ui.label("Position X:");
                                         let mut val_x = *x * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_x, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_x, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *x = val_x / 100.0;
                                         }
                                         ui.end_row();
 
                                         ui.label("Position Y:");
                                         let mut val_y = *y * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_y, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_y, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *y = val_y / 100.0;
                                         }
                                         ui.end_row();
 
                                         ui.label("Width:");
                                         let mut val_w = *w * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_w, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_w, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *w = val_w / 100.0;
                                         }
                                         ui.end_row();
 
                                         ui.label("Height:");
                                         let mut val_h = *h * 100.0;
-                                        if ui.add(egui::Slider::new(&mut val_h, 0.0..=100.0).suffix("%").clamp_to_range(false)).changed() {
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut val_h, 0.0..=100.0)
+                                                    .suffix("%")
+                                                    .clamp_to_range(false),
+                                            )
+                                            .changed()
+                                        {
                                             *h = val_h / 100.0;
                                         }
                                         ui.end_row();
@@ -637,17 +729,23 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                         ui.color_edit_button_srgba_unmultiplied(color);
                                         ui.end_row();
                                     });
-                                
+
                                 ui.add_space(4.0);
                             });
                         });
                     }
-                    Shape::Group { name, children: _, visible } => {
+                    Shape::Group {
+                        name,
+                        children: _,
+                        visible,
+                    } => {
                         ui.group(|ui| {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("📦").size(18.0));
-                                    ui.label(egui::RichText::new("Group Parameters").strong().size(14.0));
+                                    ui.label(
+                                        egui::RichText::new("Group Parameters").strong().size(14.0),
+                                    );
                                 });
                                 ui.separator();
 
@@ -664,10 +762,13 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                         ui.end_row();
 
                                         ui.label("Earliest Spawn:");
-                                        ui.label(egui::RichText::new(format!("{:.2}s", earliest_spawn)).weak());
+                                        ui.label(
+                                            egui::RichText::new(format!("{:.2}s", earliest_spawn))
+                                                .weak(),
+                                        );
                                         ui.end_row();
                                     });
-                                
+
                                 ui.add_space(4.0);
                             });
                         });
