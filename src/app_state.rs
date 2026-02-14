@@ -115,6 +115,14 @@ pub struct AppState {
 
     // UI Sidebar State
     pub sidebar_width: f32,
+    /// Previous timeline root path (used for breadcrumb animation)
+    #[serde(skip)]
+    pub timeline_prev_root_path: Option<Vec<usize>>,
+    /// Breadcrumb animation progress (0.0 -> transition start, 1.0 -> settled)
+    #[serde(skip)]
+    pub timeline_breadcrumb_anim_t: f32,
+    /// If set, timeline shows only the children of this scene path (e.g. [2, 1])
+    pub timeline_root_path: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +207,9 @@ impl Default for AppState {
             modifier_active_path: None,
             show_elements_modal: false,
             sidebar_width: 250.0,
+            timeline_root_path: None,
+            timeline_prev_root_path: None,
+            timeline_breadcrumb_anim_t: 1.0,
         }
     }
 }
