@@ -1,9 +1,11 @@
 use crate::app_state::AppState;
 use eframe::egui;
+use std::sync::mpsc;
+use std::thread;
 
 /// Samples the color at a specific normalized (0..1) paper coordinate,
-/// respecting the preview resolution and shape order.
-fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2) -> [u8; 4] {
+/// respecting the preview resolution and shape order. `time` is project time in seconds.
+fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, time: f32) -> [u8; 4] {
     let preview_res = egui::vec2(
         state.render_width as f32 * state.preview_multiplier,
         state.render_height as f32 * state.preview_multiplier,
@@ -40,14 +42,15 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2) -> 
     collect_primitives(&state.scene, 0.0, &mut all_primitives);
 
     for (shape, actual_spawn) in all_primitives {
-        if state.time < actual_spawn {
+        if time < actual_spawn {
             continue;
         }
         match shape {
-            crate::scene::Shape::Circle { x, y, radius, color, .. } => {
+            crate::scene::Shape::Circle { x: _x, y: _y, radius, color, .. } => {
                 let width = state.render_width as f32;
                 let height = state.render_height as f32;
-                let shape_pos = egui::pos2(x * width, y * height);
+                let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
+                let shape_pos = egui::pos2(eval_x * width, eval_y * height);
                 let radius_px = radius * width; // Use width as reference
                 let shape_color = [color[0] as f32, color[1] as f32, color[2] as f32, color[3] as f32];
                 let dist = pixel_pos.distance(shape_pos);
@@ -58,13 +61,14 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2) -> 
                     final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
                 }
             }
-            crate::scene::Shape::Rect { x, y, w, h, color, .. } => {
+            crate::scene::Shape::Rect { x: _x, y: _y, w, h, color, .. } => {
                 let width = state.render_width as f32;
                 let height = state.render_height as f32;
+                let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
                 let half_w = (w * width) / 2.0;
                 let half_h = (h * height) / 2.0;
-                let center_x = x * width + half_w;
-                let center_y = y * height + half_h;
+                let center_x = eval_x * width + half_w;
+                let center_y = eval_y * height + half_h;
                 let shape_pos = egui::pos2(center_x, center_y);
                 let shape_size = egui::vec2(half_w, half_h);
                 let shape_color = [color[0] as f32, color[1] as f32, color[2] as f32, color[3] as f32];
@@ -89,6 +93,263 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2) -> 
         final_color[2].round() as u8,
         255,
     ]
+}
+
+/// Compute animated position (x,y) for a shape at `project_time` (seconds) using normalized animation keys.
+fn animated_xy_for(shape: &crate::scene::Shape, project_time: f32, project_duration: f32) -> (f32, f32) {
+    // project_time and animation start/end are in seconds
+    match shape {
+        crate::scene::Shape::Circle { x, y, animations, .. } | crate::scene::Shape::Rect { x, y, animations, .. } => {
+            // prefer the last animation that matches this time
+            for a in animations.iter().rev() {
+                if let crate::scene::Animation::Move { to_x, to_y, start, end, .. } = a {
+                    if project_time >= *start && project_time <= *end {
+                        let local_t = if (*end - *start).abs() < std::f32::EPSILON {
+                            1.0
+                        } else {
+                            (project_time - *start) / (*end - *start)
+                        };
+                        // linear easing: interpolate from the element's base (x,y) to the animation's final position
+                        let ix = *x + local_t * (to_x - *x);
+                        let iy = *y + local_t * (to_y - *y);
+                        return (ix, iy);
+                    } else if project_time > *end {
+                        return (*to_x, *to_y);
+                    } else if project_time < *start {
+                        return (*x, *y);
+                    }
+                }
+            }
+            (*x, *y)
+        }
+        _ => (0.0, 0.0),
+    }
+}
+
+/// Render a single preview frame into an egui::ColorImage at the current preview resolution.
+fn render_frame_color_image(state: &crate::app_state::AppState, time: f32) -> egui::ColorImage {
+    let preview_w = (state.render_width as f32 * state.preview_multiplier).round().max(1.0) as usize;
+    let preview_h = (state.render_height as f32 * state.preview_multiplier).round().max(1.0) as usize;
+    let mut pixels: Vec<u8> = Vec::with_capacity(preview_w * preview_h * 4);
+
+    for y in 0..preview_h {
+        for x in 0..preview_w {
+            // sample at pixel center in normalized paper coords
+            let uv = egui::pos2((x as f32 + 0.5) / (preview_w as f32), (y as f32 + 0.5) / (preview_h as f32));
+            let col = sample_color_at(state, uv, time);
+            pixels.push(col[0]);
+            pixels.push(col[1]);
+            pixels.push(col[2]);
+            pixels.push(col[3]);
+        }
+    }
+
+    egui::ColorImage::from_rgba_unmultiplied([preview_w, preview_h], &pixels)
+}
+
+/// Generate cached preview frames around `center_time` (10 before + 10 after) and
+/// store them in `state.preview_frame_cache`. Also update `state.preview_texture` to the center frame.
+pub fn generate_preview_frames(state: &mut AppState, center_time: f32, ctx: &egui::Context) {
+    // Backward-compat / direct-call fallback: delegate to request_preview_frames (buffered)
+    request_preview_frames(state, center_time, PreviewMode::Buffered);
+    // poll results immediately so UI updates if worker already finished (non-blocking)
+    poll_preview_results(state, ctx);
+}
+
+/// Modes for preview generation requests
+#[derive(Clone, Copy, Debug)]
+pub enum PreviewMode {
+    Buffered, // 10 frames before/after center
+    Single,   // single center frame
+}
+
+/// Job sent to the background preview worker
+pub enum PreviewJob {
+    Generate {
+        center_time: f32,
+        mode: PreviewMode,
+        snapshot: RenderSnapshot,
+    },
+}
+
+/// Result returned from background worker
+pub enum PreviewResult {
+    Buffered(Vec<(f32, egui::ColorImage)>),
+    Single(f32, egui::ColorImage),
+}
+
+/// Lightweight snapshot of rendering inputs that can be sent to worker threads.
+#[derive(Clone)]
+pub struct RenderSnapshot {
+    pub scene: Vec<crate::scene::Shape>,
+    pub render_width: u32,
+    pub render_height: u32,
+    pub preview_multiplier: f32,
+    pub duration_secs: f32,
+    pub preview_fps: u32,
+}
+
+fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::ColorImage {
+    let preview_w = (snap.render_width as f32 * snap.preview_multiplier).round().max(1.0) as usize;
+    let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round().max(1.0) as usize;
+    let mut pixels: Vec<u8> = Vec::with_capacity(preview_w * preview_h * 4);
+
+    // reuse a minimal sampling loop similar to `sample_color_at` but operating on the snapshot
+    for y in 0..preview_h {
+        for x in 0..preview_w {
+            let uv = egui::pos2((x as f32 + 0.5) / (preview_w as f32), (y as f32 + 0.5) / (preview_h as f32));
+            // simple sampling: iterate scene primitives and composite (no sub-pixel antialiasing)
+            let mut final_color = [255.0, 255.0, 255.0, 255.0];
+
+            // collect primitives
+            fn collect_primitives(shapes: &[crate::scene::Shape], parent_spawn: f32, out: &mut Vec<(crate::scene::Shape, f32)>) {
+                for shape in shapes {
+                    let my_spawn = shape.spawn_time().max(parent_spawn);
+                    match shape {
+                        crate::scene::Shape::Group { children, .. } => collect_primitives(children, my_spawn, out),
+                        _ => out.push((shape.clone(), my_spawn)),
+                    }
+                }
+            }
+
+            let mut all_prims = Vec::new();
+            collect_primitives(&snap.scene, 0.0, &mut all_prims);
+
+            // produce pixel in project coordinates
+            let pixel_pos = egui::pos2(uv.x * snap.render_width as f32, uv.y * snap.render_height as f32);
+
+            for (shape, actual_spawn) in all_prims {
+                if time < actual_spawn {
+                    continue;
+                }
+                match shape {
+                    crate::scene::Shape::Circle { x, y, radius, color, .. } => {
+                        let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
+                        let shape_pos = egui::pos2(eval_x * snap.render_width as f32, eval_y * snap.render_height as f32);
+                        let radius_px = radius * snap.render_width as f32;
+                        let dist = pixel_pos.distance(shape_pos);
+                        if dist <= radius_px {
+                            let src_a = (color[3] as f32) / 255.0;
+                            final_color[0] = final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
+                            final_color[1] = final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
+                            final_color[2] = final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
+                        }
+                    }
+                    crate::scene::Shape::Rect { x, y, w, h, color, .. } => {
+                        let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
+                        let half_w = (w * snap.render_width as f32) / 2.0;
+                        let half_h = (h * snap.render_height as f32) / 2.0;
+                        let center_x = eval_x * snap.render_width as f32 + half_w;
+                        let center_y = eval_y * snap.render_height as f32 + half_h;
+                        let d_vec = egui::vec2((pixel_pos.x - center_x).abs() - half_w, (pixel_pos.y - center_y).abs() - half_h);
+                        if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
+                            let src_a = (color[3] as f32) / 255.0;
+                            final_color[0] = final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
+                            final_color[1] = final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
+                            final_color[2] = final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            pixels.push(final_color[0].round() as u8);
+            pixels.push(final_color[1].round() as u8);
+            pixels.push(final_color[2].round() as u8);
+            pixels.push(255);
+        }
+    }
+
+    egui::ColorImage::from_rgba_unmultiplied([preview_w, preview_h], &pixels)
+}
+
+/// Ensure background preview worker is running; if not, spawn it and store channels in `state`.
+fn ensure_preview_worker(state: &mut AppState) {
+    if state.preview_worker_tx.is_some() && state.preview_worker_rx.is_some() {
+        return;
+    }
+
+    let (job_tx, job_rx) = mpsc::channel::<PreviewJob>();
+    let (res_tx, res_rx) = mpsc::channel::<PreviewResult>();
+
+    // Spawn worker
+    thread::spawn(move || {
+        while let Ok(job) = job_rx.recv() {
+            match job {
+                PreviewJob::Generate { center_time, mode, snapshot } => {
+                    match mode {
+                        PreviewMode::Single => {
+                            let img = render_frame_color_image_snapshot(&snapshot, center_time);
+                            let _ = res_tx.send(PreviewResult::Single(center_time, img));
+                        }
+                        PreviewMode::Buffered => {
+                            let frames_each_side = 10i32;
+                            let frame_step = 1.0 / (snapshot.preview_fps as f32);
+                            let mut frames = Vec::with_capacity((frames_each_side * 2 + 1) as usize);
+                            for i in -frames_each_side..=frames_each_side {
+                                let t = (center_time + (i as f32) * frame_step).clamp(0.0, snapshot.duration_secs);
+                                let img = render_frame_color_image_snapshot(&snapshot, t);
+                                frames.push((t, img));
+                                // send intermediate single-frame updates for smoother UX
+                                let _ = res_tx.send(PreviewResult::Single(t, frames.last().unwrap().1.clone()));
+                            }
+                            let _ = res_tx.send(PreviewResult::Buffered(frames));
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    state.preview_worker_tx = Some(job_tx);
+    state.preview_worker_rx = Some(res_rx);
+}
+
+/// Request preview frames (delegates to background worker). Non-blocking.
+pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: PreviewMode) {
+    ensure_preview_worker(state);
+    if let Some(tx) = &state.preview_worker_tx {
+        let snap = RenderSnapshot {
+            scene: state.scene.clone(),
+            render_width: state.render_width,
+            render_height: state.render_height,
+            preview_multiplier: state.preview_multiplier,
+            duration_secs: state.duration_secs,
+            preview_fps: state.preview_fps,
+        };
+        let job = PreviewJob::Generate { center_time, mode, snapshot: snap };
+        let _ = tx.send(job);
+    }
+}
+
+/// Poll for preview results from the worker and integrate them into `state` (must be called on UI thread).
+pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
+    if let Some(rx) = &state.preview_worker_rx {
+        while let Ok(result) = rx.try_recv() {
+            match result {
+                PreviewResult::Single(t, img) => {
+                    // update/insert single frame into cache
+                    // replace center frame if times are close
+                    state.preview_frame_cache.retain(|(tt, _)| (tt - t).abs() > 1e-6);
+                    state.preview_frame_cache.push((t, img.clone()));
+                    // if this is near the cache center, update texture too
+                    if state.preview_cache_center_time.map_or(true, |c| (c - t).abs() < 1e-3) {
+                        let handle = ctx.load_texture("preview_center", img.clone(), egui::TextureOptions::NEAREST);
+                        state.preview_texture = Some(handle);
+                        state.preview_cache_center_time = Some(t);
+                    }
+                }
+                PreviewResult::Buffered(frames) => {
+                    state.preview_frame_cache = frames.clone();
+                    if let Some((_, center_img)) = state.preview_frame_cache.get((10) as usize) {
+                        let handle = ctx.load_texture("preview_center", center_img.clone(), egui::TextureOptions::NEAREST);
+                        state.preview_texture = Some(handle);
+                        state.preview_cache_center_time = Some(state.preview_frame_cache[10].0);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Render and handle interactions for the central canvas area.
@@ -255,6 +516,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 _render_width: f32,
                 _render_height: f32,
                 parent_spawn: f32,
+                current_time: f32,
+                project_duration: f32,
             ) {
                 for shape in shapes {
                     let my_spawn = shape.spawn_time().max(parent_spawn);
@@ -292,7 +555,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             });
                         }
                         crate::scene::Shape::Group { children, .. } => {
-                            fill_gpu_shapes(children, gpu_shapes, _render_width, _render_height, my_spawn);
+                            fill_gpu_shapes(children, gpu_shapes, _render_width, _render_height, my_spawn, current_time, project_duration);
                         }
                     }
                 }
@@ -304,6 +567,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 state.render_width as f32,
                 state.render_height as f32,
                 0.0,
+                state.time,
+                state.duration_secs,
             );
 
             // Important: use the FULL canvas rect for the callback to avoid coordinate distortion
@@ -339,6 +604,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 zoom: f32,
                 current_time: f32,
                 parent_spawn: f32,
+                project_duration: f32,
             ) {
                 for shape in shapes {
                     let actual_spawn = shape.spawn_time().max(parent_spawn);
@@ -346,29 +612,31 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         continue;
                     }
                     match shape {
-                        crate::scene::Shape::Circle { x, y, radius, color, .. } => {
+                        crate::scene::Shape::Circle { x: _x, y: _y, radius, color, .. } => {
+                            let (eval_x, eval_y) = animated_xy_for(shape, current_time, project_duration);
                             let pos = composition_rect.min
-                                + egui::vec2(x * composition_rect.width(), y * composition_rect.height());
+                                + egui::vec2(eval_x * composition_rect.width(), eval_y * composition_rect.height());
                             let scaled_radius = radius * composition_rect.width();
                             let c = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
                             ui_painter.circle_filled(pos, scaled_radius, c);
                         }
-                        crate::scene::Shape::Rect { x, y, w, h, color, .. } => {
+                        crate::scene::Shape::Rect { x: _x, y: _y, w, h, color, .. } => {
+                            let (eval_x, eval_y) = animated_xy_for(shape, current_time, project_duration);
                             let min = composition_rect.min
-                                + egui::vec2(x * composition_rect.width(), y * composition_rect.height());
+                                + egui::vec2(eval_x * composition_rect.width(), eval_y * composition_rect.height());
                             let size = egui::vec2(w * composition_rect.width(), h * composition_rect.height());
                             let rect = egui::Rect::from_min_size(min, size);
                             let c = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
                             ui_painter.rect_filled(rect, 0.0, c);
                         }
                         crate::scene::Shape::Group { children, .. } => {
-                            draw_shapes_recursive(ui_painter, children, composition_rect, zoom, current_time, actual_spawn);
+                            draw_shapes_recursive(ui_painter, children, composition_rect, zoom, current_time, actual_spawn, project_duration);
                         }
                     }
                 }
             }
 
-            draw_shapes_recursive(&painter, &state.scene, composition_rect, zoom, state.time, 0.0);
+            draw_shapes_recursive(&painter, &state.scene, composition_rect, zoom, state.time, 0.0, state.duration_secs);
         }
 
         // Interaction: clicks / selection relative to normalized coordinates
@@ -382,7 +650,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
                     if state.picker_active {
                         // COLOR PICKER LOGIC
-                        let color = sample_color_at(state, paper_uv);
+                        let color = sample_color_at(state, paper_uv, state.time);
                         let hex = format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2]);
 
                         // Copy to clipboard

@@ -27,6 +27,17 @@ pub struct AppState {
 
     #[serde(skip)]
     pub preview_texture: Option<egui::TextureHandle>,
+    /// Cached preview frames around the current playhead (time, image)
+    #[serde(skip)]
+    pub preview_frame_cache: Vec<(f32, egui::ColorImage)>,
+    /// Center time of the cached preview frames, if any
+    #[serde(skip)]
+    pub preview_cache_center_time: Option<f32>,
+    /// Background preview worker channels (job sender + result receiver)
+    #[serde(skip)]
+    pub preview_worker_tx: Option<std::sync::mpsc::Sender<crate::canvas::PreviewJob>>,
+    #[serde(skip)]
+    pub preview_worker_rx: Option<std::sync::mpsc::Receiver<crate::canvas::PreviewResult>>,
 
     pub playing: bool,
     pub time: f32,
@@ -108,10 +119,15 @@ pub struct AppState {
     // Expanded nodes for scene-graph tree. Keys are path strings like "0", "0.1", "0.1.2"
     pub expanded_nodes: HashSet<String>,
 
+    // Animations modal: selected top-level element index (temporary UI state)
+    pub anim_modal_target_idx: usize,
+
     pub modifier_active_path: Option<Vec<usize>>,
 
     // UI: Elements modal (floating palette from Scene Graph)
     pub show_elements_modal: bool,
+    // UI: Animations modal (floating palette from Scene Graph)
+    pub show_animations_modal: bool,
 
     // UI Sidebar State
     pub sidebar_width: f32,
@@ -156,6 +172,10 @@ impl Default for AppState {
             #[cfg(feature = "wgpu")]
             wgpu_renderer: None,
             preview_texture: None,
+            preview_frame_cache: Vec::new(),
+            preview_cache_center_time: None,
+            preview_worker_tx: None,
+            preview_worker_rx: None,
             playing: false,
             time: 0.0,
             export_in_progress: false,
@@ -205,7 +225,9 @@ impl Default for AppState {
             rename_buffer: String::new(),
             expanded_nodes: HashSet::new(),
             modifier_active_path: None,
+            anim_modal_target_idx: 0,
             show_elements_modal: false,
+            show_animations_modal: false,
             sidebar_width: 250.0,
             timeline_root_path: None,
             timeline_prev_root_path: None,

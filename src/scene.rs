@@ -1,5 +1,24 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Easing {
+    Linear,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Animation {
+    /// Move animation with normalized time (0.0 - 1.0)
+    Move {
+        to_x: f32,
+        to_y: f32,
+        /// start time in seconds
+        start: f32,
+        /// end time in seconds
+        end: f32,
+        easing: Easing,
+    },
+}
+
 // Scene model: shapes and helpers
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {
@@ -10,6 +29,8 @@ pub enum Shape {
         radius: f32,
         color: [u8; 4],
         spawn_time: f32,
+        #[serde(default)]
+        animations: Vec<Animation>,
         #[serde(default = "default_visible")]
         visible: bool,
     },
@@ -21,6 +42,8 @@ pub enum Shape {
         h: f32,
         color: [u8; 4],
         spawn_time: f32,
+        #[serde(default)]
+        animations: Vec<Animation>,
         #[serde(default = "default_visible")]
         visible: bool,
     },
@@ -61,33 +84,85 @@ impl Shape {
         let indent = "    ".repeat(indent_level);
         match self {
             Shape::Circle {
+                name,
                 x,
                 y,
                 radius,
                 color,
                 spawn_time,
+                animations,
                 ..
-            } => format!(
-                "{}circle(x = {:.3}, y = {:.3}, radius = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
-                indent, x, y, radius, color[0], color[1], color[2], spawn_time
-            ),
+            } => {
+                let mut out = format!(
+                    "{}circle(name = \"{}\", x = {:.3}, y = {:.3}, radius = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
+                    indent, name, x, y, radius, color[0], color[1], color[2], spawn_time
+                );
+                if !animations.is_empty() {
+                    for a in animations.iter() {
+                        if let Animation::Move {
+                            to_x,
+                            to_y,
+                            start,
+                            end,
+                            ..
+                        } = a
+                        {
+                            out.push_str(&format!("\n{}move {{\n", indent));
+                            out.push_str(&format!("{}    element = \"{}\"\n", indent, name));
+                            out.push_str(&format!("{}    type = linear\n", indent));
+                            out.push_str(&format!("{}    startAt = {:.3}\n", indent, start));
+                            out.push_str(&format!("{}    end {{\n", indent));
+                            out.push_str(&format!("{}        time = {:.3}\n", indent, end));
+                            out.push_str(&format!("{}        x = {:.3}\n", indent, to_x));
+                            out.push_str(&format!("{}        y = {:.3}\n", indent, to_y));
+                            out.push_str(&format!("{}    }}\n", indent));
+                            out.push_str(&format!("{}}}", indent));
+                        }
+                    }
+                }
+                out
+            }
             Shape::Rect {
+                name,
                 x,
                 y,
                 w,
                 h,
                 color,
                 spawn_time,
-                ..
-            } => format!(
-                "{}rect(x = {:.3}, y = {:.3}, width = {:.3}, height = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
-                indent, x, y, w, h, color[0], color[1], color[2], spawn_time
-            ),
-            Shape::Group {
-                name,
-                children,
+                animations,
                 ..
             } => {
+                let mut out = format!(
+                    "{}rect(name = \"{}\", x = {:.3}, y = {:.3}, width = {:.3}, height = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
+                    indent, name, x, y, w, h, color[0], color[1], color[2], spawn_time
+                );
+                if !animations.is_empty() {
+                    for a in animations.iter() {
+                        if let Animation::Move {
+                            to_x,
+                            to_y,
+                            start,
+                            end,
+                            ..
+                        } = a
+                        {
+                            out.push_str(&format!("\n{}move {{\n", indent));
+                            out.push_str(&format!("{}    element = \"{}\"\n", indent, name));
+                            out.push_str(&format!("{}    type = linear\n", indent));
+                            out.push_str(&format!("{}    startAt = {:.3}\n", indent, start));
+                            out.push_str(&format!("{}    end {{\n", indent));
+                            out.push_str(&format!("{}        time = {:.3}\n", indent, end));
+                            out.push_str(&format!("{}        x = {:.3}\n", indent, to_x));
+                            out.push_str(&format!("{}        y = {:.3}\n", indent, to_y));
+                            out.push_str(&format!("{}    }}\n", indent));
+                            out.push_str(&format!("{}}}", indent));
+                        }
+                    }
+                }
+                out
+            }
+            Shape::Group { name, children, .. } => {
                 let mut items: Vec<String> = Vec::new();
                 for c in children {
                     items.push(c.to_dsl_impl(indent_level + 1));
@@ -115,6 +190,7 @@ impl Shape {
             radius: 0.1,
             color: [120, 200, 255, 255],
             spawn_time: 0.0,
+            animations: Vec::new(),
             visible: true,
         }]
     }

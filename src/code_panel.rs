@@ -12,6 +12,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     state.duration_secs = config.duration;
                     state.render_width = config.width;
                     state.render_height = config.height;
+                    // Attempt to parse DSL into scene shapes (best-effort)
+                    let parsed = dsl::parse_dsl(&state.dsl_code);
+                    if !parsed.is_empty() {
+                        state.scene = parsed;
+                        // regenerate preview for current playhead
+                        crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
+                    }
                     
                     state.toast_message = Some("Configuration updated successfully!".to_string());
                     state.toast_type = ToastType::Success;

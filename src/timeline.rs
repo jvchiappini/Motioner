@@ -441,6 +441,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         let new_time =
                             (pos.x - time_origin_x + state.timeline_pan_x) / pixels_per_sec;
                         state.time = new_time.max(0.0);
+                        // regenerate preview frames around the new playhead position
+                        if state.preview_cache_center_time.map_or(true, |c| (c - state.time).abs() > 1e-4) {
+                            crate::canvas::generate_preview_frames(state, state.time, ui.ctx());
+                        }
                     }
                 }
             }

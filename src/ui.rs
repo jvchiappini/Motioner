@@ -449,10 +449,16 @@ impl eframe::App for MyApp {
                 state.time = 0.0; // Loop
             }
 
+            // Request single-frame preview generation for the new playhead time (non-blocking)
+            crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
+
             // Request next repaint based on preview_fps
             let frame_duration = 1.0 / (state.preview_fps as f32);
             ctx.request_repaint_after(std::time::Duration::from_secs_f32(frame_duration));
         }
+
+        // Poll background preview worker results and integrate textures (UI thread)
+        crate::canvas::poll_preview_results(state, ctx);
 
         if state.show_settings {
             crate::project_settings::show(ctx, state);
@@ -540,6 +546,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                         color,
                         spawn_time,
                         visible,
+                        ..
                     } => {
                         ui.group(|ui| {
                             ui.vertical(|ui| {
@@ -650,6 +657,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                         color,
                         spawn_time,
                         visible,
+                        ..
                     } => {
                         ui.group(|ui| {
                             ui.vertical(|ui| {
