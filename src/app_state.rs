@@ -50,7 +50,7 @@ pub struct AppState {
     pub toast_message: Option<String>,
     pub toast_type: ToastType, // "error" or "success", handled as enum or string
     pub toast_deadline: f64,   // Time when toast should disappear
-    
+
     // Change tracking
     pub last_synced_settings: (u32, f32, u32, u32),
 
@@ -121,7 +121,7 @@ impl Default for AppState {
             completion_cursor_idx: 0,
             completion_items: Vec::new(),
             completion_selected_index: 0,
-            
+
             project_path: None,
             show_welcome: true,
         }

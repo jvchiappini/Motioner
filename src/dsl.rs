@@ -35,13 +35,16 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
 
     for line in code.lines() {
         let line = line.trim();
-        
+
         // Parse size(w, h)
         if line.starts_with("size(") && line.ends_with(")") {
-            let content = &line[5..line.len()-1];
+            let content = &line[5..line.len() - 1];
             let parts: Vec<&str> = content.split(',').collect();
             if parts.len() == 2 {
-                if let (Ok(w), Ok(h)) = (parts[0].trim().parse::<u32>(), parts[1].trim().parse::<u32>()) {
+                if let (Ok(w), Ok(h)) = (
+                    parts[0].trim().parse::<u32>(),
+                    parts[1].trim().parse::<u32>(),
+                ) {
                     width = Some(w);
                     height = Some(h);
                 } else {
@@ -55,7 +58,7 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
             // Very naive: extract content inside {}
             if let Some(start) = line.find('{') {
                 if let Some(end) = line.rfind('}') {
-                    let content = &line[start+1..end];
+                    let content = &line[start + 1..end];
                     // Split by semicolon
                     for part in content.split(';') {
                         let part = part.trim();
@@ -83,7 +86,7 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
         return Err("Missing 'timeline { fps = ... }' configuration".to_string());
     }
     if duration.is_none() {
-         return Err("Missing 'timeline { duration = ... }' configuration".to_string());
+        return Err("Missing 'timeline { duration = ... }' configuration".to_string());
     }
 
     Ok(ProjectConfig {
