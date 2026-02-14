@@ -370,11 +370,6 @@ impl eframe::App for MyApp {
                 // Or maybe simple CubicOut/QuintOut for smoothness
                 // let ease = 1.0 - (1.0 - t_anim).powi(4); // QuartOut
 
-                // Custom EaseInOut for slower feel
-                // Sigmoid-like or Parametric Blend
-                let sqt = t_anim * t_anim;
-                let ease = sqt / (2.0 * (sqt - t_anim) + 1.0);
-
                 // OR nice Cubic Out
                 let ease = 1.0 - (1.0 - t_anim).powi(3);
 
@@ -456,11 +451,15 @@ impl eframe::App for MyApp {
 
         // Frame update for animation
         if state.playing {
-            state.time += ctx.input(|i| i.stable_dt);
+            let dt = ctx.input(|i| i.stable_dt);
+            state.time += dt;
             if state.time > state.duration_secs {
                 state.time = 0.0; // Loop
             }
-            ctx.request_repaint();
+
+            // Request next repaint based on preview_fps
+            let frame_duration = 1.0 / (state.preview_fps as f32);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f32(frame_duration));
         }
 
         if state.show_settings {

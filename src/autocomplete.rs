@@ -69,7 +69,7 @@ pub fn process_input(ui: &mut egui::Ui, text_edit_id: egui::Id, state: &mut AppS
                         // Update EgUI TextEdit State
                         if let Some(mut text_edit_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
                             let ccursor = egui::text::CCursor::new(new_cursor_idx);
-                            text_edit_state.set_ccursor_range(Some(egui::text::CCursorRange::one(ccursor)));
+                            text_edit_state.cursor.set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
                             egui::TextEdit::store_state(ui.ctx(), text_edit_id, text_edit_state);
                         }
                         
@@ -94,7 +94,7 @@ pub fn handle_state_and_render(ui: &mut egui::Ui, response: &egui::Response, sta
     // Update Cursor Position for next frame's input handling
     // Only update if we have focus and valid range
     if let Some(text_edit_state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
-        if let Some(range) = text_edit_state.ccursor_range() { 
+        if let Some(range) = text_edit_state.cursor.char_range() { 
             state.completion_cursor_idx = range.primary.index;
         }
     }

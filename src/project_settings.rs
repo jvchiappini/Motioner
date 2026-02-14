@@ -83,7 +83,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
             // 6. Draw the Settings Window
             let window_width = 460.0;
-            let window_height = 420.0; // Estimate
+            let window_height = 520.0; // Increased to fit new settings
             let center_pos = screen_rect.center();
 
             // Apply the slide offset to the Y position
@@ -206,6 +206,41 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 selectable_res(ui, state, "1080p", 1920, 1080);
                 selectable_res(ui, state, "2K", 2560, 1440);
                 selectable_res(ui, state, "4K", 3840, 2160);
+            });
+            ui.end_row();
+
+            ui.add_space(10.0);
+            ui.end_row();
+
+            // Section: Preview
+            ui.label(
+                egui::RichText::new("Preview")
+                    .strong()
+                    .color(egui::Color32::from_gray(200)),
+            );
+            ui.end_row();
+
+            ui.label("Preview FPS");
+            ui.add(
+                egui::DragValue::new(&mut state.preview_fps)
+                    .clamp_range(1..=240)
+                    .speed(1),
+            );
+            ui.end_row();
+
+            ui.label("Preview Resolution");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let multipliers = [0.125, 0.25, 0.5, 1.0, 1.125, 1.25, 1.5, 2.0];
+                for &m in &multipliers {
+                    let label = format!("{}x", m);
+                    if ui
+                        .selectable_label(state.preview_multiplier == m, label)
+                        .clicked()
+                    {
+                        state.preview_multiplier = m;
+                    }
+                }
             });
             ui.end_row();
         });

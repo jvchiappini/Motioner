@@ -15,7 +15,8 @@ pub struct AppState {
     // final render resolution (pixels)
     pub render_width: u32,
     pub render_height: u32,
-    pub preview_scale: u32,
+    pub preview_multiplier: f32, // Multiplier: 0.125, 0.25, 0.5, 1.0, etc.
+    pub preview_fps: u32,
     pub playing: bool,
     pub time: f32,
     pub export_in_progress: bool,
@@ -74,6 +75,8 @@ pub struct AppState {
     pub project_path_input: String,
     pub path_validation_error: Option<String>,
     pub show_welcome: bool,
+
+    pub preview_texture: Option<eframe::egui::TextureHandle>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,7 +93,8 @@ impl Default for AppState {
             duration_secs: 4.0,
             render_width: 1280,
             render_height: 720,
-            preview_scale: 100,
+            preview_multiplier: 1.0,
+            preview_fps: 30,
             playing: false,
             time: 0.0,
             export_in_progress: false,
@@ -116,6 +120,9 @@ impl Default for AppState {
             timeline_zoom: 100.0,
             timeline_pan_x: 0.0,
             timeline_pan_y: 0.0,
+            canvas_zoom: 1.0,
+            canvas_pan_x: 0.0,
+            canvas_pan_y: 0.0,
             settings_open_time: None,
             settings_is_closing: false,
             toast_message: None,
@@ -133,6 +140,7 @@ impl Default for AppState {
             project_path_input: String::new(),
             path_validation_error: None,
             show_welcome: true,
+            preview_texture: None,
         }
     }
 }
