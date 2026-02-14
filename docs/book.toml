@@ -3,7 +3,6 @@ title = "Motioner Documentation"
 authors = ["Juan Vasco Chiappini"]
 description = "Comprehensive documentation for Motioner - A modern animation editor built in Rust"
 language = "en"
-multilingual = false
 src = "src"
 
 [build]
