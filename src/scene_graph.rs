@@ -22,26 +22,24 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             let height = 28.0;
             let (rect, _) =
                 ui.allocate_at_least(egui::vec2(ui.available_width(), height), Sense::hover());
-            if is_dragging {
-                let hovered = ui.rect_contains_pointer(rect);
-                let stroke = if hovered {
-                    egui::Stroke::new(1.5, Color32::LIGHT_BLUE)
+            let hovered = is_dragging && ui.rect_contains_pointer(rect);
+            let stroke = if hovered {
+                egui::Stroke::new(1.5, Color32::LIGHT_BLUE)
+            } else {
+                egui::Stroke::new(1.0, Color32::from_gray(60))
+            };
+            ui.painter().rect_stroke(rect, 4.0, stroke);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "📂 Drag & Drop elements here to move to root",
+                egui::FontId::proportional(11.0),
+                if hovered {
+                    Color32::WHITE
                 } else {
-                    egui::Stroke::new(1.0, Color32::from_gray(60))
-                };
-                ui.painter().rect_stroke(rect, 4.0, stroke);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "📂 Drop here to move to root",
-                    egui::FontId::proportional(11.0),
-                    if hovered {
-                        Color32::WHITE
-                    } else {
-                        Color32::from_gray(160)
-                    },
-                );
-            }
+                    Color32::from_gray(120)
+                },
+            );
         });
         payload
     };
@@ -247,19 +245,7 @@ fn render_node(
                     },
                 );
 
-                let label_res = ui.add(
-                    egui::Label::new(job)
-                        .selectable(false)
-                        .sense(Sense::click()),
-                );
-
-                if label_res.clicked() {
-                    state.selected_node_path = Some(path.clone());
-                }
-                if label_res.double_clicked() {
-                    state.renaming_path = Some(path.clone());
-                    state.rename_buffer = node_name.clone();
-                }
+                let label_res = ui.add(egui::Label::new(job).selectable(false));
 
                 // Selection highlight — subtle blue tint
                 if is_selected {
@@ -289,12 +275,18 @@ fn render_node(
             false,
         );
 
+        // We need to capture click/double-click from within the closure
+        let group_clicked = std::cell::Cell::new(false);
+        let group_double_clicked = std::cell::Cell::new(false);
+
         let (zone_res, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
             coll_state
                 .show_header(ui, |ui| {
-                    dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
+                    let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
                         render_row(ui, state);
                     });
+                    group_clicked.set(drag_res.response.clicked());
+                    group_double_clicked.set(drag_res.response.double_clicked());
                 })
                 .body(|ui| {
                     for i in 0..children_count {
@@ -304,6 +296,13 @@ fn render_node(
                     }
                 });
         });
+
+        if group_double_clicked.get() {
+            state.renaming_path = Some(path.clone());
+            state.rename_buffer = node_name.clone();
+        } else if group_clicked.get() {
+            state.selected_node_path = Some(path.clone());
+        }
 
         // Drop-target highlight
         if zone_res.hovered() && ui.memory(|m| m.is_anything_being_dragged()) {
@@ -321,9 +320,15 @@ fn render_node(
             }
         }
     } else {
-        dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
+        let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
             render_row(ui, state);
         });
+        if drag_res.response.double_clicked() {
+            state.renaming_path = Some(path.clone());
+            state.rename_buffer = node_name.clone();
+        } else if drag_res.response.clicked() {
+            state.selected_node_path = Some(path.clone());
+        }
     }
 }
 
@@ -341,13 +346,9 @@ fn dnd_drag_source_transparent<Payload, R>(
 where
     Payload: Any + Send + Sync,
 {
-    // `is_being_dragged` is true the INSTANT the mouse goes down — too eager.
-    // We check if there is already an active drag payload, which only gets set
-    // after Response::drag_started() fires (i.e., after the ~6 px threshold).
     let is_being_dragged = ui.memory(|mem| mem.is_being_dragged(id));
     let has_drag_payload = egui::DragAndDrop::has_any_payload(ui.ctx());
 
-    // Only show the floating copy once a real drag is confirmed (payload set).
     if is_being_dragged && has_drag_payload {
         // Paint the floating copy at the cursor (tooltip layer)
         let layer_id = LayerId::new(Order::Tooltip, id);
@@ -363,13 +364,11 @@ where
         // Render content normally — no style change
         let InnerResponse { inner, response } = ui.scope(add_contents);
 
-        // Add an invisible drag-sense interaction on top of the content rect.
-        // egui's Sense::drag() has a built-in distance threshold (~6 px)
-        // so clicks and double-clicks will NOT trigger a drag.
-        let dnd_response = ui.interact(response.rect, id, Sense::drag());
+        // Use click_and_drag so that clicks and double-clicks are NOT
+        // swallowed by the drag interaction layer.
+        let dnd_response = ui.interact(response.rect, id, Sense::click_and_drag());
 
-        // dnd_set_drag_payload internally gates on drag_started(),
-        // which only fires after the threshold is met.
+        // Only set drag payload when an actual drag is started (after ~6 px threshold).
         dnd_response.dnd_set_drag_payload(payload);
 
         InnerResponse::new(inner, dnd_response | response)
