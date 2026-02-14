@@ -1,0 +1,10 @@
+[
+  { "path": "ARCHITECTURE.md", "title": "Arquitectura", "desc": "Documento maestro de la arquitectura y roadmap" },
+  { "path": "DSL.md", "title": "DSL (lenguaje)", "desc": "Especificación inicial del lenguaje interno" },
+  { "path": "elements/shapes.md", "title": "Shapes", "desc": "Formas disponibles (circle, rect, path)" },
+  { "path": "elements/layers.md", "title": "Layers", "desc": "Cómo usar y organizar layers" },
+  { "path": "elements/animation.md", "title": "Animation", "desc": "Keyframes, easing y timeline" },
+  { "path": "components/renderer.md", "title": "Renderer (component)", "desc": "API y backends del renderer" },
+  { "path": "templates/README.md", "title": "Plantillas de docs", "desc": "Plantillas para crear páginas de documentación" },
+  { "path": "README.md", "title": "Project README", "desc": "Guía rápida de inicio y requisitos" }
+]
