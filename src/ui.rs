@@ -16,6 +16,21 @@ impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
 
+        // Auto-sync Code if settings changed while Code tab is active
+        let current_settings = (state.fps, state.duration_secs, state.render_width, state.render_height);
+        if state.active_tab == Some(PanelTab::Code) && state.last_synced_settings != current_settings {
+             state.dsl_code = dsl::generate_dsl(
+                 &state.scene, 
+                 state.render_width, 
+                 state.render_height, 
+                 state.fps, 
+                 state.duration_secs
+             );
+             state.last_synced_settings = current_settings;
+        } else if state.active_tab != Some(PanelTab::Code) {
+             state.last_synced_settings = current_settings;
+        }
+
         // Throttle system stats update (e.g. every 1.0s)
         let now = ctx.input(|i| i.time);
         if now - (state.last_update as f64) > 1.0 {
@@ -73,8 +88,13 @@ impl eframe::App for MyApp {
 
                         // Update DSL code always if switching TO code
                         if state.active_tab != Some(target) {
-                            state.dsl_code =
-                                dsl::generate_dsl(&state.scene, state.fps, state.duration_secs);
+                            state.dsl_code = dsl::generate_dsl(
+                                &state.scene,
+                                state.render_width,
+                                state.render_height,
+                                state.fps,
+                                state.duration_secs,
+                            );
                         }
 
                         if state.active_tab == Some(target) {
@@ -153,10 +173,41 @@ impl eframe::App for MyApp {
         let panel_open = state.active_tab.is_some();
         let t = ctx.animate_bool("multifunction_panel_anim".into(), panel_open);
 
+        // Capture side panel rect for fullscreen animation
+        let mut side_panel_rect = egui::Rect::NOTHING;
+
         if t > 0.0 {
             // Determine which tab content to show.
             // If active_tab is None (closing), use last_active_tab.
             let tab_to_show = state.active_tab.unwrap_or(state.last_active_tab);
+
+            // Special Case: If fullscreen code is active (or animating), we might need to hide this panel
+            // OR we render an empty panel to reserve space? 
+            // Better: We Always render the SidePanel, but if Fullscreen is active, we render the content 
+            // inside the Overlay, effectively stealing it.
+            
+            let is_fullscreen = state.code_fullscreen && tab_to_show == PanelTab::Code;
+            
+            // Manual Animation Logic for Slower Transition
+            // Opening: 0.8s, Closing: 0.4s (faster)
+            let open_duration = 0.8;
+            let close_duration = 0.4;
+
+            let dt = ctx.input(|i| i.stable_dt);
+            if is_fullscreen {
+                if state.code_anim_t < 1.0 {
+                    state.code_anim_t += dt / open_duration;
+                    if state.code_anim_t > 1.0 { state.code_anim_t = 1.0; }
+                    ctx.request_repaint(); // Keep animating
+                }
+            } else {
+                if state.code_anim_t > 0.0 {
+                    state.code_anim_t -= dt / close_duration;
+                    if state.code_anim_t < 0.0 { state.code_anim_t = 0.0; }
+                    ctx.request_repaint(); // Keep animating
+                }
+            }
+            let fs_t = state.code_anim_t;
 
             let mut panel = egui::SidePanel::left("multifunction_panel")
                 .resizable(true)
@@ -164,6 +215,7 @@ impl eframe::App for MyApp {
 
             // If animating (opening or closing), force the width with elastic effect
             if t < 1.0 {
+                // ...existing code...
                 // Elastic / BackOut Easing
                 // This creates the "Overshoot" when opening and "Anticipation" when closing
                 let c1 = 1.7;
@@ -181,6 +233,7 @@ impl eframe::App for MyApp {
             panel.show(ctx, |ui| {
                 // While animating, we might want to clip content so it doesn't overflow/squish weirdly
                 ui.set_clip_rect(ui.max_rect());
+                side_panel_rect = ui.min_rect(); // approximate the panel area
 
                 // Base opacity for panel open/close
                 ui.visuals_mut().widgets.noninteractive.weak_bg_fill =
@@ -195,71 +248,143 @@ impl eframe::App for MyApp {
                     1.0
                 };
 
-                if switch_t < 1.0 {
-                    // Animating Switch
-                    ui.ctx().request_repaint();
+                // If NOT fully fullscreen, we render here
+                if fs_t < 1.0 {
+                     if switch_t < 1.0 {
+                        // Animating Switch
+                        ui.ctx().request_repaint();
 
-                    // Allocate the entire space so the panel doesn't shrink
-                    let panel_rect = ui.available_rect_before_wrap();
-                    ui.allocate_rect(panel_rect, egui::Sense::hover());
+                        // Allocate the entire space so the panel doesn't shrink
+                        let panel_rect = ui.available_rect_before_wrap();
+                        ui.allocate_rect(panel_rect, egui::Sense::hover());
 
-                    // Easing for slide
-                    let ease_switch = 1.0 - (1.0 - switch_t).powi(2);
+                        // Easing for slide
+                        let ease_switch = 1.0 - (1.0 - switch_t).powi(2);
 
-                    // Old Tab (Source) - Slide Out to Left
-                    // New Tab (Target) - Slide In from Right
-                    // Or if we want a "Push" effect:
-                    // Old moves 0 -> -Width
-                    // New moves +Width -> 0
+                        // Old Tab (Source) - Slide Out to Left
+                        // New Tab (Target) - Slide In from Right
+                        // Or if we want a "Push" effect:
+                        // Old moves 0 -> -Width
+                        // New moves +Width -> 0
 
-                    let width = panel_rect.width();
-                    let height = panel_rect.height();
-                    // Use panel_rect for child UIs to match exact allocated space
-                    let rect = panel_rect;
+                        let width = panel_rect.width();
+                        let _height = panel_rect.height();
+                        // Use panel_rect for child UIs to match exact allocated space
+                        let rect = panel_rect;
 
-                    // Render Old Tab
-                    if let Some(source) = state.transition_source_tab {
-                        let old_offset = -width * ease_switch;
-                        let old_rect = rect.translate(egui::vec2(old_offset, 0.0));
+                        // Render Old Tab
+                        if let Some(source) = state.transition_source_tab {
+                            let old_offset = -width * ease_switch;
+                            let old_rect = rect.translate(egui::vec2(old_offset, 0.0));
 
-                        let mut child_ui = ui.child_ui(old_rect, *ui.layout());
-                        // child_ui.multiply_opacity(1.0 - ease_switch); // Available in newer egui, but maybe not 0.26 or exposed differently 
-                        // Just use visual transparency
-                        child_ui.visuals_mut().widgets.noninteractive.weak_bg_fill = 
-                            egui::Color32::from_black_alpha(((1.0 - ease_switch) * 255.0) as u8);
+                            let mut child_ui = ui.child_ui(old_rect, *ui.layout());
+                            // child_ui.multiply_opacity(1.0 - ease_switch); // Available in newer egui, but maybe not 0.26 or exposed differently 
+                            // Just use visual transparency
+                            child_ui.visuals_mut().widgets.noninteractive.weak_bg_fill = 
+                                egui::Color32::from_black_alpha(((1.0 - ease_switch) * 255.0) as u8);
 
-                        render_tab_content(&mut child_ui, source, state);
+                            render_tab_content(&mut child_ui, source, state);
+                        }
+
+                        // Render New Tab
+                        // Note: Because we use child_ui with translate, they don't block each other's layout space if we are careful,
+                        // but normally in egui immediate mode, drawing widgets advances the cursor.
+                        // Ideally we render them in overlapping layers.
+
+                        let new_offset = width * (1.0 - ease_switch);
+                        let new_rect = rect.translate(egui::vec2(new_offset, 0.0));
+
+                        // We need to create a UI that thinks it is at new_rect but doesn't interact with the previous one layout-wise.
+                        // Using allocate_ui_at_rect usually pushes the parent cursor.
+                        // Since we are inside a SidePanel, we can just overlay.
+
+                        // Force a new layer/clip for the second one?
+                        // Simplest hack: Just draw them. 'child_ui' creates a nested UI region.
+
+                        let mut child_ui = ui.child_ui(new_rect, *ui.layout());
+                        // child_ui.set_clip_rect(rect); // Clip to parent so it slides in
+                        // child_ui.set_opacity(ease_switch); // Fade in - use multiply_opacity or color tint
+                        // This is 0.26, set_opacity doesn't exist.
+                        // We rely on the movement mainly.
+
+                        render_tab_content(&mut child_ui, tab_to_show, state);
+                    } else {
+                        // Standard Static Render
+                        // If fully minimized, render normally. If animating, render normally (will be overlaid)
+                        if fs_t <= 0.0 {
+                            render_tab_content(ui, tab_to_show, state);
+                        } else {
+                             // Placeholder to keep layout size
+                             ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
+                        }
                     }
-
-                    // Render New Tab
-                    // Note: Because we use child_ui with translate, they don't block each other's layout space if we are careful,
-                    // but normally in egui immediate mode, drawing widgets advances the cursor.
-                    // Ideally we render them in overlapping layers.
-
-                    let new_offset = width * (1.0 - ease_switch);
-                    let new_rect = rect.translate(egui::vec2(new_offset, 0.0));
-
-                    // We need to create a UI that thinks it is at new_rect but doesn't interact with the previous one layout-wise.
-                    // Using allocate_ui_at_rect usually pushes the parent cursor.
-                    // Since we are inside a SidePanel, we can just overlay.
-
-                    // Force a new layer/clip for the second one?
-                    // Simplest hack: Just draw them. 'child_ui' creates a nested UI region.
-
-                    let mut child_ui = ui.child_ui(new_rect, *ui.layout());
-                    // child_ui.set_clip_rect(rect); // Clip to parent so it slides in
-                    // child_ui.set_opacity(ease_switch); // Fade in - use multiply_opacity or color tint
-                    // This is 0.26, set_opacity doesn't exist.
-                    // We rely on the movement mainly.
-
-                    render_tab_content(&mut child_ui, tab_to_show, state);
-                } else {
-                    // Standard Static Render
-                    render_tab_content(ui, tab_to_show, state);
                 }
             });
-        }
 
+            // 4. Handle Fullscreen Animation / Overlay
+            if fs_t > 0.0 {
+                let screen_rect = ctx.screen_rect();
+                
+                // Calculate interpolated rect
+                // Start: side_panel_rect (where it was) or a default if not captured yet
+                let start_rect = if side_panel_rect.width() > 0.0 {
+                     // Ensure it is not zero.
+                     side_panel_rect
+                } else {
+                     // Fallback if panel wasn't rendered yet (edge case)
+                     egui::Rect::from_min_size(egui::pos2(32.0, 0.0), egui::vec2(250.0, screen_rect.height()))
+                };
+
+                // Easing (BackOut or Elastic for expansion)
+                let t_anim = fs_t; // 0.0 to 1.0
+                
+                // BackOut: overshoot slightly then settle
+                // c1 = 1.70158
+                // c3 = c1 + 1
+                // 1 + c3 * (t-1)^3 + c1 * (t-1)^2
+                // Or maybe simple CubicOut/QuintOut for smoothness
+                // let ease = 1.0 - (1.0 - t_anim).powi(4); // QuartOut
+
+                // Custom EaseInOut for slower feel
+                // Sigmoid-like or Parametric Blend
+                let sqt = t_anim * t_anim;
+                let ease = sqt / (2.0 * (sqt - t_anim) + 1.0);
+                
+                // OR nice Cubic Out
+                let ease = 1.0 - (1.0 - t_anim).powi(3);
+
+                let current_rect = egui::Rect::from_min_max(
+                    egui::pos2(
+                        start_rect.left() + (screen_rect.left() - start_rect.left()) * ease,
+                        start_rect.top() + (screen_rect.top() - start_rect.top()) * ease,
+                    ),
+                    egui::pos2(
+                        start_rect.right() + (screen_rect.right() - start_rect.right()) * ease,
+                        start_rect.bottom() + (screen_rect.bottom() - start_rect.bottom()) * ease,
+                    ),
+                );
+
+                egui::Area::new("fullscreen_code_overlay")
+                    .fixed_pos(current_rect.min)
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        // Background
+                        egui::Frame::window(ui.style())
+                             .fill(egui::Color32::from_rgb(30, 30, 30))
+                             .show(ui, |ui| {
+                                 ui.set_min_size(current_rect.size());
+                                 ui.set_max_size(current_rect.size());
+                                 
+                                 // We simply call render_tab_content here
+                                 // It will render the header and the code editor
+                                 // The code editor automatically takes available space
+                                 
+                                 // We need to make sure we render PanelTab::Code specifically
+                                 render_tab_content(ui, PanelTab::Code, state);
+                             });
+                    });
+            }
+        }
         // Canvas (Central Panel takes remaining space)
         egui::CentralPanel::default().show(ctx, |ui| {
             // Use bottom_up layout to place tools at the bottom
@@ -384,6 +509,43 @@ impl eframe::App for MyApp {
         if state.show_settings {
             crate::project_settings::show(ctx, state);
         }
+
+        // Welcome/Startup Modal
+        crate::welcome_modal::show(ctx, state);
+
+        // Toast Notification
+        if let Some(msg) = &state.toast_message {
+            let now = ctx.input(|i| i.time);
+            if now > state.toast_deadline {
+                // Clear toast
+                state.toast_message = None;
+            } else {
+                let bg_color = match state.toast_type {
+                    crate::app_state::ToastType::Error => egui::Color32::from_rgb(200, 50, 50),
+                    crate::app_state::ToastType::Success => egui::Color32::from_rgb(50, 150, 50),
+                    _ => egui::Color32::from_gray(80),
+                };
+
+                egui::Area::new("toast_notification")
+                    .order(egui::Order::Tooltip)
+                    .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -60.0))
+                    .show(ctx, |ui| {
+                        egui::Frame::none()
+                            .fill(bg_color)
+                            .rounding(8.0)
+                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(50)))
+                            .inner_margin(12.0)
+                            .shadow(egui::epaint::Shadow::small_dark())
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(msg)
+                                        .color(egui::Color32::WHITE)
+                                        .size(16.0),
+                                );
+                            });
+                    });
+            }
+        }
     }
 }
 
@@ -395,9 +557,13 @@ fn render_tab_content(ui: &mut egui::Ui, tab: PanelTab, state: &mut AppState) {
             scene_graph::show(ui, state);
         }
         PanelTab::Code => {
+            // ui.heading("Generated Code"); // Header inside the panel now?
+            // User requested "En la ventana generated code debemos poder editar el codigo..."
+            // The header "Generated Code" is outside the code_panel::show.
+            // code_panel::show draws the save button row.
             ui.heading("Generated Code");
             ui.separator();
-            code_panel::show(ui, &state.dsl_code);
+            code_panel::show(ui, state);
         }
     }
 }

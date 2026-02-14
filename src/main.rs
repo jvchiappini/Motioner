@@ -1,12 +1,14 @@
+mod app_state;
+mod autocomplete; // Added this
+mod code_panel;
 mod dsl;
+mod project_settings;
 mod renderer;
 mod scene;
-mod ui;
-mod app_state;
 mod scene_graph;
 mod timeline;
-mod code_panel;
-mod project_settings; // Added this
+mod ui;
+mod welcome_modal; // Added this
 
 use anyhow::Result;
 

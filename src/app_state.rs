@@ -45,6 +45,35 @@ pub struct AppState {
     // UI Animation State
     pub settings_open_time: Option<f64>,
     pub settings_is_closing: bool,
+
+    // Toast Notification State
+    pub toast_message: Option<String>,
+    pub toast_type: ToastType, // "error" or "success", handled as enum or string
+    pub toast_deadline: f64,   // Time when toast should disappear
+    
+    // Change tracking
+    pub last_synced_settings: (u32, f32, u32, u32),
+
+    // Fullscreen Code Editor
+    pub code_fullscreen: bool,
+    pub code_anim_t: f32, // Manually tracked animation value 0.0 to 1.0
+
+    // Autocomplete State
+    pub completion_popup_open: bool,
+    pub completion_cursor_idx: usize,
+    pub completion_items: Vec<String>,
+    pub completion_selected_index: usize,
+
+    // Project State
+    pub project_path: Option<PathBuf>,
+    pub show_welcome: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ToastType {
+    Info,
+    Error,
+    Success,
 }
 
 impl Default for AppState {
@@ -82,6 +111,19 @@ impl Default for AppState {
             timeline_pan_y: 0.0,
             settings_open_time: None,
             settings_is_closing: false,
+            toast_message: None,
+            toast_type: ToastType::Info,
+            toast_deadline: 0.0,
+            last_synced_settings: (30, 4.0, 1280, 720),
+            code_fullscreen: false,
+            code_anim_t: 0.0,
+            completion_popup_open: false,
+            completion_cursor_idx: 0,
+            completion_items: Vec::new(),
+            completion_selected_index: 0,
+            
+            project_path: None,
+            show_welcome: true,
         }
     }
 }
