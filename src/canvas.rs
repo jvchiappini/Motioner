@@ -1,3 +1,4 @@
+use crate::animations::animations_manager::animated_xy_for;
 use crate::app_state::AppState;
 use eframe::egui;
 use std::sync::mpsc;
@@ -26,7 +27,11 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
     let mut final_color = [255.0, 255.0, 255.0, 255.0]; // Paper background
 
     // Recursively traverse the scene graph to find all visual primitives
-    fn collect_primitives(shapes: &[crate::scene::Shape], parent_spawn: f32, out: &mut Vec<(crate::scene::Shape, f32)>) {
+    fn collect_primitives(
+        shapes: &[crate::scene::Shape],
+        parent_spawn: f32,
+        out: &mut Vec<(crate::scene::Shape, f32)>,
+    ) {
         for shape in shapes {
             let my_spawn = shape.spawn_time().max(parent_spawn);
             match shape {
@@ -46,13 +51,24 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
             continue;
         }
         match shape {
-            crate::scene::Shape::Circle { x: _x, y: _y, radius, color, .. } => {
+            crate::scene::Shape::Circle {
+                x: _x,
+                y: _y,
+                radius,
+                color,
+                ..
+            } => {
                 let width = state.render_width as f32;
                 let height = state.render_height as f32;
                 let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
                 let shape_pos = egui::pos2(eval_x * width, eval_y * height);
                 let radius_px = radius * width; // Use width as reference
-                let shape_color = [color[0] as f32, color[1] as f32, color[2] as f32, color[3] as f32];
+                let shape_color = [
+                    color[0] as f32,
+                    color[1] as f32,
+                    color[2] as f32,
+                    color[3] as f32,
+                ];
                 let dist = pixel_pos.distance(shape_pos);
                 if dist <= radius_px {
                     let src_a = (shape_color[3]) / 255.0;
@@ -61,7 +77,14 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
                     final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
                 }
             }
-            crate::scene::Shape::Rect { x: _x, y: _y, w, h, color, .. } => {
+            crate::scene::Shape::Rect {
+                x: _x,
+                y: _y,
+                w,
+                h,
+                color,
+                ..
+            } => {
                 let width = state.render_width as f32;
                 let height = state.render_height as f32;
                 let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
@@ -71,7 +94,12 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
                 let center_y = eval_y * height + half_h;
                 let shape_pos = egui::pos2(center_x, center_y);
                 let shape_size = egui::vec2(half_w, half_h);
-                let shape_color = [color[0] as f32, color[1] as f32, color[2] as f32, color[3] as f32];
+                let shape_color = [
+                    color[0] as f32,
+                    color[1] as f32,
+                    color[2] as f32,
+                    color[3] as f32,
+                ];
                 let d_vec = egui::vec2(
                     (pixel_pos.x - shape_pos.x).abs() - shape_size.x,
                     (pixel_pos.y - shape_pos.y).abs() - shape_size.y,
@@ -95,47 +123,25 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
     ]
 }
 
-/// Compute animated position (x,y) for a shape at `project_time` (seconds) using normalized animation keys.
-fn animated_xy_for(shape: &crate::scene::Shape, project_time: f32, project_duration: f32) -> (f32, f32) {
-    // project_time and animation start/end are in seconds
-    match shape {
-        crate::scene::Shape::Circle { x, y, animations, .. } | crate::scene::Shape::Rect { x, y, animations, .. } => {
-            // prefer the last animation that matches this time
-            for a in animations.iter().rev() {
-                if let crate::scene::Animation::Move { to_x, to_y, start, end, .. } = a {
-                    if project_time >= *start && project_time <= *end {
-                        let local_t = if (*end - *start).abs() < std::f32::EPSILON {
-                            1.0
-                        } else {
-                            (project_time - *start) / (*end - *start)
-                        };
-                        // linear easing: interpolate from the element's base (x,y) to the animation's final position
-                        let ix = *x + local_t * (to_x - *x);
-                        let iy = *y + local_t * (to_y - *y);
-                        return (ix, iy);
-                    } else if project_time > *end {
-                        return (*to_x, *to_y);
-                    } else if project_time < *start {
-                        return (*x, *y);
-                    }
-                }
-            }
-            (*x, *y)
-        }
-        _ => (0.0, 0.0),
-    }
-}
+// animation sampling is implemented in `src/animations/animations_manager.rs`
 
 /// Render a single preview frame into an egui::ColorImage at the current preview resolution.
 fn render_frame_color_image(state: &crate::app_state::AppState, time: f32) -> egui::ColorImage {
-    let preview_w = (state.render_width as f32 * state.preview_multiplier).round().max(1.0) as usize;
-    let preview_h = (state.render_height as f32 * state.preview_multiplier).round().max(1.0) as usize;
+    let preview_w = (state.render_width as f32 * state.preview_multiplier)
+        .round()
+        .max(1.0) as usize;
+    let preview_h = (state.render_height as f32 * state.preview_multiplier)
+        .round()
+        .max(1.0) as usize;
     let mut pixels: Vec<u8> = Vec::with_capacity(preview_w * preview_h * 4);
 
     for y in 0..preview_h {
         for x in 0..preview_w {
             // sample at pixel center in normalized paper coords
-            let uv = egui::pos2((x as f32 + 0.5) / (preview_w as f32), (y as f32 + 0.5) / (preview_h as f32));
+            let uv = egui::pos2(
+                (x as f32 + 0.5) / (preview_w as f32),
+                (y as f32 + 0.5) / (preview_h as f32),
+            );
             let col = sample_color_at(state, uv, time);
             pixels.push(col[0]);
             pixels.push(col[1]);
@@ -190,23 +196,36 @@ pub struct RenderSnapshot {
 }
 
 fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::ColorImage {
-    let preview_w = (snap.render_width as f32 * snap.preview_multiplier).round().max(1.0) as usize;
-    let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round().max(1.0) as usize;
+    let preview_w = (snap.render_width as f32 * snap.preview_multiplier)
+        .round()
+        .max(1.0) as usize;
+    let preview_h = (snap.render_height as f32 * snap.preview_multiplier)
+        .round()
+        .max(1.0) as usize;
     let mut pixels: Vec<u8> = Vec::with_capacity(preview_w * preview_h * 4);
 
     // reuse a minimal sampling loop similar to `sample_color_at` but operating on the snapshot
     for y in 0..preview_h {
         for x in 0..preview_w {
-            let uv = egui::pos2((x as f32 + 0.5) / (preview_w as f32), (y as f32 + 0.5) / (preview_h as f32));
+            let uv = egui::pos2(
+                (x as f32 + 0.5) / (preview_w as f32),
+                (y as f32 + 0.5) / (preview_h as f32),
+            );
             // simple sampling: iterate scene primitives and composite (no sub-pixel antialiasing)
             let mut final_color = [255.0, 255.0, 255.0, 255.0];
 
             // collect primitives
-            fn collect_primitives(shapes: &[crate::scene::Shape], parent_spawn: f32, out: &mut Vec<(crate::scene::Shape, f32)>) {
+            fn collect_primitives(
+                shapes: &[crate::scene::Shape],
+                parent_spawn: f32,
+                out: &mut Vec<(crate::scene::Shape, f32)>,
+            ) {
                 for shape in shapes {
                     let my_spawn = shape.spawn_time().max(parent_spawn);
                     match shape {
-                        crate::scene::Shape::Group { children, .. } => collect_primitives(children, my_spawn, out),
+                        crate::scene::Shape::Group { children, .. } => {
+                            collect_primitives(children, my_spawn, out)
+                        }
                         _ => out.push((shape.clone(), my_spawn)),
                     }
                 }
@@ -216,37 +235,60 @@ fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::
             collect_primitives(&snap.scene, 0.0, &mut all_prims);
 
             // produce pixel in project coordinates
-            let pixel_pos = egui::pos2(uv.x * snap.render_width as f32, uv.y * snap.render_height as f32);
+            let pixel_pos = egui::pos2(
+                uv.x * snap.render_width as f32,
+                uv.y * snap.render_height as f32,
+            );
 
             for (shape, actual_spawn) in all_prims {
                 if time < actual_spawn {
                     continue;
                 }
                 match shape {
-                    crate::scene::Shape::Circle { x, y, radius, color, .. } => {
+                    crate::scene::Shape::Circle {
+                        x,
+                        y,
+                        radius,
+                        color,
+                        ..
+                    } => {
                         let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
-                        let shape_pos = egui::pos2(eval_x * snap.render_width as f32, eval_y * snap.render_height as f32);
+                        let shape_pos = egui::pos2(
+                            eval_x * snap.render_width as f32,
+                            eval_y * snap.render_height as f32,
+                        );
                         let radius_px = radius * snap.render_width as f32;
                         let dist = pixel_pos.distance(shape_pos);
                         if dist <= radius_px {
                             let src_a = (color[3] as f32) / 255.0;
-                            final_color[0] = final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
-                            final_color[1] = final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
-                            final_color[2] = final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
+                            final_color[0] =
+                                final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
+                            final_color[1] =
+                                final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
+                            final_color[2] =
+                                final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
                         }
                     }
-                    crate::scene::Shape::Rect { x, y, w, h, color, .. } => {
+                    crate::scene::Shape::Rect {
+                        x, y, w, h, color, ..
+                    } => {
                         let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
                         let half_w = (w * snap.render_width as f32) / 2.0;
                         let half_h = (h * snap.render_height as f32) / 2.0;
                         let center_x = eval_x * snap.render_width as f32 + half_w;
                         let center_y = eval_y * snap.render_height as f32 + half_h;
-                        let d_vec = egui::vec2((pixel_pos.x - center_x).abs() - half_w, (pixel_pos.y - center_y).abs() - half_h);
+                        let d_vec = egui::vec2(
+                            (pixel_pos.x - center_x).abs() - half_w,
+                            (pixel_pos.y - center_y).abs() - half_h,
+                        );
                         if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
                             let src_a = (color[3] as f32) / 255.0;
-                            final_color[0] = final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
-                            final_color[1] = final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
-                            final_color[2] = final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
+                            final_color[0] =
+                                final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
+                            final_color[1] =
+                                final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
+                            final_color[2] =
+                                final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
                         }
                     }
                     _ => {}
@@ -276,7 +318,11 @@ fn ensure_preview_worker(state: &mut AppState) {
     thread::spawn(move || {
         while let Ok(job) = job_rx.recv() {
             match job {
-                PreviewJob::Generate { center_time, mode, snapshot } => {
+                PreviewJob::Generate {
+                    center_time,
+                    mode,
+                    snapshot,
+                } => {
                     match mode {
                         PreviewMode::Single => {
                             let img = render_frame_color_image_snapshot(&snapshot, center_time);
@@ -285,13 +331,18 @@ fn ensure_preview_worker(state: &mut AppState) {
                         PreviewMode::Buffered => {
                             let frames_each_side = 10i32;
                             let frame_step = 1.0 / (snapshot.preview_fps as f32);
-                            let mut frames = Vec::with_capacity((frames_each_side * 2 + 1) as usize);
+                            let mut frames =
+                                Vec::with_capacity((frames_each_side * 2 + 1) as usize);
                             for i in -frames_each_side..=frames_each_side {
-                                let t = (center_time + (i as f32) * frame_step).clamp(0.0, snapshot.duration_secs);
+                                let t = (center_time + (i as f32) * frame_step)
+                                    .clamp(0.0, snapshot.duration_secs);
                                 let img = render_frame_color_image_snapshot(&snapshot, t);
                                 frames.push((t, img));
                                 // send intermediate single-frame updates for smoother UX
-                                let _ = res_tx.send(PreviewResult::Single(t, frames.last().unwrap().1.clone()));
+                                let _ = res_tx.send(PreviewResult::Single(
+                                    t,
+                                    frames.last().unwrap().1.clone(),
+                                ));
                             }
                             let _ = res_tx.send(PreviewResult::Buffered(frames));
                         }
@@ -317,7 +368,11 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
             duration_secs: state.duration_secs,
             preview_fps: state.preview_fps,
         };
-        let job = PreviewJob::Generate { center_time, mode, snapshot: snap };
+        let job = PreviewJob::Generate {
+            center_time,
+            mode,
+            snapshot: snap,
+        };
         let _ = tx.send(job);
     }
 }
@@ -330,11 +385,20 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                 PreviewResult::Single(t, img) => {
                     // update/insert single frame into cache
                     // replace center frame if times are close
-                    state.preview_frame_cache.retain(|(tt, _)| (tt - t).abs() > 1e-6);
+                    state
+                        .preview_frame_cache
+                        .retain(|(tt, _)| (tt - t).abs() > 1e-6);
                     state.preview_frame_cache.push((t, img.clone()));
                     // if this is near the cache center, update texture too
-                    if state.preview_cache_center_time.map_or(true, |c| (c - t).abs() < 1e-3) {
-                        let handle = ctx.load_texture("preview_center", img.clone(), egui::TextureOptions::NEAREST);
+                    if state
+                        .preview_cache_center_time
+                        .map_or(true, |c| (c - t).abs() < 1e-3)
+                    {
+                        let handle = ctx.load_texture(
+                            "preview_center",
+                            img.clone(),
+                            egui::TextureOptions::NEAREST,
+                        );
                         state.preview_texture = Some(handle);
                         state.preview_cache_center_time = Some(t);
                     }
@@ -342,7 +406,11 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                 PreviewResult::Buffered(frames) => {
                     state.preview_frame_cache = frames.clone();
                     if let Some((_, center_img)) = state.preview_frame_cache.get((10) as usize) {
-                        let handle = ctx.load_texture("preview_center", center_img.clone(), egui::TextureOptions::NEAREST);
+                        let handle = ctx.load_texture(
+                            "preview_center",
+                            center_img.clone(),
+                            egui::TextureOptions::NEAREST,
+                        );
                         state.preview_texture = Some(handle);
                         state.preview_cache_center_time = Some(state.preview_frame_cache[10].0);
                     }
@@ -522,7 +590,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 for shape in shapes {
                     let my_spawn = shape.spawn_time().max(parent_spawn);
                     match shape {
-                        crate::scene::Shape::Circle { x, y, radius, color, .. } => {
+                        crate::scene::Shape::Circle {
+                            x,
+                            y,
+                            radius,
+                            color,
+                            ..
+                        } => {
                             gpu_shapes.push(GpuShape {
                                 pos: [*x, *y],
                                 size: [*radius, 0.0],
@@ -538,7 +612,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 p2: 0,
                             });
                         }
-                        crate::scene::Shape::Rect { x, y, w, h, color, .. } => {
+                        crate::scene::Shape::Rect {
+                            x, y, w, h, color, ..
+                        } => {
                             gpu_shapes.push(GpuShape {
                                 pos: [*x + *w / 2.0, *y + *h / 2.0],
                                 size: [*w / 2.0, *h / 2.0],
@@ -555,7 +631,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             });
                         }
                         crate::scene::Shape::Group { children, .. } => {
-                            fill_gpu_shapes(children, gpu_shapes, _render_width, _render_height, my_spawn, current_time, project_duration);
+                            fill_gpu_shapes(
+                                children,
+                                gpu_shapes,
+                                _render_width,
+                                _render_height,
+                                my_spawn,
+                                current_time,
+                                project_duration,
+                            );
                         }
                     }
                 }
@@ -612,31 +696,75 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         continue;
                     }
                     match shape {
-                        crate::scene::Shape::Circle { x: _x, y: _y, radius, color, .. } => {
-                            let (eval_x, eval_y) = animated_xy_for(shape, current_time, project_duration);
+                        crate::scene::Shape::Circle {
+                            x: _x,
+                            y: _y,
+                            radius,
+                            color,
+                            ..
+                        } => {
+                            let (eval_x, eval_y) =
+                                animated_xy_for(shape, current_time, project_duration);
                             let pos = composition_rect.min
-                                + egui::vec2(eval_x * composition_rect.width(), eval_y * composition_rect.height());
+                                + egui::vec2(
+                                    eval_x * composition_rect.width(),
+                                    eval_y * composition_rect.height(),
+                                );
                             let scaled_radius = radius * composition_rect.width();
-                            let c = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+                            let c = egui::Color32::from_rgba_unmultiplied(
+                                color[0], color[1], color[2], color[3],
+                            );
                             ui_painter.circle_filled(pos, scaled_radius, c);
                         }
-                        crate::scene::Shape::Rect { x: _x, y: _y, w, h, color, .. } => {
-                            let (eval_x, eval_y) = animated_xy_for(shape, current_time, project_duration);
+                        crate::scene::Shape::Rect {
+                            x: _x,
+                            y: _y,
+                            w,
+                            h,
+                            color,
+                            ..
+                        } => {
+                            let (eval_x, eval_y) =
+                                animated_xy_for(shape, current_time, project_duration);
                             let min = composition_rect.min
-                                + egui::vec2(eval_x * composition_rect.width(), eval_y * composition_rect.height());
-                            let size = egui::vec2(w * composition_rect.width(), h * composition_rect.height());
+                                + egui::vec2(
+                                    eval_x * composition_rect.width(),
+                                    eval_y * composition_rect.height(),
+                                );
+                            let size = egui::vec2(
+                                w * composition_rect.width(),
+                                h * composition_rect.height(),
+                            );
                             let rect = egui::Rect::from_min_size(min, size);
-                            let c = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+                            let c = egui::Color32::from_rgba_unmultiplied(
+                                color[0], color[1], color[2], color[3],
+                            );
                             ui_painter.rect_filled(rect, 0.0, c);
                         }
                         crate::scene::Shape::Group { children, .. } => {
-                            draw_shapes_recursive(ui_painter, children, composition_rect, zoom, current_time, actual_spawn, project_duration);
+                            draw_shapes_recursive(
+                                ui_painter,
+                                children,
+                                composition_rect,
+                                zoom,
+                                current_time,
+                                actual_spawn,
+                                project_duration,
+                            );
                         }
                     }
                 }
             }
 
-            draw_shapes_recursive(&painter, &state.scene, composition_rect, zoom, state.time, 0.0, state.duration_secs);
+            draw_shapes_recursive(
+                &painter,
+                &state.scene,
+                composition_rect,
+                zoom,
+                state.time,
+                0.0,
+                state.duration_secs,
+            );
         }
 
         // Interaction: clicks / selection relative to normalized coordinates
@@ -690,7 +818,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                     crate::scene::Shape::Circle { x, y, radius, .. } => {
                                         let cw = *x * composition_rect.width();
                                         let ch = *y * composition_rect.height();
-                                        let center = composition_rect.left_top() + egui::vec2(cw, ch);
+                                        let center =
+                                            composition_rect.left_top() + egui::vec2(cw, ch);
                                         let scaled_radius = radius * composition_rect.width();
                                         if pos.distance(center) <= scaled_radius {
                                             return Some(path);
@@ -700,7 +829,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                         let cw = *x * composition_rect.width();
                                         let ch = *y * composition_rect.height();
                                         let min = composition_rect.left_top() + egui::vec2(cw, ch);
-                                        let size = egui::vec2(w * composition_rect.width(), h * composition_rect.height());
+                                        let size = egui::vec2(
+                                            w * composition_rect.width(),
+                                            h * composition_rect.height(),
+                                        );
                                         let rect = egui::Rect::from_min_size(min, size);
                                         if rect.contains(pos) {
                                             return Some(path);
@@ -708,10 +840,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                     }
                                     crate::scene::Shape::Group { children, .. } => {
                                         // Try to hit children first
-                                        if let Some(child_path) = find_hit_path(children, pos, composition_rect, zoom, path.clone(), current_time, actual_spawn) {
+                                        if let Some(child_path) = find_hit_path(
+                                            children,
+                                            pos,
+                                            composition_rect,
+                                            zoom,
+                                            path.clone(),
+                                            current_time,
+                                            actual_spawn,
+                                        ) {
                                             return Some(child_path);
                                         }
-                                        
+
                                         // If no child hit, but we want the group to be pickable as a whole,
                                         // we'd need a bounding box for the group. For now, groups aren't picked directly
                                         // unless we are picking their children.
@@ -721,7 +861,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             None
                         }
 
-                        let hit_path = find_hit_path(&state.scene, pos, composition_rect, zoom, Vec::new(), state.time, 0.0);
+                        let hit_path = find_hit_path(
+                            &state.scene,
+                            pos,
+                            composition_rect,
+                            zoom,
+                            Vec::new(),
+                            state.time,
+                            0.0,
+                        );
 
                         // Update both the top-level selection and the selected node path
                         if let Some(p) = hit_path {
@@ -741,7 +889,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         // Draw selection highlight (supports nested selection paths)
         if let Some(path) = &state.selected_node_path {
             let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0));
-            
+
             // Helper to draw highlights recursively for a shape
             fn draw_highlight_recursive(
                 painter: &egui::Painter,
@@ -768,12 +916,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         let cw = *x * composition_rect.width();
                         let ch = *y * composition_rect.height();
                         let min = composition_rect.left_top() + egui::vec2(cw, ch);
-                        let size = egui::vec2(w * composition_rect.width(), h * composition_rect.height());
+                        let size =
+                            egui::vec2(w * composition_rect.width(), h * composition_rect.height());
                         painter.rect_stroke(egui::Rect::from_min_size(min, size), 0.0, stroke);
                     }
                     crate::scene::Shape::Group { children, .. } => {
                         for child in children {
-                            draw_highlight_recursive(painter, child, composition_rect, _zoom, stroke, current_time, actual_spawn);
+                            draw_highlight_recursive(
+                                painter,
+                                child,
+                                composition_rect,
+                                _zoom,
+                                stroke,
+                                current_time,
+                                actual_spawn,
+                            );
                         }
                     }
                 }
@@ -789,10 +946,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             }
 
             if let Some(node) = current_node {
-                draw_highlight_recursive(&painter, node, composition_rect, zoom, stroke, state.time, 0.0);
+                draw_highlight_recursive(
+                    &painter,
+                    node,
+                    composition_rect,
+                    zoom,
+                    stroke,
+                    state.time,
+                    0.0,
+                );
             }
-        }
-        else if let Some(selected_idx) = state.selected {
+        } else if let Some(selected_idx) = state.selected {
             // Backwards-compatible fallback (should rarely be used since we set `selected_node_path` everywhere)
             if let Some(shape) = state.scene.get(selected_idx) {
                 if state.time >= shape.spawn_time() {
@@ -809,7 +973,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             let cw = *x * composition_rect.width();
                             let ch = *y * composition_rect.height();
                             let min = composition_rect.left_top() + egui::vec2(cw, ch);
-                            let size = egui::vec2(w * composition_rect.width(), h * composition_rect.height());
+                            let size = egui::vec2(
+                                w * composition_rect.width(),
+                                h * composition_rect.height(),
+                            );
                             painter.rect_stroke(egui::Rect::from_min_size(min, size), 0.0, stroke);
                         }
                         _ => {}
@@ -1030,7 +1197,7 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         uniforms[14] = m_pos.y;
         uniforms[15] = mag_active;
         uniforms[16] = self.time; // Pass the current time
-        // 17, 18, 19 remain 0.0 for padding
+                                  // 17, 18, 19 remain 0.0 for padding
 
         queue.write_buffer(
             &resources.uniform_buffer,

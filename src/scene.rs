@@ -99,24 +99,12 @@ impl Shape {
                 );
                 if !animations.is_empty() {
                     for a in animations.iter() {
-                        if let Animation::Move {
-                            to_x,
-                            to_y,
-                            start,
-                            end,
-                            ..
-                        } = a
+                        if let Some(anim_dsl) =
+                            crate::animations::animations_manager::animation_to_dsl(
+                                a, name, &indent,
+                            )
                         {
-                            out.push_str(&format!("\n{}move {{\n", indent));
-                            out.push_str(&format!("{}    element = \"{}\"\n", indent, name));
-                            out.push_str(&format!("{}    type = linear\n", indent));
-                            out.push_str(&format!("{}    startAt = {:.3}\n", indent, start));
-                            out.push_str(&format!("{}    end {{\n", indent));
-                            out.push_str(&format!("{}        time = {:.3}\n", indent, end));
-                            out.push_str(&format!("{}        x = {:.3}\n", indent, to_x));
-                            out.push_str(&format!("{}        y = {:.3}\n", indent, to_y));
-                            out.push_str(&format!("{}    }}\n", indent));
-                            out.push_str(&format!("{}}}", indent));
+                            out.push_str(&anim_dsl);
                         }
                     }
                 }
@@ -139,24 +127,12 @@ impl Shape {
                 );
                 if !animations.is_empty() {
                     for a in animations.iter() {
-                        if let Animation::Move {
-                            to_x,
-                            to_y,
-                            start,
-                            end,
-                            ..
-                        } = a
+                        if let Some(anim_dsl) =
+                            crate::animations::animations_manager::animation_to_dsl(
+                                a, name, &indent,
+                            )
                         {
-                            out.push_str(&format!("\n{}move {{\n", indent));
-                            out.push_str(&format!("{}    element = \"{}\"\n", indent, name));
-                            out.push_str(&format!("{}    type = linear\n", indent));
-                            out.push_str(&format!("{}    startAt = {:.3}\n", indent, start));
-                            out.push_str(&format!("{}    end {{\n", indent));
-                            out.push_str(&format!("{}        time = {:.3}\n", indent, end));
-                            out.push_str(&format!("{}        x = {:.3}\n", indent, to_x));
-                            out.push_str(&format!("{}        y = {:.3}\n", indent, to_y));
-                            out.push_str(&format!("{}    }}\n", indent));
-                            out.push_str(&format!("{}}}", indent));
+                            out.push_str(&anim_dsl);
                         }
                     }
                 }

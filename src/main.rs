@@ -1,3 +1,4 @@
+mod animations;
 mod app_state;
 mod autocomplete; // Added this
 mod canvas;

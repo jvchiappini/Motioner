@@ -131,7 +131,8 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
     }
 
     // collect top-level move blocks that reference elements (to support move blocks before/after shapes)
-    let mut pending_moves: Vec<(String, f32, f32, f32, f32)> = Vec::new();
+    // tuple: (element, end_time, to_x, to_y, start_at, easing)
+    let mut pending_moves: Vec<(String, f32, f32, f32, f32, crate::scene::Easing)> = Vec::new();
 
     while let Some(line) = lines.next() {
         if line.starts_with("circle(") && line.ends_with(")") {
@@ -208,6 +209,87 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                             }
                         }
                     }
+                } else if next.starts_with("move") {
+                    // consume 'move {' line
+                    lines.next();
+                    let mut easing_kind = crate::scene::Easing::Linear;
+                    let mut start_at: Option<f32> = None;
+                    let mut end_time: Option<f32> = None;
+                    let mut end_x: Option<f32> = None;
+                    let mut end_y: Option<f32> = None;
+
+                    while let Some(bline) = lines.next() {
+                        let b = bline.trim();
+                        if b == "}" { break; }
+                        if b.starts_with("type") && b.contains('=') {
+                            if let Some(eq) = b.find('=') {
+                                let val = b[eq+1..].trim().trim_matches(',').to_lowercase();
+                                if val.contains("linear") { easing_kind = crate::scene::Easing::Linear; }
+                            }
+                        } else if b.starts_with("startAt") && b.contains('=') {
+                            if let Some(eq) = b.find('=') {
+                                if let Ok(v) = b[eq+1..].trim().trim_matches(',').parse::<f32>() {
+                                    start_at = Some(v);
+                                }
+                            }
+                        } else if b.starts_with("end") && b.contains('{') {
+                            while let Some(eline) = lines.next() {
+                                let e = eline.trim();
+                                if e == "}" { break; }
+                                if e.starts_with("time") && e.contains('=') {
+                                    if let Some(eq) = e.find('=') {
+                                        if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
+                                            end_time = Some(v);
+                                        }
+                                    }
+                                }
+                                if e.starts_with("x") && e.contains('=') {
+                                    if let Some(eq) = e.find('=') {
+                                        if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
+                                            end_x = Some(v);
+                                        }
+                                    }
+                                }
+                                if e.starts_with("y") && e.contains('=') {
+                                    if let Some(eq) = e.find('=') {
+                                        if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
+                                            end_y = Some(v);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(last) = shapes.last_mut() {
+                        if let (Some(sa), Some(et), Some(ex), Some(ey)) = (start_at, end_time, end_x, end_y) {
+                            match last {
+                                Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
+                                    animations.push(crate::scene::Animation::Move { to_x: ex, to_y: ey, start: sa, end: et, easing: easing_kind });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                } else if next.starts_with("move") {
+                            // consume 'move {', collect inner lines and delegate parsing
+                            lines.next();
+                            let mut inner: Vec<&str> = Vec::new();
+                            while let Some(bline) = lines.next() {
+                                let b = bline.trim();
+                                if b == "}" { break; }
+                                inner.push(b);
+                            }
+                            if let Some(parsed) = crate::animations::move_animation::parse_move_block(&inner) {
+                                if let Some(last) = shapes.last_mut() {
+                                    match last {
+                                        Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
+                                            animations.push(crate::scene::Animation::Move { to_x: parsed.to_x, to_y: parsed.to_y, start: parsed.start, end: parsed.end, easing: parsed.easing });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                 }
             }
         } else if line.starts_with("rect(") && line.ends_with(")") {
@@ -283,66 +365,20 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             }
         }
         else if line.starts_with("move") && line.contains('{') {
-            // parse a top-level move { ... } block
-            let mut element: Option<String> = None;
-            let mut easing: Option<String> = None;
-            let mut start_at: Option<f32> = None;
-            let mut end_time: Option<f32> = None;
-            let mut end_x: Option<f32> = None;
-            let mut end_y: Option<f32> = None;
-
-            // read inner lines until matching '}'
+            // parse a top-level move { ... } block (delegate inner parsing to animations module)
+            // consume the opening 'move {' and gather inner lines
+            let mut inner: Vec<&str> = Vec::new();
+            // consume first line's remainder already matched by `line` — but we still need to advance iterator
             while let Some(bline) = lines.next() {
                 let b = bline.trim();
                 if b == "}" { break; }
-                if b.starts_with("element") && b.contains('=') {
-                    if let Some(eq) = b.find('=') {
-                        let val = b[eq+1..].trim().trim_matches(',').trim().trim_matches('"').to_string();
-                        element = Some(val);
-                    }
-                } else if b.starts_with("type") && b.contains('=') {
-                    if let Some(eq) = b.find('=') {
-                        let val = b[eq+1..].trim().trim_matches(',').to_string();
-                        easing = Some(val);
-                    }
-                } else if b.starts_with("startAt") && b.contains('=') {
-                    if let Some(eq) = b.find('=') {
-                        if let Ok(v) = b[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                            start_at = Some(v);
-                        }
-                    }
-                } else if b.starts_with("end") && b.contains('{') {
-                    // parse nested end { ... }
-                    while let Some(eline) = lines.next() {
-                        let e = eline.trim();
-                        if e == "}" { break; }
-                        if e.starts_with("time") && e.contains('=') {
-                            if let Some(eq) = e.find('=') {
-                                if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                    end_time = Some(v);
-                                }
-                            }
-                        }
-                        if e.starts_with("x") && e.contains('=') {
-                            if let Some(eq) = e.find('=') {
-                                if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                    end_x = Some(v);
-                                }
-                            }
-                        }
-                        if e.starts_with("y") && e.contains('=') {
-                            if let Some(eq) = e.find('=') {
-                                if let Ok(v) = e[eq+1..].trim().trim_matches(',').parse::<f32>() {
-                                    end_y = Some(v);
-                                }
-                            }
-                        }
-                    }
-                }
+                inner.push(b);
             }
 
-            if let (Some(el), Some(et), Some(ex), Some(ey), Some(sa)) = (element, end_time, end_x, end_y, start_at) {
-                pending_moves.push((el, et, ex, ey, sa));
+            if let Some(parsed) = crate::animations::move_animation::parse_move_block(&inner) {
+                if let Some(el) = parsed.element.clone() {
+                    pending_moves.push((el, parsed.end, parsed.to_x, parsed.to_y, parsed.start, parsed.easing));
+                }
             }
         } else {
             // ignore other lines for now
@@ -351,11 +387,11 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
     }
 
     // attach pending moves to matching shapes by name
-    for (el, end_t, ex, ey, start_at) in pending_moves {
+    for (el, end_t, ex, ey, start_at, easing_kind) in pending_moves {
         if let Some(s) = shapes.iter_mut().find(|sh| sh.name() == el) {
             match s {
                 Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-                    animations.push(crate::scene::Animation::Move { to_x: ex, to_y: ey, start: start_at, end: end_t, easing: crate::scene::Easing::Linear });
+                    animations.push(crate::scene::Animation::Move { to_x: ex, to_y: ey, start: start_at, end: end_t, easing: easing_kind });
                 }
                 _ => {}
             }
