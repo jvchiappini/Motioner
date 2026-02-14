@@ -13,7 +13,6 @@ create-missing = true
 default-theme = "rust"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/jvchiappini/Motioner"
-git-repository-icon = "fa-github"
 edit-url-template = "https://github.com/jvchiappini/Motioner/edit/main/docs/{path}"
 
 [output.html.playground]
