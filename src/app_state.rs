@@ -42,6 +42,11 @@ pub struct AppState {
     pub timeline_pan_x: f32, // horizontal scroll offset (pixels)
     pub timeline_pan_y: f32, // vertical scroll offset (pixels)
 
+    // Canvas state
+    pub canvas_zoom: f32,
+    pub canvas_pan_x: f32,
+    pub canvas_pan_y: f32,
+
     // UI Animation State
     pub settings_open_time: Option<f64>,
     pub settings_is_closing: bool,

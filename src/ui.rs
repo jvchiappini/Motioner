@@ -1,5 +1,5 @@
 use crate::app_state::{AppState, PanelTab};
-use crate::{code_panel, dsl, scene_graph, timeline};
+use crate::{canvas, code_panel, dsl, scene_graph, timeline};
 use eframe::egui;
 
 pub struct MyApp {
@@ -450,86 +450,7 @@ impl eframe::App for MyApp {
                 ui.separator();
 
                 // The Canvas (Fills the rest of the vertical space upwards)
-                egui::Frame::canvas(ui.style()).show(ui, |ui| {
-                    // Use Sense::click() to properly capture clicks and respect occlusion by modals
-                    let (rect, response) =
-                        ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
-
-                    let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 0.0, egui::Color32::BLACK); // Canvas bg
-
-                    // Draw objects
-                    for (i, shape) in state.scene.iter().enumerate() {
-                        let is_selected = Some(i) == state.selected;
-                        let stroke = if is_selected {
-                            egui::Stroke::new(2.0, egui::Color32::YELLOW)
-                        } else {
-                            egui::Stroke::NONE
-                        };
-
-                        match shape {
-                            crate::scene::Shape::Circle {
-                                x,
-                                y,
-                                radius,
-                                color,
-                            } => {
-                                painter.circle(
-                                    egui::pos2(rect.left() + *x, rect.top() + *y),
-                                    *radius,
-                                    egui::Color32::from_rgb(color[0], color[1], color[2]),
-                                    stroke,
-                                );
-                            }
-                            crate::scene::Shape::Rect { x, y, w, h, color } => {
-                                painter.rect(
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(rect.left() + *x, rect.top() + *y),
-                                        egui::vec2(*w, *h),
-                                    ),
-                                    0.0,
-                                    egui::Color32::from_rgb(color[0], color[1], color[2]),
-                                    stroke,
-                                );
-                            }
-                        }
-                    }
-
-                    // Handle Canvas Interaction
-                    // Only process if the canvas was actually clicked (not obscured by modal)
-                    if main_ui_enabled && response.clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            let mut hit = None;
-                            for (i, shape) in state.scene.iter().enumerate() {
-                                match shape {
-                                    crate::scene::Shape::Circle { x, y, radius, .. } => {
-                                        let center = egui::pos2(rect.left() + *x, rect.top() + *y);
-                                        if pos.distance(center) <= *radius {
-                                            hit = Some(i);
-                                        }
-                                    }
-                                    crate::scene::Shape::Rect { x, y, w, h, .. } => {
-                                        let min = egui::pos2(rect.left() + *x, rect.top() + *y);
-                                        let max = min + egui::vec2(*w, *h);
-                                        if pos.x >= min.x
-                                            && pos.x <= max.x
-                                            && pos.y >= min.y
-                                            && pos.y <= max.y
-                                        {
-                                            hit = Some(i);
-                                        }
-                                    }
-                                }
-                            }
-                            state.selected = hit;
-                        } else {
-                            // Deselect if clicked background (and logic above fell through? No, logic above changes hit)
-                            // Actually, logic above iterates all. If no hit, hit is None.
-                            // So clicking empty space deselects. This is correct.
-                            state.selected = None;
-                        }
-                    }
-                });
+                canvas::show(ui, state, main_ui_enabled);
             });
         });
 

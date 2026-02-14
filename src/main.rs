@@ -1,5 +1,6 @@
 mod app_state;
 mod autocomplete; // Added this
+mod canvas;
 mod code_panel;
 mod dsl;
 mod project_settings;
