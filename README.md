@@ -158,28 +158,87 @@ Desarrollo y contribución
 
 - Clona el repo, crea una rama por feature y abre un PR.
 - Sigue mensajes de commit descriptivos (conventional style recomendado).
-- Tests / formateo: usa `cargo fmt` y `cargo clippy` cuando apliquen.
 
-Si quieres colaborar, abre un _issue_ o un _pull request_ en GitHub.
+![Rust](https://img.shields.io/badge/rust-stable-orange.svg)
 
----
+# Motioner
 
-Archivo de proyecto y estructura rápida
+Editor prototipo de animaciones construido en Rust. Motioner permite crear, previsualizar y exportar animaciones mediante un flujo de trabajo frame‑by‑frame pensado para integración con herramientas de post‑producción.
 
-- Código fuente: `src/`
-- Documentación y guías: `docs/`
-- Scripts de ayuda: `serve-docs.cmd`, `serve-docs.ps1`
-- Utilidades: `scripts/` (herramientas de mantenimiento)
+## Características
 
----
+- Interfaz rápida basada en `egui` (eframe)
+- Timeline y edición básica de escenas
+- Previsualización en tiempo real
+- Exportación por frames (PNG) y encodificación con `ffmpeg` (MP4)
+- Estructura modular preparada para añadir render por GPU (`wgpu`)
 
-Contacto & próximos pasos
+## Requisitos
+
+- Rust (stable) — instalado con `rustup`
+- `ffmpeg` disponible en `PATH`
+
+## Quickstart
+
+1. Clona el repositorio:
+
+```bash
+git clone https://github.com/jvchiappini/Motioner.git
+cd Motioner
+```
+
+2. Ejecuta en modo desarrollo:
+
+```powershell
+cargo run
+```
+
+3. Ejecuta en modo release (optimizado):
+
+```powershell
+cargo run --release
+```
+
+4. En la UI: ajustar FPS/duración/escena → `Exportar video`.
+
+## Export manual (ejemplo)
+
+Si la app genera frames en `out/frames`:
+
+```powershell
+ffmpeg -framerate 30 -i out/frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p out/movie.mp4
+```
+
+## Desarrollo
+
+- Formatear: `cargo fmt`
+- Linter: `cargo clippy`
+- Compilar (release): `cargo build --release`
+
+### Estructura relevante
+
+- `src/` — código fuente
+- `scripts/` — utilidades y herramientas de mantenimiento
+- `target/` — artefactos de compilación
+
+## Contribuir
+
+- Abrir issues para bugs o propuestas
+- Crear ramas `feat/xxx` o `fix/xxx` y enviar PRs
+- Mantener commits claros y agregar pruebas cuando aplique
+
+## Roadmap (prioritario)
+
+- Integración `wgpu` para render por GPU
+- Timeline avanzado con keyframes y easing
+- Export por capas y soporte de audio
+
+## Licencia
+
+License: Not specified
+
+## Contacto
 
 - Mantenedor: `@jvchiappini`
-- Próximas mejoras sugeridas: GPU rendering (`wgpu`), timeline avanzado, export por capas.
-
----
-
-¿Añadimos una demo GIF o un `LICENSE`? Puedo preparar ambos (dime qué licencia prefieres).
 
 
