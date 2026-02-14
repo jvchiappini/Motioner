@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::dsl;
 use crate::scene::{move_node, Shape};
 use eframe::egui;
 use eframe::egui::{Color32, Frame, Id, InnerResponse, LayerId, Order, Sense};
@@ -19,34 +20,39 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
     let root_payload = {
         let (_response, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
-            let height = 28.0;
+            // Only visible if dragging and empty scene or specific intention
+            let height = if state.scene.is_empty() { 28.0 } else { 4.0 };
             let (rect, _) =
                 ui.allocate_at_least(egui::vec2(ui.available_width(), height), Sense::hover());
-            let hovered = is_dragging && ui.rect_contains_pointer(rect);
-            let stroke = if hovered {
-                egui::Stroke::new(1.5, Color32::LIGHT_BLUE)
-            } else {
-                egui::Stroke::new(1.0, Color32::from_gray(60))
-            };
-            ui.painter().rect_stroke(rect, 4.0, stroke);
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "📂 Drag & Drop elements here to move to root",
-                egui::FontId::proportional(11.0),
-                if hovered {
-                    Color32::WHITE
+
+            if state.scene.is_empty() {
+                let hovered = is_dragging && ui.rect_contains_pointer(rect);
+                let stroke = if hovered {
+                    egui::Stroke::new(1.5, Color32::LIGHT_BLUE)
                 } else {
-                    Color32::from_gray(120)
-                },
-            );
+                    egui::Stroke::new(1.0, Color32::from_gray(60))
+                };
+                ui.painter().rect_stroke(rect, 4.0, stroke);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "📂 Drag & Drop elements here",
+                    egui::FontId::proportional(11.0),
+                    if hovered {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_gray(120)
+                    },
+                );
+            }
         });
         payload
     };
 
     if let Some(arc_path) = root_payload {
         let dragged = (*arc_path).clone();
-        state.move_request = Some((dragged, vec![], state.scene.len()));
+        // If scene is empty, append. Otherwise, this small zone acts as "insert at 0"
+        state.move_request = Some((dragged, vec![], 0));
     }
 
     ui.add_space(4.0);
@@ -57,9 +63,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         .show(ui, |ui| {
             let mut removals = Vec::new();
             let len = state.scene.len();
+
+            // We no longer inject explicit spacer drop zones between items.
+            // Instead, each render_node call handles its own drop logic (before/after/inside).
             for i in 0..len {
                 render_node(ui, state, vec![i], &mut removals);
             }
+
+            // We no longer need a dedicated append zone at the end,
+            // because dropping on the bottom half of the last element handles appending.
+            if len == 0 {
+                // If the scene is empty, we might need a catch-all if the top "Root drop zone" isn't enough,
+                // but the top zone handles empty scene specifically.
+            }
+
             for path in removals {
                 if state.selected_node_path.as_ref() == Some(&path) {
                     state.selected = None;
@@ -72,6 +89,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     if let Some((from, to_parent, to_idx)) = state.move_request.take() {
         if let Some(new_path) = move_node(&mut state.scene, &from, &to_parent, to_idx) {
             state.selected_node_path = Some(new_path);
+            state.dsl_code = dsl::generate_dsl(
+                &state.scene,
+                state.render_width,
+                state.render_height,
+                state.fps,
+                state.duration_secs,
+            );
         }
     }
 
@@ -104,12 +128,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.separator();
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
+                    let mut added = false;
                     if ui.button("📦  Group").clicked() {
                         state.scene.push(Shape::Group {
                             name: format!("Group #{}", state.scene.len()),
                             children: Vec::new(),
                             visible: true,
                         });
+                        added = true;
                     }
                     if ui.button("⭕   Circle").clicked() {
                         state.scene.push(Shape::Circle {
@@ -121,6 +147,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             spawn_time: 0.0,
                             visible: true,
                         });
+                        added = true;
                     }
                     if ui.button("⬜  Rectangle").clicked() {
                         state.scene.push(Shape::Rect {
@@ -133,6 +160,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             spawn_time: 0.0,
                             visible: true,
                         });
+                        added = true;
+                    }
+
+                    if added {
+                        state.dsl_code = dsl::generate_dsl(
+                            &state.scene,
+                            state.render_width,
+                            state.render_height,
+                            state.fps,
+                            state.duration_secs,
+                        );
                     }
                 });
             });
@@ -197,6 +235,13 @@ fn render_node(
             if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, &path) {
                 shape.set_visible(!is_visible);
             }
+            state.dsl_code = dsl::generate_dsl(
+                &state.scene,
+                state.render_width,
+                state.render_height,
+                state.fps,
+                state.duration_secs,
+            );
         }
 
         // Name / Rename
@@ -222,6 +267,13 @@ fn render_node(
                     }
                 }
                 state.renaming_path = None;
+                state.dsl_code = dsl::generate_dsl(
+                    &state.scene,
+                    state.render_width,
+                    state.render_height,
+                    state.fps,
+                    state.duration_secs,
+                );
             }
         } else {
             let mut job = egui::text::LayoutJob::default();
@@ -265,20 +317,25 @@ fn render_node(
         }
     };
 
-    // ── Render node with drag source ──
-    if is_group {
-        let coll_id = Id::new("group_collapsing").with(&path);
-        let coll_state = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            coll_id,
-            false,
-        );
+    // ── Render node with drop zone support ──
+    // Instead of separate spacer drop zones, we make the whole row a drop zone.
+    // However, since we also want to be able to drag *this* row, we need a nested approach or
+    // simply detect where the pointer is within the row (top half vs bottom half).
 
-        // We need to capture click/double-click from within the closure
-        let group_clicked = std::cell::Cell::new(false);
-        let group_double_clicked = std::cell::Cell::new(false);
+    // We wrap the entire block in a drop zone to detect "insert before/after" or "insert into group"
+    let (zone_res, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
+        if is_group {
+            let coll_id = Id::new("group_collapsing").with(&path);
+            let coll_state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                coll_id,
+                false,
+            );
 
-        let (zone_res, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
+            // We need to capture click/double-click from within the closure
+            let group_clicked = std::cell::Cell::new(false);
+            let group_double_clicked = std::cell::Cell::new(false);
+
             coll_state
                 .show_header(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -303,51 +360,214 @@ fn render_node(
                         child_path.push(i);
                         render_node(ui, state, child_path, removals);
                     }
+
+                    // Final append zone inside group (only needed if empty)
+                    if children_count == 0 {
+                        let (_, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
+                            let (rect, _) = ui.allocate_at_least(
+                                egui::vec2(ui.available_width(), 20.0),
+                                Sense::hover(),
+                            );
+                            let is_dragging = ui.memory(|m| m.is_anything_being_dragged());
+                            if is_dragging && ui.rect_contains_pointer(rect) {
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    4.0,
+                                    egui::Stroke::new(1.5, Color32::LIGHT_BLUE),
+                                );
+                                ui.painter().text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "Drop inside group",
+                                    egui::FontId::proportional(10.0),
+                                    Color32::WHITE,
+                                );
+                            } else if is_dragging {
+                                ui.painter().text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "Empty Group",
+                                    egui::FontId::proportional(10.0),
+                                    Color32::from_gray(100),
+                                );
+                            }
+                        });
+
+                        if let Some(arc_path) = payload {
+                            let from = (*arc_path).clone();
+                            state.move_request = Some((from, path.clone(), 0));
+                        }
+                    }
                 });
-        });
 
-        if group_double_clicked.get() {
-            state.renaming_path = Some(path.clone());
-            state.rename_buffer = node_name.clone();
-        } else if group_clicked.get() {
-            state.selected_node_path = Some(path.clone());
-        }
-
-        // Drop-target highlight
-        if zone_res.hovered() && ui.memory(|m| m.is_anything_being_dragged()) {
-            ui.painter().rect_stroke(
-                zone_res.rect,
-                2.0,
-                (1.5, Color32::from_rgba_premultiplied(100, 200, 255, 100)),
-            );
-        }
-
-        if let Some(arc_path) = payload {
-            let from = (*arc_path).clone();
-            if from != path {
-                state.move_request = Some((from, path.clone(), children_count));
-            }
-        }
-    } else {
-        ui.horizontal(|ui| {
-            let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
-                render_row_content(ui, state);
-            });
-
-            if drag_res.response.double_clicked() {
+            if group_double_clicked.get() {
                 state.renaming_path = Some(path.clone());
                 state.rename_buffer = node_name.clone();
-            } else if drag_res.response.clicked() {
+            } else if group_clicked.get() {
                 state.selected_node_path = Some(path.clone());
             }
+        } else {
+            // Non-group node
+            ui.horizontal(|ui| {
+                let drag_res = dnd_drag_source_transparent(ui, drag_id, path.clone(), |ui| {
+                    render_row_content(ui, state);
+                });
 
-            // Settings button OUTSIDE drag source
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙").clicked() {
-                    state.modifier_active_path = Some(path.clone());
+                if drag_res.response.double_clicked() {
+                    state.renaming_path = Some(path.clone());
+                    state.rename_buffer = node_name.clone();
+                } else if drag_res.response.clicked() {
+                    state.selected_node_path = Some(path.clone());
                 }
+
+                // Settings button OUTSIDE drag source
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("⚙").clicked() {
+                        state.modifier_active_path = Some(path.clone());
+                    }
+                });
             });
-        });
+        }
+    });
+
+    // Handle Drop Logic: Insert Before vs Insert After
+    if let Some(arc_path) = payload {
+        let from = (*arc_path).clone();
+
+        // Calculate where in the rect the pointer is
+        if let Some(pointer) = ui.ctx().pointer_hover_pos() {
+            let rect = zone_res.rect;
+            // If pointer is in top half, insert BEFORE this node.
+            // If pointer is in bottom half, insert AFTER this node.
+
+            // For groups, if we are hovering the header, we might want to insert INTO it (if it's empty?)
+            // But simple rule: top 50% -> before, bottom 50% -> after.
+            // CAREFUL: groups have bodies. We likely only want the logic to apply to the HEADER height if open.
+            // For simplicity, let's treat the entire zone rect. If closed, fine. If open, rect covers children too?
+            // ui.dnd_drop_zone wraps the entire block (header + body).
+
+            // To fix "dragging over body triggers insert around group", we might want to only allow
+            // drop-on-row logic if we are strictly over the header area or if it's a leaf.
+            // But `zone_res.rect` for a group *includes* the open body.
+            // That's why previously we used explicit spacers.
+
+            // Refined Logic:
+            // Insert-Before: top edge of rect
+            // Insert-After: bottom edge of rect (or into body?)
+
+            // Actually, explicit spacers ARE cleaner for strict tree ordering, but "horrible" visually.
+            // Let's draw the indicator line overlayed on top of the node instead of allocating space.
+
+            // We use the full `zone_res.rect` for detection, but we need to know if we are "in the list slot".
+            // If we are over a group body, we might be over a child drop zone.
+            // EGul's DND uses the innermost drop zone. So if we wrap the whole group, and children also have zones,
+            // the children zones should take precedence.
+
+            // Let's see: We are inside render_node, wrapping everything in `drop_zone`.
+            // Inside `.body()`, we recurse `render_node`, which creates *another* `drop_zone`.
+            // The deeper one should trigger first.
+
+            // So, if this payload trigger matches *this* node's drop zone, we assume it bubbled up or matched here.
+
+            // Determine index and parent
+            if let Some(parent_path) = get_parent_path(&path) {
+                // Sibling index
+                let my_idx = path.last().copied().unwrap_or(0);
+
+                // If dragging ONTO myself, ignore?
+                // `from` != `path` check usually handled by move_node but good to skip logic.
+
+                // Visual Indicator
+                // Top 25% height -> Insert Before
+                // Middle -> Make Child (if group)? Or just standard list behavior.
+                // Bottom 25% -> Insert After
+
+                // Since `zone_res.rect` might be huge (open group), we might want to restrict this logic
+                // to the top 24px (header height) approximately.
+                let header_height = 24.0; // approx
+                let relative_y = pointer.y - rect.top();
+
+                if is_group && relative_y > header_height {
+                    // We are over the body but not over a specific child (padding area maybe).
+                    // Let's default to "Append to this group"?
+                    // `move_node` (from, path, children_count)
+                    if from != path {
+                        // state.move_request = Some((from, path.clone(), children_count));
+                    }
+                } else {
+                    // We are over the header or it's a leaf.
+                    // Split at % height
+                    // Let's say if y < height/2 -> before, else -> after.
+                    // Actually for open groups, "after" is ambiguous (after header = first child?).
+                    // Let's stick to: Top half = Before (idx), Bottom Half = After (idx+1).
+                    // If open group header top half -> before group. Bottom half -> insert as first child?
+
+                    // Simplification:
+                    // Top 50% of the *Header/Item Height* -> Insert Before (idx)
+                    // Bottom 50% -> Insert After (idx + 1)
+
+                    // We need the rect of just the content item, not the whole tree.
+                    // Since we wrapped `coll_state.show_header` + body, we don't easily get the header rect alone from `zone_res`.
+                    // But we can approximate.
+
+                    let item_rect =
+                        egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 20.0)); // Assume ~20px row
+
+                    let split_y = item_rect.center().y;
+
+                    if pointer.y < split_y {
+                        // Insert Before
+                        state.move_request = Some((from, parent_path, my_idx));
+                    } else {
+                        // Insert After
+                        // If it's a group and open, "Insert After" visually looks like "Insert as first child" usually
+                        // BUT if we strictly mean sibling reordering:
+                        state.move_request = Some((from, parent_path, my_idx + 1));
+                    }
+                }
+            } else {
+                // Is Root child
+                let my_idx = path.last().copied().unwrap_or(0);
+                let item_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 20.0));
+                let split_y = item_rect.center().y;
+                if pointer.y < split_y {
+                    state.move_request = Some((from, vec![], my_idx));
+                } else {
+                    state.move_request = Some((from, vec![], my_idx + 1));
+                }
+            }
+        }
+    }
+
+    // Draw Indicator if hovered
+    if zone_res.contains_pointer() && ui.memory(|m| m.is_anything_being_dragged()) {
+        let rect = zone_res.rect;
+        // Same logic for position
+        let item_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 20.0));
+        if let Some(pointer) = ui.ctx().pointer_hover_pos() {
+            let split_y = item_rect.center().y;
+            let line_y = if pointer.y < split_y {
+                item_rect.top()
+            } else {
+                item_rect.bottom()
+            };
+
+            ui.painter().line_segment(
+                [
+                    egui::pos2(rect.left(), line_y),
+                    egui::pos2(rect.right(), line_y),
+                ],
+                egui::Stroke::new(2.0, Color32::from_rgb(100, 180, 255)),
+            );
+        }
+    }
+}
+
+fn get_parent_path(path: &[usize]) -> Option<Vec<usize>> {
+    if path.is_empty() {
+        None
+    } else {
+        Some(path[0..path.len() - 1].to_vec())
     }
 }
 

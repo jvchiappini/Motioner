@@ -519,12 +519,13 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
         None => return,
     };
 
-    egui::Window::new("🔧 Element Modifiers")
+    let inner_response = egui::Window::new("🔧 Element Modifiers")
         .open(&mut open)
         .resizable(true)
         .collapsible(true)
         .default_width(280.0)
-        .show(ctx, |ui| {
+        .show(ctx, |ui| -> bool {
+            let mut changed = false;
             if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
                 ui.add_space(4.0);
 
@@ -557,21 +558,30 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                     .spacing([12.0, 8.0])
                                     .show(ui, |ui| {
                                         ui.label("Name:");
-                                        ui.text_edit_singleline(name);
+                                        if ui.text_edit_singleline(name).changed() {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Visible:");
-                                        ui.checkbox(visible, "");
+                                        if ui.checkbox(visible, "").changed() {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Spawn Time:");
-                                        ui.add(
-                                            egui::Slider::new(
-                                                spawn_time,
-                                                0.0..=state.duration_secs,
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    spawn_time,
+                                                    0.0..=state.duration_secs,
+                                                )
+                                                .suffix("s"),
                                             )
-                                            .suffix("s"),
-                                        );
+                                            .changed()
+                                        {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Position X:");
@@ -585,6 +595,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *x = val_x / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
@@ -599,6 +610,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *y = val_y / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
@@ -613,11 +625,15 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *radius = val_r / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
                                         ui.label("Color:");
-                                        ui.color_edit_button_srgba_unmultiplied(color);
+                                        if ui.color_edit_button_srgba_unmultiplied(color).changed()
+                                        {
+                                            changed = true;
+                                        }
                                         ui.end_row();
                                     });
 
@@ -652,21 +668,30 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                     .spacing([12.0, 8.0])
                                     .show(ui, |ui| {
                                         ui.label("Name:");
-                                        ui.text_edit_singleline(name);
+                                        if ui.text_edit_singleline(name).changed() {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Visible:");
-                                        ui.checkbox(visible, "");
+                                        if ui.checkbox(visible, "").changed() {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Spawn Time:");
-                                        ui.add(
-                                            egui::Slider::new(
-                                                spawn_time,
-                                                0.0..=state.duration_secs,
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    spawn_time,
+                                                    0.0..=state.duration_secs,
+                                                )
+                                                .suffix("s"),
                                             )
-                                            .suffix("s"),
-                                        );
+                                            .changed()
+                                        {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Position X:");
@@ -680,6 +705,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *x = val_x / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
@@ -694,6 +720,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *y = val_y / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
@@ -708,6 +735,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *w = val_w / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
@@ -722,11 +750,15 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             .changed()
                                         {
                                             *h = val_h / 100.0;
+                                            changed = true;
                                         }
                                         ui.end_row();
 
                                         ui.label("Color:");
-                                        ui.color_edit_button_srgba_unmultiplied(color);
+                                        if ui.color_edit_button_srgba_unmultiplied(color).changed()
+                                        {
+                                            changed = true;
+                                        }
                                         ui.end_row();
                                     });
 
@@ -754,11 +786,15 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                     .spacing([12.0, 8.0])
                                     .show(ui, |ui| {
                                         ui.label("Visible:");
-                                        ui.checkbox(visible, "");
+                                        if ui.checkbox(visible, "").changed() {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Name:");
-                                        ui.text_edit_singleline(name);
+                                        if ui.text_edit_singleline(name).changed() {
+                                            changed = true;
+                                        }
                                         ui.end_row();
 
                                         ui.label("Earliest Spawn:");
@@ -778,9 +814,25 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                 ui.label("No element found at this path.");
                 state.modifier_active_path = None;
             }
+            changed
         });
 
     if !open {
         state.modifier_active_path = None;
+    }
+
+    if let Some(inner_response) = inner_response {
+        if let Some(changed) = inner_response.inner {
+            if changed {
+                // If any property changed, allow real-time code update
+                state.dsl_code = dsl::generate_dsl(
+                    &state.scene,
+                    state.render_width,
+                    state.render_height,
+                    state.fps,
+                    state.duration_secs,
+                );
+            }
+        }
     }
 }

@@ -54,6 +54,11 @@ impl Shape {
         }
     }
     pub fn to_dsl(&self) -> String {
+        self.to_dsl_impl(0)
+    }
+
+    fn to_dsl_impl(&self, indent_level: usize) -> String {
+        let indent = "    ".repeat(indent_level);
         match self {
             Shape::Circle {
                 x,
@@ -63,8 +68,8 @@ impl Shape {
                 spawn_time,
                 ..
             } => format!(
-                "circle(x = {:.3}, y = {:.3}, radius = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
-                x, y, radius, color[0], color[1], color[2], spawn_time
+                "{}circle(x = {:.3}, y = {:.3}, radius = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
+                indent, x, y, radius, color[0], color[1], color[2], spawn_time
             ),
             Shape::Rect {
                 x,
@@ -75,8 +80,8 @@ impl Shape {
                 spawn_time,
                 ..
             } => format!(
-                "rect(x = {:.3}, y = {:.3}, width = {:.3}, height = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
-                x, y, w, h, color[0], color[1], color[2], spawn_time
+                "{}rect(x = {:.3}, y = {:.3}, width = {:.3}, height = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
+                indent, x, y, w, h, color[0], color[1], color[2], spawn_time
             ),
             Shape::Group {
                 name,
@@ -85,15 +90,19 @@ impl Shape {
             } => {
                 let mut items: Vec<String> = Vec::new();
                 for c in children {
-                    items.push(c.to_dsl());
+                    items.push(c.to_dsl_impl(indent_level + 1));
                 }
-                format!(
-                    "group(name = \"{}\") {{
-    {}
-}}",
-                    name,
-                    items.join("\n    ")
-                )
+                if items.is_empty() {
+                    format!("{}group(name = \"{}\") {{}}", indent, name)
+                } else {
+                    format!(
+                        "{}group(name = \"{}\") {{\n{}\n{}}}",
+                        indent,
+                        name,
+                        items.join("\n"),
+                        indent
+                    )
+                }
             }
         }
     }

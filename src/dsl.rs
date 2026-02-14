@@ -4,15 +4,13 @@ use crate::scene::Shape;
 pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "project \"Demo\" {{\n  size({}, {})\n  timeline {{ fps = {}; duration = {} }}\n\n  layer \"scene\" {{\n",
+        "size({}, {})\ntimeline {{ fps = {}; duration = {} }}\n\n",
         width, height, fps, duration
     ));
     for s in scene.iter() {
-        out.push_str("    ");
         out.push_str(&s.to_dsl());
         out.push_str("\n");
     }
-    out.push_str("  }\n}\n");
     out
 }
 
