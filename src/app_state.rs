@@ -66,6 +66,8 @@ pub struct AppState {
 
     // Project State
     pub project_path: Option<PathBuf>,
+    pub project_path_input: String,
+    pub path_validation_error: Option<String>,
     pub show_welcome: bool,
 }
 
@@ -123,6 +125,8 @@ impl Default for AppState {
             completion_selected_index: 0,
 
             project_path: None,
+            project_path_input: String::new(),
+            path_validation_error: None,
             show_welcome: true,
         }
     }

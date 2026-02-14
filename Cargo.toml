@@ -12,3 +12,5 @@ sysinfo = "0.30"
 tempfile = "3.6"
 anyhow = "1.0"  # simple error handling
 rfd = "0.17.2"
+winit = "0.29"
+display-info = "0.5"

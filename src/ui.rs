@@ -17,18 +17,25 @@ impl eframe::App for MyApp {
         let state = &mut self.state;
 
         // Auto-sync Code if settings changed while Code tab is active
-        let current_settings = (state.fps, state.duration_secs, state.render_width, state.render_height);
-        if state.active_tab == Some(PanelTab::Code) && state.last_synced_settings != current_settings {
-             state.dsl_code = dsl::generate_dsl(
-                 &state.scene, 
-                 state.render_width, 
-                 state.render_height, 
-                 state.fps, 
-                 state.duration_secs
-             );
-             state.last_synced_settings = current_settings;
+        let current_settings = (
+            state.fps,
+            state.duration_secs,
+            state.render_width,
+            state.render_height,
+        );
+        if state.active_tab == Some(PanelTab::Code)
+            && state.last_synced_settings != current_settings
+        {
+            state.dsl_code = dsl::generate_dsl(
+                &state.scene,
+                state.render_width,
+                state.render_height,
+                state.fps,
+                state.duration_secs,
+            );
+            state.last_synced_settings = current_settings;
         } else if state.active_tab != Some(PanelTab::Code) {
-             state.last_synced_settings = current_settings;
+            state.last_synced_settings = current_settings;
         }
 
         // Throttle system stats update (e.g. every 1.0s)
@@ -38,11 +45,16 @@ impl eframe::App for MyApp {
             state.last_update = now as f32;
         }
 
+        // Define main UI enabled state based on modal visibility
+        let main_ui_enabled = !state.show_welcome;
+
         // 1. Toolbar Strip (Far Left)
         egui::SidePanel::left("toolbar_panel")
             .resizable(false)
             .exact_width(32.0)
             .show(ctx, |ui| {
+                ui.set_enabled(main_ui_enabled); // Disable if modal is open
+
                 ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
                     if ui
@@ -161,6 +173,7 @@ impl eframe::App for MyApp {
             .min_height(120.0)
             .default_height(200.0)
             .show(ctx, |ui| {
+                ui.set_enabled(main_ui_enabled);
                 timeline::show(ui, state);
             });
 
@@ -182,12 +195,12 @@ impl eframe::App for MyApp {
             let tab_to_show = state.active_tab.unwrap_or(state.last_active_tab);
 
             // Special Case: If fullscreen code is active (or animating), we might need to hide this panel
-            // OR we render an empty panel to reserve space? 
-            // Better: We Always render the SidePanel, but if Fullscreen is active, we render the content 
+            // OR we render an empty panel to reserve space?
+            // Better: We Always render the SidePanel, but if Fullscreen is active, we render the content
             // inside the Overlay, effectively stealing it.
-            
+
             let is_fullscreen = state.code_fullscreen && tab_to_show == PanelTab::Code;
-            
+
             // Manual Animation Logic for Slower Transition
             // Opening: 0.8s, Closing: 0.4s (faster)
             let open_duration = 0.8;
@@ -197,13 +210,17 @@ impl eframe::App for MyApp {
             if is_fullscreen {
                 if state.code_anim_t < 1.0 {
                     state.code_anim_t += dt / open_duration;
-                    if state.code_anim_t > 1.0 { state.code_anim_t = 1.0; }
+                    if state.code_anim_t > 1.0 {
+                        state.code_anim_t = 1.0;
+                    }
                     ctx.request_repaint(); // Keep animating
                 }
             } else {
                 if state.code_anim_t > 0.0 {
                     state.code_anim_t -= dt / close_duration;
-                    if state.code_anim_t < 0.0 { state.code_anim_t = 0.0; }
+                    if state.code_anim_t < 0.0 {
+                        state.code_anim_t = 0.0;
+                    }
                     ctx.request_repaint(); // Keep animating
                 }
             }
@@ -231,6 +248,8 @@ impl eframe::App for MyApp {
             }
 
             panel.show(ctx, |ui| {
+                ui.set_enabled(main_ui_enabled);
+
                 // While animating, we might want to clip content so it doesn't overflow/squish weirdly
                 ui.set_clip_rect(ui.max_rect());
                 side_panel_rect = ui.min_rect(); // approximate the panel area
@@ -250,7 +269,7 @@ impl eframe::App for MyApp {
 
                 // If NOT fully fullscreen, we render here
                 if fs_t < 1.0 {
-                     if switch_t < 1.0 {
+                    if switch_t < 1.0 {
                         // Animating Switch
                         ui.ctx().request_repaint();
 
@@ -278,10 +297,12 @@ impl eframe::App for MyApp {
                             let old_rect = rect.translate(egui::vec2(old_offset, 0.0));
 
                             let mut child_ui = ui.child_ui(old_rect, *ui.layout());
-                            // child_ui.multiply_opacity(1.0 - ease_switch); // Available in newer egui, but maybe not 0.26 or exposed differently 
+                            // child_ui.multiply_opacity(1.0 - ease_switch); // Available in newer egui, but maybe not 0.26 or exposed differently
                             // Just use visual transparency
-                            child_ui.visuals_mut().widgets.noninteractive.weak_bg_fill = 
-                                egui::Color32::from_black_alpha(((1.0 - ease_switch) * 255.0) as u8);
+                            child_ui.visuals_mut().widgets.noninteractive.weak_bg_fill =
+                                egui::Color32::from_black_alpha(
+                                    ((1.0 - ease_switch) * 255.0) as u8,
+                                );
 
                             render_tab_content(&mut child_ui, source, state);
                         }
@@ -302,10 +323,11 @@ impl eframe::App for MyApp {
                         // Simplest hack: Just draw them. 'child_ui' creates a nested UI region.
 
                         let mut child_ui = ui.child_ui(new_rect, *ui.layout());
-                        // child_ui.set_clip_rect(rect); // Clip to parent so it slides in
-                        // child_ui.set_opacity(ease_switch); // Fade in - use multiply_opacity or color tint
-                        // This is 0.26, set_opacity doesn't exist.
-                        // We rely on the movement mainly.
+                        child_ui.set_enabled(main_ui_enabled); // Inherit enabled state explicitly
+                                                               // child_ui.set_clip_rect(rect); // Clip to parent so it slides in
+                                                               // child_ui.set_opacity(ease_switch); // Fade in - use multiply_opacity or color tint
+                                                               // This is 0.26, set_opacity doesn't exist.
+                                                               // We rely on the movement mainly.
 
                         render_tab_content(&mut child_ui, tab_to_show, state);
                     } else {
@@ -314,8 +336,8 @@ impl eframe::App for MyApp {
                         if fs_t <= 0.0 {
                             render_tab_content(ui, tab_to_show, state);
                         } else {
-                             // Placeholder to keep layout size
-                             ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
+                            // Placeholder to keep layout size
+                            ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::hover());
                         }
                     }
                 }
@@ -324,20 +346,23 @@ impl eframe::App for MyApp {
             // 4. Handle Fullscreen Animation / Overlay
             if fs_t > 0.0 {
                 let screen_rect = ctx.screen_rect();
-                
+
                 // Calculate interpolated rect
                 // Start: side_panel_rect (where it was) or a default if not captured yet
                 let start_rect = if side_panel_rect.width() > 0.0 {
-                     // Ensure it is not zero.
-                     side_panel_rect
+                    // Ensure it is not zero.
+                    side_panel_rect
                 } else {
-                     // Fallback if panel wasn't rendered yet (edge case)
-                     egui::Rect::from_min_size(egui::pos2(32.0, 0.0), egui::vec2(250.0, screen_rect.height()))
+                    // Fallback if panel wasn't rendered yet (edge case)
+                    egui::Rect::from_min_size(
+                        egui::pos2(32.0, 0.0),
+                        egui::vec2(250.0, screen_rect.height()),
+                    )
                 };
 
                 // Easing (BackOut or Elastic for expansion)
                 let t_anim = fs_t; // 0.0 to 1.0
-                
+
                 // BackOut: overshoot slightly then settle
                 // c1 = 1.70158
                 // c3 = c1 + 1
@@ -349,7 +374,7 @@ impl eframe::App for MyApp {
                 // Sigmoid-like or Parametric Blend
                 let sqt = t_anim * t_anim;
                 let ease = sqt / (2.0 * (sqt - t_anim) + 1.0);
-                
+
                 // OR nice Cubic Out
                 let ease = 1.0 - (1.0 - t_anim).powi(3);
 
@@ -370,23 +395,27 @@ impl eframe::App for MyApp {
                     .show(ctx, |ui| {
                         // Background
                         egui::Frame::window(ui.style())
-                             .fill(egui::Color32::from_rgb(30, 30, 30))
-                             .show(ui, |ui| {
-                                 ui.set_min_size(current_rect.size());
-                                 ui.set_max_size(current_rect.size());
-                                 
-                                 // We simply call render_tab_content here
-                                 // It will render the header and the code editor
-                                 // The code editor automatically takes available space
-                                 
-                                 // We need to make sure we render PanelTab::Code specifically
-                                 render_tab_content(ui, PanelTab::Code, state);
-                             });
+                            .fill(egui::Color32::from_rgb(30, 30, 30))
+                            .show(ui, |ui| {
+                                ui.set_enabled(main_ui_enabled); // Disable if modal is open
+
+                                ui.set_min_size(current_rect.size());
+                                ui.set_max_size(current_rect.size());
+
+                                // We simply call render_tab_content here
+                                // It will render the header and the code editor
+                                // The code editor automatically takes available space
+
+                                // We need to make sure we render PanelTab::Code specifically
+                                render_tab_content(ui, PanelTab::Code, state);
+                            });
                     });
             }
         }
         // Canvas (Central Panel takes remaining space)
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.set_enabled(main_ui_enabled); // Disable if modal is open
+
             // Use bottom_up layout to place tools at the bottom
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 // Tools (Bottom)
@@ -422,8 +451,9 @@ impl eframe::App for MyApp {
 
                 // The Canvas (Fills the rest of the vertical space upwards)
                 egui::Frame::canvas(ui.style()).show(ui, |ui| {
-                    let (rect, _resp) =
-                        ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                    // Use Sense::click() to properly capture clicks and respect occlusion by modals
+                    let (rect, response) =
+                        ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
 
                     let painter = ui.painter_at(rect);
                     painter.rect_filled(rect, 0.0, egui::Color32::BLACK); // Canvas bg
@@ -466,8 +496,9 @@ impl eframe::App for MyApp {
                     }
 
                     // Handle Canvas Interaction
-                    if ui.input(|i| i.pointer.primary_clicked()) {
-                        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    // Only process if the canvas was actually clicked (not obscured by modal)
+                    if main_ui_enabled && response.clicked() {
+                        if let Some(pos) = response.interact_pointer_pos() {
                             let mut hit = None;
                             for (i, shape) in state.scene.iter().enumerate() {
                                 match shape {
@@ -491,6 +522,11 @@ impl eframe::App for MyApp {
                                 }
                             }
                             state.selected = hit;
+                        } else {
+                            // Deselect if clicked background (and logic above fell through? No, logic above changes hit)
+                            // Actually, logic above iterates all. If no hit, hit is None.
+                            // So clicking empty space deselects. This is correct.
+                            state.selected = None;
                         }
                     }
                 });
