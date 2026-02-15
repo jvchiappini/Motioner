@@ -4,6 +4,124 @@ use eframe::egui;
 use std::sync::mpsc;
 use std::thread;
 
+/// Per-frame flattened position cache.
+/// frames[frame_idx][flat_idx] => (x, y) in normalized project coords (0..1)
+#[derive(Clone)]
+pub struct PositionCache {
+    pub fps: u32,
+    pub duration_secs: f32,
+    pub scene_hash: u64,
+    pub frames: Vec<Vec<(f32, f32)>>,
+    pub flattened_count: usize,
+}
+
+fn scene_fingerprint(scene: &[crate::scene::Shape]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    fn hash_shape<H: Hasher>(s: &crate::scene::Shape, h: &mut H) {
+        match s {
+            crate::scene::Shape::Circle { name, x, y, radius, color, spawn_time, animations, visible } => {
+                name.hash(h);
+                (x.to_bits()).hash(h);
+                (y.to_bits()).hash(h);
+                (radius.to_bits()).hash(h);
+                color.hash(h);
+                (spawn_time.to_bits()).hash(h);
+                visible.hash(h);
+                for a in animations {
+                    // rely on Debug/Serialize stable fields — lightweight hashing
+                    format!("{:?}", a).hash(h);
+                }
+            }
+            crate::scene::Shape::Rect { name, x, y, w, h: hh, color, spawn_time, animations, visible } => {
+                name.hash(h);
+                (x.to_bits()).hash(h);
+                (y.to_bits()).hash(h);
+                (w.to_bits()).hash(h);
+                (hh.to_bits()).hash(h);
+                color.hash(h);
+                (spawn_time.to_bits()).hash(h);
+                visible.hash(h);
+                for a in animations {
+                    format!("{:?}", a).hash(h);
+                }
+            }
+            crate::scene::Shape::Group { name, children, visible } => {
+                name.hash(h);
+                visible.hash(h);
+                for c in children {
+                    hash_shape(c, h);
+                }
+            }
+        }
+    }
+
+    let mut hasher = DefaultHasher::new();
+    for s in scene {
+        hash_shape(s, &mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Build a per-frame flattened position cache for the current `state.scene`.
+/// Returns None if cache would be too large.
+pub fn build_position_cache(state: &AppState) -> Option<PositionCache> {
+    // limit total samples to avoid runaway memory usage (frames * primitives)
+    const MAX_SAMPLES: usize = 50_000;
+
+    let fps = state.fps;
+    let duration = state.duration_secs.max(0.001);
+    let frame_count = (fps as f32 * duration).ceil() as usize;
+
+    // flatten scene once to get primitive order
+    let mut flattened: Vec<crate::scene::Shape> = Vec::new();
+    for s in &state.scene {
+        flattened.extend(s.flatten(0.0).into_iter().map(|(sh, _)| sh));
+    }
+
+    let prim_count = flattened.len();
+    if frame_count == 0 || prim_count == 0 {
+        return None;
+    }
+
+    if frame_count.checked_mul(prim_count).unwrap_or(usize::MAX) > MAX_SAMPLES {
+        // too large to precompute
+        return None;
+    }
+
+    let mut frames: Vec<Vec<(f32, f32)>> = Vec::with_capacity(frame_count);
+    for fi in 0..frame_count {
+        let t = (fi as f32) / (fps as f32);
+        let mut row: Vec<(f32, f32)> = Vec::with_capacity(prim_count);
+        for prim in &flattened {
+            let (px, py) = crate::animations::animations_manager::animated_xy_for(prim, t, duration);
+            row.push((px, py));
+        }
+        frames.push(row);
+    }
+
+    Some(PositionCache {
+        fps,
+        duration_secs: duration,
+        scene_hash: scene_fingerprint(&state.scene),
+        frames,
+        flattened_count: prim_count,
+    })
+}
+
+/// Try to get a cached frame (nearest) for `time`.
+fn cached_frame_for(state: &AppState, time: f32) -> Option<&Vec<(f32, f32)>> {
+    if let Some(pc) = &state.position_cache {
+        if pc.fps == state.fps && (pc.duration_secs - state.duration_secs).abs() < 1e-6 && pc.scene_hash == scene_fingerprint(&state.scene) {
+            let frame_idx = (time * pc.fps as f32).round() as isize;
+            let clamped = frame_idx.clamp(0, (pc.frames.len() as isize - 1)) as usize;
+            return pc.frames.get(clamped);
+        }
+    }
+    None
+}
+
 /// Samples the color at a specific normalized (0..1) paper coordinate,
 /// respecting the preview resolution and shape order. `time` is project time in seconds.
 fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, time: f32) -> [u8; 4] {
@@ -46,72 +164,131 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
     let mut all_primitives = Vec::new();
     collect_primitives(&state.scene, 0.0, &mut all_primitives);
 
-    for (shape, actual_spawn) in all_primitives {
-        if time < actual_spawn {
-            continue;
+    // Try to use precomputed positional cache when available — the order
+    // produced by `collect_primitives` matches `flatten()` used by the cache.
+    if let Some(frame) = cached_frame_for(state, time) {
+        for (i, (shape, actual_spawn)) in all_primitives.into_iter().enumerate() {
+            if time < actual_spawn {
+                continue;
+            }
+            let (eval_x, eval_y) = frame.get(i).copied().unwrap_or((0.0, 0.0));
+            match shape {
+                crate::scene::Shape::Circle { radius, color, .. } => {
+                    let width = state.render_width as f32;
+                    let height = state.render_height as f32;
+                    let shape_pos = egui::pos2(eval_x * width, eval_y * height);
+                    let radius_px = radius * width; // Use width as reference
+                    let shape_color = [
+                        color[0] as f32,
+                        color[1] as f32,
+                        color[2] as f32,
+                        color[3] as f32,
+                    ];
+                    let dist = pixel_pos.distance(shape_pos);
+                    if dist <= radius_px {
+                        let src_a = (shape_color[3]) / 255.0;
+                        final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                        final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                        final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+                    }
+                }
+                crate::scene::Shape::Rect { w, h, color, .. } => {
+                    let width = state.render_width as f32;
+                    let height = state.render_height as f32;
+                    let half_w = (w * width) / 2.0;
+                    let half_h = (h * height) / 2.0;
+                    let center_x = eval_x * width + half_w;
+                    let center_y = eval_y * height + half_h;
+                    let shape_pos = egui::pos2(center_x, center_y);
+                    let shape_size = egui::vec2(half_w, half_h);
+                    let shape_color = [
+                        color[0] as f32,
+                        color[1] as f32,
+                        color[2] as f32,
+                        color[3] as f32,
+                    ];
+                    let d_vec = egui::vec2(
+                        (pixel_pos.x - shape_pos.x).abs() - shape_size.x,
+                        (pixel_pos.y - shape_pos.y).abs() - shape_size.y,
+                    );
+                    if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
+                        let src_a = (shape_color[3]) / 255.0;
+                        final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                        final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                        final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+                    }
+                }
+                _ => {}
+            }
         }
-        match shape {
-            crate::scene::Shape::Circle {
-                x: _x,
-                y: _y,
-                radius,
-                color,
-                ..
-            } => {
-                let width = state.render_width as f32;
-                let height = state.render_height as f32;
-                let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
-                let shape_pos = egui::pos2(eval_x * width, eval_y * height);
-                let radius_px = radius * width; // Use width as reference
-                let shape_color = [
-                    color[0] as f32,
-                    color[1] as f32,
-                    color[2] as f32,
-                    color[3] as f32,
-                ];
-                let dist = pixel_pos.distance(shape_pos);
-                if dist <= radius_px {
-                    let src_a = (shape_color[3]) / 255.0;
-                    final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
-                    final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
-                    final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
-                }
+    } else {
+        for (shape, actual_spawn) in all_primitives {
+            if time < actual_spawn {
+                continue;
             }
-            crate::scene::Shape::Rect {
-                x: _x,
-                y: _y,
-                w,
-                h,
-                color,
-                ..
-            } => {
-                let width = state.render_width as f32;
-                let height = state.render_height as f32;
-                let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
-                let half_w = (w * width) / 2.0;
-                let half_h = (h * height) / 2.0;
-                let center_x = eval_x * width + half_w;
-                let center_y = eval_y * height + half_h;
-                let shape_pos = egui::pos2(center_x, center_y);
-                let shape_size = egui::vec2(half_w, half_h);
-                let shape_color = [
-                    color[0] as f32,
-                    color[1] as f32,
-                    color[2] as f32,
-                    color[3] as f32,
-                ];
-                let d_vec = egui::vec2(
-                    (pixel_pos.x - shape_pos.x).abs() - shape_size.x,
-                    (pixel_pos.y - shape_pos.y).abs() - shape_size.y,
-                );
-                if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
-                    let src_a = (shape_color[3]) / 255.0;
-                    final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
-                    final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
-                    final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+            match shape {
+                crate::scene::Shape::Circle {
+                    x: _x,
+                    y: _y,
+                    radius,
+                    color,
+                    ..
+                } => {
+                    let width = state.render_width as f32;
+                    let height = state.render_height as f32;
+                    let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
+                    let shape_pos = egui::pos2(eval_x * width, eval_y * height);
+                    let radius_px = radius * width; // Use width as reference
+                    let shape_color = [
+                        color[0] as f32,
+                        color[1] as f32,
+                        color[2] as f32,
+                        color[3] as f32,
+                    ];
+                    let dist = pixel_pos.distance(shape_pos);
+                    if dist <= radius_px {
+                        let src_a = (shape_color[3]) / 255.0;
+                        final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                        final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                        final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+                    }
                 }
+                crate::scene::Shape::Rect {
+                    x: _x,
+                    y: _y,
+                    w,
+                    h,
+                    color,
+                    ..
+                } => {
+                    let width = state.render_width as f32;
+                    let height = state.render_height as f32;
+                    let (eval_x, eval_y) = animated_xy_for(&shape, time, state.duration_secs);
+                    let half_w = (w * width) / 2.0;
+                    let half_h = (h * height) / 2.0;
+                    let center_x = eval_x * width + half_w;
+                    let center_y = eval_y * height + half_h;
+                    let shape_pos = egui::pos2(center_x, center_y);
+                    let shape_size = egui::vec2(half_w, half_h);
+                    let shape_color = [
+                        color[0] as f32,
+                        color[1] as f32,
+                        color[2] as f32,
+                        color[3] as f32,
+                    ];
+                    let d_vec = egui::vec2(
+                        (pixel_pos.x - shape_pos.x).abs() - shape_size.x,
+                        (pixel_pos.y - shape_pos.y).abs() - shape_size.y,
+                    );
+                    if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
+                        let src_a = (shape_color[3]) / 255.0;
+                        final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                        final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                        final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -332,11 +509,17 @@ fn render_frame_color_image_gpu_snapshot(
     // Build GpuShape list (same layout used by on-screen GPU path)
     let mut gpu_shapes: Vec<GpuShape> = Vec::new();
 
-    fn collect_prims(shapes: &[crate::scene::Shape], parent_spawn: f32, out: &mut Vec<(crate::scene::Shape, f32)>) {
+    fn collect_prims(
+        shapes: &[crate::scene::Shape],
+        parent_spawn: f32,
+        out: &mut Vec<(crate::scene::Shape, f32)>,
+    ) {
         for s in shapes {
             let my_spawn = s.spawn_time().max(parent_spawn);
             match s {
-                crate::scene::Shape::Group { children, .. } => collect_prims(children, my_spawn, out),
+                crate::scene::Shape::Group { children, .. } => {
+                    collect_prims(children, my_spawn, out)
+                }
                 _ => out.push((s.clone(), my_spawn)),
             }
         }
@@ -350,24 +533,55 @@ fn render_frame_color_image_gpu_snapshot(
             continue;
         }
         match shape {
-            crate::scene::Shape::Circle { x: _, y: _, radius, color, .. } => {
-                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(shape, time, snap.duration_secs);
+            crate::scene::Shape::Circle {
+                x: _,
+                y: _,
+                radius,
+                color,
+                ..
+            } => {
+                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
+                    shape,
+                    time,
+                    snap.duration_secs,
+                );
                 gpu_shapes.push(GpuShape {
                     pos: [eval_x, eval_y],
                     size: [*radius, 0.0],
-                    color: [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0, color[3] as f32 / 255.0],
+                    color: [
+                        color[0] as f32 / 255.0,
+                        color[1] as f32 / 255.0,
+                        color[2] as f32 / 255.0,
+                        color[3] as f32 / 255.0,
+                    ],
                     shape_type: 0,
                     spawn_time: *actual_spawn,
                     p1: 0,
                     p2: 0,
                 });
             }
-            crate::scene::Shape::Rect { x: _, y: _, w, h, color, .. } => {
-                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(shape, time, snap.duration_secs);
+            crate::scene::Shape::Rect {
+                x: _,
+                y: _,
+                w,
+                h,
+                color,
+                ..
+            } => {
+                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
+                    shape,
+                    time,
+                    snap.duration_secs,
+                );
                 gpu_shapes.push(GpuShape {
                     pos: [eval_x + *w / 2.0, eval_y + *h / 2.0],
                     size: [*w / 2.0, *h / 2.0],
-                    color: [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0, color[3] as f32 / 255.0],
+                    color: [
+                        color[0] as f32 / 255.0,
+                        color[1] as f32 / 255.0,
+                        color[2] as f32 / 255.0,
+                        color[3] as f32 / 255.0,
+                    ],
                     shape_type: 1,
                     spawn_time: *actual_spawn,
                     p1: 0,
@@ -391,8 +605,14 @@ fn render_frame_color_image_gpu_snapshot(
             label: Some("composition_bind_group_worker"),
             layout: &resources.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: resources.shape_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: resources.uniform_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: resources.shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: resources.uniform_buffer.as_entire_binding(),
+                },
             ],
         });
     }
@@ -420,12 +640,20 @@ fn render_frame_color_image_gpu_snapshot(
     uniforms[14] = 0.0;
     uniforms[15] = 0.0;
     uniforms[16] = time;
-    queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::cast_slice(&uniforms));
+    queue.write_buffer(
+        &resources.uniform_buffer,
+        0,
+        bytemuck::cast_slice(&uniforms),
+    );
 
     // Offscreen texture -> render
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("preview_offscreen"),
-        size: wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: preview_w,
+            height: preview_h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -435,14 +663,19 @@ fn render_frame_color_image_gpu_snapshot(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("preview_encoder") });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("preview_encoder"),
+    });
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("preview_renderpass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
             depth_stencil_attachment: None,
             occlusion_query_set: None,
@@ -468,16 +701,34 @@ fn render_frame_color_image_gpu_snapshot(
     });
 
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::ImageCopyBuffer { buffer: &output_buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bytes_per_row), rows_per_image: Some(preview_h) } },
-        wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
+        wgpu::ImageCopyTexture {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::ImageCopyBuffer {
+            buffer: &output_buffer,
+            layout: wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(preview_h),
+            },
+        },
+        wgpu::Extent3d {
+            width: preview_w,
+            height: preview_h,
+            depth_or_array_layers: 1,
+        },
     );
 
     queue.submit(Some(encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
-    buffer_slice.map_async(wgpu::MapMode::Read, move |res| { let _ = tx.send(res); });
+    buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
     device.poll(wgpu::Maintain::Wait);
     match rx.recv() {
         Ok(Ok(())) => {
@@ -490,7 +741,10 @@ fn render_frame_color_image_gpu_snapshot(
             }
             drop(data);
             output_buffer.unmap();
-            Ok(egui::ColorImage::from_rgba_unmultiplied([preview_w as usize, preview_h as usize], &pixels))
+            Ok(egui::ColorImage::from_rgba_unmultiplied(
+                [preview_w as usize, preview_h as usize],
+                &pixels,
+            ))
         }
         _ => Err("wgpu readback failed".to_string()),
     }
@@ -529,36 +783,62 @@ fn ensure_preview_worker(state: &mut AppState) {
                                 if snapshot.use_gpu {
                                     if gpu_renderer.is_none() {
                                         // init device on-demand
-                                        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                                            backends: wgpu::Backends::PRIMARY,
-                                            dx12_shader_compiler: Default::default(),
-                                            flags: wgpu::InstanceFlags::empty(),
-                                            gles_minor_version: wgpu::Gles3MinorVersion::default(),
-                                        });
-                                        if let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                                            power_preference: wgpu::PowerPreference::HighPerformance,
-                                            compatible_surface: None,
-                                            force_fallback_adapter: false,
-                                        })) {
-                                            if let Ok((device, queue)) = pollster::block_on(adapter.request_device(
-                                                &wgpu::DeviceDescriptor {
-                                                    label: Some("preview-worker-device"),
-                                                    required_features: wgpu::Features::empty(),
-                                                    required_limits: wgpu::Limits::downlevel_defaults(),
+                                        let instance =
+                                            wgpu::Instance::new(wgpu::InstanceDescriptor {
+                                                backends: wgpu::Backends::PRIMARY,
+                                                dx12_shader_compiler: Default::default(),
+                                                flags: wgpu::InstanceFlags::empty(),
+                                                gles_minor_version:
+                                                    wgpu::Gles3MinorVersion::default(),
+                                            });
+                                        if let Some(adapter) =
+                                            pollster::block_on(instance.request_adapter(
+                                                &wgpu::RequestAdapterOptions {
+                                                    power_preference:
+                                                        wgpu::PowerPreference::HighPerformance,
+                                                    compatible_surface: None,
+                                                    force_fallback_adapter: false,
                                                 },
-                                                None,
-                                            )) {
-                                                let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-                                                let resources = GpuResources::new(&device, target_format);
+                                            ))
+                                        {
+                                            if let Ok((device, queue)) =
+                                                pollster::block_on(adapter.request_device(
+                                                    &wgpu::DeviceDescriptor {
+                                                        label: Some("preview-worker-device"),
+                                                        required_features: wgpu::Features::empty(),
+                                                        required_limits:
+                                                            wgpu::Limits::downlevel_defaults(),
+                                                    },
+                                                    None,
+                                                ))
+                                            {
+                                                let target_format =
+                                                    wgpu::TextureFormat::Rgba8UnormSrgb;
+                                                let resources =
+                                                    GpuResources::new(&device, target_format);
                                                 gpu_renderer = Some((device, queue, resources));
                                             }
                                         }
                                     }
 
-                                    if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
-                                        let img = render_frame_color_image_gpu_snapshot(device, queue, resources, &snapshot, center_time)
-                                            .unwrap_or_else(|_| render_frame_color_image_snapshot(&snapshot, center_time));
-                                        let _ = res_tx.send(PreviewResult::Single(center_time, img));
+                                    if let Some((ref device, ref queue, ref mut resources)) =
+                                        gpu_renderer
+                                    {
+                                        let img = render_frame_color_image_gpu_snapshot(
+                                            device,
+                                            queue,
+                                            resources,
+                                            &snapshot,
+                                            center_time,
+                                        )
+                                        .unwrap_or_else(|_| {
+                                            render_frame_color_image_snapshot(
+                                                &snapshot,
+                                                center_time,
+                                            )
+                                        });
+                                        let _ =
+                                            res_tx.send(PreviewResult::Single(center_time, img));
                                         continue;
                                     }
                                 } else {
@@ -573,9 +853,14 @@ fn ensure_preview_worker(state: &mut AppState) {
                         }
                         PreviewMode::Buffered => {
                             // Reduce the buffered frames when the preview resolution is
-                            // large to save RAM. For high-resolution previews we only
-                            // keep +/-5 frames (11 total). Otherwise +/-10 (21 total).
-                            let frames_each_side = if snapshot.preview_multiplier > 1.0 { 5i32 } else { 10i32 };
+                            // large to save RAM. Keep a smaller default buffer so idle
+                            // preview cache doesn't consume too much memory.
+                            // For hi-res previews we keep +/-3 frames; otherwise +/-6.
+                            let frames_each_side = if snapshot.preview_multiplier > 1.0 {
+                                3i32
+                            } else {
+                                6i32
+                            };
                             let frame_step = 1.0 / (snapshot.preview_fps as f32);
                             let mut frames =
                                 Vec::with_capacity((frames_each_side * 2 + 1) as usize);
@@ -587,35 +872,53 @@ fn ensure_preview_worker(state: &mut AppState) {
                                 let img = if snapshot.use_gpu {
                                     // init device lazily if needed
                                     if gpu_renderer.is_none() {
-                                        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                                            backends: wgpu::Backends::PRIMARY,
-                                            dx12_shader_compiler: Default::default(),
-                                            flags: wgpu::InstanceFlags::empty(),
-                                            gles_minor_version: wgpu::Gles3MinorVersion::default(),
-                                        });
-                                        if let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                                            power_preference: wgpu::PowerPreference::HighPerformance,
-                                            compatible_surface: None,
-                                            force_fallback_adapter: false,
-                                        })) {
-                                            if let Ok((device, queue)) = pollster::block_on(adapter.request_device(
-                                                &wgpu::DeviceDescriptor {
-                                                    label: Some("preview-worker-device"),
-                                                    required_features: wgpu::Features::empty(),
-                                                    required_limits: wgpu::Limits::downlevel_defaults(),
+                                        let instance =
+                                            wgpu::Instance::new(wgpu::InstanceDescriptor {
+                                                backends: wgpu::Backends::PRIMARY,
+                                                dx12_shader_compiler: Default::default(),
+                                                flags: wgpu::InstanceFlags::empty(),
+                                                gles_minor_version:
+                                                    wgpu::Gles3MinorVersion::default(),
+                                            });
+                                        if let Some(adapter) =
+                                            pollster::block_on(instance.request_adapter(
+                                                &wgpu::RequestAdapterOptions {
+                                                    power_preference:
+                                                        wgpu::PowerPreference::HighPerformance,
+                                                    compatible_surface: None,
+                                                    force_fallback_adapter: false,
                                                 },
-                                                None,
-                                            )) {
-                                                let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-                                                let resources = GpuResources::new(&device, target_format);
+                                            ))
+                                        {
+                                            if let Ok((device, queue)) =
+                                                pollster::block_on(adapter.request_device(
+                                                    &wgpu::DeviceDescriptor {
+                                                        label: Some("preview-worker-device"),
+                                                        required_features: wgpu::Features::empty(),
+                                                        required_limits:
+                                                            wgpu::Limits::downlevel_defaults(),
+                                                    },
+                                                    None,
+                                                ))
+                                            {
+                                                let target_format =
+                                                    wgpu::TextureFormat::Rgba8UnormSrgb;
+                                                let resources =
+                                                    GpuResources::new(&device, target_format);
                                                 gpu_renderer = Some((device, queue, resources));
                                             }
                                         }
                                     }
 
-                                    if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
-                                        render_frame_color_image_gpu_snapshot(device, queue, resources, &snapshot, t)
-                                            .unwrap_or_else(|_| render_frame_color_image_snapshot(&snapshot, t))
+                                    if let Some((ref device, ref queue, ref mut resources)) =
+                                        gpu_renderer
+                                    {
+                                        render_frame_color_image_gpu_snapshot(
+                                            device, queue, resources, &snapshot, t,
+                                        )
+                                        .unwrap_or_else(
+                                            |_| render_frame_color_image_snapshot(&snapshot, t),
+                                        )
                                     } else {
                                         render_frame_color_image_snapshot(&snapshot, t)
                                     }
@@ -860,6 +1163,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         let composition_min = grid_origin - composition_size / 2.0;
         let composition_rect = egui::Rect::from_min_size(composition_min, composition_size);
 
+        // remember composition rect for other UI (Project Settings centering)
+        state.last_composition_rect = Some(composition_rect);
+
         // Draw shadows/border for the composition area
         let shadow_rect = composition_rect.expand(4.0 * zoom);
         painter.rect_filled(shadow_rect, 0.0, egui::Color32::from_black_alpha(100));
@@ -880,10 +1186,24 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         // --- Software Rasterizer Pass ---
         // This buffer has the actual "preview" resolution.
+
+        // Lazily build a per-frame position cache when possible. This
+        // reduces repeated interpolation cost while scrubbing/playing when
+        // the scene is stable. `build_position_cache` guards against
+        // excessive memory usage.
+        if state.position_cache.is_none() {
+            if let Some(pc) = build_position_cache(state) {
+                state.position_cache = Some(pc);
+            }
+        }
         // --- GPU / WGPU Rasterizer ---
         #[cfg(feature = "wgpu")]
         {
             let mut gpu_shapes = Vec::new();
+
+            // try to obtain a cached frame for the current time (if available)
+            let cached = cached_frame_for(state, state.time);
+            let mut flat_idx: usize = 0;
 
             fn fill_gpu_shapes(
                 shapes: &[crate::scene::Shape],
@@ -893,6 +1213,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 parent_spawn: f32,
                 current_time: f32,
                 project_duration: f32,
+                cached: Option<&Vec<(f32, f32)>>,
+                flat_idx: &mut usize,
             ) {
                 for shape in shapes {
                     let my_spawn = shape.spawn_time().max(parent_spawn);
@@ -904,13 +1226,19 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             color,
                             ..
                         } => {
-                            // Apply animated position when available (GPU path must match software rasterizer)
-                            let (eval_x, eval_y) =
+                            // Use cached position when available, otherwise evaluate
+                            let (eval_x, eval_y) = if let Some(frame) = cached {
+                                let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
+                                *flat_idx += 1;
+                                p
+                            } else {
+                                *flat_idx += 1;
                                 crate::animations::animations_manager::animated_xy_for(
                                     shape,
                                     current_time,
                                     project_duration,
-                                );
+                                )
+                            };
                             gpu_shapes.push(GpuShape {
                                 pos: [eval_x, eval_y],
                                 size: [*radius, 0.0],
@@ -929,13 +1257,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         crate::scene::Shape::Rect {
                             x, y, w, h, color, ..
                         } => {
-                            // Use animated center for rects as well
-                            let (eval_x, eval_y) =
+                            let (eval_x, eval_y) = if let Some(frame) = cached {
+                                let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
+                                *flat_idx += 1;
+                                p
+                            } else {
+                                *flat_idx += 1;
                                 crate::animations::animations_manager::animated_xy_for(
                                     shape,
                                     current_time,
                                     project_duration,
-                                );
+                                )
+                            };
                             gpu_shapes.push(GpuShape {
                                 pos: [eval_x + *w / 2.0, eval_y + *h / 2.0],
                                 size: [*w / 2.0, *h / 2.0],
@@ -960,6 +1293,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 my_spawn,
                                 current_time,
                                 project_duration,
+                                cached,
+                                flat_idx,
                             );
                         }
                     }
@@ -974,6 +1309,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 0.0,
                 state.time,
                 state.duration_secs,
+                cached,
+                &mut flat_idx,
             );
 
             // Important: use the FULL canvas rect for the callback to avoid coordinate distortion
@@ -1002,6 +1339,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         #[cfg(not(feature = "wgpu"))]
         {
+            // Non-wgpu rasterizer: use cached positions when available. We
+            // traverse the scene in the same order as `flatten()` so the
+            // precomputed cache (if present) can be indexed by a running
+            // `flat_idx` counter.
+            let cached = cached_frame_for(state, state.time);
+            let mut flat_idx: usize = 0;
+
             fn draw_shapes_recursive(
                 ui_painter: &egui::Painter,
                 shapes: &[crate::scene::Shape],
@@ -1010,6 +1354,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 current_time: f32,
                 parent_spawn: f32,
                 project_duration: f32,
+                cached: Option<&Vec<(f32, f32)>>,
+                flat_idx: &mut usize,
             ) {
                 for shape in shapes {
                     let actual_spawn = shape.spawn_time().max(parent_spawn);
@@ -1024,8 +1370,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             color,
                             ..
                         } => {
-                            let (eval_x, eval_y) =
-                                animated_xy_for(shape, current_time, project_duration);
+                            let (eval_x, eval_y) = if let Some(frame) = cached {
+                                let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
+                                *flat_idx += 1;
+                                p
+                            } else {
+                                *flat_idx += 1;
+                                animated_xy_for(shape, current_time, project_duration)
+                            };
                             let pos = composition_rect.min
                                 + egui::vec2(
                                     eval_x * composition_rect.width(),
@@ -1045,8 +1397,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             color,
                             ..
                         } => {
-                            let (eval_x, eval_y) =
-                                animated_xy_for(shape, current_time, project_duration);
+                            let (eval_x, eval_y) = if let Some(frame) = cached {
+                                let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
+                                *flat_idx += 1;
+                                p
+                            } else {
+                                *flat_idx += 1;
+                                animated_xy_for(shape, current_time, project_duration)
+                            };
                             let min = composition_rect.min
                                 + egui::vec2(
                                     eval_x * composition_rect.width(),
@@ -1071,6 +1429,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 current_time,
                                 actual_spawn,
                                 project_duration,
+                                cached,
+                                flat_idx,
                             );
                         }
                     }
@@ -1085,6 +1445,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 state.time,
                 0.0,
                 state.duration_secs,
+                cached,
+                &mut flat_idx,
             );
         }
 

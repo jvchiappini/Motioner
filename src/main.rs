@@ -2,13 +2,13 @@ mod animations;
 mod app_state;
 mod autocomplete; // Added this
 mod canvas;
-mod shapes;
 mod code_panel;
 mod dsl;
 mod project_settings;
 mod renderer;
 mod scene;
 mod scene_graph;
+mod shapes;
 mod timeline;
 mod ui;
 mod welcome_modal; // Added this
@@ -47,13 +47,36 @@ fn main() -> Result<()> {
         }
     }
 
-    let mut viewport = egui::ViewportBuilder::default().with_inner_size(egui::vec2(win_w, win_h));
-
-    if let Some(p) = pos {
-        viewport = viewport.with_position(p);
+    // Sanity-check computed window size/position before applying an explicit
+    // viewport. If values are invalid or out-of-range, fall back to the
+    // platform-default placement (avoids off-screen windows).
+    let mut set_viewport = false;
+    if win_w.is_finite() && win_h.is_finite() && win_w > 200.0 && win_h > 200.0 {
+        if let Some(p) = pos {
+            if p.x.is_finite() && p.y.is_finite() {
+                set_viewport = true;
+            }
+        }
     }
 
-    native_options.viewport = viewport;
+    if set_viewport {
+        let mut viewport =
+            egui::ViewportBuilder::default().with_inner_size(egui::vec2(win_w, win_h));
+        if let Some(p) = pos {
+            viewport = viewport.with_position(p);
+        }
+        native_options.viewport = viewport;
+        println!(
+            "[motioner] explicit viewport applied - size={}x{} pos={:?}",
+            win_w, win_h, pos
+        );
+    } else {
+        println!(
+            "[motioner] explicit viewport NOT applied - using OS placement (size={}x{} pos={:?})",
+            win_w, win_h, pos
+        );
+        // leave native_options.viewport unset — let the OS place the window
+    }
 
     // Run the native eframe app. If initialization fails (wgpu/device/etc.)
     // print the error and retry once with a simplified `NativeOptions` that
@@ -67,7 +90,10 @@ fn main() -> Result<()> {
     ) {
         Ok(()) => Ok(()),
         Err(err) => {
-            eprintln!("eframe::run_native failed: {:?}. Retrying with default options...", err);
+            eprintln!(
+                "eframe::run_native failed: {:?}. Retrying with default options...",
+                err
+            );
             // Retry with default options (no explicit viewport)
             let mut fallback = eframe::NativeOptions::default();
             fallback.renderer = eframe::Renderer::Wgpu;

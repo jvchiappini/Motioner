@@ -33,6 +33,11 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
+        // Diagnostic: log a visible token so we can tell the event loop is running.
+        println!(
+            "[motioner] update() running — time = {:.3}",
+            ctx.input(|i| i.time)
+        );
 
         // Auto-sync Code if settings changed while Code tab is active
         let current_settings = (
@@ -846,6 +851,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
         if let Some(changed) = inner_response.inner {
             if changed {
                 // If any property changed, allow real-time code update
+                state.position_cache = None; // shape properties changed → invalidate cache
                 state.dsl_code = dsl::generate_dsl(
                     &state.scene,
                     state.render_width,

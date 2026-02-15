@@ -84,6 +84,17 @@ pub struct AppState {
     pub canvas_zoom: f32,
     pub canvas_pan_x: f32,
     pub canvas_pan_y: f32,
+    /// Last computed composition (paper) rect in screen coordinates. Used to
+    /// position modals (e.g. Project Settings) over the canvas.
+    #[serde(skip)]
+    pub last_composition_rect: Option<egui::Rect>,
+
+    /// Optional precomputed position cache (per-frame, flattened scene).
+    /// When present, rendering uses these precomputed positions instead of
+    /// re-evaluating animations on every paint. Cleared when the scene or
+    /// timing changes.
+    #[serde(skip)]
+    pub position_cache: Option<crate::canvas::PositionCache>,
 
     // UI Animation State
     pub settings_open_time: Option<f64>,
@@ -210,6 +221,8 @@ impl Default for AppState {
             canvas_zoom: 1.0,
             canvas_pan_x: 0.0,
             canvas_pan_y: 0.0,
+            last_composition_rect: None,
+            position_cache: None,
             settings_open_time: None,
             settings_is_closing: false,
             toast_message: None,

@@ -65,6 +65,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let fade_color = egui::Color32::from_black_alpha((180.0 * opacity) as u8);
 
     let screen_rect = ctx.input(|i| i.screen_rect());
+    // Prefer centering the settings window over the composition (paper) area
+    // when available so the dialog appears contextual to the canvas.
+    let center_pos = state
+        .last_composition_rect
+        .map(|r| r.center())
+        .unwrap_or_else(|| screen_rect.center());
 
     // 5. Draw Full Screen Overlay (Modal Backdrop)
     egui::Area::new("settings_overlay")
@@ -84,8 +90,6 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             // 6. Draw the Settings Window
             let window_width = 460.0;
             let window_height = 520.0; // Increased to fit new settings
-            let center_pos = screen_rect.center();
-
             // Apply the slide offset to the Y position
             let window_pos = egui::pos2(
                 center_pos.x - window_width / 2.0,
@@ -163,20 +167,31 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
             ui.end_row();
 
             ui.label("Frame Rate (FPS)");
-            ui.add(
-                egui::DragValue::new(&mut state.fps)
-                    .clamp_range(1..=240)
-                    .speed(1),
-            );
+            if ui
+                .add(
+                    egui::DragValue::new(&mut state.fps)
+                        .clamp_range(1..=240)
+                        .speed(1),
+                )
+                .changed()
+            {
+                // timeline / sampling changed -> invalidate precomputed positions
+                state.position_cache = None;
+            }
             ui.end_row();
 
             ui.label("Duration (seconds)");
-            ui.add(
-                egui::DragValue::new(&mut state.duration_secs)
-                    .clamp_range(0.1..=3600.0)
-                    .speed(0.1)
-                    .suffix(" s"),
-            );
+            if ui
+                .add(
+                    egui::DragValue::new(&mut state.duration_secs)
+                        .clamp_range(0.1..=3600.0)
+                        .speed(0.1)
+                        .suffix(" s"),
+                )
+                .changed()
+            {
+                state.position_cache = None;
+            }
             ui.end_row();
 
             ui.add_space(10.0);
@@ -192,9 +207,13 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
 
             ui.label("Dimensions");
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut state.render_width).prefix("W: "));
+                if ui.add(egui::DragValue::new(&mut state.render_width).prefix("W: ")).changed() {
+                    state.position_cache = None;
+                }
                 ui.label("x");
-                ui.add(egui::DragValue::new(&mut state.render_height).prefix("H: "));
+                if ui.add(egui::DragValue::new(&mut state.render_height).prefix("H: ")).changed() {
+                    state.position_cache = None;
+                }
             });
             ui.end_row();
 
@@ -267,6 +286,8 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                     state.preview_frame_cache.clear();
                     state.preview_texture = None;
                     state.preview_cache_center_time = None;
+                    // also clear positional cache (frees memory and forces rebuild)
+                    state.position_cache = None;
                 }
                 ui.add_space(8.0);
                 ui.label("Clears cached preview frames to free memory");

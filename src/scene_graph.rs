@@ -145,8 +145,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                                         }
                                         _ => {}
                                     }
-
                                     // regenerate DSL and preview frames
+                                    state.position_cache = None; // scene changed → invalidate position cache
                                     state.dsl_code = dsl::generate_dsl(
                                         &state.scene,
                                         state.render_width,
@@ -201,6 +201,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     if let Some((from, to_parent, to_idx)) = state.move_request.take() {
         if let Some(new_path) = move_node(&mut state.scene, &from, &to_parent, to_idx) {
             state.selected_node_path = Some(new_path);
+            state.position_cache = None; // scene mutated by move
             state.dsl_code = dsl::generate_dsl(
                 &state.scene,
                 state.render_width,
@@ -264,6 +265,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             animations: Vec::new(),
                             visible: true,
                         });
+                        state.position_cache = None; // scene changed
                         added = true;
                     }
                     if ui.button("⬜  Rectangle").clicked() {
