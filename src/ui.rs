@@ -450,7 +450,11 @@ impl eframe::App for MyApp {
             }
 
             // Request single-frame preview generation for the new playhead time (non-blocking)
-            crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
+            crate::canvas::request_preview_frames(
+                state,
+                state.time,
+                crate::canvas::PreviewMode::Single,
+            );
 
             // Request next repaint based on preview_fps
             let frame_duration = 1.0 / (state.preview_fps as f32);
@@ -736,7 +740,7 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                         }
                                         ui.end_row();
 
-                                            // diagnostic removed
+                                        // diagnostic removed
 
                                         ui.label("Width:");
                                         let mut val_w = *w * 100.0;
