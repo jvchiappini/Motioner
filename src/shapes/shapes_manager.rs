@@ -75,20 +75,16 @@ impl Shape {
                 animations,
                 ..
             } => {
-                let mut out = format!(
-                    "{}circle(name = \"{}\", x = {:.3}, y = {:.3}, radius = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
-                    indent, name, x, y, radius, color[0], color[1], color[2], spawn_time
-                );
-                if !animations.is_empty() {
-                    for a in animations.iter() {
-                        if let Some(anim_dsl) =
-                            crate::animations::animations_manager::animation_to_dsl(a, name, &indent)
-                        {
-                            out.push_str(&anim_dsl);
-                        }
-                    }
-                }
-                out
+                crate::shapes::circle::to_dsl_with_animations(
+                    name,
+                    *x,
+                    *y,
+                    *radius,
+                    *color,
+                    *spawn_time,
+                    animations,
+                    &indent,
+                )
             }
             Shape::Rect {
                 name,
@@ -101,20 +97,17 @@ impl Shape {
                 animations,
                 ..
             } => {
-                let mut out = format!(
-                    "{}rect(name = \"{}\", x = {:.3}, y = {:.3}, width = {:.3}, height = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2})",
-                    indent, name, x, y, w, h, color[0], color[1], color[2], spawn_time
-                );
-                if !animations.is_empty() {
-                    for a in animations.iter() {
-                        if let Some(anim_dsl) =
-                            crate::animations::animations_manager::animation_to_dsl(a, name, &indent)
-                        {
-                            out.push_str(&anim_dsl);
-                        }
-                    }
-                }
-                out
+                crate::shapes::rect::to_dsl_with_animations(
+                    name,
+                    *x,
+                    *y,
+                    *w,
+                    *h,
+                    *color,
+                    *spawn_time,
+                    animations,
+                    &indent,
+                )
             }
             Shape::Group { name, children, .. } => {
                 let mut items: Vec<String> = Vec::new();
@@ -148,6 +141,7 @@ impl Shape {
             visible: true,
         }]
     }
+    
 
     pub fn name(&self) -> &str {
         match self {
@@ -217,6 +211,28 @@ pub fn get_shape_mut<'a>(scene: &'a mut [Shape], path: &[usize]) -> Option<&'a m
         };
     }
     Some(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circle_to_dsl_includes_color_and_spawn() {
+        let s = Shape::Circle {
+            name: "C".to_string(),
+            x: 0.5,
+            y: 0.5,
+            radius: 0.1,
+            color: [17, 34, 51, 255],
+            spawn_time: 0.25,
+            animations: Vec::new(),
+            visible: true,
+        };
+        let d = s.to_dsl();
+        assert!(d.contains("fill = \"#112233\""));
+        assert!(d.contains("spawn = 0.25"));
+    }
 }
 
 pub fn get_shape<'a>(scene: &'a [Shape], path: &[usize]) -> Option<&'a Shape> {

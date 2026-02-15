@@ -1,5 +1,21 @@
 //! Animation runtime / DSL helpers — central place to add new animation types.
 use crate::scene::Shape;
+use serde::{Deserialize, Serialize};
+
+/// Animation model (moved here from `scene.rs`). Re-exported from `crate::scene` for
+/// backward compatibility.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Animation {
+    Move {
+        to_x: f32,
+        to_y: f32,
+        /// start time in seconds
+        start: f32,
+        /// end time in seconds
+        end: f32,
+        easing: crate::animations::Easing,
+    },
+}
 
 /// Public interface used by the UI/renderer to resolve an element's animated position.
 /// This replaces the previous `animated_xy_for` implementation that lived in `canvas.rs`.
@@ -26,27 +42,6 @@ pub fn animated_xy_for(shape: &Shape, project_time: f32, _project_duration: f32)
     }
 }
 
-/// Convert a serialized `scene::Animation` into a DSL snippet for an element.
-/// Returns None for animation kinds that we don't know how to render yet.
-pub fn animation_to_dsl(
-    anim: &crate::scene::Animation,
-    element_name: &str,
-    indent: &str,
-) -> Option<String> {
-    match anim {
-        crate::scene::Animation::Move {
-            to_x,
-            to_y,
-            start,
-            end,
-            easing: _,
-        } => {
-            // Reuse MoveAnimation's formatting for consistency
-            if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
-                Some(ma.to_dsl_snippet(element_name, indent))
-            } else {
-                None
-            }
-        }
-    }
-}
+// Conversion `Animation -> DSL` is now handled by each shape module
+// (e.g. `circle::to_dsl_with_animations`). The centralized helper was removed
+// to keep responsibilities local to each shape.
