@@ -55,10 +55,33 @@ fn main() -> Result<()> {
 
     native_options.viewport = viewport;
 
-    let _ = eframe::run_native(
+    // Run the native eframe app. If initialization fails (wgpu/device/etc.)
+    // print the error and retry once with a simplified `NativeOptions` that
+    // does not set an explicit viewport — this helps on systems where the
+    // computed position/size would place the window off-screen or when
+    // platform-specific viewport creation fails.
+    match eframe::run_native(
         "Motioner UI",
         native_options,
         Box::new(|cc| Box::new(ui::create_app(cc))),
-    );
-    Ok(())
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            eprintln!("eframe::run_native failed: {:?}. Retrying with default options...", err);
+            // Retry with default options (no explicit viewport)
+            let mut fallback = eframe::NativeOptions::default();
+            fallback.renderer = eframe::Renderer::Wgpu;
+            match eframe::run_native(
+                "Motioner UI (fallback)",
+                fallback,
+                Box::new(|cc| Box::new(ui::create_app(cc))),
+            ) {
+                Ok(()) => Ok(()),
+                Err(err2) => {
+                    eprintln!("Fallback start failed too: {:?}", err2);
+                    return Err(anyhow::anyhow!("eframe fallback start failed: {:#?}", err2));
+                }
+            }
+        }
+    }
 }

@@ -443,7 +443,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         state.time = new_time.max(0.0);
                         // regenerate preview frames around the new playhead position
                         if state.preview_cache_center_time.map_or(true, |c| (c - state.time).abs() > 1e-4) {
-                            crate::canvas::generate_preview_frames(state, state.time, ui.ctx());
+                            // interactive scrubbing → request a *single* fast preview frame (debounced)
+                            crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
                         }
                     }
                 }

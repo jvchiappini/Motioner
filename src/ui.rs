@@ -10,6 +10,9 @@ pub struct MyApp {
 pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
     let state = AppState::default();
 
+    // Diagnostic: confirm app construction in console when running locally.
+    println!("[motioner] create_app: AppState constructed");
+
     // Check if we have wgpu access
     #[cfg(feature = "wgpu")]
     if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {

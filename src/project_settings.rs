@@ -243,6 +243,35 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 }
             });
             ui.end_row();
+
+            ui.add_space(10.0);
+            ui.end_row();
+
+            // Section: Performance
+            ui.label(
+                egui::RichText::new("Performance")
+                    .strong()
+                    .color(egui::Color32::from_gray(200)),
+            );
+            ui.end_row();
+
+            ui.label("Use GPU worker for previews");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.preview_worker_use_gpu, "Enable headless GPU in preview worker");
+            });
+            ui.end_row();
+
+            ui.label("Preview cache");
+            ui.horizontal(|ui| {
+                if ui.button("Clear preview cache").clicked() {
+                    state.preview_frame_cache.clear();
+                    state.preview_texture = None;
+                    state.preview_cache_center_time = None;
+                }
+                ui.add_space(8.0);
+                ui.label("Clears cached preview frames to free memory");
+            });
+            ui.end_row();
         });
 }
 

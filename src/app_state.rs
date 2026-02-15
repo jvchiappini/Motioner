@@ -38,6 +38,13 @@ pub struct AppState {
     pub preview_worker_tx: Option<std::sync::mpsc::Sender<crate::canvas::PreviewJob>>,
     #[serde(skip)]
     pub preview_worker_rx: Option<std::sync::mpsc::Receiver<crate::canvas::PreviewResult>>,
+    /// True when a background preview generation job was issued and not yet observed in results.
+    #[serde(skip)]
+    pub preview_job_pending: bool,
+    /// If true the background preview worker will attempt to use a headless GPU
+    /// renderer for faster preview generation; when false the worker always
+    /// uses the CPU rasterizer. Exposed in Settings → Performance.
+    pub preview_worker_use_gpu: bool,
 
     pub playing: bool,
     pub time: f32,
@@ -176,6 +183,8 @@ impl Default for AppState {
             preview_cache_center_time: None,
             preview_worker_tx: None,
             preview_worker_rx: None,
+            preview_job_pending: false,
+            preview_worker_use_gpu: true,
             playing: false,
             time: 0.0,
             export_in_progress: false,

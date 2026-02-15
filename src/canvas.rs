@@ -163,7 +163,7 @@ pub fn generate_preview_frames(state: &mut AppState, center_time: f32, ctx: &egu
 }
 
 /// Modes for preview generation requests
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewMode {
     Buffered, // 10 frames before/after center
     Single,   // single center frame
@@ -193,6 +193,10 @@ pub struct RenderSnapshot {
     pub preview_multiplier: f32,
     pub duration_secs: f32,
     pub preview_fps: u32,
+    /// Whether the worker should attempt to use the headless GPU path for
+    /// this snapshot. This mirrors `AppState::preview_worker_use_gpu` so the
+    /// worker can decide per-job (no need to restart the thread).
+    pub use_gpu: bool,
 }
 
 fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::ColorImage {
@@ -214,7 +218,7 @@ fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::
             // simple sampling: iterate scene primitives and composite (no sub-pixel antialiasing)
             let mut final_color = [255.0, 255.0, 255.0, 255.0];
 
-            // collect primitives
+            // collect primitives once (avoid rebuilding per-pixel)
             fn collect_primitives(
                 shapes: &[crate::scene::Shape],
                 parent_spawn: f32,
@@ -231,6 +235,7 @@ fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::
                 }
             }
 
+            // do this once outside the sampling loops to save allocations
             let mut all_prims = Vec::new();
             collect_primitives(&snap.scene, 0.0, &mut all_prims);
 
@@ -240,8 +245,8 @@ fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::
                 uv.y * snap.render_height as f32,
             );
 
-            for (shape, actual_spawn) in all_prims {
-                if time < actual_spawn {
+            for (shape, actual_spawn) in &all_prims {
+                if time < *actual_spawn {
                     continue;
                 }
                 match shape {
@@ -305,6 +310,192 @@ fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::
     egui::ColorImage::from_rgba_unmultiplied([preview_w, preview_h], &pixels)
 }
 
+// GPU-based offscreen renderer used by the preview worker. Returns Err on any wgpu failure so
+// the worker can fall back to CPU rasterizer.
+#[cfg(feature = "wgpu")]
+fn render_frame_color_image_gpu_snapshot(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    resources: &mut GpuResources,
+    snap: &RenderSnapshot,
+    time: f32,
+) -> Result<egui::ColorImage, String> {
+    use std::num::NonZeroU32;
+
+    let preview_w = (snap.render_width as f32 * snap.preview_multiplier)
+        .round()
+        .max(1.0) as u32;
+    let preview_h = (snap.render_height as f32 * snap.preview_multiplier)
+        .round()
+        .max(1.0) as u32;
+
+    // Build GpuShape list (same layout used by on-screen GPU path)
+    let mut gpu_shapes: Vec<GpuShape> = Vec::new();
+
+    fn collect_prims(shapes: &[crate::scene::Shape], parent_spawn: f32, out: &mut Vec<(crate::scene::Shape, f32)>) {
+        for s in shapes {
+            let my_spawn = s.spawn_time().max(parent_spawn);
+            match s {
+                crate::scene::Shape::Group { children, .. } => collect_prims(children, my_spawn, out),
+                _ => out.push((s.clone(), my_spawn)),
+            }
+        }
+    }
+
+    let mut all = Vec::new();
+    collect_prims(&snap.scene, 0.0, &mut all);
+
+    for (shape, actual_spawn) in all.iter() {
+        if time < *actual_spawn {
+            continue;
+        }
+        match shape {
+            crate::scene::Shape::Circle { x: _, y: _, radius, color, .. } => {
+                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(shape, time, snap.duration_secs);
+                gpu_shapes.push(GpuShape {
+                    pos: [eval_x, eval_y],
+                    size: [*radius, 0.0],
+                    color: [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0, color[3] as f32 / 255.0],
+                    shape_type: 0,
+                    spawn_time: *actual_spawn,
+                    p1: 0,
+                    p2: 0,
+                });
+            }
+            crate::scene::Shape::Rect { x: _, y: _, w, h, color, .. } => {
+                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(shape, time, snap.duration_secs);
+                gpu_shapes.push(GpuShape {
+                    pos: [eval_x + *w / 2.0, eval_y + *h / 2.0],
+                    size: [*w / 2.0, *h / 2.0],
+                    color: [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0, color[3] as f32 / 255.0],
+                    shape_type: 1,
+                    spawn_time: *actual_spawn,
+                    p1: 0,
+                    p2: 0,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // Upload shape buffer (resize if necessary)
+    let shape_data = bytemuck::cast_slice(&gpu_shapes);
+    if shape_data.len() > resources.shape_buffer.size() as usize {
+        resources.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shape_buffer_worker"),
+            size: (shape_data.len() * 2 + 1024) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        resources.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("composition_bind_group_worker"),
+            layout: &resources.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: resources.shape_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: resources.uniform_buffer.as_entire_binding() },
+            ],
+        });
+    }
+
+    if !gpu_shapes.is_empty() {
+        queue.write_buffer(&resources.shape_buffer, 0, shape_data);
+    }
+
+    // Uniforms (match composition.wgsl layout)
+    let mut uniforms: [f32; 20] = [0.0; 20];
+    uniforms[0] = snap.render_width as f32;
+    uniforms[1] = snap.render_height as f32;
+    uniforms[2] = snap.render_width as f32 * snap.preview_multiplier;
+    uniforms[3] = snap.render_height as f32 * snap.preview_multiplier;
+    uniforms[4] = 0.0;
+    uniforms[5] = 0.0;
+    uniforms[6] = snap.render_width as f32;
+    uniforms[7] = snap.render_height as f32;
+    uniforms[8] = 0.0;
+    uniforms[9] = 0.0;
+    uniforms[10] = snap.render_width as f32;
+    uniforms[11] = snap.render_height as f32;
+    uniforms[12] = gpu_shapes.len() as f32;
+    uniforms[13] = 0.0;
+    uniforms[14] = 0.0;
+    uniforms[15] = 0.0;
+    uniforms[16] = time;
+    queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::cast_slice(&uniforms));
+
+    // Offscreen texture -> render
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("preview_offscreen"),
+        size: wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("preview_encoder") });
+    {
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("preview_renderpass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+        rpass.set_pipeline(&resources.pipeline);
+        rpass.set_bind_group(0, &resources.bind_group, &[]);
+        rpass.draw(0..6, 0..1);
+    }
+
+    // Readback (padded rows)
+    let bytes_per_pixel = 4u32;
+    let bytes_per_row_unpadded = bytes_per_pixel * preview_w;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bytes_per_row = ((bytes_per_row_unpadded + align - 1) / align) * align;
+    let output_buffer_size = padded_bytes_per_row as u64 * preview_h as u64;
+
+    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("preview_readback_buffer"),
+        size: output_buffer_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    encoder.copy_texture_to_buffer(
+        wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::ImageCopyBuffer { buffer: &output_buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bytes_per_row), rows_per_image: Some(preview_h) } },
+        wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
+    );
+
+    queue.submit(Some(encoder.finish()));
+
+    let buffer_slice = output_buffer.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |res| { let _ = tx.send(res); });
+    device.poll(wgpu::Maintain::Wait);
+    match rx.recv() {
+        Ok(Ok(())) => {
+            let data = buffer_slice.get_mapped_range();
+            let mut pixels: Vec<u8> = Vec::with_capacity((preview_w * preview_h * 4) as usize);
+            for row in 0..preview_h as usize {
+                let start = row * padded_bytes_per_row as usize;
+                let end = start + bytes_per_row_unpadded as usize;
+                pixels.extend_from_slice(&data[start..end]);
+            }
+            drop(data);
+            output_buffer.unmap();
+            Ok(egui::ColorImage::from_rgba_unmultiplied([preview_w as usize, preview_h as usize], &pixels))
+        }
+        _ => Err("wgpu readback failed".to_string()),
+    }
+}
+
 /// Ensure background preview worker is running; if not, spawn it and store channels in `state`.
 fn ensure_preview_worker(state: &mut AppState) {
     if state.preview_worker_tx.is_some() && state.preview_worker_rx.is_some() {
@@ -316,6 +507,11 @@ fn ensure_preview_worker(state: &mut AppState) {
 
     // Spawn worker
     thread::spawn(move || {
+        // GPU renderer is initialised lazily per-job based on the snapshot.use_gpu
+        // flag so changing the setting takes effect immediately.
+        #[cfg(feature = "wgpu")]
+        let mut gpu_renderer: Option<(wgpu::Device, wgpu::Queue, GpuResources)> = None;
+
         while let Ok(job) = job_rx.recv() {
             match job {
                 PreviewJob::Generate {
@@ -325,18 +521,109 @@ fn ensure_preview_worker(state: &mut AppState) {
                 } => {
                     match mode {
                         PreviewMode::Single => {
+                            // Decide per-job whether to use GPU (snapshot.use_gpu mirrors the
+                            // user's setting). Initialise GPU lazily and drop it if the
+                            // job requests CPU only.
+                            #[cfg(feature = "wgpu")]
+                            {
+                                if snapshot.use_gpu {
+                                    if gpu_renderer.is_none() {
+                                        // init device on-demand
+                                        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                                            backends: wgpu::Backends::PRIMARY,
+                                            dx12_shader_compiler: Default::default(),
+                                            flags: wgpu::InstanceFlags::empty(),
+                                            gles_minor_version: wgpu::Gles3MinorVersion::default(),
+                                        });
+                                        if let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                                            power_preference: wgpu::PowerPreference::HighPerformance,
+                                            compatible_surface: None,
+                                            force_fallback_adapter: false,
+                                        })) {
+                                            if let Ok((device, queue)) = pollster::block_on(adapter.request_device(
+                                                &wgpu::DeviceDescriptor {
+                                                    label: Some("preview-worker-device"),
+                                                    required_features: wgpu::Features::empty(),
+                                                    required_limits: wgpu::Limits::downlevel_defaults(),
+                                                },
+                                                None,
+                                            )) {
+                                                let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+                                                let resources = GpuResources::new(&device, target_format);
+                                                gpu_renderer = Some((device, queue, resources));
+                                            }
+                                        }
+                                    }
+
+                                    if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
+                                        let img = render_frame_color_image_gpu_snapshot(device, queue, resources, &snapshot, center_time)
+                                            .unwrap_or_else(|_| render_frame_color_image_snapshot(&snapshot, center_time));
+                                        let _ = res_tx.send(PreviewResult::Single(center_time, img));
+                                        continue;
+                                    }
+                                } else {
+                                    // If user disabled GPU for previews, drop any cached GPU renderer
+                                    gpu_renderer = None;
+                                }
+                            }
+
+                            // CPU fallback or when wgpu feature not compiled
                             let img = render_frame_color_image_snapshot(&snapshot, center_time);
                             let _ = res_tx.send(PreviewResult::Single(center_time, img));
                         }
                         PreviewMode::Buffered => {
-                            let frames_each_side = 10i32;
+                            // Reduce the buffered frames when the preview resolution is
+                            // large to save RAM. For high-resolution previews we only
+                            // keep +/-5 frames (11 total). Otherwise +/-10 (21 total).
+                            let frames_each_side = if snapshot.preview_multiplier > 1.0 { 5i32 } else { 10i32 };
                             let frame_step = 1.0 / (snapshot.preview_fps as f32);
                             let mut frames =
                                 Vec::with_capacity((frames_each_side * 2 + 1) as usize);
                             for i in -frames_each_side..=frames_each_side {
                                 let t = (center_time + (i as f32) * frame_step)
                                     .clamp(0.0, snapshot.duration_secs);
-                                let img = render_frame_color_image_snapshot(&snapshot, t);
+
+                                #[cfg(feature = "wgpu")]
+                                let img = if snapshot.use_gpu {
+                                    // init device lazily if needed
+                                    if gpu_renderer.is_none() {
+                                        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                                            backends: wgpu::Backends::PRIMARY,
+                                            dx12_shader_compiler: Default::default(),
+                                            flags: wgpu::InstanceFlags::empty(),
+                                            gles_minor_version: wgpu::Gles3MinorVersion::default(),
+                                        });
+                                        if let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                                            power_preference: wgpu::PowerPreference::HighPerformance,
+                                            compatible_surface: None,
+                                            force_fallback_adapter: false,
+                                        })) {
+                                            if let Ok((device, queue)) = pollster::block_on(adapter.request_device(
+                                                &wgpu::DeviceDescriptor {
+                                                    label: Some("preview-worker-device"),
+                                                    required_features: wgpu::Features::empty(),
+                                                    required_limits: wgpu::Limits::downlevel_defaults(),
+                                                },
+                                                None,
+                                            )) {
+                                                let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+                                                let resources = GpuResources::new(&device, target_format);
+                                                gpu_renderer = Some((device, queue, resources));
+                                            }
+                                        }
+                                    }
+
+                                    if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
+                                        render_frame_color_image_gpu_snapshot(device, queue, resources, &snapshot, t)
+                                            .unwrap_or_else(|_| render_frame_color_image_snapshot(&snapshot, t))
+                                    } else {
+                                        render_frame_color_image_snapshot(&snapshot, t)
+                                    }
+                                } else {
+                                    // forced CPU path
+                                    render_frame_color_image_snapshot(&snapshot, t)
+                                };
+
                                 frames.push((t, img));
                                 // send intermediate single-frame updates for smoother UX
                                 let _ = res_tx.send(PreviewResult::Single(
@@ -359,6 +646,14 @@ fn ensure_preview_worker(state: &mut AppState) {
 /// Request preview frames (delegates to background worker). Non-blocking.
 pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: PreviewMode) {
     ensure_preview_worker(state);
+    // Throttle: don't enqueue a new single-frame job if one is already pending.
+    // This prevents the background worker from being flooded when the user
+    // scrubs or drags the playhead rapidly. Buffered requests (cache fill)
+    // are still allowed to queue.
+    if mode == PreviewMode::Single && state.preview_job_pending {
+        return;
+    }
+
     if let Some(tx) = &state.preview_worker_tx {
         let snap = RenderSnapshot {
             scene: state.scene.clone(),
@@ -367,12 +662,18 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
             preview_multiplier: state.preview_multiplier,
             duration_secs: state.duration_secs,
             preview_fps: state.preview_fps,
+            use_gpu: state.preview_worker_use_gpu,
         };
         let job = PreviewJob::Generate {
             center_time,
             mode,
             snapshot: snap,
         };
+        // mark pending for single-frame interactive jobs so subsequent scrubs
+        // don't enqueue more work until we see a result
+        if mode == PreviewMode::Single {
+            state.preview_job_pending = true;
+        }
         let _ = tx.send(job);
     }
 }
@@ -381,6 +682,8 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
 pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
     if let Some(rx) = &state.preview_worker_rx {
         while let Ok(result) = rx.try_recv() {
+            // a worker result means at least one pending job completed
+            state.preview_job_pending = false;
             match result {
                 PreviewResult::Single(t, img) => {
                     // update/insert single frame into cache
@@ -405,14 +708,18 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                 }
                 PreviewResult::Buffered(frames) => {
                     state.preview_frame_cache = frames.clone();
-                    if let Some((_, center_img)) = state.preview_frame_cache.get((10) as usize) {
-                        let handle = ctx.load_texture(
-                            "preview_center",
-                            center_img.clone(),
-                            egui::TextureOptions::NEAREST,
-                        );
-                        state.preview_texture = Some(handle);
-                        state.preview_cache_center_time = Some(state.preview_frame_cache[10].0);
+                    // Pick center frame dynamically (frames.len()/2) instead of hard-coded index
+                    if !state.preview_frame_cache.is_empty() {
+                        let center_idx = state.preview_frame_cache.len() / 2;
+                        if let Some((t, center_img)) = state.preview_frame_cache.get(center_idx) {
+                            let handle = ctx.load_texture(
+                                "preview_center",
+                                center_img.clone(),
+                                egui::TextureOptions::NEAREST,
+                            );
+                            state.preview_texture = Some(handle);
+                            state.preview_cache_center_time = Some(*t);
+                        }
                     }
                 }
             }
