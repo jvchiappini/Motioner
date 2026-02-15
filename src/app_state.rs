@@ -15,6 +15,9 @@ pub enum PanelTab {
 pub struct AppState {
     pub fps: u32,
     pub duration_secs: f32,
+    // input buffer for duration editing in settings
+    #[serde(skip)]
+    pub duration_input_buffer: String,
     // final render resolution (pixels)
     pub render_width: u32,
     pub render_height: u32,
@@ -116,8 +119,7 @@ pub struct AppState {
     /// timing changes.
     #[serde(skip)]
     pub position_cache: Option<crate::canvas::PositionCache>,
-    /// Temporary vertical offset controlled by the settings slider (pixels).
-    pub settings_window_offset_y: f32,
+
     /// If a background position-cache build is running, this is true.
     #[serde(skip)]
     pub position_cache_build_in_progress: bool,
@@ -231,7 +233,7 @@ impl Default for AppState {
             preview_job_pending: false,
             preview_worker_use_gpu: true,
             preview_cache_auto_clean: true,
-            preview_cache_max_mb: 64,
+            preview_cache_max_mb: 512,
             compress_preview_cache: false,
             playing: false,
             time: 0.0,
@@ -260,11 +262,11 @@ impl Default for AppState {
             canvas_pan_y: 0.0,
             last_composition_rect: None,
             position_cache: None,
-            settings_window_offset_y: 0.0,
             position_cache_build_in_progress: false,
             position_cache_build_rx: None,
             settings_open_time: None,
             settings_is_closing: false,
+            duration_input_buffer: "5.0".to_string(), // Initialize with default duration
             toast_message: None,
             toast_type: ToastType::Info,
             toast_deadline: 0.0,
