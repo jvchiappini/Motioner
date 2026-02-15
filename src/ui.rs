@@ -83,6 +83,25 @@ impl eframe::App for MyApp {
 
         // Throttle system stats update (e.g. every 1.0s)
         let now = ctx.input(|i| i.time);
+        // -- Autosave debounce handling ---------------------------------
+        if state.autosave_pending {
+            if let Some(last_edit) = state.last_code_edit_time {
+                if now - last_edit > state.autosave_cooldown_secs as f64 {
+                    // perform the autosave (silent) and set indicator
+                    match crate::events::element_properties_changed_event::write_dsl_to_project(state, false) {
+                        Ok(_) => {
+                            state.autosave_pending = false;
+                            state.autosave_last_success_time = Some(now);
+                            state.autosave_error = None;
+                        }
+                        Err(e) => {
+                            state.autosave_pending = false;
+                            state.autosave_error = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+        }
         if now - (state.last_update as f64) > 1.0 {
             state.system.refresh_process(state.pid);
             state.last_update = now as f32;
@@ -890,6 +909,8 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                     state.fps,
                     state.duration_secs,
                 );
+                            // persist DSL to project (if set)
+                            crate::events::element_properties_changed_event::on_element_properties_changed(state);
             }
         }
     }

@@ -4,6 +4,7 @@ mod autocomplete; // Added this
 mod canvas;
 mod code_panel;
 mod dsl;
+mod events;
 mod project_settings;
 mod renderer;
 mod scene;

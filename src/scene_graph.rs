@@ -154,6 +154,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                                         state.fps,
                                         state.duration_secs,
                                     );
+                                    // persist DSL to project (if set)
+                                    crate::events::element_properties_changed_event::on_element_properties_changed(state);
                                     crate::canvas::generate_preview_frames(state, state.time, ui.ctx());
                                     state.show_animations_modal = false;
                                     state.toast_message = Some("Animation added".to_string());
@@ -209,6 +211,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 state.fps,
                 state.duration_secs,
             );
+            // persist DSL to project (if set)
+            crate::events::element_properties_changed_event::on_element_properties_changed(state);
         }
     }
 
@@ -291,6 +295,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             state.fps,
                             state.duration_secs,
                         );
+                        // persist DSL to project (if set)
+                        crate::events::element_properties_changed_event::on_element_properties_changed(state);
                     }
                 });
             });
@@ -362,6 +368,8 @@ fn render_node(
                 state.fps,
                 state.duration_secs,
             );
+            // persist DSL to project (if set)
+            crate::events::element_properties_changed_event::on_element_properties_changed(state);
         }
 
         // Name / Rename
@@ -394,6 +402,8 @@ fn render_node(
                     state.fps,
                     state.duration_secs,
                 );
+                // persist DSL to project (if set)
+                crate::events::element_properties_changed_event::on_element_properties_changed(state);
             }
         } else {
             let mut job = egui::text::LayoutJob::default();

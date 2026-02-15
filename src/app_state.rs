@@ -149,6 +149,18 @@ pub struct AppState {
     pub completion_items: Vec<String>,
     pub completion_selected_index: usize,
 
+    // Autosave / Editor state
+    #[serde(skip)]
+    pub autosave_cooldown_secs: f32, // debounce interval for autosave
+    #[serde(skip)]
+    pub last_code_edit_time: Option<f64>,
+    #[serde(skip)]
+    pub autosave_pending: bool,
+    #[serde(skip)]
+    pub autosave_last_success_time: Option<f64>,
+    #[serde(skip)]
+    pub autosave_error: Option<String>,
+
     // Project State
     pub project_path: Option<PathBuf>,
     pub project_path_input: String,
@@ -277,6 +289,11 @@ impl Default for AppState {
             completion_cursor_idx: 0,
             completion_items: Vec::new(),
             completion_selected_index: 0,
+            autosave_cooldown_secs: 0.5,
+            last_code_edit_time: None,
+            autosave_pending: false,
+            autosave_last_success_time: None,
+            autosave_error: None,
             project_path: None,
             project_path_input: String::new(),
             path_validation_error: None,

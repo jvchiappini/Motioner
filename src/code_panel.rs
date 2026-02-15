@@ -1,43 +1,30 @@
-use crate::app_state::{AppState, ToastType};
+use crate::app_state::AppState;
 use crate::dsl;
 use crate::autocomplete; // Added this
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
-        if ui.button("💾 Save").clicked() {
-            match dsl::parse_config(&state.dsl_code) {
-                Ok(config) => {
-                    state.fps = config.fps;
-                    state.duration_secs = config.duration;
-                    state.render_width = config.width;
-                    state.render_height = config.height;
-                    // Attempt to parse DSL into scene shapes (best-effort)
-                    let parsed = dsl::parse_dsl(&state.dsl_code);
-                    if !parsed.is_empty() {
-                        state.scene = parsed;
-                        // regenerate preview for current playhead
-                        crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
-                    }
-                    
-                    state.toast_message = Some("Configuration updated successfully!".to_string());
-                    state.toast_type = ToastType::Success;
-                    state.toast_deadline = ui.input(|i| i.time) + 3.0;
-                }
-                Err(e) => {
-                    state.toast_message = Some(format!("Error: {}", e));
-                    state.toast_type = ToastType::Error;
-                    state.toast_deadline = ui.input(|i| i.time) + 5.0;
-                }
-            }
-        }
-
+        // Save button removed — autosave will persist while editing.
         if ui.button(if state.code_fullscreen { "📉 Minimize" } else { "📈 Maximize" }).clicked() {
             state.code_fullscreen = !state.code_fullscreen;
-            // state.code_fullscreen_time = Some(ui.input(|i| i.time)); // No longer used
         }
 
-        ui.label(egui::RichText::new("Edit code to update project settings").italics().weak());
+        // Autosave indicator (replaces toast for editor autosaves)
+        let now = ui.ctx().input(|i| i.time);
+        if state.autosave_pending {
+            ui.label(egui::RichText::new("Autosaving…").weak());
+        } else if let Some(err) = &state.autosave_error {
+            ui.colored_label(egui::Color32::from_rgb(220, 100, 100), "Autosave failed").on_hover_text(err);
+        } else if let Some(t) = state.autosave_last_success_time {
+            if now - t < 2.0 {
+                ui.colored_label(egui::Color32::from_rgb(120, 200, 140), "Autosaved ✓");
+            } else {
+                ui.label(egui::RichText::new("Edit code — autosave while typing").italics().weak());
+            }
+        } else {
+            ui.label(egui::RichText::new("Edit code — autosave while typing").italics().weak());
+        }
     });
     ui.separator();
 
@@ -86,9 +73,33 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     .layouter(&mut layouter);
             
             let output = ui.add(text_edit);
-            
+
             // 2. Update State & Render Popup AFTER TextEdit
             autocomplete::handle_state_and_render(ui, &output, state);
+
+            // Autosave behavior: on any editor change, persist DSL silently,
+            // attempt to parse/apply configuration and regenerate preview if parse succeeds.
+            if output.changed() {
+                // mark edit time so App::update will debounce the actual disk write
+                state.last_code_edit_time = Some(ui.ctx().input(|i| i.time));
+                state.autosave_pending = true;
+
+                // Try to parse configuration (non-fatal). Do NOT show errors while typing.
+                if let Ok(config) = dsl::parse_config(&state.dsl_code) {
+                    state.fps = config.fps;
+                    state.duration_secs = config.duration;
+                    state.render_width = config.width;
+                    state.render_height = config.height;
+                }
+
+                // Try to parse DSL into scene; only update scene & preview on successful parse
+                let parsed = dsl::parse_dsl(&state.dsl_code);
+                if !parsed.is_empty() {
+                    state.scene = parsed;
+                    // regenerate preview for current playhead (single-frame request)
+                    crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
+                }
+            }
 
             output
         });
