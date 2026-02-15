@@ -65,12 +65,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let fade_color = egui::Color32::from_black_alpha((180.0 * opacity) as u8);
 
     let screen_rect = ctx.input(|i| i.screen_rect());
-    // Prefer centering the settings window over the composition (paper) area
-    // when available so the dialog appears contextual to the canvas.
-    let center_pos = state
-        .last_composition_rect
-        .map(|r| r.center())
-        .unwrap_or_else(|| screen_rect.center());
+    // Always center the modal horizontally and vertically in the screen.
+    // (User-request: modal must be fully centered regardless of canvas.)
+    let center_pos = screen_rect.center();
 
     // 5. Draw Full Screen Overlay (Modal Backdrop)
     egui::Area::new("settings_overlay")
@@ -90,11 +87,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             // 6. Draw the Settings Window
             let window_width = 460.0;
             let window_height = 520.0; // Increased to fit new settings
-            // Apply the slide offset to the Y position
-            let window_pos = egui::pos2(
-                center_pos.x - window_width / 2.0,
-                center_pos.y - window_height / 2.0 + slide_offset,
-            );
+            // Apply vertical offset controlled by slider and slide animation.
+            let offset_y = state.settings_window_offset_y + slide_offset;
+            let mut window_pos = egui::pos2(center_pos.x - window_width / 2.0, center_pos.y - window_height / 2.0 + offset_y);
+            // clamp to screen
+            window_pos.y = window_pos.y.clamp(screen_rect.top() + 8.0, screen_rect.bottom() - window_height - 8.0);
 
             // We use a nested Area or just manually paint a window-like frame at the calculated rect.
             // Using a Window widget is easier for content, but we want custom positioning and animation.
@@ -125,8 +122,34 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                             ui.add_space(20.0);
                             ui.separator();
                             ui.add_space(20.0);
-                            render_body(ui, state);
-                            ui.add_space(30.0);
+                            // Make the main settings content scrollable when it exceeds
+                            // the available modal height. Keep header and footer fixed
+                            // so the close button remains accessible.
+                            let header_reserved = 120.0;
+                            let footer_reserved = 120.0;
+                            let content_max_h = (window_height - header_reserved - footer_reserved).max(120.0);
+
+                            egui::ScrollArea::vertical()
+                                .id_source("project_settings_scroll")
+                                .max_height(content_max_h)
+                                .show(ui, |ui| {
+                                    ui.set_width(window_width - 48.0);
+                                    render_body(ui, state);
+                                    ui.add_space(12.0);
+
+                                    // Slider stays inside the scrollable content so it
+                                    // can be used on small screens.
+                                    ui.horizontal(|ui| {
+                                        ui.label("Scroll");
+                                        let slider = egui::Slider::new(&mut state.settings_window_offset_y, -200.0..=200.0).clamp_to_range(true);
+                                        ui.add(slider);
+                                        ui.label("Use the slider to reposition the settings window vertically");
+                                    });
+
+                                    ui.add_space(12.0);
+                                });
+
+                            ui.add_space(12.0);
                             render_footer(ui, state);
                         });
                 });
@@ -178,6 +201,45 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 // timeline / sampling changed -> invalidate precomputed positions
                 state.position_cache = None;
             }
+            ui.end_row();
+
+            // Position cache controls / background build
+            ui.label(
+                egui::RichText::new("Position cache")
+                    .strong()
+                    .color(egui::Color32::from_gray(200)),
+            );
+            ui.end_row();
+
+            ui.label("Precompute positions");
+            ui.horizontal(|ui| {
+                if ui.button("Build now (background)").clicked() {
+                    if state.position_cache_build_in_progress {
+                        // no-op
+                    } else {
+                        // spawn worker thread and store rx in state
+                        let (tx, rx) = std::sync::mpsc::channel::<crate::canvas::PositionCache>();
+                        state.position_cache_build_in_progress = true;
+                        state.position_cache_build_rx = Some(rx);
+                        let scene = state.scene.clone();
+                        let fps = state.fps;
+                        let duration = state.duration_secs;
+                        std::thread::spawn(move || {
+                            if let Some(pc) = crate::canvas::build_position_cache_for(scene, fps, duration) {
+                                let _ = tx.send(pc);
+                            }
+                        });
+                    }
+                }
+                ui.add_space(8.0);
+                if state.position_cache_build_in_progress {
+                    ui.label("Building in background...");
+                } else if state.position_cache.is_some() {
+                    ui.label("Ready");
+                } else {
+                    ui.label("Not computed");
+                }
+            });
             ui.end_row();
 
             ui.label("Duration (seconds)");
@@ -251,12 +313,38 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let multipliers = [0.125, 0.25, 0.5, 1.0, 1.125, 1.25, 1.5, 2.0];
+                
+                // Calcular límite seguro basado en resolución del proyecto
+                let max_safe_multiplier = {
+                    let max_w = 2048.0 / state.render_width as f32;
+                    let max_h = 2048.0 / state.render_height as f32;
+                    max_w.min(max_h)
+                };
+                
                 for &m in &multipliers {
                     let label = format!("{}x", m);
-                    if ui
-                        .selectable_label(state.preview_multiplier == m, label)
-                        .clicked()
-                    {
+                    let is_safe = m <= max_safe_multiplier;
+                    
+                    let mut btn = ui.selectable_label(state.preview_multiplier == m, label);
+                    
+                    if !is_safe {
+                        btn = btn.on_hover_text(format!(
+                            "⚠️ Puede exceder límite GPU (max: {:.2}x para {}x{})",
+                            max_safe_multiplier,
+                            state.render_width,
+                            state.render_height
+                        ));
+                    }
+                    
+                    if btn.clicked() {
+                        if !is_safe {
+                            // Mostrar advertencia pero permitir
+                            state.toast_message = Some(format!(
+                                "⚠️ Preview puede ser limitado automáticamente (GPU limit: 2048px)"
+                            ));
+                            state.toast_type = crate::app_state::ToastType::Info;
+                            state.toast_deadline = ui.input(|i| i.time) + 3.0;
+                        }
                         state.preview_multiplier = m;
                     }
                 }
@@ -284,13 +372,62 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 if ui.button("Clear preview cache").clicked() {
                     state.preview_frame_cache.clear();
+                    state.preview_texture_cache.clear();
+                    state.preview_compressed_cache.clear();
                     state.preview_texture = None;
                     state.preview_cache_center_time = None;
                     // also clear positional cache (frees memory and forces rebuild)
                     state.position_cache = None;
                 }
                 ui.add_space(8.0);
-                ui.label("Clears cached preview frames to free memory");
+                // Diagnostic readout: approximate preview / position cache memory
+                let mut preview_ram_bytes: usize = 0;
+                for (_t, img) in &state.preview_frame_cache {
+                    let [w, h] = img.size;
+                    preview_ram_bytes += w * h * 4;
+                }
+                let compressed_bytes: usize = state.preview_compressed_cache.iter().map(|(_,b,_)| b.len()).sum();
+                let vram_bytes: usize = state.preview_texture_cache.iter().map(|(_,_,s)| *s).sum();
+                let total_mb = (preview_ram_bytes + compressed_bytes + vram_bytes + crate::canvas::position_cache_bytes(state) ) as f32 / 1024.0 / 1024.0;
+
+                ui.vertical(|ui| {
+                    ui.label("Clears cached preview frames to free memory");
+                    ui.small(format!(
+                        "Frames RAM: {} ({:.2} MB) · Compressed: {} ({:.2} MB) · VRAM textures: {} ({:.2} MB) · Total ≈ {:.2} MB",
+                        state.preview_frame_cache.len(), (preview_ram_bytes as f32) / 1024.0 / 1024.0,
+                        state.preview_compressed_cache.len(), (compressed_bytes as f32) / 1024.0 / 1024.0,
+                        state.preview_texture_cache.len(), (vram_bytes as f32) / 1024.0 / 1024.0,
+                        total_mb
+                    ));
+
+                    // Auto-clean controls
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut state.preview_cache_auto_clean, "Auto-clean cache when large");
+                        ui.add(egui::DragValue::new(&mut state.preview_cache_max_mb).prefix("Max: ").suffix(" MB").clamp_range(1..=2048));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut state.compress_preview_cache, "Compress RAM previews (PNG)");
+                        if state.compress_preview_cache {
+                            ui.small("(reduces RAM at cost of CPU when decoding)");
+                        }
+                    });
+
+                    // Warning / action when over threshold
+                    let total_bytes = preview_ram_bytes + compressed_bytes + vram_bytes + crate::canvas::position_cache_bytes(state);
+                    let max_bytes = state.preview_cache_max_mb.saturating_mul(1024*1024);
+                    if max_bytes > 0 && (total_bytes as usize) > max_bytes {
+                        ui.colored_label(egui::Color32::from_rgb(220, 140, 50), format!("Preview cache exceeds {} MB", state.preview_cache_max_mb));
+                        ui.horizontal(|ui| {
+                            if ui.button("Clean now").clicked() {
+                                crate::canvas::enforce_preview_cache_limits(state, ui.ctx());
+                            }
+                            if ui.button("Disable GPU cache").clicked() {
+                                state.preview_worker_use_gpu = false;
+                            }
+                        });
+                    }
+                });
             });
             ui.end_row();
         });

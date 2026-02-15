@@ -2103,6 +2103,7 @@ dependencies = [
  "egui-wgpu",
  "image",
  "pollster 0.3.0",
+ "rayon",
  "rfd",
  "serde",
  "sysinfo",

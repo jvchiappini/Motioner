@@ -1,11 +1,166 @@
 use crate::animations::animations_manager::animated_xy_for;
 use crate::app_state::AppState;
 use eframe::egui;
+use image::codecs::png::PngEncoder;
+use image::ColorType;
+use image::ImageEncoder;
+use rayon::prelude::*;
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 
-/// Per-frame flattened position cache.
-/// frames[frame_idx][flat_idx] => (x, y) in normalized project coords (0..1)
+/// Cache de tiles renderizados para evitar re-renderizar tiles sin cambios
+#[derive(Clone)]
+pub struct TileCache {
+    pub tile_size: usize,
+    pub tiles: HashMap<(usize, usize, u64), Vec<u8>>, // (x, y, scene_hash) -> rgba data
+    pub max_tiles: usize,
+}
+
+impl TileCache {
+    pub fn new(tile_size: usize, max_tiles: usize) -> Self {
+        Self {
+            tile_size,
+            tiles: HashMap::new(),
+            max_tiles,
+        }
+    }
+
+    pub fn get(&self, x: usize, y: usize, hash: u64) -> Option<&[u8]> {
+        self.tiles.get(&(x, y, hash)).map(|v| v.as_slice())
+    }
+
+    pub fn insert(&mut self, x: usize, y: usize, hash: u64, data: Vec<u8>) {
+        if self.tiles.len() >= self.max_tiles {
+            // LRU simple: remover primer elemento
+            if let Some(key) = self.tiles.keys().next().cloned() {
+                self.tiles.remove(&key);
+            }
+        }
+        self.tiles.insert((x, y, hash), data);
+    }
+
+    pub fn clear(&mut self) {
+        self.tiles.clear();
+    }
+}
+
+/// Spatial hash grid for efficient shape culling
+#[derive(Clone)]
+pub struct SpatialHashGrid {
+    pub tile_size: f32,
+    pub width: u32,
+    pub height: u32,
+    /// Maps tile coordinate to list of shape indices
+    pub grid: HashMap<(i32, i32), Vec<usize>>,
+}
+
+impl SpatialHashGrid {
+    pub fn new(width: u32, height: u32, tile_size: f32) -> Self {
+        Self {
+            tile_size,
+            width,
+            height,
+            grid: HashMap::new(),
+        }
+    }
+
+    /// Insert a shape into the grid based on its bounding box
+    pub fn insert(&mut self, shape_idx: usize, bbox: BoundingBox) {
+        let min_x = ((bbox.min_x * self.width as f32) / self.tile_size).floor() as i32;
+        let max_x = ((bbox.max_x * self.width as f32) / self.tile_size).ceil() as i32;
+        let min_y = ((bbox.min_y * self.height as f32) / self.tile_size).floor() as i32;
+        let max_y = ((bbox.max_y * self.height as f32) / self.tile_size).ceil() as i32;
+
+        for tx in min_x..=max_x {
+            for ty in min_y..=max_y {
+                self.grid
+                    .entry((tx, ty))
+                    .or_insert_with(Vec::new)
+                    .push(shape_idx);
+            }
+        }
+    }
+
+    /// Query shapes that might intersect a pixel position (normalized 0..1)
+    pub fn query(&self, x: f32, y: f32) -> &[usize] {
+        let tx = ((x * self.width as f32) / self.tile_size).floor() as i32;
+        let ty = ((y * self.height as f32) / self.tile_size).floor() as i32;
+        self.grid
+            .get(&(tx, ty))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn clear(&mut self) {
+        self.grid.clear();
+    }
+}
+
+/// Bounding box in normalized coordinates (0..1)
+#[derive(Clone, Copy, Debug)]
+pub struct BoundingBox {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+}
+
+impl BoundingBox {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.min_x && x <= self.max_x && y >= self.min_y && y <= self.max_y
+    }
+
+    pub fn from_circle(x: f32, y: f32, radius: f32) -> Self {
+        Self {
+            min_x: (x - radius).max(0.0),
+            min_y: (y - radius).max(0.0),
+            max_x: (x + radius).min(1.0),
+            max_y: (y + radius).min(1.0),
+        }
+    }
+
+    pub fn from_rect(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self {
+            min_x: x.max(0.0),
+            min_y: y.max(0.0),
+            max_x: (x + w).min(1.0),
+            max_y: (y + h).min(1.0),
+        }
+    }
+}
+
+/// Pool de buffers para reutilizar y evitar allocaciones
+pub struct BufferPool {
+    buffers: Vec<Vec<u8>>,
+}
+
+impl BufferPool {
+    pub fn new() -> Self {
+        Self {
+            buffers: Vec::new(),
+        }
+    }
+
+    pub fn acquire(&mut self, capacity: usize) -> Vec<u8> {
+        if let Some(mut buf) = self.buffers.pop() {
+            buf.clear();
+            buf.reserve(capacity.saturating_sub(buf.capacity()));
+            buf
+        } else {
+            Vec::with_capacity(capacity)
+        }
+    }
+
+    pub fn release(&mut self, buf: Vec<u8>) {
+        if self.buffers.len() < 8 {
+            self.buffers.push(buf);
+        }
+    }
+}
+
+/// Per-frame flattened position cache with spatial optimization
+/// frames[frame_idx][flat_idx] => (x, y, bbox) in normalized project coords (0..1)
 #[derive(Clone)]
 pub struct PositionCache {
     pub fps: u32,
@@ -13,15 +168,28 @@ pub struct PositionCache {
     pub scene_hash: u64,
     pub frames: Vec<Vec<(f32, f32)>>,
     pub flattened_count: usize,
+    /// Bounding boxes for each primitive (flat_idx => bbox)
+    pub bounding_boxes: Vec<Vec<BoundingBox>>,
+    /// Spatial grid per frame for fast culling
+    pub spatial_grids: Vec<SpatialHashGrid>,
 }
 
 fn scene_fingerprint(scene: &[crate::scene::Shape]) -> u64 {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     fn hash_shape<H: Hasher>(s: &crate::scene::Shape, h: &mut H) {
         match s {
-            crate::scene::Shape::Circle { name, x, y, radius, color, spawn_time, animations, visible } => {
+            crate::scene::Shape::Circle {
+                name,
+                x,
+                y,
+                radius,
+                color,
+                spawn_time,
+                animations,
+                visible,
+            } => {
                 name.hash(h);
                 (x.to_bits()).hash(h);
                 (y.to_bits()).hash(h);
@@ -34,7 +202,17 @@ fn scene_fingerprint(scene: &[crate::scene::Shape]) -> u64 {
                     format!("{:?}", a).hash(h);
                 }
             }
-            crate::scene::Shape::Rect { name, x, y, w, h: hh, color, spawn_time, animations, visible } => {
+            crate::scene::Shape::Rect {
+                name,
+                x,
+                y,
+                w,
+                h: hh,
+                color,
+                spawn_time,
+                animations,
+                visible,
+            } => {
                 name.hash(h);
                 (x.to_bits()).hash(h);
                 (y.to_bits()).hash(h);
@@ -47,7 +225,11 @@ fn scene_fingerprint(scene: &[crate::scene::Shape]) -> u64 {
                     format!("{:?}", a).hash(h);
                 }
             }
-            crate::scene::Shape::Group { name, children, visible } => {
+            crate::scene::Shape::Group {
+                name,
+                children,
+                visible,
+            } => {
                 name.hash(h);
                 visible.hash(h);
                 for c in children {
@@ -67,16 +249,24 @@ fn scene_fingerprint(scene: &[crate::scene::Shape]) -> u64 {
 /// Build a per-frame flattened position cache for the current `state.scene`.
 /// Returns None if cache would be too large.
 pub fn build_position_cache(state: &AppState) -> Option<PositionCache> {
+    build_position_cache_for(state.scene.clone(), state.fps, state.duration_secs)
+}
+
+/// Build position cache from explicit parameters — useful from worker thread.
+pub fn build_position_cache_for(
+    scene: Vec<crate::scene::Shape>,
+    fps: u32,
+    duration_secs: f32,
+) -> Option<PositionCache> {
     // limit total samples to avoid runaway memory usage (frames * primitives)
     const MAX_SAMPLES: usize = 50_000;
 
-    let fps = state.fps;
-    let duration = state.duration_secs.max(0.001);
+    let duration = duration_secs.max(0.001);
     let frame_count = (fps as f32 * duration).ceil() as usize;
 
     // flatten scene once to get primitive order
     let mut flattened: Vec<crate::scene::Shape> = Vec::new();
-    for s in &state.scene {
+    for s in &scene {
         flattened.extend(s.flatten(0.0).into_iter().map(|(sh, _)| sh));
     }
 
@@ -91,29 +281,62 @@ pub fn build_position_cache(state: &AppState) -> Option<PositionCache> {
     }
 
     let mut frames: Vec<Vec<(f32, f32)>> = Vec::with_capacity(frame_count);
+    let mut bboxes: Vec<Vec<BoundingBox>> = Vec::with_capacity(frame_count);
+    let mut grids: Vec<SpatialHashGrid> = Vec::with_capacity(frame_count);
+
+    // Precomputar dimensiones para spatial grid (tiles de 64px aprox)
+    let tile_size = 64.0;
+
     for fi in 0..frame_count {
         let t = (fi as f32) / (fps as f32);
         let mut row: Vec<(f32, f32)> = Vec::with_capacity(prim_count);
-        for prim in &flattened {
-            let (px, py) = crate::animations::animations_manager::animated_xy_for(prim, t, duration);
+        let mut bbox_row: Vec<BoundingBox> = Vec::with_capacity(prim_count);
+        let mut grid = SpatialHashGrid::new(1280, 720, tile_size);
+
+        for (idx, prim) in flattened.iter().enumerate() {
+            let (px, py) =
+                crate::animations::animations_manager::animated_xy_for(prim, t, duration);
             row.push((px, py));
+
+            // Calcular bounding box según tipo de shape
+            let bbox = match prim {
+                crate::scene::Shape::Circle { radius, .. } => {
+                    BoundingBox::from_circle(px, py, *radius)
+                }
+                crate::scene::Shape::Rect { w, h, .. } => BoundingBox::from_rect(px, py, *w, *h),
+                _ => BoundingBox {
+                    min_x: px,
+                    min_y: py,
+                    max_x: px,
+                    max_y: py,
+                },
+            };
+            bbox_row.push(bbox);
+            grid.insert(idx, bbox);
         }
         frames.push(row);
+        bboxes.push(bbox_row);
+        grids.push(grid);
     }
 
     Some(PositionCache {
         fps,
         duration_secs: duration,
-        scene_hash: scene_fingerprint(&state.scene),
+        scene_hash: scene_fingerprint(&scene),
         frames,
         flattened_count: prim_count,
+        bounding_boxes: bboxes,
+        spatial_grids: grids,
     })
 }
 
 /// Try to get a cached frame (nearest) for `time`.
 fn cached_frame_for(state: &AppState, time: f32) -> Option<&Vec<(f32, f32)>> {
     if let Some(pc) = &state.position_cache {
-        if pc.fps == state.fps && (pc.duration_secs - state.duration_secs).abs() < 1e-6 && pc.scene_hash == scene_fingerprint(&state.scene) {
+        if pc.fps == state.fps
+            && (pc.duration_secs - state.duration_secs).abs() < 1e-6
+            && pc.scene_hash == scene_fingerprint(&state.scene)
+        {
             let frame_idx = (time * pc.fps as f32).round() as isize;
             let clamped = frame_idx.clamp(0, (pc.frames.len() as isize - 1)) as usize;
             return pc.frames.get(clamped);
@@ -124,6 +347,7 @@ fn cached_frame_for(state: &AppState, time: f32) -> Option<&Vec<(f32, f32)>> {
 
 /// Samples the color at a specific normalized (0..1) paper coordinate,
 /// respecting the preview resolution and shape order. `time` is project time in seconds.
+/// OPTIMIZADO: usa spatial grid y early exit
 fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, time: f32) -> [u8; 4] {
     let preview_res = egui::vec2(
         state.render_width as f32 * state.preview_multiplier,
@@ -164,6 +388,130 @@ fn sample_color_at(state: &crate::app_state::AppState, paper_uv: egui::Pos2, tim
     let mut all_primitives = Vec::new();
     collect_primitives(&state.scene, 0.0, &mut all_primitives);
 
+    // OPTIMIZACIÓN: usar spatial grid si está disponible en el cache
+    if let Some(pc) = &state.position_cache {
+        if pc.fps == state.fps
+            && (pc.duration_secs - state.duration_secs).abs() < 1e-6
+            && pc.scene_hash == scene_fingerprint(&state.scene)
+        {
+            let frame_idx = (time * pc.fps as f32).round() as isize;
+            let frame_idx = frame_idx.clamp(0, (pc.frames.len() as isize - 1)) as usize;
+
+            if let (Some(frame), Some(grid), Some(bboxes)) = (
+                pc.frames.get(frame_idx),
+                pc.spatial_grids.get(frame_idx),
+                pc.bounding_boxes.get(frame_idx),
+            ) {
+                // Query spatial grid para obtener solo shapes relevantes
+                let candidate_indices = grid.query(paper_uv.x, paper_uv.y);
+
+                // Solo iterar sobre candidatos relevantes (MUCHO más rápido)
+                for &shape_idx in candidate_indices {
+                    if shape_idx >= all_primitives.len() {
+                        continue;
+                    }
+
+                    let (shape, actual_spawn) = &all_primitives[shape_idx];
+                    if time < *actual_spawn {
+                        continue;
+                    }
+
+                    // Early exit con bounding box check
+                    if let Some(bbox) = bboxes.get(shape_idx) {
+                        if !bbox.contains(paper_uv.x, paper_uv.y) {
+                            continue;
+                        }
+                    }
+
+                    let (eval_x, eval_y) = frame.get(shape_idx).copied().unwrap_or((0.0, 0.0));
+
+                    match shape {
+                        crate::scene::Shape::Circle { radius, color, .. } => {
+                            let width = state.render_width as f32;
+                            let height = state.render_height as f32;
+                            let shape_pos = egui::pos2(eval_x * width, eval_y * height);
+                            let radius_px = radius * width;
+                            let shape_color = [
+                                color[0] as f32,
+                                color[1] as f32,
+                                color[2] as f32,
+                                color[3] as f32,
+                            ];
+                            let dist = pixel_pos.distance(shape_pos);
+                            if dist <= radius_px {
+                                let src_a = (shape_color[3]) / 255.0;
+                                final_color[0] =
+                                    final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                                final_color[1] =
+                                    final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                                final_color[2] =
+                                    final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+
+                                // Early exit si es completamente opaco
+                                if src_a >= 0.999 {
+                                    return [
+                                        final_color[0].round() as u8,
+                                        final_color[1].round() as u8,
+                                        final_color[2].round() as u8,
+                                        255,
+                                    ];
+                                }
+                            }
+                        }
+                        crate::scene::Shape::Rect { w, h, color, .. } => {
+                            let width = state.render_width as f32;
+                            let height = state.render_height as f32;
+                            let half_w = (w * width) / 2.0;
+                            let half_h = (h * height) / 2.0;
+                            let center_x = eval_x * width + half_w;
+                            let center_y = eval_y * height + half_h;
+                            let shape_pos = egui::pos2(center_x, center_y);
+                            let shape_size = egui::vec2(half_w, half_h);
+                            let shape_color = [
+                                color[0] as f32,
+                                color[1] as f32,
+                                color[2] as f32,
+                                color[3] as f32,
+                            ];
+                            let d_vec = egui::vec2(
+                                (pixel_pos.x - shape_pos.x).abs() - shape_size.x,
+                                (pixel_pos.y - shape_pos.y).abs() - shape_size.y,
+                            );
+                            if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
+                                let src_a = (shape_color[3]) / 255.0;
+                                final_color[0] =
+                                    final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                                final_color[1] =
+                                    final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                                final_color[2] =
+                                    final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+
+                                // Early exit si es completamente opaco
+                                if src_a >= 0.999 {
+                                    return [
+                                        final_color[0].round() as u8,
+                                        final_color[1].round() as u8,
+                                        final_color[2].round() as u8,
+                                        255,
+                                    ];
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                return [
+                    final_color[0].round() as u8,
+                    final_color[1].round() as u8,
+                    final_color[2].round() as u8,
+                    255,
+                ];
+            }
+        }
+    }
+
+    // Fallback a path viejo si no hay cache disponible
     // Try to use precomputed positional cache when available — the order
     // produced by `collect_primitives` matches `flatten()` used by the cache.
     if let Some(frame) = cached_frame_for(state, time) {
@@ -361,6 +709,213 @@ pub enum PreviewResult {
     Single(f32, egui::ColorImage),
 }
 
+// OPTIMIZADO: Reducir cache a 5 frames para ahorrar RAM
+// Mantener solo frames cercanos al playhead actual
+const MAX_PREVIEW_CACHE_FRAMES: usize = 5;
+
+// Límite seguro de textura GPU (muchas GPUs tienen límite de 2048 o 4096)
+// Usamos 2048 para compatibilidad con GPUs más antiguas
+const MAX_GPU_TEXTURE_SIZE: u32 = 2048;
+
+/// Detectar VRAM disponible (aproximado) usando adaptador wgpu existente
+pub fn detect_vram_size(adapter_info: &wgpu::AdapterInfo) -> usize {
+    // Estimar VRAM basado en el tipo de GPU
+    // Nota: wgpu no expone directamente la VRAM, así que estimamos
+    let estimated_vram = match adapter_info.device_type {
+        wgpu::DeviceType::DiscreteGpu => {
+            // GPU dedicada moderna (RTX 3050+, RX 6600+): 6-8GB típico
+            // RTX 4050 Laptop = 6GB, estimamos conservador 6GB
+            6 * 1024 * 1024 * 1024 // 6GB para GPUs dedicadas modernas
+        }
+        wgpu::DeviceType::IntegratedGpu => {
+            // GPU integrada: compartida con RAM, asumir 2GB
+            2 * 1024 * 1024 * 1024 // 2GB
+        }
+        wgpu::DeviceType::VirtualGpu => {
+            512 * 1024 * 1024 // 512MB
+        }
+        _ => {
+            1024 * 1024 * 1024 // 1GB por defecto
+        }
+    };
+
+    eprintln!(
+        "[VRAM] Detected GPU: {} ({:?}) - Estimated VRAM: {} MB",
+        adapter_info.name,
+        adapter_info.device_type,
+        estimated_vram / (1024 * 1024)
+    );
+
+    estimated_vram
+}
+
+fn preview_cache_ram_bytes(state: &AppState) -> usize {
+    let mut bytes: usize = 0;
+    for (_t, img) in &state.preview_frame_cache {
+        let [w, h] = img.size;
+        bytes += w * h * 4;
+    }
+    for (_t, data, _size) in &state.preview_compressed_cache {
+        bytes += data.len();
+    }
+    bytes
+}
+
+fn preview_cache_vram_bytes(state: &AppState) -> usize {
+    state
+        .preview_texture_cache
+        .iter()
+        .map(|(_, _h, s)| *s)
+        .sum()
+}
+
+fn color_image_to_rgba_bytes(img: &egui::ColorImage) -> Vec<u8> {
+    let mut out = Vec::with_capacity(img.size[0] * img.size[1] * 4);
+    for c in &img.pixels {
+        let arr = c.to_array();
+        out.push(arr[0]);
+        out.push(arr[1]);
+        out.push(arr[2]);
+        out.push(arr[3]);
+    }
+    out
+}
+
+fn compress_color_image_to_png(img: &egui::ColorImage) -> Option<Vec<u8>> {
+    let raw = color_image_to_rgba_bytes(img);
+    let mut buf: Vec<u8> = Vec::new();
+    let encoder = PngEncoder::new(&mut buf);
+    // encode as 8-bit RGBA
+    if encoder
+        .write_image(
+            &raw,
+            img.size[0] as u32,
+            img.size[1] as u32,
+            ColorType::Rgba8,
+        )
+        .is_ok()
+    {
+        Some(buf)
+    } else {
+        None
+    }
+}
+
+pub fn position_cache_bytes(state: &AppState) -> usize {
+    if let Some(pc) = &state.position_cache {
+        // frames * flattened * 2 floats * 4 bytes
+        pc.frames.len() * pc.flattened_count * 2 * std::mem::size_of::<f32>()
+    } else {
+        0
+    }
+}
+
+fn total_preview_cache_bytes(state: &AppState) -> usize {
+    preview_cache_ram_bytes(state) + preview_cache_vram_bytes(state) + position_cache_bytes(state)
+}
+
+/// Trim preview caches until total size <= max_bytes. Strategy: prefer
+/// trimming RAM cached frames/compressed first, then texture cache.
+pub fn enforce_preview_cache_limits(state: &mut AppState, ctx: &egui::Context) {
+    let mut total = total_preview_cache_bytes(state);
+    let max_bytes = state.preview_cache_max_mb.saturating_mul(1024 * 1024);
+    if max_bytes == 0 || total <= max_bytes {
+        return;
+    }
+
+    // Helper: remove farthest-from-playhead frames first
+    let now_time = state.time;
+
+    // Trim uncompressed RAM frames first
+    if !state.preview_frame_cache.is_empty() {
+        // sort by distance to now_time, keep nearest frames
+        state.preview_frame_cache.sort_by(|a, b| {
+            let da = (a.0 - now_time).abs();
+            let db = (b.0 - now_time).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        while total > max_bytes && state.preview_frame_cache.len() > 1 {
+            if let Some((t, img)) = state.preview_frame_cache.pop() {
+                let [w, h] = img.size;
+                total = total.saturating_sub(w * h * 4);
+            } else {
+                break;
+            }
+        }
+        // restore chronological order
+        state
+            .preview_frame_cache
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    }
+
+    // Trim compressed cache next
+    if total > max_bytes && !state.preview_compressed_cache.is_empty() {
+        state.preview_compressed_cache.sort_by(|a, b| {
+            let da = (a.0 - now_time).abs();
+            let db = (b.0 - now_time).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        while total > max_bytes && state.preview_compressed_cache.len() > 1 {
+            if let Some((t, data, _)) = state.preview_compressed_cache.pop() {
+                total = total.saturating_sub(data.len());
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Trim texture (VRAM) cache last
+    if total > max_bytes && !state.preview_texture_cache.is_empty() {
+        state.preview_texture_cache.sort_by(|a, b| {
+            let da = (a.0 - now_time).abs();
+            let db = (b.0 - now_time).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        while total > max_bytes && state.preview_texture_cache.len() > 1 {
+            if let Some((_t, _handle, size)) = state.preview_texture_cache.pop() {
+                total = total.saturating_sub(size);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // If we trimmed anything, ensure UI receives an updated center texture
+    if !state.preview_frame_cache.is_empty() {
+        let center_idx = state.preview_frame_cache.len() / 2;
+        if let Some((_t, center_img)) = state.preview_frame_cache.get(center_idx) {
+            let handle = ctx.load_texture(
+                "preview_center",
+                center_img.clone(),
+                egui::TextureOptions::NEAREST,
+            );
+            state.preview_texture = Some(handle);
+        }
+    } else if !state.preview_texture_cache.is_empty() {
+        let center_idx = state.preview_texture_cache.len() / 2;
+        if let Some((_t, handle, _s)) = state.preview_texture_cache.get(center_idx) {
+            state.preview_texture = Some(handle.clone());
+        }
+    } else {
+        state.preview_texture = None;
+        state.preview_cache_center_time = None;
+    }
+
+    // notify user if auto-clean is enabled
+    if state.preview_cache_auto_clean {
+        state.toast_message = Some("Preview cache exceeded limit — auto-cleaned".to_string());
+        state.toast_type = crate::app_state::ToastType::Info;
+        state.toast_deadline = ctx.input(|i| i.time) + 2.0;
+    } else {
+        state.toast_message = Some(format!(
+            "Preview cache > {} MB — consider clearing or enabling Auto-clean",
+            state.preview_cache_max_mb
+        ));
+        state.toast_type = crate::app_state::ToastType::Info;
+        state.toast_deadline = ctx.input(|i| i.time) + 4.0;
+    }
+}
+
 /// Lightweight snapshot of rendering inputs that can be sent to worker threads.
 #[derive(Clone)]
 pub struct RenderSnapshot {
@@ -377,112 +932,173 @@ pub struct RenderSnapshot {
 }
 
 fn render_frame_color_image_snapshot(snap: &RenderSnapshot, time: f32) -> egui::ColorImage {
-    let preview_w = (snap.render_width as f32 * snap.preview_multiplier)
+    let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier)
         .round()
         .max(1.0) as usize;
-    let preview_h = (snap.render_height as f32 * snap.preview_multiplier)
+    let mut preview_h = (snap.render_height as f32 * snap.preview_multiplier)
         .round()
         .max(1.0) as usize;
-    let mut pixels: Vec<u8> = Vec::with_capacity(preview_w * preview_h * 4);
 
-    // reuse a minimal sampling loop similar to `sample_color_at` but operating on the snapshot
-    for y in 0..preview_h {
-        for x in 0..preview_w {
-            let uv = egui::pos2(
-                (x as f32 + 0.5) / (preview_w as f32),
-                (y as f32 + 0.5) / (preview_h as f32),
-            );
-            // simple sampling: iterate scene primitives and composite (no sub-pixel antialiasing)
-            let mut final_color = [255.0, 255.0, 255.0, 255.0];
+    // Limitar tamaño máximo para evitar consumo excesivo de RAM
+    const MAX_CPU_PREVIEW_SIZE: usize = 4096;
+    if preview_w > MAX_CPU_PREVIEW_SIZE || preview_h > MAX_CPU_PREVIEW_SIZE {
+        let scale_w = if preview_w > MAX_CPU_PREVIEW_SIZE {
+            MAX_CPU_PREVIEW_SIZE as f32 / preview_w as f32
+        } else {
+            1.0
+        };
+        let scale_h = if preview_h > MAX_CPU_PREVIEW_SIZE {
+            MAX_CPU_PREVIEW_SIZE as f32 / preview_h as f32
+        } else {
+            1.0
+        };
+        let scale = scale_w.min(scale_h);
+        preview_w = (preview_w as f32 * scale).round() as usize;
+        preview_h = (preview_h as f32 * scale).round() as usize;
+    }
 
-            // collect primitives once (avoid rebuilding per-pixel)
-            fn collect_primitives(
-                shapes: &[crate::scene::Shape],
-                parent_spawn: f32,
-                out: &mut Vec<(crate::scene::Shape, f32)>,
-            ) {
-                for shape in shapes {
-                    let my_spawn = shape.spawn_time().max(parent_spawn);
-                    match shape {
-                        crate::scene::Shape::Group { children, .. } => {
-                            collect_primitives(children, my_spawn, out)
-                        }
-                        _ => out.push((shape.clone(), my_spawn)),
-                    }
+    // OPTIMIZACIÓN: collect primitives ONCE, no en cada pixel
+    fn collect_primitives(
+        shapes: &[crate::scene::Shape],
+        parent_spawn: f32,
+        out: &mut Vec<(crate::scene::Shape, f32)>,
+    ) {
+        for shape in shapes {
+            let my_spawn = shape.spawn_time().max(parent_spawn);
+            match shape {
+                crate::scene::Shape::Group { children, .. } => {
+                    collect_primitives(children, my_spawn, out)
                 }
+                _ => out.push((shape.clone(), my_spawn)),
             }
-
-            // do this once outside the sampling loops to save allocations
-            let mut all_prims = Vec::new();
-            collect_primitives(&snap.scene, 0.0, &mut all_prims);
-
-            // produce pixel in project coordinates
-            let pixel_pos = egui::pos2(
-                uv.x * snap.render_width as f32,
-                uv.y * snap.render_height as f32,
-            );
-
-            for (shape, actual_spawn) in &all_prims {
-                if time < *actual_spawn {
-                    continue;
-                }
-                match shape {
-                    crate::scene::Shape::Circle {
-                        x,
-                        y,
-                        radius,
-                        color,
-                        ..
-                    } => {
-                        let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
-                        let shape_pos = egui::pos2(
-                            eval_x * snap.render_width as f32,
-                            eval_y * snap.render_height as f32,
-                        );
-                        let radius_px = radius * snap.render_width as f32;
-                        let dist = pixel_pos.distance(shape_pos);
-                        if dist <= radius_px {
-                            let src_a = (color[3] as f32) / 255.0;
-                            final_color[0] =
-                                final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
-                            final_color[1] =
-                                final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
-                            final_color[2] =
-                                final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
-                        }
-                    }
-                    crate::scene::Shape::Rect {
-                        x, y, w, h, color, ..
-                    } => {
-                        let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
-                        let half_w = (w * snap.render_width as f32) / 2.0;
-                        let half_h = (h * snap.render_height as f32) / 2.0;
-                        let center_x = eval_x * snap.render_width as f32 + half_w;
-                        let center_y = eval_y * snap.render_height as f32 + half_h;
-                        let d_vec = egui::vec2(
-                            (pixel_pos.x - center_x).abs() - half_w,
-                            (pixel_pos.y - center_y).abs() - half_h,
-                        );
-                        if d_vec.x <= 0.0 && d_vec.y <= 0.0 {
-                            let src_a = (color[3] as f32) / 255.0;
-                            final_color[0] =
-                                final_color[0] * (1.0 - src_a) + (color[0] as f32) * src_a;
-                            final_color[1] =
-                                final_color[1] * (1.0 - src_a) + (color[1] as f32) * src_a;
-                            final_color[2] =
-                                final_color[2] * (1.0 - src_a) + (color[2] as f32) * src_a;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            pixels.push(final_color[0].round() as u8);
-            pixels.push(final_color[1].round() as u8);
-            pixels.push(final_color[2].round() as u8);
-            pixels.push(255);
         }
     }
+
+    let mut all_prims = Vec::new();
+    collect_primitives(&snap.scene, 0.0, &mut all_prims);
+
+    // Pre-calcular posiciones y bboxes para evitar calcular en cada pixel
+    // OPTIMIZACIÓN: Filtrar shapes fuera del viewport ANTES de renderizar
+    let mut prim_data: Vec<(f32, f32, BoundingBox, [u8; 4], bool)> =
+        Vec::with_capacity(all_prims.len());
+
+    let viewport_bbox = BoundingBox {
+        min_x: 0.0,
+        min_y: 0.0,
+        max_x: 1.0,
+        max_y: 1.0,
+    };
+
+    for (shape, actual_spawn) in &all_prims {
+        if time < *actual_spawn {
+            continue;
+        }
+
+        let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
+
+        match shape {
+            crate::scene::Shape::Circle { radius, color, .. } => {
+                let bbox = BoundingBox::from_circle(eval_x, eval_y, *radius);
+                // Frustum culling: skip si está completamente fuera del viewport
+                if bbox.max_x < viewport_bbox.min_x
+                    || bbox.min_x > viewport_bbox.max_x
+                    || bbox.max_y < viewport_bbox.min_y
+                    || bbox.min_y > viewport_bbox.max_y
+                {
+                    continue;
+                }
+                prim_data.push((eval_x, eval_y, bbox, *color, true));
+            }
+            crate::scene::Shape::Rect { w, h, color, .. } => {
+                let bbox = BoundingBox::from_rect(eval_x, eval_y, *w, *h);
+                // Frustum culling: skip si está completamente fuera del viewport
+                if bbox.max_x < viewport_bbox.min_x
+                    || bbox.min_x > viewport_bbox.max_x
+                    || bbox.max_y < viewport_bbox.min_y
+                    || bbox.min_y > viewport_bbox.max_y
+                {
+                    continue;
+                }
+                prim_data.push((eval_x, eval_y, bbox, *color, false));
+            }
+            _ => {}
+        }
+    }
+
+    // NUEVA OPTIMIZACIÓN: Renderizado paralelo por scanlines
+    // Procesar múltiples filas simultáneamente usando rayon
+    let pixels: Vec<u8> = (0..preview_h)
+        .into_par_iter()
+        .flat_map(|y| {
+            let mut row_pixels = Vec::with_capacity(preview_w * 4);
+
+            for x in 0..preview_w {
+                let uv = egui::pos2(
+                    (x as f32 + 0.5) / (preview_w as f32),
+                    (y as f32 + 0.5) / (preview_h as f32),
+                );
+
+                let mut final_color = [255.0, 255.0, 255.0, 255.0];
+
+                let pixel_pos = egui::pos2(
+                    uv.x * snap.render_width as f32,
+                    uv.y * snap.render_height as f32,
+                );
+
+                // Iterar solo sobre shapes relevantes (con bbox check)
+                for (eval_x, eval_y, bbox, color, is_circle) in &prim_data {
+                    // Early exit con bounding box
+                    if !bbox.contains(uv.x, uv.y) {
+                        continue;
+                    }
+
+                    let shape_color = [
+                        color[0] as f32,
+                        color[1] as f32,
+                        color[2] as f32,
+                        color[3] as f32,
+                    ];
+
+                    let hit = if *is_circle {
+                        // Circle - versión ultra optimizada
+                        let dx = pixel_pos.x - eval_x * snap.render_width as f32;
+                        let dy = pixel_pos.y - eval_y * snap.render_height as f32;
+                        let radius_px = (bbox.max_x - bbox.min_x) * snap.render_width as f32 / 2.0;
+                        let dist_sq = dx * dx + dy * dy;
+                        let radius_sq = radius_px * radius_px;
+                        dist_sq <= radius_sq
+                    } else {
+                        // Rect
+                        let center_x = (bbox.min_x + bbox.max_x) / 2.0 * snap.render_width as f32;
+                        let center_y = (bbox.min_y + bbox.max_y) / 2.0 * snap.render_height as f32;
+                        let half_w = (bbox.max_x - bbox.min_x) * snap.render_width as f32 / 2.0;
+                        let half_h = (bbox.max_y - bbox.min_y) * snap.render_height as f32 / 2.0;
+                        let dx = (pixel_pos.x - center_x).abs();
+                        let dy = (pixel_pos.y - center_y).abs();
+                        dx <= half_w && dy <= half_h
+                    };
+
+                    if hit {
+                        let src_a = (shape_color[3]) / 255.0;
+                        final_color[0] = final_color[0] * (1.0 - src_a) + shape_color[0] * src_a;
+                        final_color[1] = final_color[1] * (1.0 - src_a) + shape_color[1] * src_a;
+                        final_color[2] = final_color[2] * (1.0 - src_a) + shape_color[2] * src_a;
+
+                        // Early exit si opaco
+                        if src_a >= 0.999 {
+                            break;
+                        }
+                    }
+                }
+
+                row_pixels.push(final_color[0].round() as u8);
+                row_pixels.push(final_color[1].round() as u8);
+                row_pixels.push(final_color[2].round() as u8);
+                row_pixels.push(255);
+            }
+            row_pixels
+        })
+        .collect();
 
     egui::ColorImage::from_rgba_unmultiplied([preview_w, preview_h], &pixels)
 }
@@ -499,12 +1115,38 @@ fn render_frame_color_image_gpu_snapshot(
 ) -> Result<egui::ColorImage, String> {
     use std::num::NonZeroU32;
 
-    let preview_w = (snap.render_width as f32 * snap.preview_multiplier)
+    let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier)
         .round()
         .max(1.0) as u32;
-    let preview_h = (snap.render_height as f32 * snap.preview_multiplier)
+    let mut preview_h = (snap.render_height as f32 * snap.preview_multiplier)
         .round()
         .max(1.0) as u32;
+
+    // CRÍTICO: Validar límites de GPU para evitar crash
+    // Si el preview excede MAX_GPU_TEXTURE_SIZE, reducir proporcionalmente
+    if preview_w > MAX_GPU_TEXTURE_SIZE || preview_h > MAX_GPU_TEXTURE_SIZE {
+        let scale_w = if preview_w > MAX_GPU_TEXTURE_SIZE {
+            MAX_GPU_TEXTURE_SIZE as f32 / preview_w as f32
+        } else {
+            1.0
+        };
+        let scale_h = if preview_h > MAX_GPU_TEXTURE_SIZE {
+            MAX_GPU_TEXTURE_SIZE as f32 / preview_h as f32
+        } else {
+            1.0
+        };
+        let scale = scale_w.min(scale_h);
+        preview_w = (preview_w as f32 * scale).round() as u32;
+        preview_h = (preview_h as f32 * scale).round() as u32;
+
+        eprintln!(
+            "[WARN] Preview size exceeded GPU limit ({}x{}). Reduced to {}x{}",
+            snap.render_width as f32 * snap.preview_multiplier,
+            snap.render_height as f32 * snap.preview_multiplier,
+            preview_w,
+            preview_h
+        );
+    }
 
     // Build GpuShape list (same layout used by on-screen GPU path)
     let mut gpu_shapes: Vec<GpuShape> = Vec::new();
@@ -852,14 +1494,12 @@ fn ensure_preview_worker(state: &mut AppState) {
                             let _ = res_tx.send(PreviewResult::Single(center_time, img));
                         }
                         PreviewMode::Buffered => {
-                            // Reduce the buffered frames when the preview resolution is
-                            // large to save RAM. Keep a smaller default buffer so idle
-                            // preview cache doesn't consume too much memory.
-                            // For hi-res previews we keep +/-3 frames; otherwise +/-6.
+                            // OPTIMIZADO: Reducir aún más los frames pre-cacheados
+                            // Solo mantener 2-3 frames antes/después del actual
                             let frames_each_side = if snapshot.preview_multiplier > 1.0 {
-                                3i32
+                                2i32 // Hi-res: solo +/-2 frames
                             } else {
-                                6i32
+                                3i32 // Low-res: +/-3 frames
                             };
                             let frame_step = 1.0 / (snapshot.preview_fps as f32);
                             let mut frames =
@@ -982,39 +1622,155 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
 }
 
 /// Poll for preview results from the worker and integrate them into `state` (must be called on UI thread).
+/// OPTIMIZADO v2: Detecta VRAM y prioriza cache GPU agresivamente
 pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
     if let Some(rx) = &state.preview_worker_rx {
+        let mut needs_enforce = false;
+
+        // Calcular límite de VRAM disponible para cache
+        let vram_limit_bytes = if state.prefer_vram_cache && state.estimated_vram_bytes > 0 {
+            (state.estimated_vram_bytes as f32 * state.vram_cache_max_percent) as usize
+        } else {
+            usize::MAX // Si no hay límite, usar todo lo que permita egui
+        };
+
+        let current_vram_usage = preview_cache_vram_bytes(state);
+        let vram_available = vram_limit_bytes.saturating_sub(current_vram_usage);
+
         while let Ok(result) = rx.try_recv() {
             // a worker result means at least one pending job completed
             state.preview_job_pending = false;
             match result {
                 PreviewResult::Single(t, img) => {
-                    // update/insert single frame into cache
-                    // replace center frame if times are close
-                    state
-                        .preview_frame_cache
-                        .retain(|(tt, _)| (tt - t).abs() > 1e-6);
-                    state.preview_frame_cache.push((t, img.clone()));
-                    // if this is near the cache center, update texture too
-                    if state
-                        .preview_cache_center_time
-                        .map_or(true, |c| (c - t).abs() < 1e-3)
-                    {
-                        let handle = ctx.load_texture(
-                            "preview_center",
-                            img.clone(),
-                            egui::TextureOptions::NEAREST,
-                        );
-                        state.preview_texture = Some(handle);
-                        state.preview_cache_center_time = Some(t);
+                    // ESTRATEGIA AGRESIVA: Usar VRAM siempre que sea posible
+                    let img_size = img.size[0] * img.size[1] * 4;
+                    let use_vram = state.prefer_vram_cache
+                        && (vram_available >= img_size || state.preview_worker_use_gpu);
+
+                    // Actualizar textura en pantalla
+                    let handle = ctx.load_texture(
+                        "preview_center",
+                        img.clone(),
+                        egui::TextureOptions::NEAREST,
+                    );
+                    state.preview_texture = Some(handle);
+                    state.preview_cache_center_time = Some(t);
+
+                    if use_vram {
+                        // Guardar en VRAM cache (no en RAM = ahorro masivo)
+                        let tex_name = format!("preview_cached_{:.6}", t);
+                        let th =
+                            ctx.load_texture(&tex_name, img.clone(), egui::TextureOptions::NEAREST);
+                        state
+                            .preview_texture_cache
+                            .retain(|(tt, _h, _s)| (tt - t).abs() > 1e-6);
+                        state.preview_texture_cache.push((t, th, img_size));
+
+                        // NO guardar en RAM frame cache (ahorro de RAM!)
+                    } else if state.compress_preview_cache {
+                        // compress to PNG and store bytes to reduce RAM
+                        if let Some(bytes) = compress_color_image_to_png(&img) {
+                            state
+                                .preview_compressed_cache
+                                .retain(|(tt, _b, _s)| (tt - t).abs() > 1e-6);
+                            state.preview_compressed_cache.push((
+                                t,
+                                bytes,
+                                (img.size[0], img.size[1]),
+                            ));
+                        } else {
+                            state
+                                .preview_frame_cache
+                                .retain(|(tt, _)| (tt - t).abs() > 1e-6);
+                            state.preview_frame_cache.push((t, img.clone()));
+                        }
+                    } else {
+                        // keep in RAM as ColorImage (fallback)
+                        state
+                            .preview_frame_cache
+                            .retain(|(tt, _)| (tt - t).abs() > 1e-6);
+                        state.preview_frame_cache.push((t, img.clone()));
                     }
+
+                    // mark that we must enforce limits after finishing this borrow
+                    needs_enforce = true;
                 }
                 PreviewResult::Buffered(frames) => {
-                    state.preview_frame_cache = frames.clone();
-                    // Pick center frame dynamically (frames.len()/2) instead of hard-coded index
-                    if !state.preview_frame_cache.is_empty() {
-                        let center_idx = state.preview_frame_cache.len() / 2;
-                        if let Some((t, center_img)) = state.preview_frame_cache.get(center_idx) {
+                    // ESTRATEGIA AGRESIVA: Llenar VRAM primero, RAM solo si se llena
+                    // Calcular espacio VRAM disponible en este punto
+                    let mut vram_space = vram_available;
+                    let use_vram_strategy = state.prefer_vram_cache;
+
+                    // downsample to MAX_PREVIEW_CACHE_FRAMES window first
+                    let selected = if frames.len() > MAX_PREVIEW_CACHE_FRAMES {
+                        let center = frames.len() / 2;
+                        let half = MAX_PREVIEW_CACHE_FRAMES / 2;
+                        let start = center.saturating_sub(half);
+                        let end = (start + MAX_PREVIEW_CACHE_FRAMES).min(frames.len());
+                        frames[start..end].to_vec()
+                    } else {
+                        frames.clone()
+                    };
+
+                    // Limpiar caches previos
+                    if use_vram_strategy || state.preview_worker_use_gpu {
+                        state.preview_texture_cache.clear();
+                        state.preview_frame_cache.clear();
+                        state.preview_compressed_cache.clear();
+
+                        // Llenar VRAM hasta límite
+                        for (t, img) in &selected {
+                            let img_size = img.size[0] * img.size[1] * 4;
+
+                            if vram_space >= img_size || state.preview_worker_use_gpu {
+                                // Guardar en VRAM
+                                let tex_name = format!("preview_cached_{:.6}", t);
+                                let handle = ctx.load_texture(
+                                    &tex_name,
+                                    img.clone(),
+                                    egui::TextureOptions::NEAREST,
+                                );
+                                state.preview_texture_cache.push((*t, handle, img_size));
+                                vram_space = vram_space.saturating_sub(img_size);
+                            } else if state.compress_preview_cache {
+                                // Overflow a RAM comprimido
+                                if let Some(bytes) = compress_color_image_to_png(img) {
+                                    state.preview_compressed_cache.push((
+                                        *t,
+                                        bytes,
+                                        (img.size[0], img.size[1]),
+                                    ));
+                                } else {
+                                    state.preview_frame_cache.push((*t, img.clone()));
+                                }
+                            } else {
+                                // Overflow a RAM sin comprimir
+                                state.preview_frame_cache.push((*t, img.clone()));
+                            }
+                        }
+                    } else if state.compress_preview_cache {
+                        state.preview_compressed_cache.clear();
+                        for (t, img) in &selected {
+                            if let Some(bytes) = compress_color_image_to_png(img) {
+                                state.preview_compressed_cache.push((
+                                    *t,
+                                    bytes,
+                                    (img.size[0], img.size[1]),
+                                ));
+                            } else {
+                                state.preview_frame_cache.push((*t, img.clone()));
+                            }
+                        }
+                    } else {
+                        state.preview_frame_cache = selected.clone();
+                        state.preview_texture_cache.clear();
+                        state.preview_compressed_cache.clear();
+                    }
+
+                    // Pick center frame dynamically and update the on-screen texture
+                    if !selected.is_empty() {
+                        let center_idx = selected.len() / 2;
+                        if let Some((t, center_img)) = selected.get(center_idx) {
                             let handle = ctx.load_texture(
                                 "preview_center",
                                 center_img.clone(),
@@ -1024,8 +1780,14 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                             state.preview_cache_center_time = Some(*t);
                         }
                     }
+
+                    // mark that we must enforce limits after finishing this borrow
+                    needs_enforce = true;
                 }
             }
+        }
+        if needs_enforce {
+            enforce_preview_cache_limits(state, ctx);
         }
     }
 }

@@ -8,10 +8,35 @@ pub struct MyApp {
 }
 
 pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
-    let state = AppState::default();
+    let mut state = AppState::default();
 
-    // Diagnostic: confirm app construction in console when running locally.
-    println!("[motioner] create_app: AppState constructed");
+    // VRAM DETECTION: Detectar memoria GPU disponible al iniciar
+    if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {
+        let adapter_info = &wgpu_render_state.adapter.get_info();
+        state.estimated_vram_bytes = canvas::detect_vram_size(adapter_info);
+        println!(
+            "[motioner] VRAM detected: {:.1} GB ({} bytes) on {}",
+            state.estimated_vram_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+            state.estimated_vram_bytes,
+            adapter_info.name
+        );
+        println!(
+            "[motioner] VRAM cache limit: {:.1} GB ({:.0}% of total)",
+            (state.estimated_vram_bytes as f64 * state.vram_cache_max_percent as f64) / (1024.0 * 1024.0 * 1024.0),
+            state.vram_cache_max_percent * 100.0
+        );
+    } else {
+        state.estimated_vram_bytes = 512 * 1024 * 1024; // fallback 512 MB
+        println!("[motioner] No wgpu adapter, using fallback VRAM estimate: 512 MB");
+    }
+
+    // OPTIMIZACIÓN RAM: Limpiar caches al inicio para reducir uso de memoria
+    state.preview_frame_cache.clear();
+    state.preview_frame_cache.shrink_to_fit();
+    state.preview_compressed_cache.clear();
+    state.preview_compressed_cache.shrink_to_fit();
+    state.preview_texture_cache.clear();
+    state.preview_texture_cache.shrink_to_fit();
 
     // Check if we have wgpu access
     #[cfg(feature = "wgpu")]
@@ -33,11 +58,6 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
-        // Diagnostic: log a visible token so we can tell the event loop is running.
-        println!(
-            "[motioner] update() running — time = {:.3}",
-            ctx.input(|i| i.time)
-        );
 
         // Auto-sync Code if settings changed while Code tab is active
         let current_settings = (
@@ -236,7 +256,7 @@ impl eframe::App for MyApp {
                     if state.code_anim_t > 1.0 {
                         state.code_anim_t = 1.0;
                     }
-                    ctx.request_repaint(); // Keep animating
+                    // Removed: controlled by global frame rate
                 }
             } else {
                 if state.code_anim_t > 0.0 {
@@ -244,7 +264,7 @@ impl eframe::App for MyApp {
                     if state.code_anim_t < 0.0 {
                         state.code_anim_t = 0.0;
                     }
-                    ctx.request_repaint(); // Keep animating
+                    // Removed: controlled by global frame rate
                 }
             }
             let fs_t = state.code_anim_t;
@@ -463,14 +483,25 @@ impl eframe::App for MyApp {
                 state.time,
                 crate::canvas::PreviewMode::Single,
             );
-
-            // Request next repaint based on preview_fps
-            let frame_duration = 1.0 / (state.preview_fps as f32);
-            ctx.request_repaint_after(std::time::Duration::from_secs_f32(frame_duration));
         }
+
+        // Always control frame rate based on preview_fps (not just when playing)
+        let frame_duration = 1.0 / (state.preview_fps as f32);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f32(frame_duration));
 
         // Poll background preview worker results and integrate textures (UI thread)
         crate::canvas::poll_preview_results(state, ctx);
+        // Poll for asynchronous position-cache build completion
+        if let Some(rx) = &state.position_cache_build_rx {
+            if let Ok(pc) = rx.try_recv() {
+                state.position_cache = Some(pc);
+                state.position_cache_build_in_progress = false;
+                state.toast_message = Some("Position cache ready".to_string());
+                state.toast_type = crate::app_state::ToastType::Info;
+                state.toast_deadline = ctx.input(|i| i.time) + 2.0;
+                state.position_cache_build_rx = None;
+            }
+        }
 
         if state.show_settings {
             crate::project_settings::show(ctx, state);

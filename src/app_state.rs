@@ -30,6 +30,21 @@ pub struct AppState {
     /// Cached preview frames around the current playhead (time, image)
     #[serde(skip)]
     pub preview_frame_cache: Vec<(f32, egui::ColorImage)>,
+    /// When GPU previews are enabled we may store cached preview frames as
+    /// textures (VRAM) to avoid holding large ColorImage buffers in RAM.
+    #[serde(skip)]
+    pub preview_texture_cache: Vec<(f32, egui::TextureHandle, usize)>,
+    /// VRAM disponible estimada (en bytes)
+    #[serde(skip)]
+    pub estimated_vram_bytes: usize,
+    /// Si true, prioriza cache en VRAM sobre RAM
+    pub prefer_vram_cache: bool,
+    /// Máximo porcentaje de VRAM a usar para cache (default: 50%)
+    pub vram_cache_max_percent: f32,
+    /// Optional compressed preview cache (PNG bytes) used when
+    /// `compress_preview_cache` is enabled and GPU texture caching is not used.
+    #[serde(skip)]
+    pub preview_compressed_cache: Vec<(f32, Vec<u8>, (usize, usize))>,
     /// Center time of the cached preview frames, if any
     #[serde(skip)]
     pub preview_cache_center_time: Option<f32>,
@@ -45,6 +60,12 @@ pub struct AppState {
     /// renderer for faster preview generation; when false the worker always
     /// uses the CPU rasterizer. Exposed in Settings → Performance.
     pub preview_worker_use_gpu: bool,
+    /// Automatically trim preview caches when they exceed `preview_cache_max_mb`.
+    pub preview_cache_auto_clean: bool,
+    /// Maximum preview cache size (MB) before warning/auto-clean triggers.
+    pub preview_cache_max_mb: usize,
+    /// If true, compress preview frames in RAM (PNG) to reduce working set.
+    pub compress_preview_cache: bool,
 
     pub playing: bool,
     pub time: f32,
@@ -95,6 +116,14 @@ pub struct AppState {
     /// timing changes.
     #[serde(skip)]
     pub position_cache: Option<crate::canvas::PositionCache>,
+    /// Temporary vertical offset controlled by the settings slider (pixels).
+    pub settings_window_offset_y: f32,
+    /// If a background position-cache build is running, this is true.
+    #[serde(skip)]
+    pub position_cache_build_in_progress: bool,
+    /// Receiver for background-built PositionCache (one-shot)
+    #[serde(skip)]
+    pub position_cache_build_rx: Option<std::sync::mpsc::Receiver<crate::canvas::PositionCache>>,
 
     // UI Animation State
     pub settings_open_time: Option<f64>,
@@ -191,11 +220,19 @@ impl Default for AppState {
             wgpu_renderer: None,
             preview_texture: None,
             preview_frame_cache: Vec::new(),
+            preview_texture_cache: Vec::new(),
+            estimated_vram_bytes: 0,     // Se detecta en runtime
+            prefer_vram_cache: true,     // Por defecto usar VRAM
+            vram_cache_max_percent: 0.6, // Usar hasta 60% de VRAM para caché (3.6GB en RTX 4050)
+            preview_compressed_cache: Vec::new(),
             preview_cache_center_time: None,
             preview_worker_tx: None,
             preview_worker_rx: None,
             preview_job_pending: false,
             preview_worker_use_gpu: true,
+            preview_cache_auto_clean: true,
+            preview_cache_max_mb: 64,
+            compress_preview_cache: false,
             playing: false,
             time: 0.0,
             export_in_progress: false,
@@ -223,6 +260,9 @@ impl Default for AppState {
             canvas_pan_y: 0.0,
             last_composition_rect: None,
             position_cache: None,
+            settings_window_offset_y: 0.0,
+            position_cache_build_in_progress: false,
+            position_cache_build_rx: None,
             settings_open_time: None,
             settings_is_closing: false,
             toast_message: None,
