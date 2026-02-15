@@ -597,8 +597,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             color,
                             ..
                         } => {
+                            // Apply animated position when available (GPU path must match software rasterizer)
+                            let (eval_x, eval_y) =
+                                crate::animations::animations_manager::animated_xy_for(shape, current_time, project_duration);
                             gpu_shapes.push(GpuShape {
-                                pos: [*x, *y],
+                                pos: [eval_x, eval_y],
                                 size: [*radius, 0.0],
                                 color: [
                                     color[0] as f32 / 255.0,
@@ -615,8 +618,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         crate::scene::Shape::Rect {
                             x, y, w, h, color, ..
                         } => {
+                            // Use animated center for rects as well
+                            let (eval_x, eval_y) =
+                                crate::animations::animations_manager::animated_xy_for(shape, current_time, project_duration);
                             gpu_shapes.push(GpuShape {
-                                pos: [*x + *w / 2.0, *y + *h / 2.0],
+                                pos: [eval_x + *w / 2.0, eval_y + *h / 2.0],
                                 size: [*w / 2.0, *h / 2.0],
                                 color: [
                                     color[0] as f32 / 255.0,

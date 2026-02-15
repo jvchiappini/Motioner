@@ -537,6 +537,8 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
 
                 let earliest_spawn = shape.spawn_time();
 
+                // (diagnostic readout removed)
+
                 match shape {
                     Shape::Circle {
                         name,
@@ -620,6 +622,8 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             changed = true;
                                         }
                                         ui.end_row();
+
+                                        // diagnostic removed
 
                                         ui.label("Radius:");
                                         let mut val_r = *radius * 100.0;
@@ -731,6 +735,8 @@ fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
                                             changed = true;
                                         }
                                         ui.end_row();
+
+                                            // diagnostic removed
 
                                         ui.label("Width:");
                                         let mut val_w = *w * 100.0;
