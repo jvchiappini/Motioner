@@ -1,5 +1,12 @@
 use crate::scene::Easing;
 
+pub mod bezier;
+pub mod custom;
+pub mod ease_in;
+pub mod ease_in_out;
+pub mod ease_out;
+pub mod linear;
+
 /// Concrete implementation for a linear "move" animation.
 #[derive(Clone, Debug)]
 pub struct MoveAnimation {
@@ -51,136 +58,48 @@ impl MoveAnimation {
             (project_time - self.start) / denom
         };
 
-        match self.easing {
-            // Default linear easing
-            Easing::Linear => {
-                let ix = base_x + local_t * (self.to_x - base_x);
-                let iy = base_y + local_t * (self.to_y - base_y);
-                (ix, iy)
-            }
+        let progress = match &self.easing {
+            Easing::Linear => linear::compute_progress(local_t),
+            Easing::EaseIn { power } => ease_in::compute_progress(local_t, *power),
+            Easing::EaseOut { power } => ease_out::compute_progress(local_t, *power),
+            Easing::EaseInOut { power } => ease_in_out::compute_progress(local_t, *power),
+            Easing::Custom { points } => custom::compute_progress(local_t, points),
+            Easing::Bezier { p1, p2 } => bezier::compute_progress(local_t, *p1, *p2),
+        };
 
-            // Symmetric ease-in/out (power controls curvature)
-            Easing::EaseInOut { power } => {
-                let progress = if (power - 1.0).abs() < std::f32::EPSILON {
-                    local_t
-                } else if local_t < 0.5 {
-                    0.5 * (2.0 * local_t).powf(power)
-                } else {
-                    1.0 - 0.5 * (2.0 * (1.0 - local_t)).powf(power)
-                };
+        let ix = base_x + progress * (self.to_x - base_x);
+        let iy = base_y + progress * (self.to_y - base_y);
+        (ix, iy)
+    }
 
-                let ix = base_x + progress * (self.to_x - base_x);
-                let iy = base_y + progress * (self.to_y - base_y);
-                (ix, iy)
-            }
-
-            // Ease-in: progress = t^power (accelerating)
-            Easing::EaseIn { power } => {
-                let progress = local_t.powf(power);
-                let ix = base_x + progress * (self.to_x - base_x);
-                let iy = base_y + progress * (self.to_y - base_y);
-                (ix, iy)
-            }
-
-            // Ease-out: progress = 1 - (1-t)^power (decelerating)
-            Easing::EaseOut { power } => {
-                let progress = 1.0 - (1.0 - local_t).powf(power);
-                let ix = base_x + progress * (self.to_x - base_x);
-                let iy = base_y + progress * (self.to_y - base_y);
-                (ix, iy)
-            }
-
-            // Custom easing: piecewise linear interpolation between points
-            Easing::Custom { ref points } => {
-                let progress = if points.is_empty() {
-                    local_t
-                } else {
-                    // Find the segment local_t falls into
-                    // We assume points are sorted by t (x-axis)
-                    // If not sorted, we might get weird results, but for UI we ensure specific order.
-                    // We also assume (0,0) and (1,1) are conceptually there if not in list.
-
-                    // Actually, let's enforce a rule: Custom easing must have at least (0,0) and (1,1).
-                    // If user provides points, we interpolate between them.
-
-                    // Let's perform a simple linear search or binary search
-                    let mut p0 = (0.0, 0.0);
-                    let mut p1 = (1.0, 1.0);
-
-                    // Find the bounding points
-                    for i in 0..points.len() {
-                        if points[i].0 >= local_t {
-                            p1 = points[i];
-                            if i > 0 {
-                                p0 = points[i - 1];
-                            } else {
-                                // If the first point is after local_t, we interpolate from (0,0) to p1
-                                p0 = (0.0, 0.0);
-                            }
-                            break;
-                        }
-                    }
-
-                    // If we went through all points and didn't find one >= local_t,
-                    // then local_t is after the last point. Interpolate from last point to (1,1).
-                    if local_t > points.last().map(|p| p.0).unwrap_or(0.0) {
-                        p0 = points.last().cloned().unwrap_or((0.0, 0.0));
-                        p1 = (1.0, 1.0);
-                    }
-
-                    // Interpolate between p0 and p1
-                    let segment_duration = p1.0 - p0.0;
-                    if segment_duration.abs() < std::f32::EPSILON {
-                        p1.1
-                    } else {
-                        let segment_t = (local_t - p0.0) / segment_duration;
-                        // Linear interpolation
-                        p0.1 + segment_t * (p1.1 - p0.1)
-                        // To support bezier later, we would use control points here
-                    }
-                };
-
-                let ix = base_x + progress * (self.to_x - base_x);
-                let iy = base_y + progress * (self.to_y - base_y);
-                (ix, iy)
-            }
-
-            // Cubic Bezier easing (CSS-like)
-            Easing::Bezier { p1, p2 } => {
-                let t = local_t;
-                // Cubic Bezier formula for 1D (progress vs t):
-                // We need to solve for x(T) = t to find T, then y(T) is progress.
-                // But generally easing curves are defined such that x is time.
-                // Standard cubic-bezier(x1, y1, x2, y2) uses Newton's method to find T given x.
-
-                // For simplicity, let's implement a quick solve.
-                let progress = solve_cubic_bezier(t, p1.0, p1.1, p2.0, p2.1);
-
-                let ix = base_x + progress * (self.to_x - base_x);
-                let iy = base_y + progress * (self.to_y - base_y);
-                (ix, iy)
-            }
+    /// Sample a sequence of positions for this animation at a given FPS.
+    pub fn positions_by_frame(&self, base_x: f32, base_y: f32, fps: u32) -> Vec<(f32, f32, f32)> {
+        let mut frames = Vec::new();
+        let duration = (self.end - self.start).abs();
+        if duration < std::f32::EPSILON {
+            frames.push((self.start, self.to_x, self.to_y));
+            return frames;
         }
+
+        let num_steps = (duration * fps as f32).round() as u32;
+        let step = duration / num_steps as f32;
+
+        for i in 0..=num_steps {
+            let t = self.start + i as f32 * step;
+            let (x, y) = self.sample_position(base_x, base_y, t);
+            frames.push((t, x, y));
+        }
+        frames
     }
 
     pub fn to_dsl_snippet(&self, element_name: &str, indent: &str) -> String {
         let ease_str = match &self.easing {
-            Easing::Linear => "linear".to_string(),
-            Easing::EaseIn { power } => format!("ease-in({})", power),
-            Easing::EaseOut { power } => format!("ease-out({})", power),
-            Easing::EaseInOut { power } => format!("ease-in-out({})", power),
-            Easing::Bezier { p1, p2 } => format!(
-                "bezier(({:.2}, {:.2}), ({:.2}, {:.2}))",
-                p1.0, p1.1, p2.0, p2.1
-            ),
-            Easing::Custom { points } => {
-                let pts_str = points
-                    .iter()
-                    .map(|(t, v)| format!("({:.2}, {:.2})", t, v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("custom([{}])", pts_str)
-            }
+            Easing::Linear => linear::to_dsl_string(),
+            Easing::EaseIn { power } => ease_in::to_dsl_string(*power),
+            Easing::EaseOut { power } => ease_out::to_dsl_string(*power),
+            Easing::EaseInOut { power } => ease_in_out::to_dsl_string(*power),
+            Easing::Bezier { p1, p2 } => bezier::to_dsl_string(*p1, *p2),
+            Easing::Custom { points } => custom::to_dsl_string(points),
         };
 
         format!(
@@ -188,34 +107,6 @@ impl MoveAnimation {
             indent, element_name, self.to_x, self.to_y, self.start, self.end, ease_str
         )
     }
-}
-
-/// Helper to solve cubic bezier y for a given x (time).
-/// x(t) = (1-t)^3 * 0 + 3(1-t)^2 * t * x1 + 3(1-t) * t^2 * x2 + t^3 * 1
-/// y(t) = (1-t)^3 * 0 + 3(1-t)^2 * t * y1 + 3(1-t) * t^2 * y2 + t^3 * 1
-fn solve_cubic_bezier(x_target: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    let mut t = x_target; // Initial guess
-                          // Newton's method
-    for _ in 0..8 {
-        let x = cubic_axis(t, x1, x2);
-        let slope = cubic_derivative(t, x1, x2);
-        if slope.abs() < 1e-6 {
-            break;
-        }
-        t -= (x - x_target) / slope;
-    }
-    t = t.clamp(0.0, 1.0);
-    cubic_axis(t, y1, y2)
-}
-
-fn cubic_axis(t: f32, p1: f32, p2: f32) -> f32 {
-    let u = 1.0 - t;
-    3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t
-}
-
-fn cubic_derivative(t: f32, p1: f32, p2: f32) -> f32 {
-    let u = 1.0 - t;
-    3.0 * u * u * p1 + 6.0 * u * t * (p2 - p1) + 3.0 * t * t * (1.0 - p2)
 }
 
 #[cfg(test)]
@@ -440,62 +331,18 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
         } else if b.starts_with("type") && b.contains('=') {
             if let Some(eq) = b.find('=') {
                 let val = b[eq + 1..].trim().trim_matches(',').to_lowercase();
-                if val.contains("linear") {
-                    easing_kind = crate::scene::Easing::Linear;
-                } else if val.starts_with("ease_in_out") {
-                    let mut power = 1.0f32;
-                    if let Some(open) = val.find('(') {
-                        if let Some(close) = val.rfind(')') {
-                            let inner = &val[open + 1..close];
-                            for part in inner.split(',') {
-                                let p = part.trim();
-                                if p.starts_with("power") && p.contains('=') {
-                                    if let Some(eq) = p.find('=') {
-                                        if let Ok(v) = p[eq + 1..].trim().parse::<f32>() {
-                                            power = v;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    easing_kind = crate::scene::Easing::EaseInOut { power };
-                } else if val.starts_with("ease_in") {
-                    let mut power = 1.0f32;
-                    if let Some(open) = val.find('(') {
-                        if let Some(close) = val.rfind(')') {
-                            let inner = &val[open + 1..close];
-                            for part in inner.split(',') {
-                                let p = part.trim();
-                                if p.starts_with("power") && p.contains('=') {
-                                    if let Some(eq) = p.find('=') {
-                                        if let Ok(v) = p[eq + 1..].trim().parse::<f32>() {
-                                            power = v;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    easing_kind = crate::scene::Easing::EaseIn { power };
-                } else if val.starts_with("ease_out") {
-                    let mut power = 1.0f32;
-                    if let Some(open) = val.find('(') {
-                        if let Some(close) = val.rfind(')') {
-                            let inner = &val[open + 1..close];
-                            for part in inner.split(',') {
-                                let p = part.trim();
-                                if p.starts_with("power") && p.contains('=') {
-                                    if let Some(eq) = p.find('=') {
-                                        if let Ok(v) = p[eq + 1..].trim().parse::<f32>() {
-                                            power = v;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    easing_kind = crate::scene::Easing::EaseOut { power };
+                if let Some(e) = linear::parse_dsl(&val) {
+                    easing_kind = e;
+                } else if let Some(e) = ease_in_out::parse_dsl(&val) {
+                    easing_kind = e;
+                } else if let Some(e) = ease_in::parse_dsl(&val) {
+                    easing_kind = e;
+                } else if let Some(e) = ease_out::parse_dsl(&val) {
+                    easing_kind = e;
+                } else if let Some(e) = custom::parse_dsl(&val) {
+                    easing_kind = e;
+                } else if let Some(e) = bezier::parse_dsl(&val) {
+                    easing_kind = e;
                 }
             }
         } else if b.starts_with("startAt") && b.contains('=') {
