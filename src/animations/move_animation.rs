@@ -52,9 +52,27 @@ impl MoveAnimation {
         };
 
         match self.easing {
+            // Default linear easing
             Easing::Linear => {
                 let ix = base_x + local_t * (self.to_x - base_x);
                 let iy = base_y + local_t * (self.to_y - base_y);
+                (ix, iy)
+            }
+
+            // Parametrized `Lerp` — use a symmetric power curve to give non-constant
+            // velocity. `power == 1.0` behaves exactly like linear.
+            Easing::Lerp { power } => {
+                // symmetric ease-in-out using exponent `power`
+                let progress = if (power - 1.0).abs() < std::f32::EPSILON {
+                    local_t
+                } else if local_t < 0.5 {
+                    0.5 * (2.0 * local_t).powf(power)
+                } else {
+                    1.0 - 0.5 * (2.0 * (1.0 - local_t)).powf(power)
+                };
+
+                let ix = base_x + progress * (self.to_x - base_x);
+                let iy = base_y + progress * (self.to_y - base_y);
                 (ix, iy)
             }
         }
@@ -102,7 +120,21 @@ impl MoveAnimation {
         let mut out = String::new();
         out.push_str(&format!("\n{}move {{\n", indent));
         out.push_str(&format!("{}    element = \"{}\"\n", indent, element_name));
-        out.push_str(&format!("{}    type = linear\n", indent));
+        // Emit DSL; include `power` when lerp is parametrized
+        match self.easing {
+            Easing::Lerp { power } if (power - 1.0).abs() > std::f32::EPSILON => {
+                out.push_str(&format!(
+                    "{}    type = lerp(power = {:.3})\n",
+                    indent, power
+                ));
+            }
+            Easing::Lerp { .. } => {
+                out.push_str(&format!("{}    type = lerp\n", indent));
+            }
+            _ => {
+                out.push_str(&format!("{}    type = linear\n", indent));
+            }
+        }
         out.push_str(&format!("{}    startAt = {:.3}\n", indent, self.start));
         out.push_str(&format!("{}    end {{\n", indent));
         out.push_str(&format!("{}        time = {:.3}\n", indent, self.end));
@@ -153,6 +185,48 @@ mod tests {
         let times: Vec<f32> = frames.iter().map(|(t, _, _)| *t).collect();
         assert_eq!(times, vec![0.0, 0.5, 1.0]);
     }
+
+    #[test]
+    #[test]
+    fn lerp_power_changes_profile() {
+        let base = MoveAnimation {
+            to_x: 0.8,
+            to_y: 0.2,
+            start: 0.0,
+            end: 4.0,
+            easing: Easing::Linear,
+        };
+
+        let lerp_pow1 = MoveAnimation { easing: Easing::Lerp { power: 1.0 }, ..base.clone() };
+        let lerp_pow2 = MoveAnimation { easing: Easing::Lerp { power: 2.0 }, ..base.clone() };
+
+        // power == 1.0 should match linear
+        let (xl, yl) = base.sample_position(0.2, 0.2, 1.5);
+        let (x1, y1) = lerp_pow1.sample_position(0.2, 0.2, 1.5);
+        assert!((xl - x1).abs() < 1e-6);
+        assert!((yl - y1).abs() < 1e-6);
+
+        // power == 2.0 should differ from linear (non-constant speed)
+        let (x2, y2) = lerp_pow2.sample_position(0.2, 0.2, 1.5);
+        assert!((xl - x2).abs() > 1e-6 || (yl - y2).abs() > 1e-6);
+    }
+
+    #[test]
+    fn to_dsl_snippet_emits_lerp_with_power() {
+        let ma_default = MoveAnimation {
+            to_x: 0.7,
+            to_y: 0.5,
+            start: 0.0,
+            end: 5.0,
+            easing: Easing::Lerp { power: 1.0 },
+        };
+        let s_default = ma_default.to_dsl_snippet("Circle", "    ");
+        assert!(s_default.contains("type = lerp"));
+
+        let ma_pow = MoveAnimation { easing: Easing::Lerp { power: 2.0 }, ..ma_default.clone() };
+        let s_pow = ma_pow.to_dsl_snippet("Circle", "    ");
+        assert!(s_pow.contains("type = lerp(power = 2.000)"));
+    }
 }
 
 /// Result produced by parsing a `move { ... }` DSL block.
@@ -196,6 +270,25 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                 let val = b[eq + 1..].trim().trim_matches(',').to_lowercase();
                 if val.contains("linear") {
                     easing_kind = crate::scene::Easing::Linear;
+                } else if val.starts_with("lerp") {
+                    // optional params: lerp(power = 2.0)
+                    let mut power = 1.0f32;
+                    if let Some(open) = val.find('(') {
+                        if let Some(close) = val.rfind(')') {
+                            let inner = &val[open + 1..close];
+                            for part in inner.split(',') {
+                                let p = part.trim();
+                                if p.starts_with("power") && p.contains('=') {
+                                    if let Some(eq) = p.find('=') {
+                                        if let Ok(v) = p[eq + 1..].trim().parse::<f32>() {
+                                            power = v;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    easing_kind = crate::scene::Easing::Lerp { power };
                 }
             }
         } else if b.starts_with("startAt") && b.contains('=') {

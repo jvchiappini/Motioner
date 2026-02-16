@@ -92,11 +92,16 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         }
 
         ui.add_space(8.0);
-        ui.label("Available animations: Move (linear)");
+        ui.label("Available animations: Move (linear, lerp)")
+            .on_hover_text(
+                "Move animation — move an element from its position at animation start to a target (To X, To Y) over [Start, End].\n\nDetails:\n• Before Start: element stays at its base position.\n• During: position interpolated from current position at Start toward target.\n• After End: element remains at the target.\n\nEasing: `linear` = constant speed; `lerp(power)` = symmetric ease-in/out (power controls curvature; 1.0 = linear).\n\nDSL examples: `type = linear` or `type = lerp(power = 2.0)`.",
+            );
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
-            if ui.button("Add Move (linear)").clicked() {
+            if ui.add(egui::Button::new("Add Move (linear)")).on_hover_text(
+                "Add a Move animation to the selected element.\n\nDefault values: Start = element spawn (or 0), End = project duration, Easing = linear.\n\nAfter adding, edit Start/End, To X/To Y and choose Easing (linear or lerp(power)). Note: Start must be >= element spawn time.",
+            ).clicked() {
                 if let Some(path) = target_path.clone() {
                     if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, &path) {
                         // new animation parameters (default: full project duration)

@@ -159,7 +159,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                             ui.collapsing("Animations", |ui| {
                                                 // Allow adding a new Move animation
                                                 ui.horizontal(|ui| {
-                                                    if ui.button("+ Add Move").clicked() {
+                                                    // Add Move button with descriptive tooltip
+                                                    if ui
+                                                        .add(egui::Button::new("+ Add Move"))
+                                                        .on_hover_text("Add a Move animation to this element.\n\nCreates a position animation that interpolates the element from its current position at Start toward (To X, To Y) over [Start, End]. Defaults: Start = element spawn (or 0), End = project duration, Easing = linear.")
+                                                        .clicked()
+                                                    {
                                                         // default: start at element spawn (or 0), end at project end
                                                         let start = (*spawn_time).max(0.0);
                                                         let end = state.duration_secs;
@@ -174,6 +179,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                         });
                                                         changed = true;
                                                     }
+
+                                                    // tooltip describing the Move animation and available easing types (info icon)
+                                                    ui.add_space(6.0);
+                                                    ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
+                                                        "Move animation — moves an element from its position at the animation Start to the specified target (To X, To Y) over [Start, End].\n\nBehavior:\n• Before Start: element stays at its base position.\n• During: interpolates from the element's position at Start toward the target.\n• After End: element remains at the target.\n\nParameters:\n• Start / End (seconds), To X / To Y (0.0..1.0).\n• Easing: `linear` = constant speed; `lerp(power)` = symmetric ease-in/out (power controls curvature; 1.0 = linear).\n\nDSL example: `type = lerp(power = 2.0)`.",
+                                                    );
                                                 });
 
                                                 // List existing Move animations
@@ -202,6 +213,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                         if ui.add(egui::Button::new("Remove").small()).clicked() {
                                                                             remove_idx = Some(i);
                                                                         }
+                                                                           ui.add_space(6.0);
+                                                                           ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
+                                                                               "Move animation — moves the element toward `To X, To Y` between `Start` and `End`.\n\nMultiple Move animations are applied in chronological order; each animation interpolates from the element's position at that animation's Start.\n\nEasing options: `linear` (constant speed) or `lerp(power)` (symmetric ease-in/out). Use the `power` slider to control the curve (default 1.0).",
+                                                                           );
                                                                     });
 
                                                                     ui.add_space(4.0);
@@ -254,11 +269,26 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                         egui::ComboBox::from_label("")
                                                                             .selected_text(format!("{:?}", easing))
                                                                             .show_ui(ui, |ui| {
-                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Linear), "Linear").clicked() {
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Linear), "Linear").on_hover_text("Linear — constant speed interpolation (uniform velocity)").clicked() {
                                                                                     *easing = crate::scene::Easing::Linear;
                                                                                     changed = true;
                                                                                 }
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Lerp { .. }), "Lerp").on_hover_text("Lerp(power) — symmetric ease-in/out controlled by `power`. `power = 1.0` = linear; `power > 1` slows start/end; `power < 1` makes motion snappier.").clicked() {
+                                                                                    *easing = crate::scene::Easing::Lerp { power: 1.0 };
+                                                                                    changed = true;
+                                                                                }
                                                                             });
+
+                                                                        // If Lerp is selected expose the `power` parameter with tooltip
+                                                                        if let crate::scene::Easing::Lerp { power } = easing {
+                                                                            let mut p = *power;
+                                                                            let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
+                                                                            if slider_resp.changed() {
+                                                                                *power = p;
+                                                                                changed = true;
+                                                                            }
+                                                                            slider_resp.on_hover_text("`power` controls the curvature of the ease-in/out for `lerp` (1.0 = linear). Larger values increase easing strength.");
+                                                                        }
                                                                     });
                                                                 });
 
@@ -418,6 +448,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                             });
                                                             changed = true;
                                                         }
+                                                        // tooltip for the button
+                                                        ui.add_space(6.0);
+                                                        ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
+                                                            "Add Move — create a position animation for the selected element.\n\nDefaults: Start = element spawn or 0; End = project duration; Easing = linear.\n\nAfter adding, adjust Start/End, To X/To Y and select Easing (linear or lerp(power)). Note: animation Start must be >= element spawn time.",
+                                                        );
                                                     });
 
                                                     if animations.is_empty() {
@@ -490,11 +525,26 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                             egui::ComboBox::from_label("")
                                                                                 .selected_text(format!("{:?}", easing))
                                                                                 .show_ui(ui, |ui| {
-                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::Linear), "Linear").clicked() {
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::Linear), "Linear").on_hover_text("Linear — constant speed interpolation (uniform velocity)").clicked() {
                                                                                         *easing = crate::scene::Easing::Linear;
                                                                                         changed = true;
                                                                                     }
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::Lerp { .. }), "Lerp").on_hover_text("Lerp(power) — symmetric ease-in/out controlled by `power`. `power = 1.0` = linear; `power > 1` slows start/end; `power < 1` makes motion snappier.").clicked() {
+                                                                                        *easing = crate::scene::Easing::Lerp { power: 1.0 };
+                                                                                        changed = true;
+                                                                                    }
                                                                                 });
+
+                                                                            if let crate::scene::Easing::Lerp { power } = easing {
+                                                                                let mut p = *power;
+                                                                                if ui
+                                                                                    .add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false))
+                                                                                    .changed()
+                                                                                {
+                                                                                    *power = p;
+                                                                                    changed = true;
+                                                                                }
+                                                                            }
                                                                         });
                                                                     });
 
