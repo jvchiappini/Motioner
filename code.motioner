@@ -5,15 +5,6 @@ circle "Circle" {
     x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00
 }
 
-circle "test" {
-    x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00
-}
 
-circle "Name" {
-    x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00
-}
 
-circle "Circle #3" {
-    x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00
-}
 

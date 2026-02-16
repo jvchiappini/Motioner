@@ -114,18 +114,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     .lock_focus(true)
                     .layouter(&mut layouter);
 
-                let output = ui.add(text_edit);
-                let output_rect = output.rect; // capture rect so we can draw while still owning `output`
+                let output = text_edit.show(ui);
+                let output_rect = output.response.rect; // capture rect so we can draw while still owning `output`
 
                 // 2. Update State & Render Popup AFTER TextEdit
-                autocomplete::handle_state_and_render(ui, &output, state);
+                autocomplete::handle_state_and_render(ui, &output.response, state);
 
                 // --- GUTTER RENDERING ---
                 // Match the font size used in highlight_code (14.0)
                 let font_id = egui::FontId::monospace(14.0);
-                let line_height = ui.fonts(|f| f.row_height(&font_id));
-                let padding_y = ui.spacing().button_padding.y;
-
+                
                 // Determine active logical line efficiently
                 let mut active_line_idx: usize = 0;
                 if let Some(te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
@@ -141,9 +139,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 }
 
                 // Draw gutter background
-                // Use a painter that covers the whole viewport but clipped to the gutter column
                 let mut full_gutter_rect = gutter_rect;
-                // Extended to cover the entire visible viewport plus content
                 full_gutter_rect.set_bottom(ui.clip_rect().bottom().max(output_rect.bottom()));
 
                 let gutter_painter = ui.painter().with_clip_rect(full_gutter_rect);
@@ -154,81 +150,80 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 );
 
                 let gutter_text_color = egui::Color32::from_gray(100);
-                let logical_lines = state.dsl_code.split('\n').count();
+                
+                // Use the galley to accurately position line numbers, handling wrapping and different scales
+                let galley = &output.galley;
+                let galley_pos = output.galley_pos;
+                
+                let mut current_logical_line = 0;
+                
+                for row in &galley.rows {
+                    // Get character start index for this row using the galley's cursor system
+                    // We use the vertical center of the row to ensure we hit the right row
+                    let row_center_y = row.rect.center().y;
+                    let cursor = galley.cursor_from_pos(egui::vec2(0.0, row_center_y));
+                    let row_start_idx = cursor.ccursor.index;
+                    
+                    // A row is the start of a logical line if it starts at index 0 
+                    // or if the character immediately preceding it is a newline.
+                    let is_start_of_logical_line = row_start_idx == 0 || {
+                        let prev_idx = row_start_idx - 1;
+                        state.dsl_code.chars().nth(prev_idx) == Some('\n')
+                    };
 
-                // Calculate line range based on the visible clip rect
-                let viewport_top = ui.clip_rect().top();
-                let viewport_bottom = ui.clip_rect().bottom();
+                    if is_start_of_logical_line {
+                        let line_index = current_logical_line;
+                        current_logical_line += 1;
 
-                // Starting line from the top of the viewport
-                let start_line = ((viewport_top - output_rect.top() - padding_y) / line_height)
-                    .floor()
-                    .max(0.0) as usize;
-                // Ending line at the bottom of the viewport
-                let end_line = ((viewport_bottom - output_rect.top() - padding_y) / line_height)
-                    .ceil() as usize;
+                        // Calculate Y position based on the galley's layout
+                        let y = galley_pos.y + row.rect.top();
+                        
+                        // Optimization: Skip drawing if outside the visible clip rect
+                        if y + row.rect.height() < ui.clip_rect().top() {
+                            continue;
+                        }
+                        if y > ui.clip_rect().bottom() {
+                            break;
+                        }
 
-                // We draw either up to the end of the file or the end of the viewport, whichever is further.
-                // We add a small buffer (e.g. 1000) if we want it to feel "infinite" even below the current view,
-                // but end_line is sufficient for what's visible.
-                let lines_to_draw = logical_lines.max(end_line);
+                        let num = format!("{}", line_index + 1);
+                        let is_active = line_index == active_line_idx;
 
-                // Draw line numbers
-                for line_index in start_line..lines_to_draw {
-                    let y = output_rect.top() + padding_y + (line_index as f32) * line_height;
-
-                    let num = format!("{}", line_index + 1);
-
-                    gutter_painter.text(
-                        egui::pos2(full_gutter_rect.right() - 8.0, y),
-                        egui::Align2::RIGHT_TOP,
-                        num,
-                        font_id.clone(),
-                        if line_index == active_line_idx && line_index < logical_lines {
-                            egui::Color32::from_rgb(220, 220, 220)
-                        } else {
-                            gutter_text_color
-                        },
-                    );
+                        gutter_painter.text(
+                            egui::pos2(full_gutter_rect.right() - 8.0, y),
+                            egui::Align2::RIGHT_TOP,
+                            num,
+                            font_id.clone(),
+                            if is_active {
+                                egui::Color32::from_rgb(220, 220, 220)
+                            } else {
+                                gutter_text_color
+                            },
+                        );
+                    }
                 }
 
                 // Make gutter clickable: clicking a line will move cursor to line start
                 if gutter_response.clicked() {
                     if let Some(pos) = ui.ctx().pointer_interact_pos() {
-                        let click_y = pos.y;
-                        let clicked_line = ((click_y - (output_rect.top() + padding_y))
-                            / line_height)
-                            .floor() as isize;
-                        if clicked_line >= 0 {
-                            let mut target_line = clicked_line as usize;
-                            let total = state.dsl_code.split('\n').count();
-                            if target_line >= total {
-                                target_line = total.saturating_sub(1);
-                            }
-                            // Compute char index for start of that logical line
-                            let mut idx = 0usize;
-                            for (i, ln) in state.dsl_code.split('\n').enumerate() {
-                                if i == target_line {
-                                    break;
-                                }
-                                idx += ln.len();
-                                idx += 1; // for the '\n'
-                            }
-                            let ccursor = egui::text::CCursor::new(idx.min(state.dsl_code.len()));
-                            if let Some(mut te_state) =
-                                egui::TextEdit::load_state(ui.ctx(), text_edit_id)
-                            {
-                                te_state
-                                    .cursor
-                                    .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
-                                egui::TextEdit::store_state(ui.ctx(), text_edit_id, te_state);
-                            }
+                        let galley_y = pos.y - galley_pos.y;
+                        
+                        // Use the galley to find the cursor at the clicked position
+                        let cursor = galley.cursor_from_pos(egui::vec2(0.0, galley_y));
+                        let char_idx = cursor.ccursor.index;
+                        let ccursor = egui::text::CCursor::new(char_idx);
+                        
+                        if let Some(mut te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
+                            te_state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
+                            egui::TextEdit::store_state(ui.ctx(), text_edit_id, te_state);
                         }
                     }
                 }
 
                 // finally store the response so outer scope can use it
-                editor_response = Some(output);
+                editor_response = Some(output.response);
             });
 
             // retrieve the TextEdit response we captured from the horizontal layout
