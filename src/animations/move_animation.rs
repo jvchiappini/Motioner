@@ -59,10 +59,8 @@ impl MoveAnimation {
                 (ix, iy)
             }
 
-            // Parametrized `Lerp` — use a symmetric power curve to give non-constant
-            // velocity. `power == 1.0` behaves exactly like linear.
-            Easing::Lerp { power } => {
-                // symmetric ease-in-out using exponent `power`
+            // Symmetric ease-in/out (power controls curvature)
+            Easing::EaseInOut { power } => {
                 let progress = if (power - 1.0).abs() < std::f32::EPSILON {
                     local_t
                 } else if local_t < 0.5 {
@@ -71,6 +69,36 @@ impl MoveAnimation {
                     1.0 - 0.5 * (2.0 * (1.0 - local_t)).powf(power)
                 };
 
+                let ix = base_x + progress * (self.to_x - base_x);
+                let iy = base_y + progress * (self.to_y - base_y);
+                (ix, iy)
+            }
+
+            // Ease-in: progress = t^power (accelerating)
+            Easing::EaseIn { power } => {
+                let progress = local_t.powf(power);
+                let ix = base_x + progress * (self.to_x - base_x);
+                let iy = base_y + progress * (self.to_y - base_y);
+                (ix, iy)
+            }
+
+            // Ease-out: progress = 1 - (1-t)^power (decelerating)
+            Easing::EaseOut { power } => {
+                let progress = 1.0 - (1.0 - local_t).powf(power);
+                let ix = base_x + progress * (self.to_x - base_x);
+                let iy = base_y + progress * (self.to_y - base_y);
+                (ix, iy)
+            }
+
+            // Ease-in-out (symmetric)
+            Easing::EaseInOut { power } => {
+                let progress = if (power - 1.0).abs() < std::f32::EPSILON {
+                    local_t
+                } else if local_t < 0.5 {
+                    0.5 * (2.0 * local_t).powf(power)
+                } else {
+                    1.0 - 0.5 * (2.0 * (1.0 - local_t)).powf(power)
+                };
                 let ix = base_x + progress * (self.to_x - base_x);
                 let iy = base_y + progress * (self.to_y - base_y);
                 (ix, iy)
@@ -120,19 +148,26 @@ impl MoveAnimation {
         let mut out = String::new();
         out.push_str(&format!("\n{}move {{\n", indent));
         out.push_str(&format!("{}    element = \"{}\"\n", indent, element_name));
-        // Emit DSL; include `power` when lerp is parametrized
+        // Emit DSL; include `power` when a parametrized easing differs from default
         match self.easing {
-            Easing::Lerp { power } if (power - 1.0).abs() > std::f32::EPSILON => {
-                out.push_str(&format!(
-                    "{}    type = lerp(power = {:.3})\n",
-                    indent, power
-                ));
-            }
-            Easing::Lerp { .. } => {
-                out.push_str(&format!("{}    type = lerp\n", indent));
-            }
-            _ => {
-                out.push_str(&format!("{}    type = linear\n", indent));
+            Easing::Linear => out.push_str(&format!("{}    type = linear\n", indent)),
+
+            // Emit the canonical name `ease_in_out` for symmetric easing; keep `power` when != 1.0
+            Easing::EaseIn { power } if (power - 1.0).abs() > std::f32::EPSILON => out.push_str(
+                &format!("{}    type = ease_in(power = {:.3})\n", indent, power),
+            ),
+            Easing::EaseIn { .. } => out.push_str(&format!("{}    type = ease_in\n", indent)),
+
+            Easing::EaseOut { power } if (power - 1.0).abs() > std::f32::EPSILON => out.push_str(
+                &format!("{}    type = ease_out(power = {:.3})\n", indent, power),
+            ),
+            Easing::EaseOut { .. } => out.push_str(&format!("{}    type = ease_out\n", indent)),
+
+            Easing::EaseInOut { power } if (power - 1.0).abs() > std::f32::EPSILON => out.push_str(
+                &format!("{}    type = ease_in_out(power = {:.3})\n", indent, power),
+            ),
+            Easing::EaseInOut { .. } => {
+                out.push_str(&format!("{}    type = ease_in_out\n", indent))
             }
         }
         out.push_str(&format!("{}    startAt = {:.3}\n", indent, self.start));
@@ -187,8 +222,7 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn lerp_power_changes_profile() {
+    fn ease_in_out_power_changes_profile() {
         let base = MoveAnimation {
             to_x: 0.8,
             to_y: 0.2,
@@ -196,45 +230,137 @@ mod tests {
             end: 4.0,
             easing: Easing::Linear,
         };
-
-        let lerp_pow1 = MoveAnimation {
-            easing: Easing::Lerp { power: 1.0 },
+        let eio_pow1 = MoveAnimation {
+            easing: Easing::EaseInOut { power: 1.0 },
             ..base.clone()
         };
-        let lerp_pow2 = MoveAnimation {
-            easing: Easing::Lerp { power: 2.0 },
+        let eio_pow2 = MoveAnimation {
+            easing: Easing::EaseInOut { power: 2.0 },
             ..base.clone()
         };
 
         // power == 1.0 should match linear
         let (xl, yl) = base.sample_position(0.2, 0.2, 1.5);
-        let (x1, y1) = lerp_pow1.sample_position(0.2, 0.2, 1.5);
+        let (x1, y1) = eio_pow1.sample_position(0.2, 0.2, 1.5);
         assert!((xl - x1).abs() < 1e-6);
         assert!((yl - y1).abs() < 1e-6);
 
         // power == 2.0 should differ from linear (non-constant speed)
-        let (x2, y2) = lerp_pow2.sample_position(0.2, 0.2, 1.5);
+        let (x2, y2) = eio_pow2.sample_position(0.2, 0.2, 1.5);
         assert!((xl - x2).abs() > 1e-6 || (yl - y2).abs() > 1e-6);
     }
 
     #[test]
-    fn to_dsl_snippet_emits_lerp_with_power() {
+    fn ease_in_out_and_variants_behave() {
+        let base = MoveAnimation {
+            to_x: 0.9,
+            to_y: 0.1,
+            start: 0.0,
+            end: 4.0,
+            easing: Easing::Linear,
+        };
+
+        // ease_in (power=1) == linear
+        let ei1 = MoveAnimation {
+            easing: Easing::EaseIn { power: 1.0 },
+            ..base.clone()
+        };
+        let (xl, yl) = base.sample_position(0.1, 0.1, 1.2);
+        let (xe1, ye1) = ei1.sample_position(0.1, 0.1, 1.2);
+        assert!((xl - xe1).abs() < 1e-6 && (yl - ye1).abs() < 1e-6);
+
+        // ease_in (power=2) differs from linear
+        let ei2 = MoveAnimation {
+            easing: Easing::EaseIn { power: 2.0 },
+            ..base.clone()
+        };
+        let (xe2, ye2) = ei2.sample_position(0.1, 0.1, 1.2);
+        assert!((xl - xe2).abs() > 1e-6 || (yl - ye2).abs() > 1e-6);
+
+        // ease_out (power=2) should also differ
+        let eo2 = MoveAnimation {
+            easing: Easing::EaseOut { power: 2.0 },
+            ..base.clone()
+        };
+        let (xo2, yo2) = eo2.sample_position(0.1, 0.1, 1.2);
+        assert!((xl - xo2).abs() > 1e-6 || (yl - yo2).abs() > 1e-6);
+
+        // ease_in_out(power) should behave as the symmetric curve (power=1 => linear)
+        let eio = MoveAnimation {
+            easing: Easing::EaseInOut { power: 2.0 },
+            ..base.clone()
+        };
+        let (x_eio, y_eio) = eio.sample_position(0.1, 0.1, 1.2);
+        // ensure it's different from linear at the same sample
+        assert!((xl - x_eio).abs() > 1e-6 || (yl - y_eio).abs() > 1e-6);
+    }
+
+    #[test]
+    fn to_dsl_emits_ease_types() {
+        let ma_ei = MoveAnimation {
+            easing: Easing::EaseIn { power: 1.0 },
+            to_x: 0.0,
+            to_y: 0.0,
+            start: 0.0,
+            end: 1.0,
+        };
+        assert!(ma_ei.to_dsl_snippet("E", "").contains("type = ease_in"));
+
+        let ma_eo = MoveAnimation {
+            easing: Easing::EaseOut { power: 2.0 },
+            ..ma_ei.clone()
+        };
+        assert!(ma_eo
+            .to_dsl_snippet("E", "")
+            .contains("type = ease_out(power = 2.000)"));
+
+        let ma_eio = MoveAnimation {
+            easing: Easing::EaseInOut { power: 3.0 },
+            ..ma_ei.clone()
+        };
+        assert!(ma_eio
+            .to_dsl_snippet("E", "")
+            .contains("type = ease_in_out(power = 3.000)"));
+    }
+
+    #[test]
+    fn to_dsl_snippet_emits_ease_in_out_with_power() {
         let ma_default = MoveAnimation {
             to_x: 0.7,
             to_y: 0.5,
             start: 0.0,
             end: 5.0,
-            easing: Easing::Lerp { power: 1.0 },
+            easing: Easing::EaseInOut { power: 1.0 },
         };
         let s_default = ma_default.to_dsl_snippet("Circle", "    ");
-        assert!(s_default.contains("type = lerp"));
+        assert!(s_default.contains("type = ease_in_out"));
 
         let ma_pow = MoveAnimation {
-            easing: Easing::Lerp { power: 2.0 },
+            easing: Easing::EaseInOut { power: 2.0 },
             ..ma_default.clone()
         };
         let s_pow = ma_pow.to_dsl_snippet("Circle", "    ");
-        assert!(s_pow.contains("type = lerp(power = 2.000)"));
+        assert!(s_pow.contains("type = ease_in_out(power = 2.000)"));
+    }
+
+    #[test]
+    fn parse_move_block_rejects_lerp() {
+        let lines = vec![
+            "element = \"E\"",
+            "type = lerp(power = 2.0)",
+            "startAt = 0.0",
+            "end {",
+            "    time = 1.0",
+            "    x = 0.5",
+            "    y = 0.5",
+            "}",
+        ];
+
+        let parsed = parse_move_block(&lines.iter().map(|s| *s).collect::<Vec<&str>>());
+        // `lerp` must no longer be recognized by the parser — it should not parse as EaseInOut.
+        assert!(parsed.is_some());
+        let pm = parsed.unwrap();
+        assert!(matches!(pm.easing, crate::scene::Easing::Linear));
     }
 }
 
@@ -279,8 +405,7 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                 let val = b[eq + 1..].trim().trim_matches(',').to_lowercase();
                 if val.contains("linear") {
                     easing_kind = crate::scene::Easing::Linear;
-                } else if val.starts_with("lerp") {
-                    // optional params: lerp(power = 2.0)
+                } else if val.starts_with("ease_in_out") {
                     let mut power = 1.0f32;
                     if let Some(open) = val.find('(') {
                         if let Some(close) = val.rfind(')') {
@@ -297,7 +422,43 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                             }
                         }
                     }
-                    easing_kind = crate::scene::Easing::Lerp { power };
+                    easing_kind = crate::scene::Easing::EaseInOut { power };
+                } else if val.starts_with("ease_in") {
+                    let mut power = 1.0f32;
+                    if let Some(open) = val.find('(') {
+                        if let Some(close) = val.rfind(')') {
+                            let inner = &val[open + 1..close];
+                            for part in inner.split(',') {
+                                let p = part.trim();
+                                if p.starts_with("power") && p.contains('=') {
+                                    if let Some(eq) = p.find('=') {
+                                        if let Ok(v) = p[eq + 1..].trim().parse::<f32>() {
+                                            power = v;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    easing_kind = crate::scene::Easing::EaseIn { power };
+                } else if val.starts_with("ease_out") {
+                    let mut power = 1.0f32;
+                    if let Some(open) = val.find('(') {
+                        if let Some(close) = val.rfind(')') {
+                            let inner = &val[open + 1..close];
+                            for part in inner.split(',') {
+                                let p = part.trim();
+                                if p.starts_with("power") && p.contains('=') {
+                                    if let Some(eq) = p.find('=') {
+                                        if let Ok(v) = p[eq + 1..].trim().parse::<f32>() {
+                                            power = v;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    easing_kind = crate::scene::Easing::EaseOut { power };
                 }
             }
         } else if b.starts_with("startAt") && b.contains('=') {

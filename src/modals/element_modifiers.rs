@@ -182,8 +182,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                                     // tooltip describing the Move animation and available easing types (info icon)
                                                     ui.add_space(6.0);
-                                                    ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
-                                                        "Move animation — moves an element from its position at the animation Start to the specified target (To X, To Y) over [Start, End].\n\nBehavior:\n• Before Start: element stays at its base position.\n• During: interpolates from the element's position at Start toward the target.\n• After End: element remains at the target.\n\nParameters:\n• Start / End (seconds), To X / To Y (0.0..1.0).\n• Easing: `linear` = constant speed; `lerp(power)` = symmetric ease-in/out (power controls curvature; 1.0 = linear).\n\nDSL example: `type = lerp(power = 2.0)`.",
+                                                        ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
+                                                        "Move animation — moves an element from its position at the animation Start to the specified target (To X, To Y) over [Start, End].\n\nBehavior:\n• Before Start: element stays at its base position.\n• During: interpolates from the element's position at Start toward the target.\n• After End: element remains at the target.\n\nParameters:\n• Start / End (seconds), To X / To Y (0.0..1.0).\n• Easing: `linear` = constant speed; `ease_in_out(power)` = symmetric ease-in/out (power controls curvature; 1.0 = linear).\n\nDSL example: `type = ease_in_out(power = 2.0)`.",
                                                     );
                                                 });
 
@@ -215,7 +215,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                         }
                                                                            ui.add_space(6.0);
                                                                            ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
-                                                                               "Move animation — moves the element toward `To X, To Y` between `Start` and `End`.\n\nMultiple Move animations are applied in chronological order; each animation interpolates from the element's position at that animation's Start.\n\nEasing options: `linear` (constant speed) or `lerp(power)` (symmetric ease-in/out). Use the `power` slider to control the curve (default 1.0).",
+                                                                               "Move animation — moves the element toward `To X, To Y` between `Start` and `End`.\n\nMultiple Move animations are applied in chronological order; each animation interpolates from the element's position at that animation's Start.\n\nEasing options: `linear` (constant speed) or `ease_in_out(power)` (symmetric ease-in/out). Use the `power` slider to control the curve (default 1.0).",
                                                                            );
                                                                     });
 
@@ -269,26 +269,144 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                         egui::ComboBox::from_label("")
                                                                             .selected_text(format!("{:?}", easing))
                                                                             .show_ui(ui, |ui| {
-                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Linear), "Linear").on_hover_text("Linear — constant speed interpolation (uniform velocity)").clicked() {
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Linear), "Linear").on_hover_text("Linear — constant speed (uniform velocity)").clicked() {
                                                                                     *easing = crate::scene::Easing::Linear;
                                                                                     changed = true;
                                                                                 }
-                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Lerp { .. }), "Lerp").on_hover_text("Lerp(power) — symmetric ease-in/out controlled by `power`. `power = 1.0` = linear; `power > 1` slows start/end; `power < 1` makes motion snappier.").clicked() {
-                                                                                    *easing = crate::scene::Easing::Lerp { power: 1.0 };
+
+                                                                                // `Lerp` removed — use `EaseInOut` instead (symmetric power curve)
+
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::EaseIn { .. }), "EaseIn").on_hover_text("EaseIn(power) — accelerate from zero; progress = t^power").clicked() {
+                                                                                    *easing = crate::scene::Easing::EaseIn { power: 1.0 };
+                                                                                    changed = true;
+                                                                                }
+
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::EaseOut { .. }), "EaseOut").on_hover_text("EaseOut(power) — decelerate to stop; progress = 1 - (1-t)^power").clicked() {
+                                                                                    *easing = crate::scene::Easing::EaseOut { power: 1.0 };
+                                                                                    changed = true;
+                                                                                }
+
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::EaseInOut { .. }), "EaseInOut").on_hover_text("EaseInOut(power) — symmetric ease-in/out (use for smooth start+end)").clicked() {
+                                                                                    *easing = crate::scene::Easing::EaseInOut { power: 1.0 };
                                                                                     changed = true;
                                                                                 }
                                                                             });
 
-                                                                        // If Lerp is selected expose the `power` parameter with tooltip
-                                                                        if let crate::scene::Easing::Lerp { power } = easing {
-                                                                            let mut p = *power;
-                                                                            let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
-                                                                            if slider_resp.changed() {
-                                                                                *power = p;
-                                                                                changed = true;
+                                                                        // If a `power`-based easing is selected expose the `power` parameter
+                                                                            match easing {
+                                                                                crate::scene::Easing::EaseIn { power } => {
+                                                                                    // expose slider + small curve preview (EaseIn)
+                                                                                    let mut p = *power;
+                                                                                    ui.horizontal(|ui| {
+                                                                                        let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
+                                                                                        if slider_resp.changed() {
+                                                                                            *power = p;
+                                                                                            changed = true;
+                                                                                        }
+                                                                                        slider_resp.on_hover_text("`power` controls curvature (1.0 = linear). Larger values increase easing strength.");
+
+                                                                                        ui.add_space(8.0);
+
+                                                                                        // curve preview (small inline graph)
+                                                                                        let preview_size = egui::vec2(120.0, 44.0);
+                                                                                        let (rect, _resp) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                                                                                        let painter = ui.painter_at(rect);
+                                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
+                                                                                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+
+                                                                                        let steps = 48usize;
+                                                                                        let mut prev: Option<egui::Pos2> = None;
+                                                                                        for i in 0..=steps {
+                                                                                            let t = i as f32 / steps as f32;
+                                                                                            let progress = t.powf(*power);
+                                                                                            let x = rect.left() + t * rect.width();
+                                                                                            let y = rect.bottom() - progress * rect.height();
+                                                                                            let pos = egui::pos2(x, y);
+                                                                                            if let Some(prev_pos) = prev {
+                                                                                                painter.line_segment([prev_pos, pos], egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
+                                                                                            }
+                                                                                            prev = Some(pos);
+                                                                                        }
+                                                                                    });
+                                                                                }
+
+                                                                                crate::scene::Easing::EaseOut { power } => {
+                                                                                    // expose slider + small curve preview (EaseOut)
+                                                                                    let mut p = *power;
+                                                                                    ui.horizontal(|ui| {
+                                                                                        let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
+                                                                                        if slider_resp.changed() {
+                                                                                            *power = p;
+                                                                                            changed = true;
+                                                                                        }
+                                                                                        slider_resp.on_hover_text("`power` controls curvature (1.0 = linear). Larger values increase easing strength.");
+
+                                                                                        ui.add_space(8.0);
+
+                                                                                        let preview_size = egui::vec2(120.0, 44.0);
+                                                                                        let (rect, _resp) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                                                                                        let painter = ui.painter_at(rect);
+                                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
+                                                                                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+
+                                                                                        let steps = 48usize;
+                                                                                        let mut prev: Option<egui::Pos2> = None;
+                                                                                        for i in 0..=steps {
+                                                                                            let t = i as f32 / steps as f32;
+                                                                                            let progress = 1.0 - (1.0 - t).powf(*power);
+                                                                                            let x = rect.left() + t * rect.width();
+                                                                                            let y = rect.bottom() - progress * rect.height();
+                                                                                            let pos = egui::pos2(x, y);
+                                                                                            if let Some(prev_pos) = prev {
+                                                                                                painter.line_segment([prev_pos, pos], egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
+                                                                                            }
+                                                                                            prev = Some(pos);
+                                                                                        }
+                                                                                    });
+                                                                                }
+
+                                                                                crate::scene::Easing::EaseInOut { power } => {
+                                                                                    // expose slider + small curve preview (EaseInOut)
+                                                                                    let mut p = *power;
+                                                                                    ui.horizontal(|ui| {
+                                                                                        let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
+                                                                                        if slider_resp.changed() {
+                                                                                            *power = p;
+                                                                                            changed = true;
+                                                                                        }
+                                                                                        slider_resp.on_hover_text("`power` controls curvature (1.0 = linear). Larger values increase easing strength.");
+
+                                                                                        ui.add_space(8.0);
+
+                                                                                        let preview_size = egui::vec2(120.0, 44.0);
+                                                                                        let (rect, _resp) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                                                                                        let painter = ui.painter_at(rect);
+                                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
+                                                                                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+
+                                                                                        let steps = 48usize;
+                                                                                        let mut prev: Option<egui::Pos2> = None;
+                                                                                        for i in 0..=steps {
+                                                                                            let t = i as f32 / steps as f32;
+                                                                                            let progress = if (*power - 1.0).abs() < std::f32::EPSILON {
+                                                                                                t
+                                                                                            } else if t < 0.5 {
+                                                                                                0.5 * (2.0 * t).powf(*power)
+                                                                                            } else {
+                                                                                                1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power)
+                                                                                            };
+                                                                                            let x = rect.left() + t * rect.width();
+                                                                                            let y = rect.bottom() - progress * rect.height();
+                                                                                            let pos = egui::pos2(x, y);
+                                                                                            if let Some(prev_pos) = prev {
+                                                                                                painter.line_segment([prev_pos, pos], egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
+                                                                                            }
+                                                                                            prev = Some(pos);
+                                                                                        }
+                                                                                    });
+                                                                                }
+                                                                                _ => {}
                                                                             }
-                                                                            slider_resp.on_hover_text("`power` controls the curvature of the ease-in/out for `lerp` (1.0 = linear). Larger values increase easing strength.");
-                                                                        }
                                                                     });
                                                                 });
 
@@ -451,7 +569,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                         // tooltip for the button
                                                         ui.add_space(6.0);
                                                         ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
-                                                            "Add Move — create a position animation for the selected element.\n\nDefaults: Start = element spawn or 0; End = project duration; Easing = linear.\n\nAfter adding, adjust Start/End, To X/To Y and select Easing (linear or lerp(power)). Note: animation Start must be >= element spawn time.",
+                                                            "Add Move — create a position animation for the selected element.\n\nDefaults: Start = element spawn or 0; End = project duration; Easing = linear.\n\nAfter adding, adjust Start/End, To X/To Y and select Easing (linear or ease_in_out(power)). Note: animation Start must be >= element spawn time.",
                                                         );
                                                     });
 
@@ -529,21 +647,35 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                                         *easing = crate::scene::Easing::Linear;
                                                                                         changed = true;
                                                                                     }
-                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::Lerp { .. }), "Lerp").on_hover_text("Lerp(power) — symmetric ease-in/out controlled by `power`. `power = 1.0` = linear; `power > 1` slows start/end; `power < 1` makes motion snappier.").clicked() {
-                                                                                        *easing = crate::scene::Easing::Lerp { power: 1.0 };
+                                                                                    // `Lerp` option removed; use `EaseInOut(power)` for symmetric easing.
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::EaseIn { .. }), "EaseIn").on_hover_text("EaseIn(power) — accelerate from zero; progress = t^power").clicked() {
+                                                                                        *easing = crate::scene::Easing::EaseIn { power: 1.0 };
+                                                                                        changed = true;
+                                                                                    }
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::EaseOut { .. }), "EaseOut").on_hover_text("EaseOut(power) — decelerate to zero; progress = 1 - (1-t)^power").clicked() {
+                                                                                        *easing = crate::scene::Easing::EaseOut { power: 1.0 };
+                                                                                        changed = true;
+                                                                                    }
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::EaseInOut { .. }), "EaseInOut").on_hover_text("EaseInOut(power) — symmetric ease-in/out").clicked() {
+                                                                                        *easing = crate::scene::Easing::EaseInOut { power: 1.0 };
                                                                                         changed = true;
                                                                                     }
                                                                                 });
 
-                                                                            if let crate::scene::Easing::Lerp { power } = easing {
-                                                                                let mut p = *power;
-                                                                                if ui
-                                                                                    .add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false))
-                                                                                    .changed()
-                                                                                {
-                                                                                    *power = p;
-                                                                                    changed = true;
+                                                                            match easing {
+                                                                                crate::scene::Easing::EaseIn { power }
+                                                                                | crate::scene::Easing::EaseOut { power }
+                                                                                | crate::scene::Easing::EaseInOut { power } => {
+                                                                                    let mut p = *power;
+                                                                                    if ui
+                                                                                        .add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false))
+                                                                                        .changed()
+                                                                                    {
+                                                                                        *power = p;
+                                                                                        changed = true;
+                                                                                    }
                                                                                 }
+                                                                                _ => {}
                                                                             }
                                                                         });
                                                                     });

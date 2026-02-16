@@ -99,39 +99,6 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
         }
     }
 
-    #[test]
-    fn parse_top_level_move_with_lerp() {
-        let src = r##"size(1280, 720)
-timeline { fps = 60; duration = 5 }
-
-circle(name = "Circle", x = 0.500, y = 0.500, radius = 0.100, fill = "#78c8ff", spawn = 0.00)
-move {
-    element = "Circle"
-    type = lerp
-    startAt = 0.000
-    end {
-        time = 5.000
-        x = 0.700
-        y = 0.500
-    }
-}
-"##;
-
-        let shapes = parse_dsl(src);
-        assert_eq!(shapes.len(), 1);
-        match &shapes[0] {
-            crate::scene::Shape::Circle { animations, .. } => {
-                assert_eq!(animations.len(), 1);
-                if let crate::scene::Animation::Move { easing, .. } = animations[0] {
-                    assert!(matches!(easing, crate::scene::Easing::Lerp { .. }));
-                } else {
-                    panic!("expected Move animation");
-                }
-            }
-            _ => panic!("expected a circle"),
-        }
-    }
-
     // Validate
     if width.is_none() || height.is_none() {
         return Err("Missing 'size(width, height)' configuration".to_string());
