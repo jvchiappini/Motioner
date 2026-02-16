@@ -1,6 +1,6 @@
 use eframe::egui;
 use crate::scene::{Animation, Easing};
-use crate::modals::element_modifiers::render_easing_curve_editor;
+use crate::modals::element_modifiers::easing_curve_editor::render_easing_curve_editor;
 
 pub fn render_move_animation_modifiers(
     ui: &mut egui::Ui,
