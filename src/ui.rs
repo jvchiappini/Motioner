@@ -1,5 +1,4 @@
 use crate::app_state::{AppState, PanelTab};
-use crate::scene::{get_shape_mut, Shape};
 use crate::{canvas, code_panel, dsl, scene_graph, timeline};
 use eframe::egui;
 
@@ -9,6 +8,40 @@ pub struct MyApp {
 
 pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
     let mut state = AppState::default();
+
+    // -- Initialize Autocomplete Worker Thread ---------------------
+    let (atx, arx) = std::sync::mpsc::channel::<String>();
+    let (btx, brx) = std::sync::mpsc::channel::<Vec<crate::app_state::CompletionItem>>();
+    state.completion_worker_tx = Some(atx);
+    state.completion_worker_rx = Some(brx);
+
+    std::thread::spawn(move || {
+        while let Ok(query) = arx.recv() {
+            // Catalogue of completion candidates (static for now)
+            let candidates = vec![
+                crate::app_state::CompletionItem { label: "project".into(), insert_text: "project".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "timeline".into(), insert_text: "timeline".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "layer".into(), insert_text: "layer".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "fps".into(), insert_text: "fps".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "duration".into(), insert_text: "duration".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "size".into(), insert_text: "size".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "fill".into(), insert_text: "fill".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "radius".into(), insert_text: "radius".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "width".into(), insert_text: "width".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "height".into(), insert_text: "height".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "color".into(), insert_text: "color".into(), is_snippet: false },
+                crate::app_state::CompletionItem { label: "circle".into(), insert_text: "circle \"Name\" {\n    x = 0.50, y = 0.50, radius = 0.10, fill = \"#78c8ff\", spawn = 0.00\n}\n".into(), is_snippet: true },
+                crate::app_state::CompletionItem { label: "rect".into(), insert_text: "rect \"Name\" {\n    x = 0.50, y = 0.50, width = 0.30, height = 0.20, fill = \"#c87878\", spawn = 0.00\n}\n".into(), is_snippet: true },
+            ];
+
+            let filtered: Vec<_> = candidates
+                .into_iter()
+                .filter(|c| c.label.starts_with(&query) && c.label != query)
+                .collect();
+            
+            let _ = btx.send(filtered);
+        }
+    });
 
     // VRAM DETECTION: Detectar memoria GPU disponible al iniciar
     if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {
@@ -103,6 +136,36 @@ impl eframe::App for MyApp {
                         }
                     }
                 }
+            }
+        }
+        // Debounced DSL parsing (separate from autosave). Run a lightweight
+        // parse after the user stops typing for a short interval so the
+        // UI isn't blocked on every keystroke.
+        if let Some(last_edit) = state.last_code_edit_time {
+            // parse after ~120ms of inactivity
+            let parse_debounce = 0.12_f64;
+            if now - last_edit > parse_debounce && now - state.last_scene_parse_time > 0.0 {
+                // Try to parse configuration (non-fatal). Do NOT show errors while typing.
+                if let Ok(config) = crate::dsl::parse_config(&state.dsl_code) {
+                    state.fps = config.fps;
+                    state.duration_secs = config.duration;
+                    state.render_width = config.width;
+                    state.render_height = config.height;
+                }
+
+                // Try to parse DSL into scene; only update scene & preview on successful parse
+                let parsed = crate::dsl::parse_dsl(&state.dsl_code);
+                if !parsed.is_empty() {
+                    state.scene = parsed;
+                    // regenerate preview for current playhead (single-frame request)
+                    crate::canvas::request_preview_frames(
+                        state,
+                        state.time,
+                        crate::canvas::PreviewMode::Single,
+                    );
+                }
+
+                state.last_scene_parse_time = now;
             }
         }
         if now - (state.last_update as f64) > 1.0 {

@@ -1113,8 +1113,6 @@ fn render_frame_color_image_gpu_snapshot(
     snap: &RenderSnapshot,
     time: f32,
 ) -> Result<egui::ColorImage, String> {
-    use std::num::NonZeroU32;
-
     let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier)
         .round()
         .max(1.0) as u32;

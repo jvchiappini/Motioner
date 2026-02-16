@@ -11,6 +11,14 @@ pub enum PanelTab {
     Code,
 }
 
+/// Small helper representing a completion suggestion and the text to insert.
+#[derive(Clone, Debug)]
+pub struct CompletionItem {
+    pub label: String,
+    pub insert_text: String,
+    pub is_snippet: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AppState {
     pub fps: u32,
@@ -89,6 +97,11 @@ pub struct AppState {
     pub tab_switch_time: Option<f64>,
     pub dsl_code: String, // Added this field
 
+    #[serde(skip)]
+    pub completion_worker_tx: Option<std::sync::mpsc::Sender<String>>,
+    #[serde(skip)]
+    pub completion_worker_rx: Option<std::sync::mpsc::Receiver<Vec<CompletionItem>>>,
+
     /// Move operation: (from_path, to_parent_path, to_index)
     pub move_request: Option<(Vec<usize>, Vec<usize>, usize)>,
 
@@ -146,14 +159,33 @@ pub struct AppState {
     // Autocomplete State
     pub completion_popup_open: bool,
     pub completion_cursor_idx: usize,
-    pub completion_items: Vec<String>,
+    // Structured completion item (label + text to insert). Not serialized.
+    #[serde(skip)]
+    pub completion_items: Vec<CompletionItem>,
     pub completion_selected_index: usize,
+
+    // Snippet/tabstop state for multi-field completions (e.g. `circle { ... }`).
+    #[serde(skip)]
+    pub completion_snippet_active: bool,
+    #[serde(skip)]
+    pub completion_snippet_region: Option<(usize, usize)>, // byte indices in `dsl_code`
+    #[serde(skip)]
+    pub completion_snippet_params: Vec<(usize, usize)>, // absolute byte ranges of editable params
+    #[serde(skip)]
+    pub completion_snippet_index: Option<usize>,
+    // Last completion query (to debounce suggestion updates)
+    #[serde(skip)]
+    pub last_completion_query: Option<String>,
+    #[serde(skip)]
+    pub last_completion_query_time: f64,
 
     // Autosave / Editor state
     #[serde(skip)]
     pub autosave_cooldown_secs: f32, // debounce interval for autosave
     #[serde(skip)]
     pub last_code_edit_time: Option<f64>,
+    /// Time when we last parsed `dsl_code` into `scene` (debounced)
+    pub last_scene_parse_time: f64,
     #[serde(skip)]
     pub autosave_pending: bool,
     #[serde(skip)]
@@ -265,6 +297,8 @@ impl Default for AppState {
             transition_source_tab: None,
             tab_switch_time: None,
             dsl_code: String::new(),
+            completion_worker_tx: None,
+            completion_worker_rx: None,
             move_request: None,
             system,
             pid,
@@ -292,8 +326,15 @@ impl Default for AppState {
             completion_cursor_idx: 0,
             completion_items: Vec::new(),
             completion_selected_index: 0,
+            completion_snippet_active: false,
+            completion_snippet_region: None,
+            completion_snippet_params: Vec::new(),
+            completion_snippet_index: None,
+            last_completion_query: None,
+            last_completion_query_time: 0.0,
             autosave_cooldown_secs: 0.5,
             last_code_edit_time: None,
+            last_scene_parse_time: 0.0,
             autosave_pending: false,
             autosave_last_success_time: None,
             autosave_error: None,
@@ -312,7 +353,7 @@ impl Default for AppState {
             anim_modal_target_idx: 0,
             show_elements_modal: false,
             show_animations_modal: false,
-                animations_modal_pos: None,
+            animations_modal_pos: None,
             sidebar_width: 250.0,
             timeline_root_path: None,
             timeline_prev_root_path: None,

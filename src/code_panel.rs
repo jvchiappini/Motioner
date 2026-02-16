@@ -1,12 +1,18 @@
 use crate::app_state::AppState;
-use crate::dsl;
 use crate::autocomplete; // Added this
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         // Save button removed — autosave will persist while editing.
-        if ui.button(if state.code_fullscreen { "📉 Minimize" } else { "📈 Maximize" }).clicked() {
+        if ui
+            .button(if state.code_fullscreen {
+                "📉 Minimize"
+            } else {
+                "📈 Maximize"
+            })
+            .clicked()
+        {
             state.code_fullscreen = !state.code_fullscreen;
         }
 
@@ -15,20 +21,30 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         if state.autosave_pending {
             ui.label(egui::RichText::new("Autosaving…").weak());
         } else if let Some(err) = &state.autosave_error {
-            ui.colored_label(egui::Color32::from_rgb(220, 100, 100), "Autosave failed").on_hover_text(err);
+            ui.colored_label(egui::Color32::from_rgb(220, 100, 100), "Autosave failed")
+                .on_hover_text(err);
         } else if let Some(t) = state.autosave_last_success_time {
             if now - t < 2.0 {
                 ui.colored_label(egui::Color32::from_rgb(120, 200, 140), "Autosaved ✓");
             } else {
-                ui.label(egui::RichText::new("Edit code — autosave while typing").italics().weak());
+                ui.label(
+                    egui::RichText::new("Edit code — autosave while typing")
+                        .italics()
+                        .weak(),
+                );
             }
         } else {
-            ui.label(egui::RichText::new("Edit code — autosave while typing").italics().weak());
+            ui.label(
+                egui::RichText::new("Edit code — autosave while typing")
+                    .italics()
+                    .weak(),
+            );
         }
     });
     ui.separator();
 
-    let defined_names: std::collections::HashSet<String> = state.scene.iter().map(|s| s.name().to_string()).collect();
+    let defined_names: std::collections::HashSet<String> =
+        state.scene.iter().map(|s| s.name().to_string()).collect();
 
     let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
         let mut layout_job = egui::text::LayoutJob::default();
@@ -39,7 +55,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
     let available_rect = ui.available_rect_before_wrap();
     // Paint the background for the whole scroll area to look like the editor
-    ui.painter().rect_filled(available_rect, 0.0, egui::Color32::from_rgb(10, 10, 10));
+    ui.painter()
+        .rect_filled(available_rect, 0.0, egui::Color32::from_rgb(10, 10, 10));
 
     let is_fullscreen = state.code_fullscreen;
     let minimap_width = if is_fullscreen { 120.0 } else { 0.0 };
@@ -61,23 +78,161 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             ui.set_min_height(ui.available_height()); // Ensure clickable area covers view
 
             let text_edit_id = ui.make_persistent_id("dsl_text_edit");
-            
+
             // 1. Process Input BEFORE TextEdit (Consume keys)
             autocomplete::process_input(ui, text_edit_id, state);
 
-            let text_edit = egui::TextEdit::multiline(&mut state.dsl_code)
+            // Editor with a left gutter for line numbers (VSCode-style)
+            let gutter_width = 56.0f32;
+
+            // We'll capture the TextEdit response so it remains available after the
+            // `ui.horizontal` closure (needed by autosave logic below).
+            let mut editor_response: Option<egui::Response> = None;
+
+            ui.horizontal(|ui| {
+                // Reserve gutter area (will scroll together with the TextEdit because
+                // both are inside the same ScrollArea closure). Use a clickable rect
+                // so we can detect gutter clicks via the returned Response.
+                let gutter_response = ui.allocate_rect(
+                    egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(gutter_width, ui.available_height()),
+                    ),
+                    egui::Sense::click(),
+                );
+                let gutter_rect = gutter_response.rect;
+
+                // Main code text edit
+                let rows = state.dsl_code.lines().count().max(6); // ensure a reasonable minimum height
+                let text_edit = egui::TextEdit::multiline(&mut state.dsl_code)
                     .id(text_edit_id) // Explicit ID
                     .font(egui::TextStyle::Monospace) // for cursor height
                     .code_editor()
+                    .desired_rows(rows)
                     .frame(false) // Transparent frame so background shows through
                     .desired_width(f32::INFINITY)
                     .lock_focus(true)
                     .layouter(&mut layouter);
-            
-            let output = ui.add(text_edit);
 
-            // 2. Update State & Render Popup AFTER TextEdit
-            autocomplete::handle_state_and_render(ui, &output, state);
+                let output = ui.add(text_edit);
+                let output_rect = output.rect; // capture rect so we can draw while still owning `output`
+
+                // 2. Update State & Render Popup AFTER TextEdit
+                autocomplete::handle_state_and_render(ui, &output, state);
+
+                // --- GUTTER RENDERING ---
+                // Match the font size used in highlight_code (14.0)
+                let font_id = egui::FontId::monospace(14.0);
+                let line_height = ui.fonts(|f| f.row_height(&font_id));
+                let padding_y = ui.spacing().button_padding.y;
+
+                // Determine active logical line efficiently
+                let mut active_line_idx: usize = 0;
+                if let Some(te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
+                    if let Some(range) = te_state.cursor.char_range() {
+                        let char_idx = range.primary.index;
+                        active_line_idx = state
+                            .dsl_code
+                            .chars()
+                            .take(char_idx)
+                            .filter(|&c| c == '\n')
+                            .count();
+                    }
+                }
+
+                // Draw gutter background
+                // Use a painter that covers the whole viewport but clipped to the gutter column
+                let mut full_gutter_rect = gutter_rect;
+                // Extended to cover the entire visible viewport plus content
+                full_gutter_rect.set_bottom(ui.clip_rect().bottom().max(output_rect.bottom()));
+
+                let gutter_painter = ui.painter().with_clip_rect(full_gutter_rect);
+                gutter_painter.rect_filled(
+                    full_gutter_rect,
+                    0.0,
+                    egui::Color32::from_rgb(24, 24, 24),
+                );
+
+                let gutter_text_color = egui::Color32::from_gray(100);
+                let logical_lines = state.dsl_code.split('\n').count();
+
+                // Calculate line range based on the visible clip rect
+                let viewport_top = ui.clip_rect().top();
+                let viewport_bottom = ui.clip_rect().bottom();
+
+                // Starting line from the top of the viewport
+                let start_line = ((viewport_top - output_rect.top() - padding_y) / line_height)
+                    .floor()
+                    .max(0.0) as usize;
+                // Ending line at the bottom of the viewport
+                let end_line = ((viewport_bottom - output_rect.top() - padding_y) / line_height)
+                    .ceil() as usize;
+
+                // We draw either up to the end of the file or the end of the viewport, whichever is further.
+                // We add a small buffer (e.g. 1000) if we want it to feel "infinite" even below the current view,
+                // but end_line is sufficient for what's visible.
+                let lines_to_draw = logical_lines.max(end_line);
+
+                // Draw line numbers
+                for line_index in start_line..lines_to_draw {
+                    let y = output_rect.top() + padding_y + (line_index as f32) * line_height;
+
+                    let num = format!("{}", line_index + 1);
+
+                    gutter_painter.text(
+                        egui::pos2(full_gutter_rect.right() - 8.0, y),
+                        egui::Align2::RIGHT_TOP,
+                        num,
+                        font_id.clone(),
+                        if line_index == active_line_idx && line_index < logical_lines {
+                            egui::Color32::from_rgb(220, 220, 220)
+                        } else {
+                            gutter_text_color
+                        },
+                    );
+                }
+
+                // Make gutter clickable: clicking a line will move cursor to line start
+                if gutter_response.clicked() {
+                    if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                        let click_y = pos.y;
+                        let clicked_line = ((click_y - (output_rect.top() + padding_y))
+                            / line_height)
+                            .floor() as isize;
+                        if clicked_line >= 0 {
+                            let mut target_line = clicked_line as usize;
+                            let total = state.dsl_code.split('\n').count();
+                            if target_line >= total {
+                                target_line = total.saturating_sub(1);
+                            }
+                            // Compute char index for start of that logical line
+                            let mut idx = 0usize;
+                            for (i, ln) in state.dsl_code.split('\n').enumerate() {
+                                if i == target_line {
+                                    break;
+                                }
+                                idx += ln.len();
+                                idx += 1; // for the '\n'
+                            }
+                            let ccursor = egui::text::CCursor::new(idx.min(state.dsl_code.len()));
+                            if let Some(mut te_state) =
+                                egui::TextEdit::load_state(ui.ctx(), text_edit_id)
+                            {
+                                te_state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
+                                egui::TextEdit::store_state(ui.ctx(), text_edit_id, te_state);
+                            }
+                        }
+                    }
+                }
+
+                // finally store the response so outer scope can use it
+                editor_response = Some(output);
+            });
+
+            // retrieve the TextEdit response we captured from the horizontal layout
+            let output = editor_response.expect("text edit response");
 
             // Autosave behavior: on any editor change, persist DSL silently,
             // attempt to parse/apply configuration and regenerate preview if parse succeeds.
@@ -86,30 +241,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 state.last_code_edit_time = Some(ui.ctx().input(|i| i.time));
                 state.autosave_pending = true;
 
-                // Try to parse configuration (non-fatal). Do NOT show errors while typing.
-                if let Ok(config) = dsl::parse_config(&state.dsl_code) {
-                    state.fps = config.fps;
-                    state.duration_secs = config.duration;
-                    state.render_width = config.width;
-                    state.render_height = config.height;
-                }
-
-                // Try to parse DSL into scene; only update scene & preview on successful parse
-                let parsed = dsl::parse_dsl(&state.dsl_code);
-                if !parsed.is_empty() {
-                    state.scene = parsed;
-                    // regenerate preview for current playhead (single-frame request)
-                    crate::canvas::request_preview_frames(state, state.time, crate::canvas::PreviewMode::Single);
-                }
+                // Parsing and scene/preview updates are debounced and handled in `ui::update`
             }
 
             output
         });
-        
-    // If we just inserted text, we might want to force focus back or update cursor?
-    // In immediate mode, the state.dsl_code update usually reflects next frame.
+
     if state.completion_popup_open {
-        ui.ctx().request_repaint();
+        // We still need a repaint for the popup to show up if it's new,
+        // but it's better handled in handle_state_and_render now.
+        // I'll keep it here just in case but without the spam.
     }
 
     if is_fullscreen {
@@ -117,14 +258,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             egui::pos2(available_rect.max.x - minimap_width, available_rect.min.y),
             available_rect.max,
         );
-        render_minimap(ui, minimap_rect, &state.dsl_code, scroll_output.state.offset, editor_rect.height());
+        render_minimap(
+            ui,
+            minimap_rect,
+            &state.dsl_code,
+            scroll_output.state.offset,
+            editor_rect.height(),
+        );
     }
 }
 
-fn render_minimap(ui: &mut egui::Ui, rect: egui::Rect, code: &str, scroll_offset: egui::Vec2, viewport_height: f32) {
+fn render_minimap(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    code: &str,
+    scroll_offset: egui::Vec2,
+    viewport_height: f32,
+) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(18, 18, 18)); // Minimap bg
-    
+
     // Minimap Rendering Parameters
     let code_line_height = 14.0; // Assuming monospace(14.0) from highlight_code
     let minimap_scale = 0.2; // 20% size
@@ -132,107 +285,117 @@ fn render_minimap(ui: &mut egui::Ui, rect: egui::Rect, code: &str, scroll_offset
     let mm_char_width = 8.0 * minimap_scale; // Approx char width
 
     // Draw Code Blocks
-    // We can't draw every char as a rect efficiently if the file is huge, 
+    // We can't draw every char as a rect efficiently if the file is huge,
     // but for DSL it's likely small efficiently.
     // Optimization: Draw lines as simplified blocks.
-    
+
     let start_y = rect.top() + 4.0;
-    
+
     let mut y = start_y;
-    
+
     // Very simple highlighting for minimap (simplified parser)
     for line in code.lines() {
         // Skip rendering if out of bounds (optimization)
-        if y > rect.bottom() { break; }
-        
+        if y > rect.bottom() {
+            break;
+        }
+
         let mut x = rect.left() + 4.0;
-        
+
         // Simple "words" tokenizer
         // let mut word_color = egui::Color32::from_gray(100);
-        
+
         // Heuristic: Color whole words based on first char or context?
         // Let's just iterate chars for "accurate" mini-view
         // If too slow, switch to block words.
-        
+
         let mut chars = line.chars().peekable();
         while let Some(c) = chars.next() {
-             if x > rect.right() { break; }
+            if x > rect.right() {
+                break;
+            }
 
-             let color = if c.is_whitespace() {
-                 None
-             } else if c.is_ascii_digit() {
-                 Some(egui::Color32::from_rgb(181, 206, 168)) // Number green
-             } else if "\"".contains(c) {
-                 Some(egui::Color32::from_rgb(206, 145, 120)) // String
-             } else if "()[]{}".contains(c) {
-                 Some(egui::Color32::from_rgb(255, 200, 50)) // Bracket Gold
-             } else if c == '/' && chars.peek() == Some(&'/') {
-                 // Comment - rest of line
-                 Some(egui::Color32::from_rgb(90, 120, 90)) // Comment Green
-             } else if c.is_lowercase() {
-                  Some(egui::Color32::from_rgb(86, 156, 214)) // Keyword/Param Blue
-             } else if c.is_uppercase() {
-                 Some(egui::Color32::from_rgb(78, 201, 176)) // Object Teal
-             } else {
-                 Some(egui::Color32::from_gray(120))
-             };
-             
-             if let Some(col) = color {
-                 // If it's a comment, draw a long bar
-                 if col == egui::Color32::from_rgb(80, 100, 80) {
-                      let len = line.len() as f32 * mm_char_width; // Approx
-                      painter.rect_filled(
-                          egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(len.min(rect.right() - x), mm_line_height * 0.8)),
-                          1.0,
-                          col
-                      );
-                      break; // Next line
-                 }
-                 
-                 painter.rect_filled(
-                    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(mm_char_width, mm_line_height * 0.8)),
+            let color = if c.is_whitespace() {
+                None
+            } else if c.is_ascii_digit() {
+                Some(egui::Color32::from_rgb(181, 206, 168)) // Number green
+            } else if "\"".contains(c) {
+                Some(egui::Color32::from_rgb(206, 145, 120)) // String
+            } else if "()[]{}".contains(c) {
+                Some(egui::Color32::from_rgb(255, 200, 50)) // Bracket Gold
+            } else if c == '/' && chars.peek() == Some(&'/') {
+                // Comment - rest of line
+                Some(egui::Color32::from_rgb(90, 120, 90)) // Comment Green
+            } else if c.is_lowercase() {
+                Some(egui::Color32::from_rgb(86, 156, 214)) // Keyword/Param Blue
+            } else if c.is_uppercase() {
+                Some(egui::Color32::from_rgb(78, 201, 176)) // Object Teal
+            } else {
+                Some(egui::Color32::from_gray(120))
+            };
+
+            if let Some(col) = color {
+                // If it's a comment, draw a long bar
+                if col == egui::Color32::from_rgb(80, 100, 80) {
+                    let len = line.len() as f32 * mm_char_width; // Approx
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(x, y),
+                            egui::vec2(len.min(rect.right() - x), mm_line_height * 0.8),
+                        ),
+                        1.0,
+                        col,
+                    );
+                    break; // Next line
+                }
+
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(x, y),
+                        egui::vec2(mm_char_width, mm_line_height * 0.8),
+                    ),
                     0.5,
-                    col
-                 );
-             }
-             x += mm_char_width;
+                    col,
+                );
+            }
+            x += mm_char_width;
         }
 
         y += mm_line_height * 1.5; // Line spacing
     }
-    
+
     // Draw Viewport Shadow Overlay
     // Map scroll_offset.y to minimap y
     let scroll_y = scroll_offset.y;
     let mm_scroll_y = scroll_y * minimap_scale;
     let mm_viewport_h = viewport_height * minimap_scale;
-    
+
     let highlight_rect = egui::Rect::from_min_size(
         egui::pos2(rect.left(), start_y + mm_scroll_y),
-        egui::vec2(rect.width(), mm_viewport_h)
+        egui::vec2(rect.width(), mm_viewport_h),
     );
-    
-    // Draw semi-transparent overlay over the NON-visible parts? 
+
+    // Draw semi-transparent overlay over the NON-visible parts?
     // Or highlight the visible part. VS Code highlights the visible part with a light hover effect.
-    painter.rect_filled(
-        highlight_rect, 
-        0.0, 
-        egui::Color32::from_white_alpha(15)
-    );
+    painter.rect_filled(highlight_rect, 0.0, egui::Color32::from_white_alpha(15));
     painter.rect_stroke(
         highlight_rect,
         0.0,
-        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(30))
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(30)),
     );
 }
 
-fn highlight_code(job: &mut egui::text::LayoutJob, code: &str, defined_names: &std::collections::HashSet<String>) {
+fn highlight_code(
+    job: &mut egui::text::LayoutJob,
+    code: &str,
+    defined_names: &std::collections::HashSet<String>,
+) {
     let font_id = egui::FontId::monospace(14.0);
-    
+
     // Simple tokenizer based on characters
     let mut chars = code.char_indices().peekable();
     let mut last_idx = 0;
-    
+
     // Rainbow bracket colors (Pastel/Neon for dark theme)
     let rainbow_colors = [
         egui::Color32::from_rgb(255, 100, 100), // Red
@@ -246,115 +409,166 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str, defined_names: &s
     let mut bracket_depth: usize = 0;
 
     while let Some((idx, c)) = chars.next() {
-        // 1. Whitespace - just append
+        // 1. Whitespace
         if c.is_whitespace() {
-            continue; 
+            if idx > last_idx {
+                append_text(
+                    job,
+                    &code[last_idx..idx],
+                    &font_id,
+                    egui::Color32::LIGHT_GRAY,
+                );
+            }
+            append_text(job, &code[idx..idx + 1], &font_id, egui::Color32::LIGHT_GRAY);
+            last_idx = idx + 1;
+            continue;
         }
 
         // 2. Comments (// ...)
         if c == '/' {
-             if let Some((_, '/')) = chars.peek() {
-                 chars.next(); // eat second slash
-                 let start = idx;
-                 let mut end = idx + 2;
-                 while let Some((i, next_c)) = chars.peek() {
-                     if *next_c == '\n' { break; }
-                     end = *i + 1;
-                     chars.next();
-                 }
-                 append_text(job, &code[last_idx..start], &font_id, egui::Color32::LIGHT_GRAY);
-                 append_text(job, &code[start..end], &font_id, egui::Color32::from_rgb(90, 120, 90)); // Greenish comment
-                 last_idx = end;
-                 continue;
-             }
+            if let Some((_, '/')) = chars.peek() {
+                chars.next(); // eat second slash
+                let start = idx;
+                let mut end = idx + 2;
+                while let Some((i, next_c)) = chars.peek() {
+                    if *next_c == '\n' {
+                        break;
+                    }
+                    end = *i + 1;
+                    chars.next();
+                }
+                append_text(
+                    job,
+                    &code[last_idx..start],
+                    &font_id,
+                    egui::Color32::LIGHT_GRAY,
+                );
+                append_text(
+                    job,
+                    &code[start..end],
+                    &font_id,
+                    egui::Color32::from_rgb(90, 120, 90),
+                ); // Greenish comment
+                last_idx = end;
+                continue;
+            }
         }
 
         // 3. Strings ("...")
         if c == '"' {
-             append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
-             
-             let start = idx;
-             let mut end = idx + 1;
-             while let Some((i, next_c)) = chars.next() {
-                 end = i + 1;
-                 if next_c == '"' { break; } 
-             }
-             append_text(job, &code[start..end], &font_id, egui::Color32::from_rgb(206, 145, 120)); // VSCode String Color
-             last_idx = end;
-             continue;
+            append_text(
+                job,
+                &code[last_idx..idx],
+                &font_id,
+                egui::Color32::LIGHT_GRAY,
+            );
+
+            let start = idx;
+            let mut end = idx + 1;
+            while let Some((i, next_c)) = chars.next() {
+                end = i + 1;
+                if next_c == '"' {
+                    break;
+                }
+            }
+            append_text(
+                job,
+                &code[start..end],
+                &font_id,
+                egui::Color32::from_rgb(206, 145, 120),
+            ); // VSCode String Color
+            last_idx = end;
+            continue;
         }
 
         // 4. Brackets (Rainbow)
         if "()[]{}".contains(c) {
-             append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
-             
-             let color_idx = if ")]}".contains(c) {
-                 if bracket_depth > 0 { bracket_depth -= 1; }
-                 bracket_depth
-             } else {
-                 let d = bracket_depth;
-                 bracket_depth += 1;
-                 d
-             };
-             
-             let color = rainbow_colors[color_idx % rainbow_colors.len()];
-             append_text(job, &code[idx..idx+1], &font_id, color);
-             last_idx = idx + 1;
-             continue;
+            append_text(
+                job,
+                &code[last_idx..idx],
+                &font_id,
+                egui::Color32::LIGHT_GRAY,
+            );
+
+            let color_idx = if ")]}".contains(c) {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+                bracket_depth
+            } else {
+                let d = bracket_depth;
+                bracket_depth += 1;
+                d
+            };
+
+            let color = rainbow_colors[color_idx % rainbow_colors.len()];
+            append_text(job, &code[idx..idx + 1], &font_id, color);
+            last_idx = idx + 1;
+            continue;
         }
 
         // 5. DSL Blocks, Parameters and Identifiers
         if c.is_alphabetic() || c == '_' {
-             if idx > last_idx {
-                 append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
-             }
-             
-             let start = idx;
-             let mut end = idx + 1;
-             while let Some((i, next_c)) = chars.peek() {
-                 if next_c.is_alphanumeric() || *next_c == '_' {
-                     end = *i + 1;
-                     chars.next();
-                 } else {
-                     break;
-                 }
-             }
-             
-             let word = &code[start..end];
-             let color = match word {
-                 // Primary Block Keywords
-                 "circle" | "rect" | "move" | "size" | "timeline" 
-                 => egui::Color32::from_rgb(86, 156, 214), // Blue (#569CD6)
+            if idx > last_idx {
+                append_text(
+                    job,
+                    &code[last_idx..idx],
+                    &font_id,
+                    egui::Color32::LIGHT_GRAY,
+                );
+            }
 
-                 // Parameters / Properties
-                 "name" | "x" | "y" | "radius" | "w" | "h" | "width" | "height" | 
-                 "fill" | "spawn" | "to" | "during" | "ease" | "startAt" | 
-                 "time" | "element" | "type" | "fps" | "duration"
-                 => egui::Color32::from_rgb(156, 220, 254), // Light Blue (#9CDCFE)
+            let start = idx;
+            let mut end = idx + 1;
+            while let Some((i, next_c)) = chars.peek() {
+                if next_c.is_alphanumeric() || *next_c == '_' {
+                    end = *i + 1;
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
 
-                 // Values / Constants / Easings
-                 "linear" | "ease_in" | "ease_out" | "ease_in_out" | "bezier" | "custom" | "points" | "power"
-                 => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
+            let word = &code[start..end];
+            let color = match word {
+                // Primary Block Keywords
+                "circle" | "rect" | "move" | "size" | "timeline" => {
+                    egui::Color32::from_rgb(86, 156, 214)
+                } // Blue (#569CD6)
 
-                 _ => {
-                     // Check if this is a defined object name
-                     if defined_names.contains(word) {
-                         egui::Color32::from_rgb(78, 201, 176) // Teal (#4EC9B0) for Objects
-                     } else {
-                         egui::Color32::LIGHT_GRAY
-                     }
-                 }
-             };
-             
-             append_text(job, word, &font_id, color);
-             last_idx = end;
-             continue;
+                // Parameters / Properties
+                "name" | "x" | "y" | "radius" | "w" | "h" | "width" | "height" | "fill"
+                | "spawn" | "to" | "during" | "ease" | "startAt" | "time" | "element" | "type"
+                | "fps" | "duration" => egui::Color32::from_rgb(156, 220, 254), // Light Blue (#9CDCFE)
+
+                // Values / Constants / Easings
+                "linear" | "ease_in" | "ease_out" | "ease_in_out" | "bezier" | "custom"
+                | "points" | "power" => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
+
+                _ => {
+                    // Check if this is a defined object name
+                    if defined_names.contains(word) {
+                        egui::Color32::from_rgb(78, 201, 176) // Teal (#4EC9B0) for Objects
+                    } else {
+                        egui::Color32::LIGHT_GRAY
+                    }
+                }
+            };
+
+            append_text(job, word, &font_id, color);
+            last_idx = end;
+            continue;
         }
-        
+
         // 6. Numbers
         if c.is_ascii_digit() {
             if idx > last_idx {
-                append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
+                append_text(
+                    job,
+                    &code[last_idx..idx],
+                    &font_id,
+                    egui::Color32::LIGHT_GRAY,
+                );
             }
             let start = idx;
             let mut end = idx + 1;
@@ -366,28 +580,50 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str, defined_names: &s
                     break;
                 }
             }
-            append_text(job, &code[start..end], &font_id, egui::Color32::from_rgb(181, 206, 168)); // Light Green number
+            append_text(
+                job,
+                &code[start..end],
+                &font_id,
+                egui::Color32::from_rgb(181, 206, 168),
+            ); // Light Green number
             last_idx = end;
             continue;
         }
 
         // 7. Operators and separators
         if "=->,".contains(c) {
-            append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
-            append_text(job, &code[idx..idx+1], &font_id, egui::Color32::from_rgb(212, 212, 212)); // Subtle gray for ops
+            append_text(
+                job,
+                &code[last_idx..idx],
+                &font_id,
+                egui::Color32::LIGHT_GRAY,
+            );
+            append_text(
+                job,
+                &code[idx..idx + 1],
+                &font_id,
+                egui::Color32::from_rgb(212, 212, 212),
+            ); // Subtle gray for ops
             last_idx = idx + 1;
             continue;
         }
     }
-    
+
     // Flush remaining
     if last_idx < code.len() {
         append_text(job, &code[last_idx..], &font_id, egui::Color32::LIGHT_GRAY);
     }
 }
 
-fn append_text(job: &mut egui::text::LayoutJob, text: &str, font_id: &egui::FontId, color: egui::Color32) {
-    if text.is_empty() { return; }
+fn append_text(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    font_id: &egui::FontId,
+    color: egui::Color32,
+) {
+    if text.is_empty() {
+        return;
+    }
     job.append(
         text,
         0.0,
