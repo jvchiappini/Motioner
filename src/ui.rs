@@ -288,7 +288,7 @@ impl eframe::App for MyApp {
                     if state.code_anim_t > 1.0 {
                         state.code_anim_t = 1.0;
                     }
-                    // Removed: controlled by global frame rate
+                    ctx.request_repaint(); // Ensure fluid animation
                 }
             } else {
                 if state.code_anim_t > 0.0 {
@@ -296,7 +296,7 @@ impl eframe::App for MyApp {
                     if state.code_anim_t < 0.0 {
                         state.code_anim_t = 0.0;
                     }
-                    // Removed: controlled by global frame rate
+                    ctx.request_repaint(); // Ensure fluid animation
                 }
             }
             let fs_t = state.code_anim_t;
@@ -515,9 +515,14 @@ impl eframe::App for MyApp {
                 state.time,
                 crate::canvas::PreviewMode::Single,
             );
+
+            // Ensure maximum fluidity during playback
+            ctx.request_repaint();
         }
 
         // Always control frame rate based on preview_fps (not just when playing)
+        // This acts as a fallback or minimum frame rate when not playing,
+        // but while playing we prefer the explicit request_repaint() above.
         let frame_duration = 1.0 / (state.preview_fps as f32);
         ctx.request_repaint_after(std::time::Duration::from_secs_f32(frame_duration));
 

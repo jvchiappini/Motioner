@@ -1640,6 +1640,7 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
         while let Ok(result) = rx.try_recv() {
             // a worker result means at least one pending job completed
             state.preview_job_pending = false;
+            ctx.request_repaint(); // Request UI update to show the new result immediately
             match result {
                 PreviewResult::Single(t, img) => {
                     // ESTRATEGIA AGRESIVA: Usar VRAM siempre que sea posible
