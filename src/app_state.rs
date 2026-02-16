@@ -189,6 +189,9 @@ pub struct AppState {
     pub show_elements_modal: bool,
     // UI: Animations modal (floating palette from Scene Graph)
     pub show_animations_modal: bool,
+    /// Remember last top-left position of the Animations modal (UI-only)
+    #[serde(skip)]
+    pub animations_modal_pos: Option<egui::Pos2>,
 
     // UI Sidebar State
     pub sidebar_width: f32,
@@ -309,6 +312,7 @@ impl Default for AppState {
             anim_modal_target_idx: 0,
             show_elements_modal: false,
             show_animations_modal: false,
+                animations_modal_pos: None,
             sidebar_width: 250.0,
             timeline_root_path: None,
             timeline_prev_root_path: None,

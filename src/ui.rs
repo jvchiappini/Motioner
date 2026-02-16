@@ -22,7 +22,8 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
         );
         println!(
             "[motioner] VRAM cache limit: {:.1} GB ({:.0}% of total)",
-            (state.estimated_vram_bytes as f64 * state.vram_cache_max_percent as f64) / (1024.0 * 1024.0 * 1024.0),
+            (state.estimated_vram_bytes as f64 * state.vram_cache_max_percent as f64)
+                / (1024.0 * 1024.0 * 1024.0),
             state.vram_cache_max_percent * 100.0
         );
     } else {
@@ -88,7 +89,9 @@ impl eframe::App for MyApp {
             if let Some(last_edit) = state.last_code_edit_time {
                 if now - last_edit > state.autosave_cooldown_secs as f64 {
                     // perform the autosave (silent) and set indicator
-                    match crate::events::element_properties_changed_event::write_dsl_to_project(state, false) {
+                    match crate::events::element_properties_changed_event::write_dsl_to_project(
+                        state, false,
+                    ) {
                         Ok(_) => {
                             state.autosave_pending = false;
                             state.autosave_last_success_time = Some(now);
@@ -109,6 +112,16 @@ impl eframe::App for MyApp {
 
         // Define main UI enabled state based on modal visibility
         let main_ui_enabled = !state.show_welcome;
+
+        // Render Element Modifiers as a top-level modal (global — not constrained to CentralPanel)
+        if state.modifier_active_path.is_some() {
+            crate::modals::element_modifiers::show(ctx, state);
+        }
+
+        // Render Animations modal as top-level/global (remembered position, Esc/click-outside)
+        if state.show_animations_modal {
+            crate::modals::animations::show(ctx, state);
+        }
 
         // 1. Toolbar Strip (Far Left)
         egui::SidePanel::left("toolbar_panel")
@@ -526,10 +539,6 @@ impl eframe::App for MyApp {
             crate::project_settings::show(ctx, state);
         }
 
-        if state.modifier_active_path.is_some() {
-            show_modifier_modal(ctx, state);
-        }
-
         // Welcome/Startup Modal
         crate::welcome_modal::show(ctx, state);
 
@@ -580,338 +589,4 @@ fn render_tab_content(ui: &mut egui::Ui, tab: PanelTab, state: &mut AppState) {
     }
 }
 
-fn show_modifier_modal(ctx: &egui::Context, state: &mut AppState) {
-    let mut open = true;
-    let path = match &state.modifier_active_path {
-        Some(p) => p.clone(),
-        None => return,
-    };
-
-    let inner_response = egui::Window::new("🔧 Element Modifiers")
-        .open(&mut open)
-        .resizable(true)
-        .collapsible(true)
-        .default_width(280.0)
-        .show(ctx, |ui| -> bool {
-            let mut changed = false;
-            if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
-                ui.add_space(4.0);
-
-                let earliest_spawn = shape.spawn_time();
-
-                // (diagnostic readout removed)
-
-                match shape {
-                    Shape::Circle {
-                        name,
-                        x,
-                        y,
-                        radius,
-                        color,
-                        spawn_time,
-                        visible,
-                        ..
-                    } => {
-                        ui.group(|ui| {
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("⭕").size(18.0));
-                                    ui.label(
-                                        egui::RichText::new("Circle Parameters")
-                                            .strong()
-                                            .size(14.0),
-                                    );
-                                });
-                                ui.separator();
-
-                                egui::Grid::new("circle_grid")
-                                    .num_columns(2)
-                                    .spacing([12.0, 8.0])
-                                    .show(ui, |ui| {
-                                        ui.label("Name:");
-                                        if ui.text_edit_singleline(name).changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Visible:");
-                                        if ui.checkbox(visible, "").changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Spawn Time:");
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    spawn_time,
-                                                    0.0..=state.duration_secs,
-                                                )
-                                                .suffix("s"),
-                                            )
-                                            .changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position X:");
-                                        let mut val_x = *x * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_x, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *x = val_x / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position Y:");
-                                        let mut val_y = *y * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_y, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *y = val_y / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        // diagnostic removed
-
-                                        ui.label("Radius:");
-                                        let mut val_r = *radius * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_r, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *radius = val_r / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Color:");
-                                        if ui.color_edit_button_srgba_unmultiplied(color).changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-                                    });
-
-                                ui.add_space(4.0);
-                            });
-                        });
-                    }
-                    Shape::Rect {
-                        name,
-                        x,
-                        y,
-                        w,
-                        h,
-                        color,
-                        spawn_time,
-                        visible,
-                        ..
-                    } => {
-                        ui.group(|ui| {
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("⬜").size(18.0));
-                                    ui.label(
-                                        egui::RichText::new("Rectangle Parameters")
-                                            .strong()
-                                            .size(14.0),
-                                    );
-                                });
-                                ui.separator();
-
-                                egui::Grid::new("rect_grid")
-                                    .num_columns(2)
-                                    .spacing([12.0, 8.0])
-                                    .show(ui, |ui| {
-                                        ui.label("Name:");
-                                        if ui.text_edit_singleline(name).changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Visible:");
-                                        if ui.checkbox(visible, "").changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Spawn Time:");
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    spawn_time,
-                                                    0.0..=state.duration_secs,
-                                                )
-                                                .suffix("s"),
-                                            )
-                                            .changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position X:");
-                                        let mut val_x = *x * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_x, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *x = val_x / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position Y:");
-                                        let mut val_y = *y * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_y, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *y = val_y / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        // diagnostic removed
-
-                                        ui.label("Width:");
-                                        let mut val_w = *w * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_w, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *w = val_w / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Height:");
-                                        let mut val_h = *h * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_h, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            *h = val_h / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Color:");
-                                        if ui.color_edit_button_srgba_unmultiplied(color).changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-                                    });
-
-                                ui.add_space(4.0);
-                            });
-                        });
-                    }
-                    Shape::Group {
-                        name,
-                        children: _,
-                        visible,
-                    } => {
-                        ui.group(|ui| {
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("📦").size(18.0));
-                                    ui.label(
-                                        egui::RichText::new("Group Parameters").strong().size(14.0),
-                                    );
-                                });
-                                ui.separator();
-
-                                egui::Grid::new("group_grid")
-                                    .num_columns(2)
-                                    .spacing([12.0, 8.0])
-                                    .show(ui, |ui| {
-                                        ui.label("Visible:");
-                                        if ui.checkbox(visible, "").changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Name:");
-                                        if ui.text_edit_singleline(name).changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Earliest Spawn:");
-                                        ui.label(
-                                            egui::RichText::new(format!("{:.2}s", earliest_spawn))
-                                                .weak(),
-                                        );
-                                        ui.end_row();
-                                    });
-
-                                ui.add_space(4.0);
-                            });
-                        });
-                    }
-                }
-            } else {
-                ui.label("No element found at this path.");
-                state.modifier_active_path = None;
-            }
-            changed
-        });
-
-    if !open {
-        state.modifier_active_path = None;
-    }
-
-    if let Some(inner_response) = inner_response {
-        if let Some(changed) = inner_response.inner {
-            if changed {
-                // If any property changed, allow real-time code update
-                state.position_cache = None; // shape properties changed → invalidate cache
-                state.dsl_code = dsl::generate_dsl(
-                    &state.scene,
-                    state.render_width,
-                    state.render_height,
-                    state.fps,
-                    state.duration_secs,
-                );
-                            // persist DSL to project (if set)
-                            crate::events::element_properties_changed_event::on_element_properties_changed(state);
-            }
-        }
-    }
-}
+// Element Modifiers UI moved to `src/modals/element_modifiers.rs` (fullscreen, non-draggable)
