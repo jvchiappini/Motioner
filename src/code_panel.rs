@@ -123,7 +123,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 // --- GUTTER RENDERING ---
                 // Match the font size used in highlight_code (14.0)
                 let font_id = egui::FontId::monospace(14.0);
-                
+
                 // Determine active logical line efficiently
                 let mut active_line_idx: usize = 0;
                 if let Some(te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
@@ -150,21 +150,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 );
 
                 let gutter_text_color = egui::Color32::from_gray(100);
-                
+
                 // Use the galley to accurately position line numbers, handling wrapping and different scales
                 let galley = &output.galley;
                 let galley_pos = output.galley_pos;
-                
+
                 let mut current_logical_line = 0;
-                
+
                 for row in &galley.rows {
                     // Get character start index for this row using the galley's cursor system
                     // We use the vertical center of the row to ensure we hit the right row
                     let row_center_y = row.rect.center().y;
                     let cursor = galley.cursor_from_pos(egui::vec2(0.0, row_center_y));
                     let row_start_idx = cursor.ccursor.index;
-                    
-                    // A row is the start of a logical line if it starts at index 0 
+
+                    // A row is the start of a logical line if it starts at index 0
                     // or if the character immediately preceding it is a newline.
                     let is_start_of_logical_line = row_start_idx == 0 || {
                         let prev_idx = row_start_idx - 1;
@@ -177,7 +177,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
                         // Calculate Y position based on the galley's layout
                         let y = galley_pos.y + row.rect.top();
-                        
+
                         // Optimization: Skip drawing if outside the visible clip rect
                         if y + row.rect.height() < ui.clip_rect().top() {
                             continue;
@@ -207,13 +207,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 if gutter_response.clicked() {
                     if let Some(pos) = ui.ctx().pointer_interact_pos() {
                         let galley_y = pos.y - galley_pos.y;
-                        
+
                         // Use the galley to find the cursor at the clicked position
                         let cursor = galley.cursor_from_pos(egui::vec2(0.0, galley_y));
                         let char_idx = cursor.ccursor.index;
                         let ccursor = egui::text::CCursor::new(char_idx);
-                        
-                        if let Some(mut te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
+
+                        if let Some(mut te_state) =
+                            egui::TextEdit::load_state(ui.ctx(), text_edit_id)
+                        {
                             te_state
                                 .cursor
                                 .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
