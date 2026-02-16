@@ -4,36 +4,36 @@ use crate::scene::Shape;
 pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "size({}, {})\ntimeline {{ fps = {}; duration = {} }}\n\n",
+        "size({}, {})\ntimeline(fps = {}, duration = {:.2})\n\n",
         width, height, fps, duration
     ));
+
+    // First, generate all shapes
     for s in scene.iter() {
         out.push_str(&s.to_dsl());
-        // Validate animations vs spawn_time and emit a warning comment when detected
-        match s {
-            Shape::Circle {
-                spawn_time,
-                animations,
-                ..
-            }
-            | Shape::Rect {
-                spawn_time,
-                animations,
-                ..
-            } => {
-                for a in animations {
-                    if let crate::scene::Animation::Move { start, .. } = a {
-                        let start_secs = *start; // start is already in seconds
-                        if start_secs < *spawn_time {
-                            out.push_str(&format!("\n# WARNING: animation starts at {:.3}s before element spawn at {:.3}s\n", start_secs, spawn_time));
-                        }
+        out.push_str("\n");
+    }
+
+    // Then, generate all animations as top-level blocks
+    for s in scene.iter() {
+        let name = s.name();
+        let animations = match s {
+            Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => animations,
+            _ => continue,
+        };
+
+        for a in animations {
+            match a {
+                crate::scene::Animation::Move { .. } => {
+                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(a) {
+                        out.push_str(&ma.to_dsl_block(Some(&name), ""));
+                        out.push_str("\n");
                     }
                 }
             }
-            _ => {}
         }
-        out.push_str("\n");
     }
+
     out
 }
 
@@ -48,7 +48,6 @@ pub struct ProjectConfig {
 /// Validates and parses just the header configuration (size, fps, duration).
 /// Returns error string if validation fails.
 pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
-    // Simple line-based scanning
     let mut width = None;
     let mut height = None;
     let mut fps = None;
@@ -56,50 +55,40 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
 
     for line in code.lines() {
         let line = line.trim();
+        if line.is_empty() { continue; }
 
-        // Parse size(w, h)
-        if line.starts_with("size(") && line.ends_with(")") {
-            let content = &line[5..line.len() - 1];
+        if line.starts_with("size") {
+            let content = line.trim_start_matches("size").trim_start_matches('(').trim_end_matches(')').trim_start_matches(':').trim();
             let parts: Vec<&str> = content.split(',').collect();
             if parts.len() == 2 {
-                if let (Ok(w), Ok(h)) = (
-                    parts[0].trim().parse::<u32>(),
-                    parts[1].trim().parse::<u32>(),
-                ) {
-                    width = Some(w);
-                    height = Some(h);
-                } else {
-                    return Err(format!("Invalid size parameters: {}", content));
-                }
+                width = parts[0].trim().parse().ok();
+                height = parts[1].trim().parse().ok();
             }
         }
 
-        // Parse timeline { ... }
-        if line.starts_with("timeline {") && line.contains("}") {
-            // Very naive: extract content inside {}
-            if let Some(start) = line.find('{') {
-                if let Some(end) = line.rfind('}') {
-                    let content = &line[start + 1..end];
-                    // Split by semicolon
-                    for part in content.split(';') {
-                        let part = part.trim();
-                        if part.starts_with("fps =") {
-                            if let Ok(val) = part.replace("fps =", "").trim().parse::<u32>() {
-                                fps = Some(val);
-                            }
-                        }
-                        if part.starts_with("duration =") {
-                            if let Ok(val) = part.replace("duration =", "").trim().parse::<f32>() {
-                                duration = Some(val);
-                            }
-                        }
+        if line.starts_with("timeline") {
+            let content = line.trim_start_matches("timeline").trim_matches(|c| c == '{' || c == '}' || c == '(' || c == ')').trim();
+            let stmts = if content.contains(';') { content.split(';') } else { content.split(',') };
+            for part in stmts {
+                let s = part.trim();
+                if s.starts_with("fps") {
+                    if let Some(eq) = s.find('=') {
+                        fps = s[eq + 1..].trim().parse().ok();
+                    } else {
+                        fps = s.trim_start_matches("fps").trim_start_matches(':').trim().parse().ok();
+                    }
+                }
+                if s.starts_with("duration") {
+                    if let Some(eq) = s.find('=') {
+                        duration = s[eq + 1..].trim().parse().ok();
+                    } else {
+                        duration = s.trim_start_matches("duration").trim_start_matches(':').trim().parse().ok();
                     }
                 }
             }
         }
     }
 
-    // Validate
     if width.is_none() || height.is_none() {
         return Err("Missing 'size(width, height)' configuration".to_string());
     }
@@ -121,9 +110,8 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
 /// Stub parser: in the future this will parse DSL -> Scene (AST).
 /// For now returns an empty vec (placeholder).
 pub fn parse_dsl(_src: &str) -> Vec<Shape> {
-    let src = _src;
     let mut shapes: Vec<Shape> = Vec::new();
-    let mut lines = src.lines().map(|l| l.trim()).peekable();
+    let mut lines = _src.lines().map(|l| l.trim()).peekable();
 
     fn parse_kv_list(s: &str) -> std::collections::HashMap<String, String> {
         let mut map = std::collections::HashMap::new();
@@ -141,334 +129,126 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
         map
     }
 
-    // collect top-level move blocks that reference elements (to support move blocks before/after shapes)
-    // tuple: (element, end_time, to_x, to_y, start_at, easing)
+    // collect top-level move blocks that reference elements
     let mut pending_moves: Vec<(String, f32, f32, f32, f32, crate::scene::Easing)> = Vec::new();
 
     while let Some(line) = lines.next() {
-        if line.starts_with("circle(") && line.ends_with(")") {
-            let inner = &line[7..line.len() - 1];
-            let kv = parse_kv_list(inner);
-            let name = kv
-                .get("name")
-                .cloned()
-                .unwrap_or_else(|| format!("Circle_{}", shapes.len()));
-            let x = kv
-                .get("x")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.5);
-            let y = kv
-                .get("y")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.5);
-            let radius = kv
-                .get("radius")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.1);
-            let spawn = kv
-                .get("spawn")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.0);
-            let color = if let Some(fill) = kv.get("fill") {
-                if fill.starts_with('#') && fill.len() >= 7 {
-                    let r = u8::from_str_radix(&fill[1..3], 16).unwrap_or(120);
-                    let g = u8::from_str_radix(&fill[3..5], 16).unwrap_or(200);
-                    let b = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
-                    [r, g, b, 255]
-                } else {
-                    [120, 200, 255, 255]
+        if line.is_empty() { continue; }
+
+        // Handle shape definitions: circle "name" { ... } or circle(...) legacy
+        if line.starts_with("circle") || line.starts_with("rect") {
+            let is_circle = line.starts_with("circle");
+            let mut name = String::new();
+            
+            // Extract name from circle "name" or circle(name="name")
+            if let Some(quote_start) = line.find('"') {
+                if let Some(quote_end) = line[quote_start + 1..].find('"') {
+                    name = line[quote_start + 1..quote_start + 1 + quote_end].to_string();
+                }
+            } else if let Some(open_paren) = line.find('(') {
+                let end_paren = line.rfind(')').unwrap_or(line.len());
+                let inner = &line[open_paren + 1..end_paren];
+                let kv = parse_kv_list(inner);
+                if let Some(n) = kv.get("name") {
+                    name = n.clone();
+                }
+            }
+
+            if name.is_empty() {
+                name = format!("{}_{}", if is_circle { "Circle" } else { "Rect" }, shapes.len());
+            }
+
+            let mut current_shape = if is_circle {
+                Shape::Circle {
+                    name, x: 0.5, y: 0.5, radius: 0.1, color: [120, 200, 255, 255],
+                    spawn_time: 0.0, animations: Vec::new(), visible: true,
                 }
             } else {
-                [120, 200, 255, 255]
+                Shape::Rect {
+                    name, x: 0.4, y: 0.4, w: 0.2, h: 0.2, color: [200, 120, 120, 255],
+                    spawn_time: 0.0, animations: Vec::new(), visible: true,
+                }
             };
 
-            shapes.push(Shape::Circle {
-                name,
-                x,
-                y,
-                radius,
-                color,
-                spawn_time: spawn,
-                animations: Vec::new(),
-                visible: true,
-            });
+            // If legacy format circle(x=1, y=2), apply values
+            if let Some(open_paren) = line.find('(') {
+                let end_paren = line.rfind(')').unwrap_or(line.len());
+                let inner = &line[open_paren+1..end_paren];
+                let kv = parse_kv_list(inner);
+                update_shape_from_kv(&mut current_shape, &kv);
+                
+                // Check if there is more stuff on the same line (like .animate_to legacy)
+                let remainder = &line[end_paren+1..].trim();
+                if remainder.contains(".animate_to") {
+                    // Try to parse legacy chained animations on same line
+                    parse_legacy_animations(&mut current_shape, remainder);
+                }
+            }
 
-            // Peek for an anim block immediately after
-            if let Some(&next) = lines.peek() {
-                if next.starts_with("anim") {
-                    // consume 'anim {' line
-                    lines.next();
-                    // collect keyframes
-                    let mut keyframes: Vec<(f32, Option<f32>, Option<f32>)> = Vec::new();
-                    while let Some(kline) = lines.next() {
-                        let k = kline.trim();
-                        if k == "}" {
-                            break;
-                        }
-                        if k.starts_with("at") {
-                            // at <time> { ... }
-                            if let Some(open) = k.find('{') {
-                                let time_part = k[2..open].trim();
-                                if let Ok(t) = time_part.parse::<f32>() {
-                                    let inner = k[open + 1..].trim_end_matches('}').trim();
-                                    let mut kx: Option<f32> = None;
-                                    let mut ky: Option<f32> = None;
-                                    for stmt in inner.split(';') {
-                                        let s = stmt.trim();
-                                        if s.contains(".x") && s.contains('=') {
-                                            if let Some(eq) = s.find('=') {
-                                                let val = s[eq + 1..].trim();
-                                                if let Ok(v) = val.parse::<f32>() {
-                                                    kx = Some(v);
-                                                }
-                                            }
-                                        }
-                                        if s.contains(".y") && s.contains('=') {
-                                            if let Some(eq) = s.find('=') {
-                                                let val = s[eq + 1..].trim();
-                                                if let Ok(v) = val.parse::<f32>() {
-                                                    ky = Some(v);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    keyframes.push((t, kx, ky));
-                                }
-                            }
-                        }
-                    }
-
-                    if !keyframes.is_empty() {
-                        // associate with last shape
-                        if let Some(last) = shapes.last_mut() {
-                            // pick first and last keyframes with x/y defined
-                            let start = keyframes.first().unwrap().0;
-                            let end = keyframes.last().unwrap().0;
-                            let last_x = keyframes.last().unwrap().1.unwrap_or(match last {
-                                Shape::Circle { x, .. } => *x,
-                                Shape::Rect { x, .. } => *x,
-                                _ => 0.5,
-                            });
-                            let last_y = keyframes.last().unwrap().2.unwrap_or(match last {
-                                Shape::Circle { y, .. } => *y,
-                                Shape::Rect { y, .. } => *y,
-                                _ => 0.5,
-                            });
-                            match last {
-                                Shape::Circle { animations, .. }
-                                | Shape::Rect { animations, .. } => {
-                                    animations.push(crate::scene::Animation::Move {
-                                        to_x: last_x,
-                                        to_y: last_y,
-                                        start,
-                                        end,
-                                        easing: crate::scene::Easing::Linear,
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                } else if next.starts_with("move") {
-                    // consume 'move {', collect inner lines and delegate parsing to shared helper
-                    lines.next();
-                    let mut inner: Vec<&str> = Vec::new();
-                    while let Some(bline) = lines.next() {
-                        let b = bline.trim();
-                        if b == "}" {
-                            break;
-                        }
-                        inner.push(b);
-                    }
-                    if let Some(parsed) =
-                        crate::animations::move_animation::parse_move_block(&inner)
-                    {
-                        if let Some(last) = shapes.last_mut() {
-                            match last {
-                                Shape::Circle { animations, .. }
-                                | Shape::Rect { animations, .. } => {
-                                    animations.push(crate::scene::Animation::Move {
-                                        to_x: parsed.to_x,
-                                        to_y: parsed.to_y,
-                                        start: parsed.start,
-                                        end: parsed.end,
-                                        easing: parsed.easing,
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
+            // Check if block follows
+            let mut has_block = line.contains('{');
+            if !has_block {
+                if let Some(next) = lines.peek() {
+                    if next.starts_with('{') {
+                        lines.next();
+                        has_block = true;
                     }
                 }
             }
-        } else if line.starts_with("rect(") && line.ends_with(")") {
-            let inner = &line[5..line.len() - 1];
-            let kv = parse_kv_list(inner);
-            let name = kv
-                .get("name")
-                .cloned()
-                .unwrap_or_else(|| format!("Rect_{}", shapes.len()));
-            let x = kv
-                .get("x")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.4);
-            let y = kv
-                .get("y")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.4);
-            let w = kv
-                .get("width")
-                .or_else(|| kv.get("w"))
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.2);
-            let h = kv
-                .get("height")
-                .or_else(|| kv.get("h"))
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.2);
-            let spawn = kv
-                .get("spawn")
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(0.0);
-            let color = if let Some(fill) = kv.get("fill") {
-                if fill.starts_with('#') && fill.len() >= 7 {
-                    let r = u8::from_str_radix(&fill[1..3], 16).unwrap_or(200);
-                    let g = u8::from_str_radix(&fill[3..5], 16).unwrap_or(120);
-                    let b = u8::from_str_radix(&fill[5..7], 16).unwrap_or(120);
-                    [r, g, b, 255]
-                } else {
-                    [200, 120, 120, 255]
-                }
-            } else {
-                [200, 120, 120, 255]
-            };
 
-            shapes.push(Shape::Rect {
-                name,
-                x,
-                y,
-                w,
-                h,
-                color,
-                spawn_time: spawn,
-                animations: Vec::new(),
-                visible: true,
-            });
+            if has_block {
+                while let Some(inner_line) = lines.next() {
+                    let b = inner_line.trim();
+                    if b == "}" { break; }
+                    if b.is_empty() { continue; }
 
-            // optional anim handling (same as circle)
-            if let Some(&next) = lines.peek() {
-                if next.starts_with("anim") {
-                    lines.next();
-                    let mut keyframes: Vec<(f32, Option<f32>, Option<f32>)> = Vec::new();
-                    while let Some(kline) = lines.next() {
-                        let k = kline.trim();
-                        if k == "}" {
-                            break;
-                        }
-                        if k.starts_with("at") {
-                            if let Some(open) = k.find('{') {
-                                let time_part = k[2..open].trim();
-                                if let Ok(t) = time_part.parse::<f32>() {
-                                    let inner = k[open + 1..].trim_end_matches('}').trim();
-                                    let mut kx: Option<f32> = None;
-                                    let mut ky: Option<f32> = None;
-                                    for stmt in inner.split(';') {
-                                        let s = stmt.trim();
-                                        if s.contains(".x") && s.contains('=') {
-                                            if let Some(eq) = s.find('=') {
-                                                let val = s[eq + 1..].trim();
-                                                if let Ok(v) = val.parse::<f32>() {
-                                                    kx = Some(v);
-                                                }
-                                            }
-                                        }
-                                        if s.contains(".y") && s.contains('=') {
-                                            if let Some(eq) = s.find('=') {
-                                                let val = s[eq + 1..].trim();
-                                                if let Ok(v) = val.parse::<f32>() {
-                                                    ky = Some(v);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    keyframes.push((t, kx, ky));
-                                }
+                    if b.starts_with("move") && (b.contains('{') || b.contains('(')) {
+                        let mut move_lines = Vec::new();
+                        if b.contains('{') {
+                            // Block-based move
+                            while let Some(m_line) = lines.next() {
+                                let m = m_line.trim();
+                                if m == "}" { break; }
+                                move_lines.push(m);
                             }
+                        } else {
+                            // Single line move(to=..., ...)
+                            move_lines.push(b);
                         }
-                    }
-                    if !keyframes.is_empty() {
-                        if let Some(last) = shapes.last_mut() {
-                            let start = keyframes.first().unwrap().0;
-                            let end = keyframes.last().unwrap().0;
-                            let last_x = keyframes.last().unwrap().1.unwrap_or(match last {
-                                Shape::Circle { x, .. } => *x,
-                                Shape::Rect { x, .. } => *x,
-                                _ => 0.5,
-                            });
-                            let last_y = keyframes.last().unwrap().2.unwrap_or(match last {
-                                Shape::Circle { y, .. } => *y,
-                                Shape::Rect { y, .. } => *y,
-                                _ => 0.5,
-                            });
-                            match last {
-                                Shape::Circle { animations, .. }
-                                | Shape::Rect { animations, .. } => {
-                                    animations.push(crate::scene::Animation::Move {
-                                        to_x: last_x,
-                                        to_y: last_y,
-                                        start,
-                                        end,
-                                        easing: crate::scene::Easing::Linear,
-                                    });
-                                }
-                                _ => {}
-                            }
+                        
+                        if let Some(parsed) = crate::animations::move_animation::parse_move_block(&move_lines) {
+                            add_anim_to_shape(&mut current_shape, parsed);
                         }
+                    } else if b.contains('=') {
+                        let kv = parse_kv_list(b);
+                        update_shape_from_kv(&mut current_shape, &kv);
                     }
                 }
             }
+            shapes.push(current_shape);
         } else if line.starts_with("move") && line.contains('{') {
-            // parse a top-level move { ... } block (delegate inner parsing to animations module)
-            // consume the opening 'move {' and gather inner lines
-            let mut inner: Vec<&str> = Vec::new();
-            // consume first line's remainder already matched by `line` — but we still need to advance iterator
-            while let Some(bline) = lines.next() {
-                let b = bline.trim();
-                if b == "}" {
-                    break;
-                }
-                inner.push(b);
+            // top-level move block
+            let mut move_lines = Vec::new();
+            while let Some(m_line) = lines.next() {
+                let m = m_line.trim();
+                if m == "}" { break; }
+                move_lines.push(m);
             }
-
-            if let Some(parsed) = crate::animations::move_animation::parse_move_block(&inner) {
+            if let Some(parsed) = crate::animations::move_animation::parse_move_block(&move_lines) {
                 if let Some(el) = parsed.element.clone() {
-                    pending_moves.push((
-                        el,
-                        parsed.end,
-                        parsed.to_x,
-                        parsed.to_y,
-                        parsed.start,
-                        parsed.easing,
-                    ));
+                    pending_moves.push((el, parsed.end, parsed.to_x, parsed.to_y, parsed.start, parsed.easing));
                 }
             }
-        } else {
-            // ignore other lines for now
-            continue;
         }
     }
 
-    // attach pending moves to matching shapes by name
+    // Attach pending moves
     for (el, end_t, ex, ey, start_at, easing_kind) in pending_moves {
         if let Some(s) = shapes.iter_mut().find(|sh| sh.name() == el) {
             match s {
                 Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
                     animations.push(crate::scene::Animation::Move {
-                        to_x: ex,
-                        to_y: ey,
-                        start: start_at,
-                        end: end_t,
-                        easing: easing_kind,
+                        to_x: ex, to_y: ey, start: start_at, end: end_t, easing: easing_kind,
                     });
                 }
                 _ => {}
@@ -477,6 +257,111 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
     }
 
     shapes
+}
+
+fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String, String>) {
+    match shape {
+        Shape::Circle { x, y, radius, color, spawn_time, .. } => {
+            if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) { *x = v; }
+            if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) { *y = v; }
+            if let Some(v) = kv.get("radius").and_then(|s| s.parse().ok()) { *radius = v; }
+            if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) { *spawn_time = v; }
+            if let Some(fill) = kv.get("fill") {
+                if fill.starts_with('#') && fill.len() >= 7 {
+                    let r = u8::from_str_radix(&fill[1..3], 16).unwrap_or(120);
+                    let g = u8::from_str_radix(&fill[3..5], 16).unwrap_or(200);
+                    let b = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
+                    *color = [r, g, b, 255];
+                }
+            }
+        }
+        Shape::Rect { x, y, w, h, color, spawn_time, .. } => {
+            if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) { *x = v; }
+            if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) { *y = v; }
+            if let Some(v) = kv.get("width").or(kv.get("w")).and_then(|s| s.parse().ok()) { *w = v; }
+            if let Some(v) = kv.get("height").or(kv.get("h")).and_then(|s| s.parse().ok()) { *h = v; }
+            if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) { *spawn_time = v; }
+            if let Some(fill) = kv.get("fill") {
+                if fill.starts_with('#') && fill.len() >= 7 {
+                    let r = u8::from_str_radix(&fill[1..3], 16).unwrap_or(200);
+                    let g = u8::from_str_radix(&fill[3..5], 16).unwrap_or(120);
+                    let b = u8::from_str_radix(&fill[5..7], 16).unwrap_or(120);
+                    *color = [r, g, b, 255];
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn add_anim_to_shape(shape: &mut Shape, parsed: crate::animations::move_animation::ParsedMove) {
+    match shape {
+        Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
+            animations.push(crate::scene::Animation::Move {
+                to_x: parsed.to_x,
+                to_y: parsed.to_y,
+                start: parsed.start,
+                end: parsed.end,
+                easing: parsed.easing,
+            });
+        }
+        _ => {}
+    }
+}
+
+fn parse_legacy_animations(shape: &mut Shape, mut line: &str) {
+    // Handle .animate_to(1.0, 0.0).during(0.0, 1.0).ease(type = linear)
+    while let Some(pos) = line.find(".animate_to(") {
+        let content_start = pos + 12;
+        if let Some(content_end) = line[content_start..].find(')') {
+            let coords = &line[content_start..content_start + content_end];
+            let parts: Vec<&str> = coords.split(',').collect();
+            if parts.len() == 2 {
+                let to_x = parts[0].trim().parse().unwrap_or(0.0);
+                let to_y = parts[1].trim().parse().unwrap_or(0.0);
+                
+                let mut start = 0.0;
+                let mut end = 1.0;
+                let mut easing = crate::scene::Easing::Linear;
+                
+                // check for .during
+                let mut remainder = &line[content_start + content_end + 1..];
+                if let Some(d_pos) = remainder.find(".during(") {
+                    let d_start = d_pos + 8;
+                    if let Some(d_end) = remainder[d_start..].find(')') {
+                        let times = &remainder[d_start..d_start + d_end];
+                        let t_parts: Vec<&str> = times.split(',').collect();
+                        if t_parts.len() == 2 {
+                            start = t_parts[0].trim().parse().unwrap_or(0.0);
+                            end = t_parts[1].trim().parse().unwrap_or(1.0);
+                        }
+                        remainder = &remainder[d_start + d_end + 1..];
+                    }
+                }
+                
+                // check for .ease
+                if let Some(e_pos) = remainder.find(".ease(") {
+                    let e_start = e_pos + 6;
+                    if let Some(e_end) = remainder[e_start..].find(')') {
+                        let e_content = &remainder[e_start..e_start + e_end];
+                        // Simplified easing lookup
+                        if e_content.contains("linear") { easing = crate::scene::Easing::Linear; }
+                        else if e_content.contains("ease_in_out") { easing = crate::scene::Easing::EaseInOut { power: 2.0 }; }
+                        else if e_content.contains("ease_in") { easing = crate::scene::Easing::EaseIn { power: 2.0 }; }
+                        else if e_content.contains("ease_out") { easing = crate::scene::Easing::EaseOut { power: 2.0 }; }
+                        line = &remainder[e_start + e_end + 1..];
+                    } else { line = ""; }
+                } else { line = remainder; }
+                
+                match shape {
+                    Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
+                        animations.push(crate::scene::Animation::Move { to_x, to_y, start, end, easing });
+                    }
+                    _ => {}
+                }
+            } else { break; }
+        } else { break; }
+    }
 }
 
 #[cfg(test)]

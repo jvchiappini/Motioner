@@ -201,8 +201,8 @@ pub fn render_easing_curve_editor(
                         } else if pos.distance(cp2) < 10.0 {
                             dragging = Some(2);
                         }
-                        if dragging.is_some() {
-                            ui.data_mut(|d| d.insert_temp(drag_id, dragging));
+                        if let Some(idx) = dragging {
+                            ui.data_mut(|d| d.insert_temp(drag_id, idx));
                         }
                     }
                 }
@@ -215,15 +215,21 @@ pub fn render_easing_curve_editor(
                         let (nx, ny) = from_screen(pos);
                         let new_val = (nx.clamp(0.0, 1.0), ny.clamp(-0.5, 1.5));
                         if idx == 1 {
-                            *p1 = new_val;
+                            if *p1 != new_val {
+                                *p1 = new_val;
+                                changed = true;
+                            }
                         } else {
-                            *p2 = new_val;
+                            if *p2 != new_val {
+                                *p2 = new_val;
+                                changed = true;
+                            }
                         }
                         ctx.request_repaint();
                     }
                 } else {
                     // Mouse soltado
-                    ui.data_mut(|d| d.remove::<Option<usize>>(drag_id));
+                    ui.data_mut(|d| d.remove::<usize>(drag_id));
                     changed = true;
                 }
             }
@@ -251,7 +257,24 @@ pub fn render_easing_curve_editor(
                 painter.circle_filled(to_screen(p.0, p.1), 5.0, egui::Color32::YELLOW);
             }
 
-            // Detectar inicio de drag
+            // Right click to remove point
+            if response.clicked_by(egui::PointerButton::Secondary) {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let mut to_remove = None;
+                    for (i, p) in points.iter().enumerate() {
+                        if to_screen(p.0, p.1).distance(pos) < 10.0 {
+                            to_remove = Some(i);
+                            break;
+                        }
+                    }
+                    if let Some(idx) = to_remove {
+                        points.remove(idx);
+                        changed = true;
+                    }
+                }
+            }
+
+            // Detectar inicio de drag o agregar punto
             if pointer_down && !was_down && dragging.is_none() {
                 if let Some(pos) = pointer_pos {
                     if rect.contains(pos) {
@@ -266,7 +289,22 @@ pub fn render_easing_curve_editor(
                         }
                         if let Some(pt_idx) = best {
                             dragging = Some(pt_idx);
-                            ui.data_mut(|d| d.insert_temp(drag_id, dragging));
+                            ui.data_mut(|d| d.insert_temp(drag_id, pt_idx));
+                        } else {
+                            // Agregar punto si no hay ninguno cerca
+                            let (nx, ny) = from_screen(pos);
+                            points.push((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)));
+                            points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                            // Opcional: empezar a arrastrar el nuevo punto?
+                            // Buscamos el índice del nuevo punto (tras sort)
+                            for (idx, p) in points.iter().enumerate() {
+                                if (p.0 - nx).abs() < 0.001 && (p.1 - ny).abs() < 0.001 {
+                                    dragging = Some(idx);
+                                    ui.data_mut(|d| d.insert_temp(drag_id, idx));
+                                    break;
+                                }
+                            }
+                            changed = true;
                         }
                     }
                 }
@@ -277,12 +315,16 @@ pub fn render_easing_curve_editor(
                 if pointer_down {
                     if let Some(pos) = pointer_pos {
                         let (nx, ny) = from_screen(pos);
-                        points[idx] = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+                        let new_val = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+                        if points[idx] != new_val {
+                            points[idx] = new_val;
+                            changed = true;
+                        }
                         ctx.request_repaint();
                     }
                 } else {
                     // Mouse soltado
-                    ui.data_mut(|d| d.remove::<Option<usize>>(drag_id));
+                    ui.data_mut(|d| d.remove::<usize>(drag_id));
                     points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                     changed = true;
                 }

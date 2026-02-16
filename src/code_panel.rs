@@ -28,9 +28,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     });
     ui.separator();
 
+    let defined_names: std::collections::HashSet<String> = state.scene.iter().map(|s| s.name().to_string()).collect();
+
     let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
         let mut layout_job = egui::text::LayoutJob::default();
-        highlight_code(&mut layout_job, string); // custom highlighter
+        highlight_code(&mut layout_job, string, &defined_names); // custom highlighter
         layout_job.wrap.max_width = wrap_width; // no wrapping
         ui.fonts(|f| f.layout_job(layout_job))
     };
@@ -159,19 +161,18 @@ fn render_minimap(ui: &mut egui::Ui, rect: egui::Rect, code: &str, scroll_offset
              let color = if c.is_whitespace() {
                  None
              } else if c.is_ascii_digit() {
-                 Some(egui::Color32::from_rgb(150, 200, 150)) // Number green
+                 Some(egui::Color32::from_rgb(181, 206, 168)) // Number green
              } else if "\"".contains(c) {
-                 Some(egui::Color32::from_rgb(200, 140, 120)) // String red/orange
+                 Some(egui::Color32::from_rgb(206, 145, 120)) // String
              } else if "()[]{}".contains(c) {
                  Some(egui::Color32::from_rgb(255, 200, 50)) // Bracket Gold
              } else if c == '/' && chars.peek() == Some(&'/') {
                  // Comment - rest of line
-                 Some(egui::Color32::from_rgb(80, 100, 80)) // Comment Green
+                 Some(egui::Color32::from_rgb(90, 120, 90)) // Comment Green
+             } else if c.is_lowercase() {
+                  Some(egui::Color32::from_rgb(86, 156, 214)) // Keyword/Param Blue
              } else if c.is_uppercase() {
-                 Some(egui::Color32::from_rgb(70, 200, 170)) // Type
-             } else if c == 'f' || c == 'l' || c == 'p' { 
-                 // Weak heuristic for keywords (fn, let, pub, project, etc)
-                  Some(egui::Color32::from_rgb(80, 150, 210)) // Keyword Blue-ish
+                 Some(egui::Color32::from_rgb(78, 201, 176)) // Object Teal
              } else {
                  Some(egui::Color32::from_gray(120))
              };
@@ -225,7 +226,7 @@ fn render_minimap(ui: &mut egui::Ui, rect: egui::Rect, code: &str, scroll_offset
     );
 }
 
-fn highlight_code(job: &mut egui::text::LayoutJob, code: &str) {
+fn highlight_code(job: &mut egui::text::LayoutJob, code: &str, defined_names: &std::collections::HashSet<String>) {
     let font_id = egui::FontId::monospace(14.0);
     
     // Simple tokenizer based on characters
@@ -247,14 +248,12 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str) {
     while let Some((idx, c)) = chars.next() {
         // 1. Whitespace - just append
         if c.is_whitespace() {
-            // Check if we need to flush previous token? (Handled inside token blocks usually)
             continue; 
         }
 
         // 2. Comments (// ...)
         if c == '/' {
              if let Some((_, '/')) = chars.peek() {
-                 // Consume until newline
                  chars.next(); // eat second slash
                  let start = idx;
                  let mut end = idx + 2;
@@ -272,14 +271,13 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str) {
 
         // 3. Strings ("...")
         if c == '"' {
-             // flush preamble
              append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
              
              let start = idx;
              let mut end = idx + 1;
              while let Some((i, next_c)) = chars.next() {
                  end = i + 1;
-                 if next_c == '"' { break; } // TODO: Handle escaped quotes
+                 if next_c == '"' { break; } 
              }
              append_text(job, &code[start..end], &font_id, egui::Color32::from_rgb(206, 145, 120)); // VSCode String Color
              last_idx = end;
@@ -305,9 +303,8 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str) {
              continue;
         }
 
-        // 5. Keywords and Identifiers (Alpha start)
+        // 5. DSL Blocks, Parameters and Identifiers
         if c.is_alphabetic() || c == '_' {
-            // flush preamble
              if idx > last_idx {
                  append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
              }
@@ -325,19 +322,26 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str) {
              
              let word = &code[start..end];
              let color = match word {
-                 "fn" | "let" | "mut" | "if" | "else" | "match" | "return" | 
-                 "struct" | "impl" | "pub" | "use" | "mod" | "crate" | "for" | "while" | "loop" 
-                 => egui::Color32::from_rgb(86, 156, 214), // Blue keyword
-                 "true" | "false" => egui::Color32::from_rgb(86, 156, 214),
-                 "i32" | "f32" | "f64" | "u32" | "usize" | "String" | "str" | "bool" 
-                 => egui::Color32::from_rgb(78, 201, 176), // Type teal
+                 // Primary Block Keywords
+                 "circle" | "rect" | "move" | "size" | "timeline" 
+                 => egui::Color32::from_rgb(86, 156, 214), // Blue (#569CD6)
+
+                 // Parameters / Properties
+                 "name" | "x" | "y" | "radius" | "w" | "h" | "width" | "height" | 
+                 "fill" | "spawn" | "to" | "during" | "ease" | "startAt" | 
+                 "time" | "element" | "type" | "fps" | "duration"
+                 => egui::Color32::from_rgb(156, 220, 254), // Light Blue (#9CDCFE)
+
+                 // Values / Constants / Easings
+                 "linear" | "ease_in" | "ease_out" | "ease_in_out" | "bezier" | "custom" | "points" | "power"
+                 => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
+
                  _ => {
-                     // Heuristic for simple function calls (followed by '(')? 
-                     // Hard without lookahead of tokens, but basic colored ident is fine.
-                     if word.starts_with(char::is_uppercase) {
-                         egui::Color32::from_rgb(78, 201, 176) // Class/Type-like
+                     // Check if this is a defined object name
+                     if defined_names.contains(word) {
+                         egui::Color32::from_rgb(78, 201, 176) // Teal (#4EC9B0) for Objects
                      } else {
-                         egui::Color32::LIGHT_GRAY // Standard variable
+                         egui::Color32::LIGHT_GRAY
                      }
                  }
              };
@@ -348,25 +352,32 @@ fn highlight_code(job: &mut egui::text::LayoutJob, code: &str) {
         }
         
         // 6. Numbers
-         if c.is_ascii_digit() {
-              if idx > last_idx {
-                 append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
-             }
-              let start = idx;
-             let mut end = idx + 1;
-             while let Some((i, next_c)) = chars.peek() {
-                 if next_c.is_ascii_digit() || *next_c == '.' {
-                     end = *i + 1;
-                     chars.next();
-                 } else {
-                     break;
-                 }
-             }
+        if c.is_ascii_digit() {
+            if idx > last_idx {
+                append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
+            }
+            let start = idx;
+            let mut end = idx + 1;
+            while let Some((i, next_c)) = chars.peek() {
+                if next_c.is_ascii_digit() || *next_c == '.' {
+                    end = *i + 1;
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
             append_text(job, &code[start..end], &font_id, egui::Color32::from_rgb(181, 206, 168)); // Light Green number
             last_idx = end;
             continue;
-         }
+        }
 
+        // 7. Operators and separators
+        if "=->,".contains(c) {
+            append_text(job, &code[last_idx..idx], &font_id, egui::Color32::LIGHT_GRAY);
+            append_text(job, &code[idx..idx+1], &font_id, egui::Color32::from_rgb(212, 212, 212)); // Subtle gray for ops
+            last_idx = idx + 1;
+            continue;
+        }
     }
     
     // Flush remaining

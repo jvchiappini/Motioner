@@ -27,7 +27,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let window = egui::Window::new("🔧 Element Modifiers")
         .open(&mut open)
         .resizable(true)
-        .collapsible(false)
+        .collapsible(true)
         .default_width(default_w)
         .default_height(default_h)
         .default_pos(default_pos)

@@ -92,20 +92,47 @@ impl MoveAnimation {
         frames
     }
 
-    pub fn to_dsl_snippet(&self, element_name: &str, indent: &str) -> String {
+    pub fn to_dsl_block(&self, element_name: Option<&str>, indent: &str) -> String {
         let ease_str = match &self.easing {
-            Easing::Linear => linear::to_dsl_string(),
-            Easing::EaseIn { power } => ease_in::to_dsl_string(*power),
-            Easing::EaseOut { power } => ease_out::to_dsl_string(*power),
-            Easing::EaseInOut { power } => ease_in_out::to_dsl_string(*power),
-            Easing::Bezier { p1, p2 } => bezier::to_dsl_string(*p1, *p2),
-            Easing::Custom { points } => custom::to_dsl_string(points),
+            Easing::Linear => "linear".to_string(),
+            Easing::EaseIn { power } => format!("ease_in(power = {:.3})", power),
+            Easing::EaseOut { power } => format!("ease_out(power = {:.3})", power),
+            Easing::EaseInOut { power } => format!("ease_in_out(power = {:.3})", power),
+            Easing::Bezier { p1, p2 } => format!(
+                "bezier(p1 = ({:.3}, {:.3}), p2 = ({:.3}, {:.3}))",
+                p1.0, p1.1, p2.0, p2.1
+            ),
+            Easing::Custom { points } => {
+                let pts: Vec<String> = points
+                    .iter()
+                    .map(|(t, v)| format!("({:.3}, {:.3})", t, v))
+                    .collect();
+                format!("custom(points = [{}])", pts.join(", "))
+            }
         };
 
-        format!(
-            "{}{}.animate_to({:.2}, {:.2}).during({:.2}, {:.2}).ease({});\n",
-            indent, element_name, self.to_x, self.to_y, self.start, self.end, ease_str
-        )
+        let mut out = format!("{}move {{\n", indent);
+        let inner_indent = format!("{}    ", indent);
+
+        if let Some(name) = element_name {
+            out.push_str(&format!("{}element = \"{}\"\n", inner_indent, name));
+        }
+
+        out.push_str(&format!(
+            "{}to = ({:.3}, {:.3})\n",
+            inner_indent, self.to_x, self.to_y
+        ));
+        out.push_str(&format!(
+            "{}during = {:.3} -> {:.3}\n",
+            inner_indent, self.start, self.end
+        ));
+        out.push_str(&format!("{}ease = {}\n", inner_indent, ease_str));
+        out.push_str(&format!("{}}}\n", indent));
+        out
+    }
+
+    pub fn to_dsl_snippet(&self, element_name: &str, indent: &str) -> String {
+        self.to_dsl_block(None, indent)
     }
 }
 
@@ -318,6 +345,11 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
     let mut i = 0usize;
     while i < lines.len() {
         let b = lines[i].trim();
+        if b.is_empty() {
+            i += 1;
+            continue;
+        }
+
         if b.starts_with("element") && b.contains('=') {
             if let Some(eq) = b.find('=') {
                 let val = b[eq + 1..]
@@ -328,21 +360,50 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                     .to_string();
                 element = Some(val);
             }
-        } else if b.starts_with("type") && b.contains('=') {
+        } else if (b.starts_with("type") || b.starts_with("ease")) && b.contains('=') {
             if let Some(eq) = b.find('=') {
                 let val = b[eq + 1..].trim().trim_matches(',').to_lowercase();
-                if let Some(e) = linear::parse_dsl(&val) {
+                // Try parsing with or without "type =" prefix
+                let clean_val = if val.starts_with("type =") {
+                    val.clone()
+                } else {
+                    format!("type = {}", val)
+                };
+
+                if let Some(e) = linear::parse_dsl(&clean_val) {
                     easing_kind = e;
-                } else if let Some(e) = ease_in_out::parse_dsl(&val) {
+                } else if let Some(e) = ease_in_out::parse_dsl(&clean_val) {
                     easing_kind = e;
-                } else if let Some(e) = ease_in::parse_dsl(&val) {
+                } else if let Some(e) = ease_in::parse_dsl(&clean_val) {
                     easing_kind = e;
-                } else if let Some(e) = ease_out::parse_dsl(&val) {
+                } else if let Some(e) = ease_out::parse_dsl(&clean_val) {
                     easing_kind = e;
-                } else if let Some(e) = custom::parse_dsl(&val) {
+                } else if let Some(e) = custom::parse_dsl(&clean_val) {
                     easing_kind = e;
-                } else if let Some(e) = bezier::parse_dsl(&val) {
+                } else if let Some(e) = bezier::parse_dsl(&clean_val) {
                     easing_kind = e;
+                }
+            }
+        } else if b.starts_with("to") && b.contains('=') {
+            // to = (x, y)
+            if let Some(eq) = b.find('=') {
+                let val = b[eq + 1..].trim().trim_matches(',');
+                if val.starts_with('(') && val.ends_with(')') {
+                    let inner = &val[1..val.len() - 1];
+                    let parts: Vec<&str> = inner.split(',').collect();
+                    if parts.len() == 2 {
+                        end_x = parts[0].trim().parse().ok();
+                        end_y = parts[1].trim().parse().ok();
+                    }
+                }
+            }
+        } else if b.starts_with("during") && b.contains('=') {
+            // during = start -> end
+            if let Some(eq) = b.find('=') {
+                let val = b[eq + 1..].trim().trim_matches(',');
+                if let Some(arrow) = val.find("->") {
+                    start_at = val[..arrow].trim().parse().ok();
+                    end_time = val[arrow + 2..].trim().parse().ok();
                 }
             }
         } else if b.starts_with("startAt") && b.contains('=') {
@@ -352,7 +413,7 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                 }
             }
         } else if b.starts_with("end") && b.contains('{') {
-            // parse nested end { ... } block
+            // parse nested end { ... } block (legacy support)
             i += 1;
             while i < lines.len() {
                 let e = lines[i].trim();

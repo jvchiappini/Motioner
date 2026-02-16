@@ -19,11 +19,12 @@ pub fn to_dsl_string(power: f32) -> String {
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    if val.starts_with("ease_in_out") {
+    let s = val.trim_start_matches("type").trim_start_matches('=').trim();
+    if s.starts_with("ease_in_out") {
         let mut power = 1.0f32;
-        if let Some(open) = val.find('(') {
-            if let Some(close) = val.rfind(')') {
-                let inner = &val[open + 1..close];
+        if let Some(open) = s.find('(') {
+            if let Some(close) = s.rfind(')') {
+                let inner = &s[open + 1..close];
                 for part in inner.split(',') {
                     let p = part.trim();
                     if p.starts_with("power") && p.contains('=') {
