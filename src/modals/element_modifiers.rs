@@ -290,125 +290,238 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                                     *easing = crate::scene::Easing::EaseInOut { power: 1.0 };
                                                                                     changed = true;
                                                                                 }
+
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Custom { .. }), "Custom").on_hover_text("Custom — define your own curve by adding points").clicked() {
+                                                                                    *easing = crate::scene::Easing::Custom { points: vec![(0.0, 0.0), (1.0, 1.0)] };
+                                                                                    changed = true;
+                                                                                }
+                                                                                if ui.selectable_label(matches!(easing, crate::scene::Easing::Bezier { .. }), "Bezier").on_hover_text("Bezier — smooth curve with 2 control points").clicked() {
+                                                                                    // Default ease-in-out like
+                                                                                    *easing = crate::scene::Easing::Bezier { p1: (0.42, 0.0), p2: (0.58, 1.0) };
+                                                                                    changed = true;
+                                                                                }
                                                                             });
+                                                                        }); // Close the horizontal layout that contains the label and ComboBox
 
                                                                         // If a `power`-based easing is selected expose the `power` parameter
-                                                                            match easing {
-                                                                                crate::scene::Easing::EaseIn { power } => {
-                                                                                    // expose slider + small curve preview (EaseIn)
-                                                                                    let mut p = *power;
-                                                                                    ui.horizontal(|ui| {
-                                                                                        let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
-                                                                                        if slider_resp.changed() {
-                                                                                            *power = p;
-                                                                                            changed = true;
-                                                                                        }
-                                                                                        slider_resp.on_hover_text("`power` controls curvature (1.0 = linear). Larger values increase easing strength.");
-
-                                                                                        ui.add_space(8.0);
-
-                                                                                        // curve preview (small inline graph)
-                                                                                        let preview_size = egui::vec2(120.0, 44.0);
-                                                                                        let (rect, _resp) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
-                                                                                        let painter = ui.painter_at(rect);
-                                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
-                                                                                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
-
-                                                                                        let steps = 48usize;
-                                                                                        let mut prev: Option<egui::Pos2> = None;
-                                                                                        for i in 0..=steps {
-                                                                                            let t = i as f32 / steps as f32;
-                                                                                            let progress = t.powf(*power);
-                                                                                            let x = rect.left() + t * rect.width();
-                                                                                            let y = rect.bottom() - progress * rect.height();
-                                                                                            let pos = egui::pos2(x, y);
-                                                                                            if let Some(prev_pos) = prev {
-                                                                                                painter.line_segment([prev_pos, pos], egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
-                                                                                            }
-                                                                                            prev = Some(pos);
-                                                                                        }
-                                                                                    });
-                                                                                }
-
-                                                                                crate::scene::Easing::EaseOut { power } => {
-                                                                                    // expose slider + small curve preview (EaseOut)
-                                                                                    let mut p = *power;
-                                                                                    ui.horizontal(|ui| {
-                                                                                        let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
-                                                                                        if slider_resp.changed() {
-                                                                                            *power = p;
-                                                                                            changed = true;
-                                                                                        }
-                                                                                        slider_resp.on_hover_text("`power` controls curvature (1.0 = linear). Larger values increase easing strength.");
-
-                                                                                        ui.add_space(8.0);
-
-                                                                                        let preview_size = egui::vec2(120.0, 44.0);
-                                                                                        let (rect, _resp) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
-                                                                                        let painter = ui.painter_at(rect);
-                                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
-                                                                                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
-
-                                                                                        let steps = 48usize;
-                                                                                        let mut prev: Option<egui::Pos2> = None;
-                                                                                        for i in 0..=steps {
-                                                                                            let t = i as f32 / steps as f32;
-                                                                                            let progress = 1.0 - (1.0 - t).powf(*power);
-                                                                                            let x = rect.left() + t * rect.width();
-                                                                                            let y = rect.bottom() - progress * rect.height();
-                                                                                            let pos = egui::pos2(x, y);
-                                                                                            if let Some(prev_pos) = prev {
-                                                                                                painter.line_segment([prev_pos, pos], egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
-                                                                                            }
-                                                                                            prev = Some(pos);
-                                                                                        }
-                                                                                    });
-                                                                                }
-
-                                                                                crate::scene::Easing::EaseInOut { power } => {
-                                                                                    // expose slider + small curve preview (EaseInOut)
-                                                                                    let mut p = *power;
-                                                                                    ui.horizontal(|ui| {
-                                                                                        let slider_resp = ui.add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false));
-                                                                                        if slider_resp.changed() {
-                                                                                            *power = p;
-                                                                                            changed = true;
-                                                                                        }
-                                                                                        slider_resp.on_hover_text("`power` controls curvature (1.0 = linear). Larger values increase easing strength.");
-
-                                                                                        ui.add_space(8.0);
-
-                                                                                        let preview_size = egui::vec2(120.0, 44.0);
-                                                                                        let (rect, _resp) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
-                                                                                        let painter = ui.painter_at(rect);
-                                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
-                                                                                        painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
-
-                                                                                        let steps = 48usize;
-                                                                                        let mut prev: Option<egui::Pos2> = None;
-                                                                                        for i in 0..=steps {
-                                                                                            let t = i as f32 / steps as f32;
-                                                                                            let progress = if (*power - 1.0).abs() < std::f32::EPSILON {
-                                                                                                t
-                                                                                            } else if t < 0.5 {
-                                                                                                0.5 * (2.0 * t).powf(*power)
-                                                                                            } else {
-                                                                                                1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power)
-                                                                                            };
-                                                                                            let x = rect.left() + t * rect.width();
-                                                                                            let y = rect.bottom() - progress * rect.height();
-                                                                                            let pos = egui::pos2(x, y);
-                                                                                            if let Some(prev_pos) = prev {
-                                                                                                painter.line_segment([prev_pos, pos], egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE));
-                                                                                            }
-                                                                                            prev = Some(pos);
-                                                                                        }
-                                                                                    });
-                                                                                }
-                                                                                _ => {}
+                                                                        ui.label("Easing Curve:");
+                                                                        
+                                                                        // Parameter sliders for standard easings
+                                                                        match easing {
+                                                                            crate::scene::Easing::EaseIn { power } | 
+                                                                            crate::scene::Easing::EaseOut { power } | 
+                                                                            crate::scene::Easing::EaseInOut { power } => {
+                                                                                ui.horizontal(|ui| {
+                                                                                    if ui.add(egui::Slider::new(power, 0.1..=5.0).text("Power")).changed() { changed = true; }
+                                                                                });
                                                                             }
+                                                                            crate::scene::Easing::Bezier { p1, p2 } => {
+                                                                                 ui.horizontal(|ui| {
+                                                                                        ui.label("P1:");
+                                                                                        if ui.add(egui::DragValue::new(&mut p1.0).speed(0.01).clamp_range(0.0..=1.0)).changed() { changed = true; }
+                                                                                        if ui.add(egui::DragValue::new(&mut p1.1).speed(0.01)).changed() { changed = true; }
+                                                                                        ui.label("P2:");
+                                                                                        if ui.add(egui::DragValue::new(&mut p2.0).speed(0.01).clamp_range(0.0..=1.0)).changed() { changed = true; }
+                                                                                        if ui.add(egui::DragValue::new(&mut p2.1).speed(0.01)).changed() { changed = true; }
+                                                                                 });
+                                                                            }
+                                                                            crate::scene::Easing::Custom { .. } => {
+                                                                                ui.label(egui::RichText::new("Left-click add/drag, Right-click remove").small().color(egui::Color32::GRAY));
+                                                                            }
+                                                                            _ => {}
+                                                                        }
+
+                                                                        // UNIFIED GRAPH EDITOR
+                                                                        let size = egui::vec2(ui.available_width(), 200.0);
+                                                                        let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
+                                                                        let rect = response.rect;
+
+                                                                        // Background & Grid
+                                                                        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(20));
+                                                                        painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+                                                                        
+                                                                        let to_screen = |x: f32, y: f32| egui::pos2(
+                                                                            rect.left() + x * rect.width(),
+                                                                            rect.bottom() - y * rect.height()
+                                                                        );
+                                                                        let from_screen = |pos: egui::Pos2| (
+                                                                            (pos.x - rect.left()) / rect.width(),
+                                                                            (rect.bottom() - pos.y) / rect.height()
+                                                                        );
+
+                                                                        // Draw Grid
+                                                                        for i in 1..4 {
+                                                                            let t = i as f32 / 4.0;
+                                                                            let x = rect.left() + t * rect.width();
+                                                                            let y = rect.bottom() - t * rect.height();
+                                                                            painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
+                                                                            painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
+                                                                        }
+                                                                        painter.text(rect.right_bottom() + egui::vec2(-4.0, -12.0), egui::Align2::RIGHT_BOTTOM, "Time", egui::FontId::proportional(10.0), egui::Color32::GRAY);
+                                                                        painter.text(rect.left_top() + egui::vec2(6.0, 4.0), egui::Align2::LEFT_TOP, "Value", egui::FontId::proportional(10.0), egui::Color32::GRAY);
+
+                                                                        // Draw Current Easing Curve
+                                                                        let steps = 64;
+                                                                        let mut curve_points = Vec::with_capacity(steps + 1);
+                                                                        match easing {
+                                                                            crate::scene::Easing::Linear => {
+                                                                                curve_points.push(to_screen(0.0, 0.0));
+                                                                                curve_points.push(to_screen(1.0, 1.0));
+                                                                            }
+                                                                            crate::scene::Easing::Custom { points } => {
+                                                                                let mut sorted = points.clone();
+                                                                                sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                                                                                for p in sorted {
+                                                                                    curve_points.push(to_screen(p.0, p.1));
+                                                                                }
+                                                                            }
+                                                                            crate::scene::Easing::Bezier { p1, p2 } => {
+                                                                                for i in 0..=steps {
+                                                                                    let t = i as f32 / steps as f32;
+                                                                                    let u = 1.0 - t;
+                                                                                    // Cubic Bezier Parametric
+                                                                                    let cx = 3.0*u*u*t*p1.0 + 3.0*u*t*t*p2.0 + t*t*t;
+                                                                                    let cy = 3.0*u*u*t*p1.1 + 3.0*u*t*t*p2.1 + t*t*t;
+                                                                                    curve_points.push(to_screen(cx, cy));
+                                                                                }
+                                                                            }
+                                                                            _ => {
+                                                                                // Sample strict y(x) function
+                                                                                for i in 0..=steps {
+                                                                                    let t = i as f32 / steps as f32;
+                                                                                    let v = match easing {
+                                                                                        crate::scene::Easing::EaseIn { power } => t.powf(*power),
+                                                                                        crate::scene::Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
+                                                                                        crate::scene::Easing::EaseInOut { power } => {
+                                                                                            if t < 0.5 { 0.5 * (2.0 * t).powf(*power) } 
+                                                                                            else { 1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power) }
+                                                                                        },
+                                                                                        _ => t // Fallback
+                                                                                    };
+                                                                                    curve_points.push(to_screen(t, v));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        painter.add(egui::Shape::line(curve_points, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE)));
+
+                                                                        // INTERACTION & EDITORS
+                                                                        match easing {
+                                                                            crate::scene::Easing::Bezier { p1, p2 } => {
+                                                                                // Bezier Handles
+                                                                                let start = to_screen(0.0, 0.0);
+                                                                                let end = to_screen(1.0, 1.0);
+                                                                                let cp1 = to_screen(p1.0, p1.1);
+                                                                                let cp2 = to_screen(p2.0, p2.1);
+                                                                                
+                                                                                painter.line_segment([start, cp1], egui::Stroke::new(1.0, egui::Color32::GRAY));
+                                                                                painter.line_segment([end, cp2], egui::Stroke::new(1.0, egui::Color32::GRAY));
+                                                                                painter.circle_filled(cp1, 4.0, egui::Color32::YELLOW);
+                                                                                painter.circle_filled(cp2, 4.0, egui::Color32::YELLOW);
+
+                                                                                let drag_id = ui.make_persistent_id("bezier_drag");
+                                                                                let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
+
+                                                                                if response.drag_started() {
+                                                                                    if let Some(pos) = response.interact_pointer_pos() {
+                                                                                        if pos.distance(cp1) < 10.0 { dragging = Some(1); }
+                                                                                        else if pos.distance(cp2) < 10.0 { dragging = Some(2); }
+                                                                                        ui.data_mut(|d| d.insert_temp(drag_id, dragging));
+                                                                                    }
+                                                                                }
+                                                                                if let Some(idx) = dragging {
+                                                                                    if let Some(pos) = response.interact_pointer_pos() {
+                                                                                        let (nx, ny) = from_screen(pos);
+                                                                                        let new_val = (nx.clamp(0.0, 1.0), ny.clamp(-0.5, 1.5));
+                                                                                        if idx == 1 { *p1 = new_val; } else { *p2 = new_val; }
+                                                                                        changed = true;
+                                                                                    }
+                                                                                    if response.drag_released() { ui.data_mut(|d| d.remove::<Option<usize>>(drag_id)); }
+                                                                                }
+                                                                            }
+                                                                            crate::scene::Easing::Custom { points } => {
+                                                                                // Points Editor
+                                                                                let drag_id = ui.make_persistent_id("custom_drag");
+                                                                                let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
+                                                                                
+                                                                                // Draw Points
+                                                                                for (i, p) in points.iter().enumerate() {
+                                                                                    painter.circle_filled(to_screen(p.0, p.1), 5.0, egui::Color32::YELLOW);
+                                                                                }
+
+                                                                                // Drag Logic
+                                                                                if response.drag_started() {
+                                                                                    if let Some(pos) = response.interact_pointer_pos() {
+                                                                                        let mut best_dist = f32::MAX;
+                                                                                        let mut best = None;
+                                                                                        for (i, p) in points.iter().enumerate() {
+                                                                                            let d = to_screen(p.0, p.1).distance(pos);
+                                                                                            if d < 10.0 && d < best_dist { best_dist = d; best = Some(i); }
+                                                                                        }
+                                                                                        if let Some(i) = best { dragging = Some(i); ui.data_mut(|d| d.insert_temp(drag_id, dragging)); }
+                                                                                    }
+                                                                                }
+                                                                                if let Some(idx) = dragging {
+                                                                                    if let Some(pos) = response.interact_pointer_pos() {
+                                                                                        let (nx, ny) = from_screen(pos);
+                                                                                        points[idx] = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+                                                                                        changed = true;
+                                                                                    }
+                                                                                    if response.drag_released() { 
+                                                                                        ui.data_mut(|d| d.remove::<Option<usize>>(drag_id)); 
+                                                                                        points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                                                                                    }
+                                                                                }
+                                                                                // Add/Remove Logic
+                                                                                if response.clicked() && dragging.is_none() {
+                                                                                    if let Some(pos) = response.interact_pointer_pos() {
+                                                                                        // Check close to point for remove?
+                                                                                        let mut clicked_pt = None;
+                                                                                        for (i, p) in points.iter().enumerate() {
+                                                                                            if to_screen(p.0, p.1).distance(pos) < 10.0 { clicked_pt = Some(i); break; }
+                                                                                        }
+                                                                                        
+                                                                                        if response.secondary_clicked() {
+                                                                                            if let Some(i) = clicked_pt { 
+                                                                                                if points.len() > 2 { points.remove(i); changed = true; }
+                                                                                            }
+                                                                                        } else if response.clicked_by(egui::PointerButton::Primary) {
+                                                                                            if clicked_pt.is_none() {
+                                                                                                let new_p = from_screen(pos);
+                                                                                                points.push((new_p.0.clamp(0.0, 1.0), new_p.1.clamp(0.0, 1.0)));
+                                                                                                points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                                                                                                changed = true;
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            _ => {
+                                                                                // Auto-convert to Custom on interaction
+                                                                                if response.clicked() || response.drag_started() {
+                                                                                     // Sample current curve to points
+                                                                                     let mut new_points = Vec::new();
+                                                                                     for i in 0..=4 {
+                                                                                        let t = i as f32 / 4.0;
+                                                                                        let v = match easing {
+                                                                                             crate::scene::Easing::EaseIn { power } => t.powf(*power),
+                                                                                             crate::scene::Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
+                                                                                             crate::scene::Easing::EaseInOut { power } => {
+                                                                                                 if t < 0.5 { 0.5 * (2.0 * t).powf(*power) } 
+                                                                                                 else { 1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power) }
+                                                                                             },
+                                                                                             _ => t
+                                                                                         };
+                                                                                         new_points.push((t, v));
+                                                                                     }
+                                                                                     // If clicked position is new, add it too? 
+                                                                                     // Actually, just convert first, then let next frame handle drag/add.
+                                                                                     // Or try to add point right away.
+                                                                                     *easing = crate::scene::Easing::Custom { points: new_points };
+                                                                                     changed = true;
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     });
-                                                                });
 
                                                             ui.add_space(6.0);
                                                         }
@@ -660,36 +773,234 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                                                         *easing = crate::scene::Easing::EaseInOut { power: 1.0 };
                                                                                         changed = true;
                                                                                     }
-                                                                                });
 
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::Custom { .. }), "Custom").on_hover_text("Custom — define your own curve by adding points").clicked() {
+                                                                                        // Initialize with just start and end points
+                                                                                        *easing = crate::scene::Easing::Custom { points: vec![(0.0, 0.0), (1.0, 1.0)] };
+                                                                                        changed = true;
+                                                                                    }
+                                                                                    if ui.selectable_label(matches!(easing, crate::scene::Easing::Bezier { .. }), "Bezier").on_hover_text("Bezier — smooth curve with 2 control points").clicked() {
+                                                                                        // Default ease-in-out like
+                                                                                        *easing = crate::scene::Easing::Bezier { p1: (0.42, 0.0), p2: (0.58, 1.0) };
+                                                                                        changed = true;
+                                                                                    }
+                                                                                });
+                                                                            }); // Close the horizontal layout that contains the label and ComboBox
+
+                                                                            // If a `power`-based easing is selected expose the `power` parameter
+                                                                            ui.label(""); // Spacing
+                                                                            
+                                                                            // --- UNIFIED GRAPH VISUALIZATION ---
+                                                                            let graph_size = egui::vec2(ui.available_width(), 160.0);
+                                                                            let (response, painter) = ui.allocate_painter(graph_size, egui::Sense::click_and_drag());
+                                                                            let rect = response.rect;
+
+                                                                            // Background
+                                                                            painter.rect_filled(rect, 4.0, egui::Color32::from_gray(20));
+                                                                            painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+                                                                            
+                                                                            let to_screen = |x: f32, y: f32| egui::pos2(
+                                                                                rect.left() + x * rect.width(),
+                                                                                rect.bottom() - y * rect.height()
+                                                                            );
+                                                                            let from_screen = |pos: egui::Pos2| (
+                                                                                (pos.x - rect.left()) / rect.width(),
+                                                                                (rect.bottom() - pos.y) / rect.height()
+                                                                            );
+
+                                                                            // Grid
+                                                                            for i in 1..4 {
+                                                                                let t = i as f32 / 4.0;
+                                                                                let x = rect.left() + t * rect.width();
+                                                                                let y = rect.bottom() - t * rect.height();
+                                                                                painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
+                                                                                painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
+                                                                            }
+                                                                            painter.text(rect.right_bottom() + egui::vec2(-4.0, -12.0), egui::Align2::RIGHT_BOTTOM, "Time", egui::FontId::proportional(10.0), egui::Color32::GRAY);
+                                                                            
+                                                                            // Draw and Interact based on Type
                                                                             match easing {
-                                                                                crate::scene::Easing::EaseIn { power }
-                                                                                | crate::scene::Easing::EaseOut { power }
-                                                                                | crate::scene::Easing::EaseInOut { power } => {
-                                                                                    let mut p = *power;
-                                                                                    if ui
-                                                                                        .add(egui::Slider::new(&mut p, 0.1..=4.0).text("power").clamp_to_range(false))
-                                                                                        .changed()
-                                                                                    {
-                                                                                        *power = p;
+                                                                                crate::scene::Easing::Bezier { p1, p2 } => {
+                                                                                    // Handles
+                                                                                    let start = to_screen(0.0, 0.0);
+                                                                                    let end = to_screen(1.0, 1.0);
+                                                                                    let cp1 = to_screen(p1.0, p1.1);
+                                                                                    let cp2 = to_screen(p2.0, p2.1);
+                                                                                    
+                                                                                    painter.line_segment([start, cp1], egui::Stroke::new(1.0, egui::Color32::GRAY));
+                                                                                    painter.line_segment([end, cp2], egui::Stroke::new(1.0, egui::Color32::GRAY));
+                                                                                    
+                                                                                    // Interaction
+                                                                                    let drag_id = ui.make_persistent_id("bezier_drag");
+                                                                                    let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
+                                                                                    if response.drag_started() {
+                                                                                        if let Some(pos) = response.interact_pointer_pos() {
+                                                                                            if pos.distance(cp1) < 10.0 { dragging = Some(1); }
+                                                                                            else if pos.distance(cp2) < 10.0 { dragging = Some(2); }
+                                                                                            if dragging.is_some() { ui.data_mut(|d| d.insert_temp(drag_id, dragging)); }
+                                                                                        }
+                                                                                    }
+                                                                                    if let Some(idx) = dragging {
+                                                                                        if let Some(pos) = response.interact_pointer_pos() {
+                                                                                            let (nx, ny) = from_screen(pos);
+                                                                                            let new_val = (nx.clamp(0.0, 1.0), ny.clamp(-0.5, 1.5));
+                                                                                            if idx == 1 { *p1 = new_val; } else { *p2 = new_val; }
+                                                                                            changed = true;
+                                                                                        }
+                                                                                        if response.drag_released() { ui.data_mut(|d| d.remove::<Option<usize>>(drag_id)); }
+                                                                                    }
+
+                                                                                    // Draw Points
+                                                                                    painter.circle_filled(cp1, 4.0, egui::Color32::YELLOW);
+                                                                                    painter.circle_filled(cp2, 4.0, egui::Color32::YELLOW);
+
+                                                                                    // Draw Curve
+                                                                                    let steps = 64;
+                                                                                    let mut curve = Vec::with_capacity(steps);
+                                                                                    for i in 0..=steps {
+                                                                                        let t = i as f32 / steps as f32;
+                                                                                        let u = 1.0 - t;
+                                                                                        let cx = 3.0*u*u*t*p1.0 + 3.0*u*t*t*p2.0 + t*t*t;
+                                                                                        let cy = 3.0*u*u*t*p1.1 + 3.0*u*t*t*p2.1 + t*t*t;
+                                                                                        curve.push(to_screen(cx, cy));
+                                                                                    }
+                                                                                    painter.add(egui::Shape::line(curve, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE)));
+                                                                                }
+                                                                                crate::scene::Easing::Custom { points } => {
+                                                                                    // Draw Points
+                                                                                    for p in points.iter() {
+                                                                                        painter.circle_filled(to_screen(p.0, p.1), 4.0, egui::Color32::YELLOW);
+                                                                                    }
+                                                                                    // Draw Lines
+                                                                                    if points.len() >= 2 {
+                                                                                        let mut sorted = points.clone();
+                                                                                        sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                                                                                        let line_pts: Vec<egui::Pos2> = sorted.iter().map(|p| to_screen(p.0, p.1)).collect();
+                                                                                        painter.add(egui::Shape::line(line_pts, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE)));
+                                                                                    }
+                                                                                    
+                                                                                    // Interaction Logic (Simplified for brevity as it was complex, but let's re-add basic drag)
+                                                                                    let drag_id = ui.make_persistent_id("custom_drag");
+                                                                                    let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
+                                                                                    if response.drag_started() {
+                                                                                        if let Some(pos) = response.interact_pointer_pos() {
+                                                                                            let mut best = None;
+                                                                                            let mut min_d = 10.0;
+                                                                                            for (i, p) in points.iter().enumerate() {
+                                                                                                let d = to_screen(p.0, p.1).distance(pos);
+                                                                                                if d < min_d { min_d = d; best = Some(i); }
+                                                                                            }
+                                                                                            if let Some(i) = best { dragging = Some(i); ui.data_mut(|d| d.insert_temp(drag_id, dragging)); }
+                                                                                            else if response.clicked_by(egui::PointerButton::Primary) {
+                                                                                                // Add point
+                                                                                                let (nx, ny) = from_screen(pos);
+                                                                                                points.push((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)));
+                                                                                                points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                                                                                                changed = true;
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                    if let Some(idx) = dragging {
+                                                                                        if let Some(pos) = response.interact_pointer_pos() {
+                                                                                            let (nx, ny) = from_screen(pos);
+                                                                                            if idx < points.len() {
+                                                                                                points[idx] = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
+                                                                                                changed = true;
+                                                                                            }
+                                                                                        }
+                                                                                        if response.drag_released() { 
+                                                                                            ui.data_mut(|d| d.remove::<Option<usize>>(drag_id)); 
+                                                                                            points.sort_by(|a,b| a.0.partial_cmp(&b.0).unwrap());
+                                                                                        }
+                                                                                    }
+                                                                                    // Right click remove
+                                                                                    if response.secondary_clicked() {
+                                                                                        if let Some(pos) = response.interact_pointer_pos() {
+                                                                                             for (i, p) in points.iter().enumerate() {
+                                                                                                 if to_screen(p.0, p.1).distance(pos) < 10.0 {
+                                                                                                     if points.len() > 2 { points.remove(i); changed = true; }
+                                                                                                     break;
+                                                                                                 }
+                                                                                             }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                                _ => {
+                                                                                    // Draw standard easing
+                                                                                    let steps = 64;
+                                                                                    let mut curve = Vec::with_capacity(steps);
+                                                                                    for i in 0..=steps {
+                                                                                        let t = i as f32 / steps as f32;
+                                                                                        let v = match easing {
+                                                                                            crate::scene::Easing::EaseIn { power } => t.powf(*power),
+                                                                                            crate::scene::Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
+                                                                                            crate::scene::Easing::EaseInOut { power } => {
+                                                                                                if t < 0.5 { 0.5 * (2.0 * t).powf(*power) }
+                                                                                                else { 1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power) }
+                                                                                            },
+                                                                                            _ => t
+                                                                                        };
+                                                                                        curve.push(to_screen(t, v));
+                                                                                    }
+                                                                                    painter.add(egui::Shape::line(curve, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE)));
+                                                                                    
+                                                                                    // Convert to Custom on click
+                                                                                    if response.clicked() {
+                                                                                        // Sample to points
+                                                                                        let mut new_pts = Vec::new();
+                                                                                        for i in 0..=5 {
+                                                                                            let t = i as f32 / 5.0;
+                                                                                            let v = match easing {
+                                                                                                crate::scene::Easing::EaseIn { power } => t.powf(*power),
+                                                                                                crate::scene::Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
+                                                                                                crate::scene::Easing::EaseInOut { power } => {
+                                                                                                    if t < 0.5 { 0.5 * (2.0 * t).powf(*power) }
+                                                                                                    else { 1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power) }
+                                                                                                },
+                                                                                                _ => t
+                                                                                            };
+                                                                                            new_pts.push((t, v));
+                                                                                        }
+                                                                                        *easing = crate::scene::Easing::Custom { points: new_pts };
                                                                                         changed = true;
                                                                                     }
                                                                                 }
+                                                                            }
+
+                                                                            // --- CONTROLS ---
+                                                                            match easing {
+                                                                                crate::scene::Easing::EaseIn { power } | 
+                                                                                crate::scene::Easing::EaseOut { power } | 
+                                                                                crate::scene::Easing::EaseInOut { power } => {
+                                                                                    ui.horizontal(|ui| {
+                                                                                        if ui.add(egui::Slider::new(power, 0.1..=5.0).text("Power")).changed() { changed = true; }
+                                                                                    });
+                                                                                }
+                                                                                crate::scene::Easing::Bezier { p1, p2 } => {
+                                                                                    ui.horizontal(|ui| {
+                                                                                        ui.label("P1:");
+                                                                                        if ui.add(egui::DragValue::new(&mut p1.0).speed(0.01)).changed() { changed = true; }
+                                                                                        if ui.add(egui::DragValue::new(&mut p1.1).speed(0.01)).changed() { changed = true; }
+                                                                                        ui.label("P2:");
+                                                                                        if ui.add(egui::DragValue::new(&mut p2.0).speed(0.01)).changed() { changed = true; }
+                                                                                        if ui.add(egui::DragValue::new(&mut p2.1).speed(0.01)).changed() { changed = true; }
+                                                                                    });
+                                                                                }
                                                                                 _ => {}
                                                                             }
-                                                                        });
                                                                     });
 
-                                                                ui.add_space(6.0);
-                                                            }
-                                                        }
-
-                                                        if let Some(idx) = remove_idx {
-                                                            animations.remove(idx);
-                                                            changed = true;
+                                                            ui.add_space(6.0);
                                                         }
                                                     }
-                                                });
+
+                                                    // perform removal after iteration to avoid borrow issues
+                                                    if let Some(idx) = remove_idx {
+                                                        animations.remove(idx);
+                                                        changed = true;
+                                                    }
+                                                }
+                                            });
                                         });
                                     });
                                 }

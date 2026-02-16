@@ -17,4 +17,18 @@ pub enum Easing {
     EaseOut {
         power: f32,
     },
+    /// Custom easing defined by a list of control points (t, value).
+    /// Points should be sorted by t.
+    /// Implicit start at (0,0) and end at (1,1) are assumed if not present,
+    /// but explicitly including them makes editing easier.
+    Custom {
+        points: Vec<(f32, f32)>,
+    },
+    /// Cubic Bezier curve defined by two control points P1 and P2.
+    /// P0 is (0,0) and P3 is (1,1).
+    /// P1 = (x1, y1), P2 = (x2, y2)
+    Bezier {
+        p1: (f32, f32),
+        p2: (f32, f32),
+    },
 }
