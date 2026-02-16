@@ -197,8 +197,14 @@ mod tests {
             easing: Easing::Linear,
         };
 
-        let lerp_pow1 = MoveAnimation { easing: Easing::Lerp { power: 1.0 }, ..base.clone() };
-        let lerp_pow2 = MoveAnimation { easing: Easing::Lerp { power: 2.0 }, ..base.clone() };
+        let lerp_pow1 = MoveAnimation {
+            easing: Easing::Lerp { power: 1.0 },
+            ..base.clone()
+        };
+        let lerp_pow2 = MoveAnimation {
+            easing: Easing::Lerp { power: 2.0 },
+            ..base.clone()
+        };
 
         // power == 1.0 should match linear
         let (xl, yl) = base.sample_position(0.2, 0.2, 1.5);
@@ -223,7 +229,10 @@ mod tests {
         let s_default = ma_default.to_dsl_snippet("Circle", "    ");
         assert!(s_default.contains("type = lerp"));
 
-        let ma_pow = MoveAnimation { easing: Easing::Lerp { power: 2.0 }, ..ma_default.clone() };
+        let ma_pow = MoveAnimation {
+            easing: Easing::Lerp { power: 2.0 },
+            ..ma_default.clone()
+        };
         let s_pow = ma_pow.to_dsl_snippet("Circle", "    ");
         assert!(s_pow.contains("type = lerp(power = 2.000)"));
     }
