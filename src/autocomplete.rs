@@ -117,7 +117,6 @@ pub fn process_input(ui: &mut egui::Ui, text_edit_id: egui::Id, state: &mut AppS
     }
 }
 
-
 // Helper: find the byte index of the start of the word before `cursor_byte_idx`.
 fn find_word_start(text: &str, cursor_byte_idx: usize) -> usize {
     let mut start = cursor_byte_idx.min(text.len());
@@ -275,12 +274,13 @@ pub fn handle_state_and_render(ui: &mut egui::Ui, response: &egui::Response, sta
         if let Some(range) = text_edit_state.cursor.char_range() {
             let char_idx = range.primary.index;
             // Convert character index to byte index safely and efficiently
-            cursor_byte_idx = state.dsl_code
+            cursor_byte_idx = state
+                .dsl_code
                 .char_indices()
                 .nth(char_idx)
                 .map(|(b, _)| b)
                 .unwrap_or(state.dsl_code.len());
-            
+
             state.completion_cursor_idx = cursor_byte_idx;
         }
     }
@@ -374,4 +374,3 @@ pub fn handle_state_and_render(ui: &mut egui::Ui, response: &egui::Response, sta
         }
     }
 }
-

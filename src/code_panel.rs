@@ -419,7 +419,12 @@ fn highlight_code(
                     egui::Color32::LIGHT_GRAY,
                 );
             }
-            append_text(job, &code[idx..idx + 1], &font_id, egui::Color32::LIGHT_GRAY);
+            append_text(
+                job,
+                &code[idx..idx + 1],
+                &font_id,
+                egui::Color32::LIGHT_GRAY,
+            );
             last_idx = idx + 1;
             continue;
         }
