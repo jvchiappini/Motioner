@@ -8,8 +8,8 @@ pub fn default_color() -> [u8; 4] {
 /// Return the DSL snippet line for a rectangle (without animations).
 pub fn to_dsl_snippet(name: &str, x: f32, y: f32, w: f32, h: f32, color: [u8; 4], spawn_time: f32, indent: &str) -> String {
     format!(
-        "{}rect \"{}\" {{\n{}    x = {:.3}, y = {:.3}, width = {:.3}, height = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2}\n{}}}\n",
-        indent, name, indent, x, y, w, h, color[0], color[1], color[2], spawn_time, indent
+        "{}rect \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    width = {:.3},\n{}    height = {:.3},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2}\n{}}}\n",
+        indent, name, indent, x, indent, y, indent, w, indent, h, indent, color[0], color[1], color[2], indent, spawn_time, indent
     )
 }
 

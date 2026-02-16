@@ -115,15 +115,15 @@ impl MoveAnimation {
         let inner_indent = format!("{}    ", indent);
 
         if let Some(name) = element_name {
-            out.push_str(&format!("{}element = \"{}\"\n", inner_indent, name));
+            out.push_str(&format!("{}element = \"{}\",\n", inner_indent, name));
         }
 
         out.push_str(&format!(
-            "{}to = ({:.3}, {:.3})\n",
+            "{}to = ({:.3}, {:.3}),\n",
             inner_indent, self.to_x, self.to_y
         ));
         out.push_str(&format!(
-            "{}during = {:.3} -> {:.3}\n",
+            "{}during = {:.3} -> {:.3},\n",
             inner_indent, self.start, self.end
         ));
         out.push_str(&format!("{}ease = {}\n", inner_indent, ease_str));

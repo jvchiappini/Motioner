@@ -16,8 +16,8 @@ pub fn to_dsl_snippet(
     indent: &str,
 ) -> String {
     format!(
-        "{}circle \"{}\" {{\n{}    x = {:.3}, y = {:.3}, radius = {:.3}, fill = \"#{:02x}{:02x}{:02x}\", spawn = {:.2}\n{}}}\n",
-        indent, name, indent, x, y, radius, color[0], color[1], color[2], spawn_time, indent
+        "{}circle \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    radius = {:.3},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2}\n{}}}\n",
+        indent, name, indent, x, indent, y, indent, radius, indent, color[0], color[1], color[2], indent, spawn_time, indent
     )
 }
 

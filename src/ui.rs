@@ -30,15 +30,16 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
                 crate::app_state::CompletionItem { label: "width".into(), insert_text: "width".into(), is_snippet: false },
                 crate::app_state::CompletionItem { label: "height".into(), insert_text: "height".into(), is_snippet: false },
                 crate::app_state::CompletionItem { label: "color".into(), insert_text: "color".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "circle".into(), insert_text: "circle \"Name\" {\n    x = 0.50, y = 0.50, radius = 0.10, fill = \"#78c8ff\", spawn = 0.00\n}\n".into(), is_snippet: true },
-                crate::app_state::CompletionItem { label: "rect".into(), insert_text: "rect \"Name\" {\n    x = 0.50, y = 0.50, width = 0.30, height = 0.20, fill = \"#c87878\", spawn = 0.00\n}\n".into(), is_snippet: true },
+                crate::app_state::CompletionItem { label: "circle".into(), insert_text: "circle \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    radius = 0.10,\n    fill = \"#78c8ff\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
+                crate::app_state::CompletionItem { label: "rect".into(), insert_text: "rect \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    width = 0.30,\n    height = 0.20,\n    fill = \"#c87878\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
+                crate::app_state::CompletionItem { label: "move".into(), insert_text: "move {\n    element = \"Name\",\n    to = (0.50, 0.50),\n    during = 0.00 -> 1.00,\n    ease = linear\n}\n".into(), is_snippet: true },
             ];
 
             let filtered: Vec<_> = candidates
                 .into_iter()
                 .filter(|c| c.label.starts_with(&query) && c.label != query)
                 .collect();
-            
+
             let _ = btx.send(filtered);
         }
     });
@@ -92,6 +93,52 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
+
+        // --- Global Color Picker Window (Top-level, unconstrained) ---
+        if let Some(mut data) = state.color_picker_data.clone() {
+            let mut open = true;
+            let mut changed = false;
+            egui::Window::new("Color Picker")
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    let alpha = if data.is_alpha {
+                        egui::color_picker::Alpha::BlendOrAdditive
+                    } else {
+                        egui::color_picker::Alpha::Opaque
+                    };
+
+                    let mut color = egui::Color32::from_rgba_unmultiplied(
+                        data.color[0],
+                        data.color[1],
+                        data.color[2],
+                        data.color[3],
+                    );
+                    if egui::color_picker::color_picker_color32(ui, &mut color, alpha) {
+                        data.color = color.to_srgba_unmultiplied();
+                        changed = true;
+                    }
+                });
+
+            if !open {
+                state.color_picker_data = None;
+            } else if changed {
+                let new_hex = code_panel::format_hex(data.color, data.is_alpha);
+                // Safety check: ensure range is still valid (text might have changed)
+                if data.range.end <= state.dsl_code.len() {
+                    state.dsl_code.replace_range(data.range.clone(), &new_hex);
+                    state.last_code_edit_time = Some(ctx.input(|i| i.time));
+                    state.autosave_pending = true;
+                    // Update range length if it changed
+                    data.range.end = data.range.start + new_hex.len();
+                    state.color_picker_data = Some(data);
+                } else {
+                    // Text changed out from under us, close picker to avoid panic
+                    state.color_picker_data = None;
+                }
+            }
+        }
 
         // Auto-sync Code if settings changed while Code tab is active
         let current_settings = (
@@ -501,7 +548,7 @@ impl eframe::App for MyApp {
 
                 egui::Area::new("fullscreen_code_overlay")
                     .fixed_pos(current_rect.min)
-                    .order(egui::Order::Foreground)
+                    .order(egui::Order::Middle)
                     .show(ctx, |ui| {
                         // Background
                         egui::Frame::window(ui.style())

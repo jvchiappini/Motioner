@@ -98,6 +98,9 @@ pub struct AppState {
     pub dsl_code: String, // Added this field
 
     #[serde(skip)]
+    pub color_picker_data: Option<ColorPickerData>,
+
+    #[serde(skip)]
     pub completion_worker_tx: Option<std::sync::mpsc::Sender<String>>,
     #[serde(skip)]
     pub completion_worker_rx: Option<std::sync::mpsc::Receiver<Vec<CompletionItem>>>,
@@ -297,6 +300,7 @@ impl Default for AppState {
             transition_source_tab: None,
             tab_switch_time: None,
             dsl_code: String::new(),
+            color_picker_data: None,
             completion_worker_tx: None,
             completion_worker_rx: None,
             move_request: None,
@@ -360,6 +364,13 @@ impl Default for AppState {
             timeline_breadcrumb_anim_t: 1.0,
         }
     }
+}
+
+#[derive(Clone)]
+pub struct ColorPickerData {
+    pub range: std::ops::Range<usize>,
+    pub color: [u8; 4],
+    pub is_alpha: bool,
 }
 
 #[cfg(feature = "wgpu")]
