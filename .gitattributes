@@ -1,0 +1,26 @@
+# Enforce consistent LF line endings for source files to avoid CI formatting
+# failures on macOS / Linux runners. Keep shell and Windows scripts appropriate.
+
+# Default: treat text files as text and normalize to LF in the repository
+* text=auto eol=lf
+
+# Explicit rules for common source and config files
+*.rs     text eol=lf
+*.toml   text eol=lf
+*.md     text eol=lf
+*.wgsl   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.json   text eol=lf
+*.lock   text eol=lf
+
+# Keep Windows-specific scripts with CRLF in working copy
+*.ps1    text eol=crlf
+*.bat    text eol=crlf
+
+# Ensure binary files are not treated as text
+*.png    -text
+*.jpg    -text
+*.jpeg   -text
+*.gif    -text
+*.wasm   -text
