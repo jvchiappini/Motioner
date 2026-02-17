@@ -107,7 +107,7 @@ fn main() -> Result<()> {
                 Ok(()) => Ok(()),
                 Err(err2) => {
                     eprintln!("Fallback start failed too: {:?}", err2);
-                    return Err(anyhow::anyhow!("eframe fallback start failed: {:#?}", err2));
+                    Err(anyhow::anyhow!("eframe fallback start failed: {:#?}", err2))
                 }
             }
         }
