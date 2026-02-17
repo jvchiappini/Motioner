@@ -8,6 +8,8 @@ pub struct MoveElement {
     /// X/Y are stored as expressions (not yet evaluated) so they can contain `seconds`, etc.
     pub x_expr: String,
     pub y_expr: String,
+    /// Display color for this action (RGBA). Not currently serialized in DSL string.
+    pub color: [u8; 4],
 }
 
 impl MoveElement {
@@ -29,6 +31,7 @@ impl MoveElement {
         let mut name_target: Option<String> = None;
         let mut x_expr: Option<String> = None;
         let mut y_expr: Option<String> = None;
+        let mut color_val: Option<[u8; 4]> = None;
 
         for part in inner.split(',') {
             let p = part.trim();
@@ -39,6 +42,21 @@ impl MoveElement {
                     "name" => name_target = Some(val.trim_matches('"').to_string()),
                     "x" => x_expr = Some(val.to_string()),
                     "y" => y_expr = Some(val.to_string()),
+                    "color" => {
+                        // accept strings like "#RRGGBB" or "#RRGGBBAA"
+                        let vs = val.trim().trim_matches('"');
+                        if vs.starts_with('#') && (vs.len() == 7 || vs.len() == 9) {
+                            let r = u8::from_str_radix(&vs[1..3], 16).unwrap_or(78);
+                            let g = u8::from_str_radix(&vs[3..5], 16).unwrap_or(201);
+                            let b = u8::from_str_radix(&vs[5..7], 16).unwrap_or(176);
+                            let a = if vs.len() == 9 {
+                                u8::from_str_radix(&vs[7..9], 16).unwrap_or(255)
+                            } else {
+                                255
+                            };
+                            color_val = Some([r, g, b, a]);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -48,7 +66,9 @@ impl MoveElement {
         let x_expr = x_expr.ok_or("move_element: missing 'x'")?;
         let y_expr = y_expr.ok_or("move_element: missing 'y'")?;
 
-        Ok(MoveElement { name, x_expr, y_expr })
+        // Default color matches "object teal" used by the code panel highlighter
+        let color = color_val.unwrap_or([78, 201, 176, 255]);
+        Ok(MoveElement { name, x_expr, y_expr, color })
     }
 
     /// Evaluate the stored expressions and apply the move using the provided
@@ -102,6 +122,7 @@ mod tests {
             name: "C".to_string(),
             x_expr: "2.0 * 0.1".to_string(),
             y_expr: "0.25".to_string(),
+            color: [78, 201, 176, 255],
         };
 
         let ctx = crate::dsl::evaluator::EvalContext::new();

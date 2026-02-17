@@ -382,9 +382,12 @@ pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
                 }
 
                 if found_block {
+                    // Default handler color: match "object teal" used in code panel
+                    let handler_color: [u8; 4] = [78, 201, 176, 255];
                     out.push(DslHandler {
                         name: ident,
                         body: block_body,
+                        color: handler_color,
                     });
                     // advance the outer iterator
                     for _ in 0..(end_idx - i) {

@@ -6,6 +6,8 @@ use crate::scene::Shape;
 pub struct DslHandler {
     pub name: String,
     pub body: String,
+    /// Display color for this handler (RGBA). Used by UI to color-code handlers.
+    pub color: [u8; 4],
 }
 
 /// Dispatches actions for a given event.

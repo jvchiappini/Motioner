@@ -46,9 +46,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let defined_names: std::collections::HashSet<String> =
         state.scene.iter().map(|s| s.name().to_string()).collect();
 
+    // Clone handler metadata so the highlighter closure doesn't borrow `state`
+    // (avoids borrow-checker conflicts with other mutable UI closures).
+    let handlers = state.dsl_event_handlers.clone();
+
     let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
         let mut layout_job = egui::text::LayoutJob::default();
-        highlight_code(&mut layout_job, string, &defined_names); // custom highlighter
+        highlight_code(&mut layout_job, string, &defined_names, &handlers); // custom highlighter with handler colors
         layout_job.wrap.max_width = wrap_width; // no wrapping
         ui.fonts(|f| f.layout_job(layout_job))
     };
@@ -389,6 +393,7 @@ fn highlight_code(
     job: &mut egui::text::LayoutJob,
     code: &str,
     defined_names: &std::collections::HashSet<String>,
+    handlers: &[crate::dsl::runtime::DslHandler],
 ) {
     let font_id = egui::FontId::monospace(14.0);
 
@@ -560,6 +565,38 @@ fn highlight_code(
             }
 
             let word = &code[start..end];
+            // If this identifier matches a registered DSL handler, use its color.
+            if let Some(h) = handlers.iter().find(|h| h.name == word) {
+                let c = h.color;
+                append_text(job, word, &font_id, egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
+                last_idx = end;
+                continue;
+            }
+
+            // If this identifier is a move-element-style utility, try to infer a color
+            // from an upcoming `color = "#rrggbb"` parameter in the call. Fallback to
+            // the default object-teal color.
+            if word == "move_element" {
+                // Delegate parsing of the call (including color) to the MoveElement
+                // parser so the highlighter doesn't duplicate parsing logic.
+                let rest = &code[end..];
+                if let Some(open_paren_pos) = rest.find('(') {
+                    if let Some(close_paren_pos) = find_matching_paren(rest, open_paren_pos) {
+                        let call_substr = &code[start..end + close_paren_pos + 1];
+                        if let Ok(me) = crate::shapes::utilities::move_element::MoveElement::parse_dsl(call_substr) {
+                            let c = me.color;
+                            append_text(job, word, &font_id, egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
+                            last_idx = end;
+                            continue;
+                        }
+                    }
+                }
+                // Fallback
+                append_text(job, word, &font_id, egui::Color32::from_rgb(78, 201, 176));
+                last_idx = end;
+                continue;
+            }
+
             let color = match word {
                 // Primary Block Keywords
                 "circle" | "rect" | "move" | "size" | "timeline" => {
@@ -765,4 +802,29 @@ pub fn format_hex(color: [u8; 4], alpha: bool) -> String {
     } else {
         format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
     }
+}
+
+/// Find the index of the matching `)` for the `(` at `open_pos` inside `s`.
+/// Returns `Some(idx)` (byte index relative to `s`) or `None` if not found.
+fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    for (i, ch) in s.char_indices().skip(open_pos) {
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
 }

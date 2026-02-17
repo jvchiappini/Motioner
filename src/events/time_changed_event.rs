@@ -59,6 +59,7 @@ mod handler_tests {
         state.dsl_event_handlers = vec![DslHandler {
             name: "on_time".to_string(),
             body: "move_element(name = \"Circle\", x = seconds * 0.1, y = 0.25)".to_string(),
+            color: [78, 201, 176, 255],
         }];
 
         // call event with seconds = 2.0 → x should become 0.2
