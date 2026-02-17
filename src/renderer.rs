@@ -7,7 +7,11 @@ use std::sync::Arc;
 
 /// CPU rasteriser placeholder + ffmpeg exporter.
 /// Returns the path to the generated MP4 on success.
-pub fn render_and_encode(fps: u32, duration_secs: f32, progress: &Arc<AtomicUsize>) -> Result<PathBuf> {
+pub fn render_and_encode(
+    fps: u32,
+    duration_secs: f32,
+    progress: &Arc<AtomicUsize>,
+) -> Result<PathBuf> {
     let total_frames = (fps as f32 * duration_secs).ceil() as usize;
     let width = 1280u32;
     let height = 720u32;
@@ -31,7 +35,9 @@ pub fn render_and_encode(fps: u32, duration_secs: f32, progress: &Arc<AtomicUsiz
                 let dx = x as f32 - cx;
                 let dy = y as f32 - cy;
                 let dist2 = dx * dx + dy * dy;
-                if dist2 <= radius_sq { img.put_pixel(x as u32, y as u32, Rgba([120u8,200u8,255u8,255u8])); }
+                if dist2 <= radius_sq {
+                    img.put_pixel(x as u32, y as u32, Rgba([120u8, 200u8, 255u8, 255u8]));
+                }
             }
         }
 
@@ -55,7 +61,9 @@ pub fn render_and_encode(fps: u32, duration_secs: f32, progress: &Arc<AtomicUsiz
         ])
         .status()?;
 
-    if !status.success() { anyhow::bail!("ffmpeg returned non-zero status"); }
+    if !status.success() {
+        anyhow::bail!("ffmpeg returned non-zero status");
+    }
     progress.store(usize::MAX, Ordering::SeqCst);
     Ok(out_file)
 }

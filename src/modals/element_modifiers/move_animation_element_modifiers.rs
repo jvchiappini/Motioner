@@ -1,6 +1,6 @@
-use eframe::egui;
-use crate::scene::{Animation, Easing};
 use crate::modals::element_modifiers::easing_curve_editor::render_easing_curve_editor;
+use crate::scene::{Animation, Easing};
+use eframe::egui;
 
 pub fn render_move_animation_modifiers(
     ui: &mut egui::Ui,
@@ -167,19 +167,19 @@ pub fn render_move_animation_modifiers(
                                         }
 
                                         if ui.selectable_label(matches!(easing, Easing::CustomBezier { .. }), "CustomBezier").on_hover_text("CustomBezier — multi-point curve with control handles").clicked() {
-                                            *easing = Easing::CustomBezier { 
+                                            *easing = Easing::CustomBezier {
                                                 points: vec![
-                                                    crate::scene::BezierPoint { 
-                                                        pos: (0.0, 0.0), 
-                                                        handle_left: (-0.1, 0.0), 
-                                                        handle_right: (0.1, 0.0) 
+                                                    crate::scene::BezierPoint {
+                                                        pos: (0.0, 0.0),
+                                                        handle_left: (-0.1, 0.0),
+                                                        handle_right: (0.1, 0.0)
                                                     },
-                                                    crate::scene::BezierPoint { 
-                                                        pos: (1.0, 1.0), 
-                                                        handle_left: (-0.1, 0.0), 
-                                                        handle_right: (0.1, 0.0) 
+                                                    crate::scene::BezierPoint {
+                                                        pos: (1.0, 1.0),
+                                                        handle_left: (-0.1, 0.0),
+                                                        handle_right: (0.1, 0.0)
                                                     }
-                                                ] 
+                                                ]
                                             };
                                             *changed = true;
                                         }
@@ -217,7 +217,7 @@ pub fn render_move_animation_modifiers(
                                 });
 
                             ui.label("Easing Curve:");
-                            
+
                             // Use unified curve editor
                             if render_easing_curve_editor(ui, ctx, easing, i, "move") {
                                 *changed = true;

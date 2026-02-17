@@ -109,7 +109,8 @@ pub fn render_minimap(
 
     // Draw semi-transparent overlay over the NON-visible parts?
     // Or highlight the visible part. VS Code highlights the visible part with a light hover effect.
-    ui.painter().rect_filled(highlight_rect, 0.0, egui::Color32::from_white_alpha(15));
+    ui.painter()
+        .rect_filled(highlight_rect, 0.0, egui::Color32::from_white_alpha(15));
     ui.painter().rect_stroke(
         highlight_rect,
         0.0,

@@ -13,7 +13,10 @@ pub(crate) fn render_gutter(
     // both are inside the same ScrollArea closure). Use a clickable rect
     // so we can detect gutter clicks via the returned Response.
     let gutter_response = ui.allocate_rect(
-        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(gutter_width, ui.available_height())),
+        egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(gutter_width, ui.available_height()),
+        ),
         egui::Sense::click(),
     );
     let gutter_rect = gutter_response.rect;
@@ -27,7 +30,11 @@ pub(crate) fn render_gutter(
     if let Some(te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
         if let Some(range) = te_state.cursor.char_range() {
             let char_idx = range.primary.index;
-            active_line_idx = dsl_code.chars().take(char_idx).filter(|&c| c == '\n').count();
+            active_line_idx = dsl_code
+                .chars()
+                .take(char_idx)
+                .filter(|&c| c == '\n')
+                .count();
         }
     }
 
@@ -103,7 +110,9 @@ pub(crate) fn render_gutter(
             let ccursor = egui::text::CCursor::new(char_idx);
 
             if let Some(mut te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
-                te_state.cursor.set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
+                te_state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
                 egui::TextEdit::store_state(ui.ctx(), text_edit_id, te_state);
             }
         }

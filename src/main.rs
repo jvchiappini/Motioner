@@ -5,6 +5,7 @@ mod canvas;
 mod code_panel;
 mod dsl;
 mod events;
+mod modals;
 mod project_settings;
 mod renderer;
 mod scene;
@@ -13,7 +14,6 @@ mod shapes;
 mod timeline;
 mod ui;
 mod welcome_modal; // Added this
-mod modals;
 
 use anyhow::Result;
 use display_info::DisplayInfo;

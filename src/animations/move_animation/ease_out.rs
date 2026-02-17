@@ -13,7 +13,12 @@ pub fn to_dsl_string(power: f32) -> String {
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
+    let s = val
+        .trim()
+        .trim_start_matches("type")
+        .trim()
+        .trim_start_matches('=')
+        .trim();
     if s.starts_with("ease_out") {
         let mut power = 1.0f32;
         if let Some(open) = s.find('(') {

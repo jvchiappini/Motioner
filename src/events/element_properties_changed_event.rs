@@ -14,7 +14,10 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
     fs::write(&dst, &state.dsl_code)?;
     state.last_export_path = Some(dst.clone());
     if show_toast {
-        state.toast_message = Some(format!("Saved {}", dst.file_name().unwrap().to_string_lossy()));
+        state.toast_message = Some(format!(
+            "Saved {}",
+            dst.file_name().unwrap().to_string_lossy()
+        ));
         state.toast_type = ToastType::Success;
     }
     Ok(())

@@ -12,10 +12,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let screen_rect = ctx.input(|i| i.screen_rect());
     let default_w = 360.0f32;
     let default_h = 180.0f32;
-    let default_pos = state
-        .animations_modal_pos
-        .map(|p| p)
-        .unwrap_or_else(|| egui::pos2(screen_rect.center().x - default_w / 2.0, screen_rect.center().y - default_h / 2.0));
+    let default_pos = state.animations_modal_pos.map(|p| p).unwrap_or_else(|| {
+        egui::pos2(
+            screen_rect.center().x - default_w / 2.0,
+            screen_rect.center().y - default_h / 2.0,
+        )
+    });
 
     // Note: we DO NOT install an interactive full-screen backdrop here because
     // that would intercept pointer/drag events and prevent the window from

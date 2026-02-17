@@ -26,7 +26,6 @@ pub fn move_element(shapes: &mut [Shape], name: &str, x: f32, y: f32) -> Result<
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

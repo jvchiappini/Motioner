@@ -38,12 +38,20 @@ pub fn to_dsl_string(amplitude: f32, period: f32) -> String {
     if (amplitude - 1.0).abs() < 1e-6 && (period - 0.3).abs() < 1e-6 {
         "elastic".to_string()
     } else {
-        format!("elastic(amplitude = {:.3}, period = {:.3})", amplitude, period)
+        format!(
+            "elastic(amplitude = {:.3}, period = {:.3})",
+            amplitude, period
+        )
     }
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
+    let s = val
+        .trim()
+        .trim_start_matches("type")
+        .trim()
+        .trim_start_matches('=')
+        .trim();
     if s.starts_with("elastic") {
         let mut amplitude = 1.0f32;
         let mut period = 0.3f32;

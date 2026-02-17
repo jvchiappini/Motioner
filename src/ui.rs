@@ -205,7 +205,8 @@ impl eframe::App for MyApp {
                 if !parsed.is_empty() {
                     state.scene = parsed;
                     // collect DSL event handler blocks (e.g. `on_time { ... }`)
-                    state.dsl_event_handlers = crate::dsl::extract_event_handlers_structured(&state.dsl_code);
+                    state.dsl_event_handlers =
+                        crate::dsl::extract_event_handlers_structured(&state.dsl_code);
                     // regenerate preview for current playhead (single-frame request)
                     crate::canvas::request_preview_frames(
                         state,
@@ -580,14 +581,19 @@ impl eframe::App for MyApp {
                 // Tools (Bottom)
                 ui.horizontal(|ui| {
                     if ui
-                        .button(if state.playing { "⏸ Pause" } else { "▶ Play" })
+                        .button(if state.playing {
+                            "⏸ Pause"
+                        } else {
+                            "▶ Play"
+                        })
                         .clicked()
                     {
                         state.playing = !state.playing;
                         // When starting playback, ensure DSL handlers are
                         // registered immediately (don't rely on debounce).
                         if state.playing {
-                            state.dsl_event_handlers = crate::dsl::extract_event_handlers_structured(&state.dsl_code);
+                            state.dsl_event_handlers =
+                                crate::dsl::extract_event_handlers_structured(&state.dsl_code);
                             // dispatch initial time event for the current playhead
                             state.set_time(state.time);
                         }

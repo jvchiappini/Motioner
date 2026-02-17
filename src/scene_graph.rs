@@ -291,7 +291,9 @@ fn render_node(
                     state.duration_secs,
                 );
                 // persist DSL to project (if set)
-                crate::events::element_properties_changed_event::on_element_properties_changed(state);
+                crate::events::element_properties_changed_event::on_element_properties_changed(
+                    state,
+                );
             }
         } else {
             let mut job = egui::text::LayoutJob::default();

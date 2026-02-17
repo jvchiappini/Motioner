@@ -26,7 +26,10 @@ pub fn parse_hex(hex: &str) -> Option<[u8; 4]> {
 /// Format RGBA bytes into `#rrggbb` or `#rrggbbaa` (lowercase hex).
 pub fn format_hex(color: [u8; 4], alpha: bool) -> String {
     if alpha {
-        format!("#{:02x}{:02x}{:02x}{:02x}", color[0], color[1], color[2], color[3])
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            color[0], color[1], color[2], color[3]
+        )
     } else {
         format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
     }

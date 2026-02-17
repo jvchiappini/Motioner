@@ -17,7 +17,11 @@ pub fn render_easing_curve_editor(
         Easing::Sine | Easing::Expo | Easing::Circ => {
             // no parameters for these presets
         }
-        Easing::Spring { damping, stiffness, mass } => {
+        Easing::Spring {
+            damping,
+            stiffness,
+            mass,
+        } => {
             ui.horizontal(|ui| {
                 ui.label("damping");
                 if ui.add(egui::Slider::new(damping, 0.0..=2.0)).changed() {
@@ -25,14 +29,22 @@ pub fn render_easing_curve_editor(
                 }
                 ui.label("stiffness");
                 if ui
-                    .add(egui::DragValue::new(stiffness).speed(1.0).clamp_range(1.0..=500.0))
+                    .add(
+                        egui::DragValue::new(stiffness)
+                            .speed(1.0)
+                            .clamp_range(1.0..=500.0),
+                    )
                     .changed()
                 {
                     changed = true;
                 }
                 ui.label("mass");
                 if ui
-                    .add(egui::DragValue::new(mass).speed(0.1).clamp_range(0.1..=10.0))
+                    .add(
+                        egui::DragValue::new(mass)
+                            .speed(0.1)
+                            .clamp_range(0.1..=10.0),
+                    )
                     .changed()
                 {
                     changed = true;
@@ -169,7 +181,7 @@ pub fn render_easing_curve_editor(
     let mut curve_points = Vec::new();
     for i in 0..=100 {
         let t = i as f32 / 100.0;
-            let v = match easing {
+        let v = match easing {
             Easing::Linear => t,
             Easing::EaseIn { power } => t.powf(*power),
             Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
@@ -183,9 +195,13 @@ pub fn render_easing_curve_editor(
             Easing::Sine => crate::animations::move_animation::sine::compute_progress(t),
             Easing::Expo => crate::animations::move_animation::expo::compute_progress(t),
             Easing::Circ => crate::animations::move_animation::circ::compute_progress(t),
-            Easing::Spring { damping, stiffness, mass } => {
-                crate::animations::move_animation::spring::compute_progress(t, *damping, *stiffness, *mass)
-            }
+            Easing::Spring {
+                damping,
+                stiffness,
+                mass,
+            } => crate::animations::move_animation::spring::compute_progress(
+                t, *damping, *stiffness, *mass,
+            ),
             Easing::Elastic { amplitude, period } => {
                 crate::animations::move_animation::elastic::compute_progress(t, *amplitude, *period)
             }
@@ -401,33 +417,47 @@ pub fn render_easing_curve_editor(
             ui.data_mut(|d| d.insert_temp(was_down_id, pointer_down));
         }
         Easing::CustomBezier { points } => {
-            let drag_id = ui.make_persistent_id(format!("custom_bezier_drag_{}_{}", element_type, animation_index));
-            let was_down_id = ui.make_persistent_id(format!("custom_bezier_was_down_{}_{}", element_type, animation_index));
-            
+            let drag_id = ui.make_persistent_id(format!(
+                "custom_bezier_drag_{}_{}",
+                element_type, animation_index
+            ));
+            let was_down_id = ui.make_persistent_id(format!(
+                "custom_bezier_was_down_{}_{}",
+                element_type, animation_index
+            ));
+
             // drag_state: (type, index)
             // type: 0 = point, 1 = handle_left, 2 = handle_right
             let mut drag_state: Option<(u8, usize)> = ui.data(|d| d.get_temp(drag_id));
             let pointer_pos = ui.input(|i| i.pointer.hover_pos());
             let pointer_down = ui.input(|i| i.pointer.primary_down());
-            let was_down = ui.data(|d| d.get_temp::<bool>(was_down_id)).unwrap_or(false);
+            let was_down = ui
+                .data(|d| d.get_temp::<bool>(was_down_id))
+                .unwrap_or(false);
 
             // Draw segments/curves and handles
             for i in 0..points.len() {
                 let p = &points[i];
                 let pos = to_screen(p.pos.0, p.pos.1);
-                
+
                 // Draw Handles
                 if i > 0 {
                     let h_left = to_screen(p.pos.0 + p.handle_left.0, p.pos.1 + p.handle_left.1);
-                    painter.line_segment([pos, h_left], egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    painter.line_segment(
+                        [pos, h_left],
+                        egui::Stroke::new(1.0, egui::Color32::from_gray(100)),
+                    );
                     painter.circle_filled(h_left, 3.5, egui::Color32::from_rgb(100, 150, 255));
                 }
                 if i < points.len() - 1 {
                     let h_right = to_screen(p.pos.0 + p.handle_right.0, p.pos.1 + p.handle_right.1);
-                    painter.line_segment([pos, h_right], egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    painter.line_segment(
+                        [pos, h_right],
+                        egui::Stroke::new(1.0, egui::Color32::from_gray(100)),
+                    );
                     painter.circle_filled(h_right, 3.5, egui::Color32::from_rgb(100, 150, 255));
                 }
-                
+
                 // Draw Point
                 painter.circle_filled(pos, 5.0, egui::Color32::YELLOW);
             }
@@ -464,14 +494,20 @@ pub fn render_easing_curve_editor(
                         if drag_state.is_none() {
                             for (i, p) in points.iter().enumerate() {
                                 if i > 0 {
-                                    let h_left = to_screen(p.pos.0 + p.handle_left.0, p.pos.1 + p.handle_left.1);
+                                    let h_left = to_screen(
+                                        p.pos.0 + p.handle_left.0,
+                                        p.pos.1 + p.handle_left.1,
+                                    );
                                     if h_left.distance(pos) < 7.0 {
                                         drag_state = Some((1, i));
                                         break;
                                     }
                                 }
                                 if i < points.len() - 1 {
-                                    let h_right = to_screen(p.pos.0 + p.handle_right.0, p.pos.1 + p.handle_right.1);
+                                    let h_right = to_screen(
+                                        p.pos.0 + p.handle_right.0,
+                                        p.pos.1 + p.handle_right.1,
+                                    );
                                     if h_right.distance(pos) < 7.0 {
                                         drag_state = Some((2, i));
                                         break;
@@ -479,7 +515,7 @@ pub fn render_easing_curve_editor(
                                 }
                             }
                         }
-                        
+
                         if let Some(state) = drag_state {
                             ui.data_mut(|d| d.insert_temp(drag_id, state));
                         } else {
@@ -503,16 +539,21 @@ pub fn render_easing_curve_editor(
                     if let Some(pos) = pointer_pos {
                         let (nx, ny) = from_screen(pos);
                         match typ {
-                            0 => { // Point
+                            0 => {
+                                // Point
                                 points[idx].pos = (nx.clamp(0.0, 1.0), ny.clamp(-0.5, 1.5));
                                 changed = true;
                             }
-                            1 => { // Handle Left
-                                points[idx].handle_left = (nx - points[idx].pos.0, ny - points[idx].pos.1);
+                            1 => {
+                                // Handle Left
+                                points[idx].handle_left =
+                                    (nx - points[idx].pos.0, ny - points[idx].pos.1);
                                 changed = true;
                             }
-                            2 => { // Handle Right
-                                points[idx].handle_right = (nx - points[idx].pos.0, ny - points[idx].pos.1);
+                            2 => {
+                                // Handle Right
+                                points[idx].handle_right =
+                                    (nx - points[idx].pos.0, ny - points[idx].pos.1);
                                 changed = true;
                             }
                             _ => {}

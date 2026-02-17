@@ -16,7 +16,12 @@ pub fn to_dsl_string() -> String {
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
+    let s = val
+        .trim()
+        .trim_start_matches("type")
+        .trim()
+        .trim_start_matches('=')
+        .trim();
     if s.starts_with("circ") {
         Some(Easing::Circ)
     } else {

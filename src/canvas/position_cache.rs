@@ -16,7 +16,10 @@ pub struct PositionCache {
     pub spatial_grids: Vec<SpatialHashGrid>,
 }
 
-pub fn scene_fingerprint(scene: &[crate::scene::Shape], handlers: &[crate::dsl::runtime::DslHandler]) -> u64 {
+pub fn scene_fingerprint(
+    scene: &[crate::scene::Shape],
+    handlers: &[crate::dsl::runtime::DslHandler],
+) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -146,7 +149,12 @@ pub fn build_position_cache_for(
         // Apply DSL handlers to a working copy of the flattened primitives
         // to ensure dynamic positions are captured in the cache.
         let mut frame_prims = flattened.clone();
-        crate::events::time_changed_event::apply_on_time_handlers(&mut frame_prims, handlers, t, fi as u32);
+        crate::events::time_changed_event::apply_on_time_handlers(
+            &mut frame_prims,
+            handlers,
+            t,
+            fi as u32,
+        );
 
         for (idx, prim) in frame_prims.iter().enumerate() {
             let (px, py) =

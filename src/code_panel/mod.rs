@@ -2,14 +2,14 @@ use crate::app_state::AppState;
 use crate::autocomplete; // Added this
 use eframe::egui;
 
+mod gutter;
 mod highlighter;
 mod minimap;
 pub mod utils;
-mod gutter;
 
 use highlighter::highlight_code;
-use utils::handle_color_pickers;
 use minimap::render_minimap;
+use utils::handle_color_pickers;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.horizontal(|ui| {

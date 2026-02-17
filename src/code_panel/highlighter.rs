@@ -179,7 +179,12 @@ pub(crate) fn highlight_code(
             // If this identifier matches a registered DSL handler, use its color.
             if let Some(h) = handlers.iter().find(|h| h.name == word) {
                 let c = h.color;
-                append_text(job, word, &font_id, egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
+                append_text(
+                    job,
+                    word,
+                    &font_id,
+                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
+                );
                 last_idx = end;
                 continue;
             }
@@ -194,7 +199,9 @@ pub(crate) fn highlight_code(
             if let Some(mcol) = crate::dsl::method_color(word) {
                 let rest = &code[end..];
                 if let Some(open_paren_pos) = rest.find('(') {
-                    if let Some(close_paren_pos) = crate::code_panel::find_matching_paren(rest, open_paren_pos) {
+                    if let Some(close_paren_pos) =
+                        crate::code_panel::find_matching_paren(rest, open_paren_pos)
+                    {
                         if let Some(call_end) = end.checked_add(close_paren_pos + 1) {
                             if call_end <= code.len() {
                                 let call_substr = &code[start..call_end];
@@ -236,8 +243,9 @@ pub(crate) fn highlight_code(
 
                 // Values / Constants / Easings
                 "linear" | "ease_in" | "ease_out" | "ease_in_out" | "bezier" | "custom"
-                | "sine" | "expo" | "circ" | "spring" | "elastic" | "bounce"
-                | "points" | "power" | "damping" | "stiffness" | "mass" | "amplitude" | "period" | "bounciness" => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
+                | "sine" | "expo" | "circ" | "spring" | "elastic" | "bounce" | "points"
+                | "power" | "damping" | "stiffness" | "mass" | "amplitude" | "period"
+                | "bounciness" => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
 
                 _ => {
                     // Check if this is a defined object name

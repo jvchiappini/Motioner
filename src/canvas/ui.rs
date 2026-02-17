@@ -1,10 +1,10 @@
-use crate::app_state::AppState;
-use eframe::egui;
-use crate::animations::animations_manager::animated_xy_for;
+#[cfg(feature = "wgpu")]
+use super::gpu::{CompositionCallback, GpuShape};
 use super::position_cache::{build_position_cache, cached_frame_for};
 use super::rasterizer::sample_color_at;
-#[cfg(feature = "wgpu")]
-use super::gpu::{GpuShape, CompositionCallback};
+use crate::animations::animations_manager::animated_xy_for;
+use crate::app_state::AppState;
+use eframe::egui;
 
 /// Renderiza y maneja las interacciones para el área del canvas central.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
@@ -56,8 +56,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         let center = rect.center();
 
         let mut base_step = 100.0;
-        while base_step * zoom > 200.0 { base_step /= 10.0; }
-        while base_step * zoom < 20.0 { base_step *= 10.0; }
+        while base_step * zoom > 200.0 {
+            base_step /= 10.0;
+        }
+        while base_step * zoom < 20.0 {
+            base_step *= 10.0;
+        }
 
         let step = base_step * zoom;
         let grid_origin = center + pan;
@@ -72,7 +76,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         let mut x = start_x;
         while x <= rect.right() + step {
             if x >= rect.left() {
-                painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], grid_stroke);
+                painter.line_segment(
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    grid_stroke,
+                );
             }
             x += step;
         }
@@ -80,19 +87,35 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         let mut y = start_y;
         while y <= rect.bottom() + step {
             if y >= rect.top() {
-                painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid_stroke);
+                painter.line_segment(
+                    [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                    grid_stroke,
+                );
             }
             y += step;
         }
 
         if grid_origin.x >= rect.left() && grid_origin.x <= rect.right() {
-            painter.line_segment([egui::pos2(grid_origin.x, rect.top()), egui::pos2(grid_origin.x, rect.bottom())], origin_stroke_y);
+            painter.line_segment(
+                [
+                    egui::pos2(grid_origin.x, rect.top()),
+                    egui::pos2(grid_origin.x, rect.bottom()),
+                ],
+                origin_stroke_y,
+            );
         }
         if grid_origin.y >= rect.top() && grid_origin.y <= rect.bottom() {
-            painter.line_segment([egui::pos2(rect.left(), grid_origin.y), egui::pos2(rect.right(), grid_origin.y)], origin_stroke_x);
+            painter.line_segment(
+                [
+                    egui::pos2(rect.left(), grid_origin.y),
+                    egui::pos2(rect.right(), grid_origin.y),
+                ],
+                origin_stroke_x,
+            );
         }
 
-        let composition_size = egui::vec2(state.render_width as f32, state.render_height as f32) * zoom;
+        let composition_size =
+            egui::vec2(state.render_width as f32, state.render_height as f32) * zoom;
         let composition_min = grid_origin - composition_size / 2.0;
         let composition_rect = egui::Rect::from_min_size(composition_min, composition_size);
 
@@ -102,7 +125,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         painter.rect_filled(shadow_rect, 0.0, egui::Color32::from_black_alpha(100));
 
         painter.rect_filled(composition_rect, 0.0, egui::Color32::WHITE);
-        painter.rect_stroke(composition_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+        painter.rect_stroke(
+            composition_rect,
+            0.0,
+            egui::Stroke::new(1.0, egui::Color32::BLACK),
+        );
 
         if state.position_cache.is_none() {
             if let Some(pc) = build_position_cache(state) {
@@ -197,15 +224,41 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             });
                         }
                         crate::scene::Shape::Group { children, .. } => {
-                            fill_gpu_shapes(children, gpu_shapes, _render_width, _render_height, my_spawn, current_time, project_duration, cached, flat_idx, handlers);
+                            fill_gpu_shapes(
+                                children,
+                                gpu_shapes,
+                                _render_width,
+                                _render_height,
+                                my_spawn,
+                                current_time,
+                                project_duration,
+                                cached,
+                                flat_idx,
+                                handlers,
+                            );
                         }
                     }
                 }
             }
 
-            fill_gpu_shapes(&state.scene, &mut gpu_shapes, state.render_width as f32, state.render_height as f32, 0.0, state.time, state.duration_secs, cached, &mut flat_idx, &state.dsl_event_handlers);
+            fill_gpu_shapes(
+                &state.scene,
+                &mut gpu_shapes,
+                state.render_width as f32,
+                state.render_height as f32,
+                0.0,
+                state.time,
+                state.duration_secs,
+                cached,
+                &mut flat_idx,
+                &state.dsl_event_handlers,
+            );
 
-            let magnifier_pos = if state.picker_active { ui.input(|i| i.pointer.hover_pos()) } else { None };
+            let magnifier_pos = if state.picker_active {
+                ui.input(|i| i.pointer.hover_pos())
+            } else {
+                None
+            };
 
             let cb = eframe::egui_wgpu::Callback::new_paint_callback(
                 rect,
@@ -243,7 +296,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 let frame_idx = (current_time * 60.0).round() as u32;
                 for shape in shapes {
                     let actual_spawn = shape.spawn_time().max(parent_spawn);
-                    if current_time < actual_spawn { continue; }
+                    if current_time < actual_spawn {
+                        continue;
+                    }
                     match shape {
                         crate::scene::Shape::Circle { radius, color, .. } => {
                             let (eval_x, eval_y) = if let Some(frame) = cached {
@@ -261,9 +316,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 );
                                 animated_xy_for(&transient, current_time, project_duration)
                             };
-                            let pos = composition_rect.min + egui::vec2(eval_x * composition_rect.width(), eval_y * composition_rect.height());
+                            let pos = composition_rect.min
+                                + egui::vec2(
+                                    eval_x * composition_rect.width(),
+                                    eval_y * composition_rect.height(),
+                                );
                             let scaled_radius = radius * composition_rect.width();
-                            let c = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+                            let c = egui::Color32::from_rgba_unmultiplied(
+                                color[0], color[1], color[2], color[3],
+                            );
                             ui_painter.circle_filled(pos, scaled_radius, c);
                         }
                         crate::scene::Shape::Rect { w, h, color, .. } => {
@@ -282,19 +343,50 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 );
                                 animated_xy_for(&transient, current_time, project_duration)
                             };
-                            let pos = composition_rect.min + egui::vec2(eval_x * composition_rect.width(), eval_y * composition_rect.height());
-                            let size = egui::vec2(w * composition_rect.width(), h * composition_rect.height());
-                            let c = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]);
+                            let pos = composition_rect.min
+                                + egui::vec2(
+                                    eval_x * composition_rect.width(),
+                                    eval_y * composition_rect.height(),
+                                );
+                            let size = egui::vec2(
+                                w * composition_rect.width(),
+                                h * composition_rect.height(),
+                            );
+                            let c = egui::Color32::from_rgba_unmultiplied(
+                                color[0], color[1], color[2], color[3],
+                            );
                             ui_painter.rect_filled(egui::Rect::from_min_size(pos, size), 0.0, c);
                         }
                         crate::scene::Shape::Group { children, .. } => {
-                            draw_shapes_recursive(ui_painter, children, composition_rect, _zoom, current_time, actual_spawn, project_duration, cached, flat_idx, handlers);
+                            draw_shapes_recursive(
+                                ui_painter,
+                                children,
+                                composition_rect,
+                                _zoom,
+                                current_time,
+                                actual_spawn,
+                                project_duration,
+                                cached,
+                                flat_idx,
+                                handlers,
+                            );
                         }
                     }
                 }
             }
 
-            draw_shapes_recursive(&painter, &state.scene, composition_rect, zoom, state.time, 0.0, state.duration_secs, cached, &mut flat_idx, &state.dsl_event_handlers);
+            draw_shapes_recursive(
+                &painter,
+                &state.scene,
+                composition_rect,
+                zoom,
+                state.time,
+                0.0,
+                state.duration_secs,
+                cached,
+                &mut flat_idx,
+                &state.dsl_event_handlers,
+            );
         }
 
         if main_ui_enabled && response.clicked() {
@@ -326,28 +418,67 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         ) -> Option<Vec<usize>> {
                             for (i, shape) in shapes.iter().enumerate().rev() {
                                 let actual_spawn = shape.spawn_time().max(parent_spawn);
-                                if current_time < actual_spawn { continue; }
+                                if current_time < actual_spawn {
+                                    continue;
+                                }
                                 let mut path = current_path.clone();
                                 path.push(i);
                                 match shape {
                                     crate::scene::Shape::Circle { x, y, radius, .. } => {
-                                        let center = composition_rect.left_top() + egui::vec2(*x * composition_rect.width(), *y * composition_rect.height());
-                                        if pos.distance(center) <= radius * composition_rect.width() { return Some(path); }
+                                        let center = composition_rect.left_top()
+                                            + egui::vec2(
+                                                *x * composition_rect.width(),
+                                                *y * composition_rect.height(),
+                                            );
+                                        if pos.distance(center) <= radius * composition_rect.width()
+                                        {
+                                            return Some(path);
+                                        }
                                     }
                                     crate::scene::Shape::Rect { x, y, w, h, .. } => {
-                                        let min = composition_rect.left_top() + egui::vec2(*x * composition_rect.width(), *y * composition_rect.height());
-                                        let rect = egui::Rect::from_min_size(min, egui::vec2(*w * composition_rect.width(), *h * composition_rect.height()));
-                                        if rect.contains(pos) { return Some(path); }
+                                        let min = composition_rect.left_top()
+                                            + egui::vec2(
+                                                *x * composition_rect.width(),
+                                                *y * composition_rect.height(),
+                                            );
+                                        let rect = egui::Rect::from_min_size(
+                                            min,
+                                            egui::vec2(
+                                                *w * composition_rect.width(),
+                                                *h * composition_rect.height(),
+                                            ),
+                                        );
+                                        if rect.contains(pos) {
+                                            return Some(path);
+                                        }
                                     }
                                     crate::scene::Shape::Group { children, .. } => {
-                                        if let Some(cp) = find_hit_path(children, pos, composition_rect, zoom, path, current_time, actual_spawn) { return Some(cp); }
+                                        if let Some(cp) = find_hit_path(
+                                            children,
+                                            pos,
+                                            composition_rect,
+                                            zoom,
+                                            path,
+                                            current_time,
+                                            actual_spawn,
+                                        ) {
+                                            return Some(cp);
+                                        }
                                     }
                                 }
                             }
                             None
                         }
 
-                        let hit_path = find_hit_path(&state.scene, pos, composition_rect, zoom, Vec::new(), state.time, 0.0);
+                        let hit_path = find_hit_path(
+                            &state.scene,
+                            pos,
+                            composition_rect,
+                            zoom,
+                            Vec::new(),
+                            state.time,
+                            0.0,
+                        );
                         if let Some(p) = hit_path {
                             state.selected = Some(p[0]);
                             state.selected_node_path = Some(p);
@@ -364,26 +495,65 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         if let Some(path) = &state.selected_node_path {
             let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0));
-            fn draw_highlight_recursive(painter: &egui::Painter, shape: &crate::scene::Shape, composition_rect: egui::Rect, stroke: egui::Stroke, current_time: f32, parent_spawn: f32) {
+            fn draw_highlight_recursive(
+                painter: &egui::Painter,
+                shape: &crate::scene::Shape,
+                composition_rect: egui::Rect,
+                stroke: egui::Stroke,
+                current_time: f32,
+                parent_spawn: f32,
+            ) {
                 let actual_spawn = shape.spawn_time().max(parent_spawn);
-                if current_time < actual_spawn { return; }
+                if current_time < actual_spawn {
+                    return;
+                }
                 match shape {
                     crate::scene::Shape::Circle { x, y, radius, .. } => {
-                        let center = composition_rect.left_top() + egui::vec2(*x * composition_rect.width(), *y * composition_rect.height());
+                        let center = composition_rect.left_top()
+                            + egui::vec2(
+                                *x * composition_rect.width(),
+                                *y * composition_rect.height(),
+                            );
                         painter.circle_stroke(center, radius * composition_rect.width(), stroke);
                     }
                     crate::scene::Shape::Rect { x, y, w, h, .. } => {
-                        let min = composition_rect.left_top() + egui::vec2(*x * composition_rect.width(), *y * composition_rect.height());
-                        painter.rect_stroke(egui::Rect::from_min_size(min, egui::vec2(*w * composition_rect.width(), *h * composition_rect.height())), 0.0, stroke);
+                        let min = composition_rect.left_top()
+                            + egui::vec2(
+                                *x * composition_rect.width(),
+                                *y * composition_rect.height(),
+                            );
+                        painter.rect_stroke(
+                            egui::Rect::from_min_size(
+                                min,
+                                egui::vec2(
+                                    *w * composition_rect.width(),
+                                    *h * composition_rect.height(),
+                                ),
+                            ),
+                            0.0,
+                            stroke,
+                        );
                     }
                     crate::scene::Shape::Group { children, .. } => {
-                        for child in children { draw_highlight_recursive(painter, child, composition_rect, stroke, current_time, actual_spawn); }
+                        for child in children {
+                            draw_highlight_recursive(
+                                painter,
+                                child,
+                                composition_rect,
+                                stroke,
+                                current_time,
+                                actual_spawn,
+                            );
+                        }
                     }
                 }
             }
             let mut current_node = state.scene.get(path[0]);
             for &idx in &path[1..] {
-                current_node = match current_node { Some(crate::scene::Shape::Group { children, .. }) => children.get(idx), _ => None };
+                current_node = match current_node {
+                    Some(crate::scene::Shape::Group { children, .. }) => children.get(idx),
+                    _ => None,
+                };
             }
             if let Some(node) = current_node {
                 draw_highlight_recursive(&painter, node, composition_rect, stroke, state.time, 0.0);
@@ -392,37 +562,101 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         let menu_pos = rect.min + egui::vec2(10.0, 10.0);
         if !state.code_fullscreen {
-            egui::Area::new("canvas_quick_settings").fixed_pos(menu_pos).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-                egui::Frame::none().fill(egui::Color32::from_black_alpha(150)).rounding(4.0).inner_margin(4.0).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        let picker_btn = egui::Button::new(egui::RichText::new("📷").size(14.0))
-                            .fill(if state.picker_active { egui::Color32::from_rgb(255, 100, 0) } else { egui::Color32::TRANSPARENT });
-                        if ui.add(picker_btn).on_hover_text("Color Picker & Magnifier").clicked() { state.picker_active = !state.picker_active; }
+            egui::Area::new("canvas_quick_settings")
+                .fixed_pos(menu_pos)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_black_alpha(150))
+                        .rounding(4.0)
+                        .inner_margin(4.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                let picker_btn = egui::Button::new(
+                                    egui::RichText::new("📷").size(14.0),
+                                )
+                                .fill(if state.picker_active {
+                                    egui::Color32::from_rgb(255, 100, 0)
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                });
+                                if ui
+                                    .add(picker_btn)
+                                    .on_hover_text("Color Picker & Magnifier")
+                                    .clicked()
+                                {
+                                    state.picker_active = !state.picker_active;
+                                }
 
-                        let (r, _) = ui.allocate_at_least(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                        ui.painter().rect_filled(r.shrink(2.0), 2.0, egui::Color32::from_rgb(state.picker_color[0], state.picker_color[1], state.picker_color[2]));
-                        ui.painter().rect_stroke(r.shrink(2.0), 2.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
+                                let (r, _) = ui.allocate_at_least(
+                                    egui::vec2(14.0, 14.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    r.shrink(2.0),
+                                    2.0,
+                                    egui::Color32::from_rgb(
+                                        state.picker_color[0],
+                                        state.picker_color[1],
+                                        state.picker_color[2],
+                                    ),
+                                );
+                                ui.painter().rect_stroke(
+                                    r.shrink(2.0),
+                                    2.0,
+                                    egui::Stroke::new(1.0, egui::Color32::GRAY),
+                                );
 
-                        ui.separator();
-                        ui.menu_button(format!("Preview: {}x", state.preview_multiplier), |ui| {
-                            for &m in &[0.125, 0.25, 0.5, 1.0, 1.125, 1.25, 1.5, 2.0] {
-                                if ui.selectable_label(state.preview_multiplier == m, format!("{}x", m)).clicked() { state.preview_multiplier = m; ui.close_menu(); }
-                            }
+                                ui.separator();
+                                ui.menu_button(
+                                    format!("Preview: {}x", state.preview_multiplier),
+                                    |ui| {
+                                        for &m in &[0.125, 0.25, 0.5, 1.0, 1.125, 1.25, 1.5, 2.0] {
+                                            if ui
+                                                .selectable_label(
+                                                    state.preview_multiplier == m,
+                                                    format!("{}x", m),
+                                                )
+                                                .clicked()
+                                            {
+                                                state.preview_multiplier = m;
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    },
+                                );
+                                ui.separator();
+                                ui.add(
+                                    egui::DragValue::new(&mut state.preview_fps)
+                                        .prefix("FPS: ")
+                                        .clamp_range(1..=240),
+                                );
+                                ui.separator();
+                                if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                                    let pct_x = (mouse_pos.x - composition_rect.min.x)
+                                        / composition_rect.width();
+                                    let pct_y = (mouse_pos.y - composition_rect.min.y)
+                                        / composition_rect.height();
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "X: {:.2}%, Y: {:.2}%",
+                                            pct_x * 100.0,
+                                            pct_y * 100.0
+                                        ))
+                                        .monospace()
+                                        .color(egui::Color32::LIGHT_BLUE),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("X: ---%, Y: ---%")
+                                            .monospace()
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                }
+                            });
                         });
-                        ui.separator();
-                        ui.add(egui::DragValue::new(&mut state.preview_fps).prefix("FPS: ").clamp_range(1..=240));
-                        ui.separator();
-                        if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
-                            let pct_x = (mouse_pos.x - composition_rect.min.x) / composition_rect.width();
-                            let pct_y = (mouse_pos.y - composition_rect.min.y) / composition_rect.height();
-                            ui.label(egui::RichText::new(format!("X: {:.2}%, Y: {:.2}%", pct_x * 100.0, pct_y * 100.0)).monospace().color(egui::Color32::LIGHT_BLUE));
-                        } else {
-                            ui.label(egui::RichText::new("X: ---%, Y: ---%").monospace().color(egui::Color32::GRAY));
-                        }
-                    });
                 });
-            });
         }
     });
 }

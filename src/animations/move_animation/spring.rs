@@ -40,7 +40,8 @@ pub fn compute_progress(local_t: f32, damping: f32, stiffness: f32, mass: f32) -
 }
 
 pub fn to_dsl_string(damping: f32, stiffness: f32, mass: f32) -> String {
-    if (damping - 0.7).abs() < 1e-6 && (stiffness - 120.0).abs() < 1e-3 && (mass - 1.0).abs() < 1e-6 {
+    if (damping - 0.7).abs() < 1e-6 && (stiffness - 120.0).abs() < 1e-3 && (mass - 1.0).abs() < 1e-6
+    {
         "spring".to_string()
     } else {
         format!(
@@ -51,7 +52,12 @@ pub fn to_dsl_string(damping: f32, stiffness: f32, mass: f32) -> String {
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
+    let s = val
+        .trim()
+        .trim_start_matches("type")
+        .trim()
+        .trim_start_matches('=')
+        .trim();
     if s.starts_with("spring") {
         let mut damping = 0.7f32;
         let mut stiffness = 120.0f32;

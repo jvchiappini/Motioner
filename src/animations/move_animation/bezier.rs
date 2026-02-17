@@ -12,7 +12,12 @@ pub fn to_dsl_string(p1: (f32, f32), p2: (f32, f32)) -> String {
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
+    let s = val
+        .trim()
+        .trim_start_matches("type")
+        .trim()
+        .trim_start_matches('=')
+        .trim();
     if s.starts_with("bezier") {
         let mut p1 = (0.0, 0.0);
         let mut p2 = (1.0, 1.0);
@@ -24,7 +29,7 @@ pub fn parse_dsl(val: &str) -> Option<Easing> {
                 if parts.len() == 2 {
                     // Part 1 should contain p1 = (...)
                     if let Some(p1_eq) = parts[0].find('=') {
-                        let p1_val = parts[0][p1_eq+1..].trim().trim_matches(',');
+                        let p1_val = parts[0][p1_eq + 1..].trim().trim_matches(',');
                         if p1_val.starts_with('(') && p1_val.contains(')') {
                             let p1_inner = &p1_val[1..p1_val.find(')').unwrap()];
                             let coords: Vec<&str> = p1_inner.split(',').collect();
@@ -36,7 +41,7 @@ pub fn parse_dsl(val: &str) -> Option<Easing> {
                     }
                     // Part 2 should contain = (...)
                     if let Some(p2_eq) = parts[1].find('=') {
-                        let p2_val = parts[1][p2_eq+1..].trim().trim_matches(',');
+                        let p2_val = parts[1][p2_eq + 1..].trim().trim_matches(',');
                         if p2_val.starts_with('(') && p2_val.contains(')') {
                             let p2_inner = &p2_val[1..p2_val.find(')').unwrap()];
                             let coords: Vec<&str> = p2_inner.split(',').collect();

@@ -67,7 +67,8 @@ fn tokenize<'a>(s: &'a str) -> Vec<Tok<'a>> {
         }
         if c.is_ascii_digit() || c == '.' {
             let start = i;
-            while i < s.len() && ((bytes[i] as char).is_ascii_digit() || (bytes[i] as char) == '.') {
+            while i < s.len() && ((bytes[i] as char).is_ascii_digit() || (bytes[i] as char) == '.')
+            {
                 i += 1;
             }
             if let Ok(v) = s[start..i].parse::<f32>() {
@@ -77,7 +78,8 @@ fn tokenize<'a>(s: &'a str) -> Vec<Tok<'a>> {
         }
         if c.is_alphabetic() {
             let start = i;
-            while i < s.len() && ((bytes[i] as char).is_alphanumeric() || (bytes[i] as char) == '_') {
+            while i < s.len() && ((bytes[i] as char).is_alphanumeric() || (bytes[i] as char) == '_')
+            {
                 i += 1;
             }
             out.push(Tok::Ident(&s[start..i]));
