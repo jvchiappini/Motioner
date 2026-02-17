@@ -382,17 +382,24 @@ pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
                 }
 
                 if found_block {
-                    // Default handler color: match "object teal" used in code panel
-                    let handler_color: [u8; 4] = [78, 201, 176, 255];
-                    out.push(DslHandler {
-                        name: ident,
-                        body: block_body,
-                        color: handler_color,
-                    });
-                    // advance the outer iterator
+                    // Always advance the outer iterator past the block so we don't
+                    // re-parse the block body as top-level identifiers.
                     for _ in 0..(end_idx - i) {
                         chars.next();
                     }
+
+                    // Only treat *recognized* event handler names as handlers.
+                    // Currently we accept only `on_time` as a top-level event.
+                    if let Some(col) = event_color(&ident) {
+                        out.push(DslHandler {
+                            name: ident,
+                            body: block_body,
+                            color: col,
+                        });
+                    } else {
+                        // Unknown top-level block — skip registering it as a handler.
+                    }
+
                     continue;
                 }
             }
@@ -400,6 +407,55 @@ pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
         chars.next();
     }
     out
+}
+
+/// Return the display color for a known top-level event name (RGBA), or None
+/// if the name is not a recognized event. Add new events here to whitelist
+/// them for handler extraction + coloring in the editor.
+pub fn event_color(name: &str) -> Option<[u8; 4]> {
+    match name {
+        "on_time" => Some([200, 100, 255, 255]), // purple for events
+        _ => None,
+    }
+}
+
+/// Return the display color for a known DSL method (e.g. `move_element`).
+/// Methods listed here will get a distinct color in the editor; callers may
+/// still allow per-call color override (e.g. `move_element(color = "#rrggbb")`).
+pub fn method_color(name: &str) -> Option<[u8; 4]> {
+    match name {
+        "move_element" => Some([255, 160, 80, 255]), // orange for methods
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_on_time_is_extracted_as_handler() {
+        let src = r#"
+            on_time {
+                move_element(name = "C", x = 0.1, y = 0.2)
+            }
+
+            asghasgbag {
+                move_element(name = "C", x = 0.3, y = 0.4)
+            }
+        "#;
+
+        let handlers = extract_event_handlers_structured(src);
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].name, "on_time");
+        assert_eq!(handlers[0].color, [200, 100, 255, 255]);
+    }
+
+    #[test]
+    fn method_color_registry_contains_move_element() {
+        let c = super::method_color("move_element").expect("move_element color");
+        assert_eq!(c, [255, 160, 80, 255]);
+    }
 }
 
 fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String, String>) {

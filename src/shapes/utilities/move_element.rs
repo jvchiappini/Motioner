@@ -45,16 +45,8 @@ impl MoveElement {
                     "color" => {
                         // accept strings like "#RRGGBB" or "#RRGGBBAA"
                         let vs = val.trim().trim_matches('"');
-                        if vs.starts_with('#') && (vs.len() == 7 || vs.len() == 9) {
-                            let r = u8::from_str_radix(&vs[1..3], 16).unwrap_or(78);
-                            let g = u8::from_str_radix(&vs[3..5], 16).unwrap_or(201);
-                            let b = u8::from_str_radix(&vs[5..7], 16).unwrap_or(176);
-                            let a = if vs.len() == 9 {
-                                u8::from_str_radix(&vs[7..9], 16).unwrap_or(255)
-                            } else {
-                                255
-                            };
-                            color_val = Some([r, g, b, a]);
+                        if let Some(c) = crate::code_panel::utils::parse_hex(vs) {
+                            color_val = Some(c);
                         }
                     }
                     _ => {}

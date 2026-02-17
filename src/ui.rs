@@ -124,7 +124,7 @@ impl eframe::App for MyApp {
             if !open {
                 state.color_picker_data = None;
             } else if changed {
-                let new_hex = code_panel::format_hex(data.color, data.is_alpha);
+                let new_hex = crate::code_panel::utils::format_hex(data.color, data.is_alpha);
                 // Safety check: ensure range is still valid (text might have changed)
                 if data.range.end <= state.dsl_code.len() {
                     state.dsl_code.replace_range(data.range.clone(), &new_hex);
