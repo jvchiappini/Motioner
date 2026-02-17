@@ -20,9 +20,11 @@ jobs:
         uses: actions/configure-pages@v3
 
       - name: Upload docs folder
-        uses: actions/upload-pages-artifact@v1
+        # updated to v3 to avoid use of deprecated upload-artifact v3 under the hood
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./docs
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+        # deploy-pages v4 is the current recommended release
+        uses: actions/deploy-pages@v4
