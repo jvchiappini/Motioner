@@ -30,7 +30,8 @@ jobs:
         run: cargo build --release --locked
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v3
+        # v3 of actions/upload-artifact is deprecated and blocked; use v4
+        uses: actions/upload-artifact@v4
         with:
           name: motioner_ui-${{ matrix.os }}
           path: |
