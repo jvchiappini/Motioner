@@ -6,13 +6,13 @@ pub fn compute_progress(local_t: f32, p1: (f32, f32), p2: (f32, f32)) -> f32 {
 
 pub fn to_dsl_string(p1: (f32, f32), p2: (f32, f32)) -> String {
     format!(
-        "type = bezier(p1 = ({:.2}, {:.2}), p2 = ({:.2}, {:.2}))",
+        "bezier(p1 = ({:.2}, {:.2}), p2 = ({:.2}, {:.2}))",
         p1.0, p1.1, p2.0, p2.1
     )
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim_start_matches("type").trim_start_matches('=').trim();
+    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
     if s.starts_with("bezier") {
         let mut p1 = (0.0, 0.0);
         let mut p2 = (1.0, 1.0);

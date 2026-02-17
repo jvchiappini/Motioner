@@ -94,7 +94,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         ui.add_space(8.0);
         ui.label("Available animations: Move (linear, ease_in_out)")
             .on_hover_text(
-                "Move animation — move an element from its position at animation start to a target (To X, To Y) over [Start, End].\n\nDetails:\n• Before Start: element stays at its base position.\n• During: position interpolated from current position at Start toward target.\n• After End: element remains at the target.\n\nEasing: `linear` = constant speed; `ease_in_out(power)` = symmetric ease-in/out (power controls curvature; 1.0 = linear).\n\nDSL examples: `type = linear` or `type = ease_in_out(power = 2.0)`.",
+                "Move animation — move an element from its position at animation start to a target (To X, To Y) over [Start, End].\n\nDetails:\n• Before Start: element stays at its base position.\n• During: position interpolated from current position at Start toward target.\n• After End: element remains at the target.\n\nEasing: `linear`, `ease_in/out/in_out(power)`, presets `sine`, `expo`, `circ`, or physics-like `spring(damping, stiffness, mass)`, `elastic(amplitude, period)`, `bounce(bounciness)`.\n\nDSL examples: `ease = sine`, `ease = spring(damping = 0.7, stiffness = 120.0)`.",
             );
         ui.add_space(8.0);
 

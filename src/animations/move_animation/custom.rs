@@ -41,11 +41,11 @@ pub fn to_dsl_string(points: &[(f32, f32)]) -> String {
         .map(|(t, v)| format!("({:.2}, {:.2})", t, v))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("type = custom(points = [{}])", pts_str)
+    format!("custom(points = [{}])", pts_str)
 }
 
 pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim_start_matches("type").trim_start_matches('=').trim();
+    let s = val.trim().trim_start_matches("type").trim().trim_start_matches('=').trim();
     if s.starts_with("custom") {
         let mut points = Vec::new();
         if let Some(open_bracket) = s.find('[') {

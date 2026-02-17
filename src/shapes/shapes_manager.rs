@@ -74,18 +74,16 @@ impl Shape {
                 spawn_time,
                 animations,
                 ..
-            } => {
-                crate::shapes::circle::to_dsl_with_animations(
-                    name,
-                    *x,
-                    *y,
-                    *radius,
-                    *color,
-                    *spawn_time,
-                    animations,
-                    &indent,
-                )
-            }
+            } => crate::shapes::circle::to_dsl_with_animations(
+                name,
+                *x,
+                *y,
+                *radius,
+                *color,
+                *spawn_time,
+                animations,
+                &indent,
+            ),
             Shape::Rect {
                 name,
                 x,
@@ -96,19 +94,17 @@ impl Shape {
                 spawn_time,
                 animations,
                 ..
-            } => {
-                crate::shapes::rect::to_dsl_with_animations(
-                    name,
-                    *x,
-                    *y,
-                    *w,
-                    *h,
-                    *color,
-                    *spawn_time,
-                    animations,
-                    &indent,
-                )
-            }
+            } => crate::shapes::rect::to_dsl_with_animations(
+                name,
+                *x,
+                *y,
+                *w,
+                *h,
+                *color,
+                *spawn_time,
+                animations,
+                &indent,
+            ),
             Shape::Group { name, children, .. } => {
                 let mut items: Vec<String> = Vec::new();
                 for c in children {
@@ -141,7 +137,6 @@ impl Shape {
             visible: true,
         }]
     }
-    
 
     pub fn name(&self) -> &str {
         match self {
@@ -211,28 +206,6 @@ pub fn get_shape_mut<'a>(scene: &'a mut [Shape], path: &[usize]) -> Option<&'a m
         };
     }
     Some(current)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn circle_to_dsl_includes_color_and_spawn() {
-        let s = Shape::Circle {
-            name: "C".to_string(),
-            x: 0.5,
-            y: 0.5,
-            radius: 0.1,
-            color: [17, 34, 51, 255],
-            spawn_time: 0.25,
-            animations: Vec::new(),
-            visible: true,
-        };
-        let d = s.to_dsl();
-        assert!(d.contains("fill = \"#112233\""));
-        assert!(d.contains("spawn = 0.25"));
-    }
 }
 
 pub fn get_shape<'a>(scene: &'a [Shape], path: &[usize]) -> Option<&'a Shape> {

@@ -573,7 +573,8 @@ fn highlight_code(
 
                 // Values / Constants / Easings
                 "linear" | "ease_in" | "ease_out" | "ease_in_out" | "bezier" | "custom"
-                | "points" | "power" => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
+                | "sine" | "expo" | "circ" | "spring" | "elastic" | "bounce"
+                | "points" | "power" | "damping" | "stiffness" | "mass" | "amplitude" | "period" | "bounciness" => egui::Color32::from_rgb(220, 220, 170), // Gold (#DCDCAA)
 
                 _ => {
                     // Check if this is a defined object name

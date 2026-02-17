@@ -14,6 +14,51 @@ pub fn render_easing_curve_editor(
 
     // Parameter editors for standard easings
     match easing {
+        Easing::Sine | Easing::Expo | Easing::Circ => {
+            // no parameters for these presets
+        }
+        Easing::Spring { damping, stiffness, mass } => {
+            ui.horizontal(|ui| {
+                ui.label("damping");
+                if ui.add(egui::Slider::new(damping, 0.0..=2.0)).changed() {
+                    changed = true;
+                }
+                ui.label("stiffness");
+                if ui
+                    .add(egui::DragValue::new(stiffness).speed(1.0).clamp_range(1.0..=500.0))
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.label("mass");
+                if ui
+                    .add(egui::DragValue::new(mass).speed(0.1).clamp_range(0.1..=10.0))
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+        }
+        Easing::Elastic { amplitude, period } => {
+            ui.horizontal(|ui| {
+                ui.label("amplitude");
+                if ui.add(egui::Slider::new(amplitude, 0.0..=3.0)).changed() {
+                    changed = true;
+                }
+                ui.label("period");
+                if ui.add(egui::Slider::new(period, 0.05..=1.5)).changed() {
+                    changed = true;
+                }
+            });
+        }
+        Easing::Bounce { bounciness } => {
+            ui.horizontal(|ui| {
+                ui.label("bounciness");
+                if ui.add(egui::Slider::new(bounciness, 0.0..=3.0)).changed() {
+                    changed = true;
+                }
+            });
+        }
         Easing::EaseIn { power } | Easing::EaseOut { power } | Easing::EaseInOut { power } => {
             ui.horizontal(|ui| {
                 if ui
@@ -117,7 +162,7 @@ pub fn render_easing_curve_editor(
     let mut curve_points = Vec::new();
     for i in 0..=100 {
         let t = i as f32 / 100.0;
-        let v = match easing {
+            let v = match easing {
             Easing::Linear => t,
             Easing::EaseIn { power } => t.powf(*power),
             Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
@@ -127,6 +172,18 @@ pub fn render_easing_curve_editor(
                 } else {
                     1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power)
                 }
+            }
+            Easing::Sine => crate::animations::move_animation::sine::compute_progress(t),
+            Easing::Expo => crate::animations::move_animation::expo::compute_progress(t),
+            Easing::Circ => crate::animations::move_animation::circ::compute_progress(t),
+            Easing::Spring { damping, stiffness, mass } => {
+                crate::animations::move_animation::spring::compute_progress(t, *damping, *stiffness, *mass)
+            }
+            Easing::Elastic { amplitude, period } => {
+                crate::animations::move_animation::elastic::compute_progress(t, *amplitude, *period)
+            }
+            Easing::Bounce { bounciness } => {
+                crate::animations::move_animation::bounce::compute_progress(t, *bounciness)
             }
             Easing::Bezier { p1, p2 } => {
                 let u = 1.0 - t;

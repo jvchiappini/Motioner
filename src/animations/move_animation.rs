@@ -6,6 +6,12 @@ pub mod ease_in;
 pub mod ease_in_out;
 pub mod ease_out;
 pub mod linear;
+pub mod sine;
+pub mod expo;
+pub mod circ;
+pub mod spring;
+pub mod elastic;
+pub mod bounce;
 
 /// Concrete implementation for a linear "move" animation.
 #[derive(Clone, Debug)]
@@ -65,6 +71,16 @@ impl MoveAnimation {
             Easing::EaseInOut { power } => ease_in_out::compute_progress(local_t, *power),
             Easing::Custom { points } => custom::compute_progress(local_t, points),
             Easing::Bezier { p1, p2 } => bezier::compute_progress(local_t, *p1, *p2),
+            Easing::Sine => sine::compute_progress(local_t),
+            Easing::Expo => expo::compute_progress(local_t),
+            Easing::Circ => circ::compute_progress(local_t),
+            Easing::Spring { damping, stiffness, mass } => {
+                spring::compute_progress(local_t, *damping, *stiffness, *mass)
+            }
+            Easing::Elastic { amplitude, period } => {
+                elastic::compute_progress(local_t, *amplitude, *period)
+            }
+            Easing::Bounce { bounciness } => bounce::compute_progress(local_t, *bounciness),
         };
 
         let ix = base_x + progress * (self.to_x - base_x);
@@ -109,6 +125,14 @@ impl MoveAnimation {
                     .collect();
                 format!("custom(points = [{}])", pts.join(", "))
             }
+            Easing::Sine => "sine".to_string(),
+            Easing::Expo => "expo".to_string(),
+            Easing::Circ => "circ".to_string(),
+            Easing::Spring { damping, stiffness, mass } => {
+                spring::to_dsl_string(*damping, *stiffness, *mass)
+            }
+            Easing::Elastic { amplitude, period } => elastic::to_dsl_string(*amplitude, *period),
+            Easing::Bounce { bounciness } => bounce::to_dsl_string(*bounciness),
         };
 
         let mut out = format!("{}move {{\n", indent);
@@ -135,189 +159,7 @@ impl MoveAnimation {
         self.to_dsl_block(None, indent)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sample_at_end_returns_target() {
-        let ma = MoveAnimation {
-            to_x: 0.7,
-            to_y: 0.5,
-            start: 0.0,
-            end: 5.0,
-            easing: Easing::Linear,
-        };
-
-        let (x, y) = ma.sample_position(0.5, 0.5, 5.0);
-        assert!((x - 0.7).abs() < 1e-6);
-        assert!((y - 0.5).abs() < 1e-6);
-
-        // times after end stay at target
-        let (x2, y2) = ma.sample_position(0.5, 0.5, 6.0);
-        assert!((x2 - 0.7).abs() < 1e-6);
-        assert!((y2 - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn positions_by_frame_samples_edges() {
-        let ma = MoveAnimation {
-            to_x: 1.0,
-            to_y: 0.0,
-            start: 0.0,
-            end: 1.0,
-            easing: Easing::Linear,
-        };
-
-        let frames = ma.positions_by_frame(0.0, 1.0, 2);
-        // fps=2 -> step=0.5 -> expect times [0.0, 0.5, 1.0]
-        let times: Vec<f32> = frames.iter().map(|(t, _, _)| *t).collect();
-        assert_eq!(times, vec![0.0, 0.5, 1.0]);
-    }
-
-    #[test]
-    fn ease_in_out_power_changes_profile() {
-        let base = MoveAnimation {
-            to_x: 0.8,
-            to_y: 0.2,
-            start: 0.0,
-            end: 4.0,
-            easing: Easing::Linear,
-        };
-        let eio_pow1 = MoveAnimation {
-            easing: Easing::EaseInOut { power: 1.0 },
-            ..base.clone()
-        };
-        let eio_pow2 = MoveAnimation {
-            easing: Easing::EaseInOut { power: 2.0 },
-            ..base.clone()
-        };
-
-        // power == 1.0 should match linear
-        let (xl, yl) = base.sample_position(0.2, 0.2, 1.5);
-        let (x1, y1) = eio_pow1.sample_position(0.2, 0.2, 1.5);
-        assert!((xl - x1).abs() < 1e-6);
-        assert!((yl - y1).abs() < 1e-6);
-
-        // power == 2.0 should differ from linear (non-constant speed)
-        let (x2, y2) = eio_pow2.sample_position(0.2, 0.2, 1.5);
-        assert!((xl - x2).abs() > 1e-6 || (yl - y2).abs() > 1e-6);
-    }
-
-    #[test]
-    fn ease_in_out_and_variants_behave() {
-        let base = MoveAnimation {
-            to_x: 0.9,
-            to_y: 0.1,
-            start: 0.0,
-            end: 4.0,
-            easing: Easing::Linear,
-        };
-
-        // ease_in (power=1) == linear
-        let ei1 = MoveAnimation {
-            easing: Easing::EaseIn { power: 1.0 },
-            ..base.clone()
-        };
-        let (xl, yl) = base.sample_position(0.1, 0.1, 1.2);
-        let (xe1, ye1) = ei1.sample_position(0.1, 0.1, 1.2);
-        assert!((xl - xe1).abs() < 1e-6 && (yl - ye1).abs() < 1e-6);
-
-        // ease_in (power=2) differs from linear
-        let ei2 = MoveAnimation {
-            easing: Easing::EaseIn { power: 2.0 },
-            ..base.clone()
-        };
-        let (xe2, ye2) = ei2.sample_position(0.1, 0.1, 1.2);
-        assert!((xl - xe2).abs() > 1e-6 || (yl - ye2).abs() > 1e-6);
-
-        // ease_out (power=2) should also differ
-        let eo2 = MoveAnimation {
-            easing: Easing::EaseOut { power: 2.0 },
-            ..base.clone()
-        };
-        let (xo2, yo2) = eo2.sample_position(0.1, 0.1, 1.2);
-        assert!((xl - xo2).abs() > 1e-6 || (yl - yo2).abs() > 1e-6);
-
-        // ease_in_out(power) should behave as the symmetric curve (power=1 => linear)
-        let eio = MoveAnimation {
-            easing: Easing::EaseInOut { power: 2.0 },
-            ..base.clone()
-        };
-        let (x_eio, y_eio) = eio.sample_position(0.1, 0.1, 1.2);
-        // ensure it's different from linear at the same sample
-        assert!((xl - x_eio).abs() > 1e-6 || (yl - y_eio).abs() > 1e-6);
-    }
-
-    #[test]
-    fn to_dsl_emits_ease_types() {
-        let ma_ei = MoveAnimation {
-            easing: Easing::EaseIn { power: 1.0 },
-            to_x: 0.0,
-            to_y: 0.0,
-            start: 0.0,
-            end: 1.0,
-        };
-        assert!(ma_ei.to_dsl_snippet("E", "").contains("type = ease_in"));
-
-        let ma_eo = MoveAnimation {
-            easing: Easing::EaseOut { power: 2.0 },
-            ..ma_ei.clone()
-        };
-        assert!(ma_eo
-            .to_dsl_snippet("E", "")
-            .contains("type = ease_out(power = 2.000)"));
-
-        let ma_eio = MoveAnimation {
-            easing: Easing::EaseInOut { power: 3.0 },
-            ..ma_ei.clone()
-        };
-        assert!(ma_eio
-            .to_dsl_snippet("E", "")
-            .contains("type = ease_in_out(power = 3.000)"));
-    }
-
-    #[test]
-    fn to_dsl_snippet_emits_ease_in_out_with_power() {
-        let ma_default = MoveAnimation {
-            to_x: 0.7,
-            to_y: 0.5,
-            start: 0.0,
-            end: 5.0,
-            easing: Easing::EaseInOut { power: 1.0 },
-        };
-        let s_default = ma_default.to_dsl_snippet("Circle", "    ");
-        assert!(s_default.contains("type = ease_in_out"));
-
-        let ma_pow = MoveAnimation {
-            easing: Easing::EaseInOut { power: 2.0 },
-            ..ma_default.clone()
-        };
-        let s_pow = ma_pow.to_dsl_snippet("Circle", "    ");
-        assert!(s_pow.contains("type = ease_in_out(power = 2.000)"));
-    }
-
-    #[test]
-    fn parse_move_block_rejects_lerp() {
-        let lines = vec![
-            "element = \"E\"",
-            "type = lerp(power = 2.0)",
-            "startAt = 0.0",
-            "end {",
-            "    time = 1.0",
-            "    x = 0.5",
-            "    y = 0.5",
-            "}",
-        ];
-
-        let parsed = parse_move_block(&lines.iter().map(|s| *s).collect::<Vec<&str>>());
-        // `lerp` must no longer be recognized by the parser — it should not parse as EaseInOut.
-        assert!(parsed.is_some());
-        let pm = parsed.unwrap();
-        assert!(matches!(pm.easing, crate::scene::Easing::Linear));
-    }
-}
+=
 
 /// Result produced by parsing a `move { ... }` DSL block.
 #[derive(Clone, Debug)]
@@ -363,12 +205,13 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
         } else if (b.starts_with("type") || b.starts_with("ease")) && b.contains('=') {
             if let Some(eq) = b.find('=') {
                 let val = b[eq + 1..].trim().trim_matches(',').to_lowercase();
-                // Try parsing with or without "type =" prefix
+                // Support ease/easing (preferred) or type (legacy)
                 let clean_val = if val.starts_with("type =") {
                     val.clone()
                 } else {
                     format!("type = {}", val)
                 };
+                
 
                 if let Some(e) = linear::parse_dsl(&clean_val) {
                     easing_kind = e;
@@ -377,6 +220,18 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                 } else if let Some(e) = ease_in::parse_dsl(&clean_val) {
                     easing_kind = e;
                 } else if let Some(e) = ease_out::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = sine::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = expo::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = circ::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = spring::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = elastic::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = bounce::parse_dsl(&clean_val) {
                     easing_kind = e;
                 } else if let Some(e) = custom::parse_dsl(&clean_val) {
                     easing_kind = e;

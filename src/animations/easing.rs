@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum Easing {
     Linear,
     /// Symmetric ease-in/out parameterized by `power` (1.0 == linear).
-    /// DSL: `type = ease_in_out(power = 2.0)`
+    /// DSL: `ease_in_out(power = 2.0)`
     EaseInOut {
         power: f32,
     },
@@ -30,5 +30,26 @@ pub enum Easing {
     Bezier {
         p1: (f32, f32),
         p2: (f32, f32),
+    },
+    /// Preset: smooth sinusoidal ease-in-out (progress = 0.5*(1 - cos(pi*t))).
+    Sine,
+    /// Preset: exponential ease-in-out (fast start/stop, slow middle).
+    Expo,
+    /// Preset: circular ease-in-out.
+    Circ,
+    /// Damped spring — parameters: damping, stiffness, mass.
+    Spring {
+        damping: f32,
+        stiffness: f32,
+        mass: f32,
+    },
+    /// Elastic easing with given amplitude and period.
+    Elastic {
+        amplitude: f32,
+        period: f32,
+    },
+    /// Bounce-style easing with configurable bounciness (0.0 = linear, 1.0 = default bounce).
+    Bounce {
+        bounciness: f32,
     },
 }

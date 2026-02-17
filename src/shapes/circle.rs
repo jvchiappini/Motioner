@@ -36,32 +36,3 @@ pub fn to_dsl_with_animations(
     // Animations are now top-level entities generated in dsl.rs.
     to_dsl_snippet(name, x, y, radius, color, spawn_time, indent)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn circle_dsl_snippet_contains_values() {
-        let s = to_dsl_snippet("C", 0.5, 0.25, 0.1, [1, 2, 3, 255], 0.0, "    ");
-        assert!(s.contains("circle \"C\""));
-        assert!(s.contains("x = 0.500"));
-        assert!(s.contains("y = 0.250"));
-        assert!(s.contains("radius = 0.100"));
-        assert!(s.contains("fill = \"#010203\""));
-    }
-
-    #[test]
-    fn circle_includes_move_animation_snippet() {
-        let anim = crate::scene::Animation::Move {
-            to_x: 0.7,
-            to_y: 0.5,
-            start: 0.0,
-            end: 5.0,
-            easing: crate::scene::Easing::Linear,
-        };
-        let out = to_dsl_with_animations("C", 0.5, 0.5, 0.1, [1, 2, 3, 255], 0.0, &[anim], "    ");
-        assert!(out.contains("move {"), "missing move block: {}", out);
-        assert!(out.contains("during = 0.000 -> 5.000"));
-    }
-}

@@ -40,7 +40,7 @@ pub fn render_move_animation_modifiers(
             // tooltip describing the Move animation and available easing types (info icon)
             ui.add_space(6.0);
             ui.label(egui::RichText::new("ⓘ").weak()).on_hover_text(
-                "Move animation — moves an element from its position at the animation Start to the specified target (To X, To Y) over [Start, End].\n\nBehavior:\n• Before Start: element stays at its base position.\n• During: interpolates from the element's position at Start toward the target.\n• After End: element remains at the target.\n\nParameters:\n• Start / End (seconds), To X / To Y (0.0..1.0).\n• Easing: `linear` = constant speed; `ease_in_out(power)` = symmetric ease-in/out (power controls curvature; 1.0 = linear).\n\nDSL example: `type = ease_in_out(power = 2.0)`.",
+                "Move animation — moves an element from its position at the animation Start to the specified target (To X, To Y) over [Start, End].\n\nBehavior:\n• Before Start: element stays at its base position.\n• During: interpolates from the element's position at Start toward the target.\n• After End: element remains at the target.\n\nParameters:\n• Start / End (seconds), To X / To Y (0.0..1.0).\n• Easing: `linear`, `ease_in/out/in_out(power)`, presets `sine|expo|circ`, or physics `spring(damping,stiffness,mass)`, `elastic(amplitude,period)`, `bounce(bounciness)`.\n\nDSL example: `ease = spring(damping = 0.7, stiffness = 120.0)`.",
             );
         });
 
@@ -152,6 +152,31 @@ pub fn render_move_animation_modifiers(
                                         }
                                         if ui.selectable_label(matches!(easing, Easing::Bezier { .. }), "Bezier").on_hover_text("Bezier — smooth curve with 2 control points").clicked() {
                                             *easing = Easing::Bezier { p1: (0.42, 0.0), p2: (0.58, 1.0) };
+                                            *changed = true;
+                                        }
+                                        ui.separator();
+                                        if ui.selectable_label(matches!(easing, Easing::Sine), "Sine").on_hover_text("Sine — smooth sinusoidal ease-in/out").clicked() {
+                                            *easing = Easing::Sine;
+                                            *changed = true;
+                                        }
+                                        if ui.selectable_label(matches!(easing, Easing::Expo), "Expo").on_hover_text("Expo — exponential ease-in/out (fast start/stop)").clicked() {
+                                            *easing = Easing::Expo;
+                                            *changed = true;
+                                        }
+                                        if ui.selectable_label(matches!(easing, Easing::Circ), "Circ").on_hover_text("Circ — circular ease-in/out").clicked() {
+                                            *easing = Easing::Circ;
+                                            *changed = true;
+                                        }
+                                        if ui.selectable_label(matches!(easing, Easing::Spring { .. }), "Spring").on_hover_text("Spring(damping, stiffness, mass) — damped spring/overshoot").clicked() {
+                                            *easing = Easing::Spring { damping: 0.7, stiffness: 120.0, mass: 1.0 };
+                                            *changed = true;
+                                        }
+                                        if ui.selectable_label(matches!(easing, Easing::Elastic { .. }), "Elastic").on_hover_text("Elastic(amplitude, period) — elastic overshoot").clicked() {
+                                            *easing = Easing::Elastic { amplitude: 1.0, period: 0.3 };
+                                            *changed = true;
+                                        }
+                                        if ui.selectable_label(matches!(easing, Easing::Bounce { .. }), "Bounce").on_hover_text("Bounce(bounciness) — bouncing easing").clicked() {
+                                            *easing = Easing::Bounce { bounciness: 1.0 };
                                             *changed = true;
                                         }
                                     });
