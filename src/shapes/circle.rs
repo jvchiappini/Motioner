@@ -1,4 +1,5 @@
 /// Circle-specific helpers and constants.
+#[allow(dead_code)]
 pub fn default_color() -> [u8; 4] {
     [120, 200, 255, 255]
 }
@@ -22,6 +23,7 @@ pub fn to_dsl_snippet(
 }
 
 /// Produce the full DSL snippet for a circle.
+#[allow(clippy::too_many_arguments)]
 pub fn to_dsl_with_animations(
     name: &str,
     x: f32,
@@ -32,7 +34,6 @@ pub fn to_dsl_with_animations(
     _animations: &[crate::scene::Animation],
     indent: &str,
 ) -> String {
-    // We no longer nest animations inside the circle block.
-    // Animations are now top-level entities generated in dsl.rs.
+    #[allow(clippy::too_many_arguments)]
     to_dsl_snippet(name, x, y, radius, color, spawn_time, indent)
 }

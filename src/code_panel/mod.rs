@@ -116,7 +116,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     .layouter(&mut layouter);
 
                 let output = text_edit.show(ui);
-                let output_rect = output.response.rect; // capture rect so we can draw while still owning `output`
+                let _output_rect = output.response.rect; // capture rect so we can draw while still owning `output`
 
                 // 2. Update State & Render Popup AFTER TextEdit
                 autocomplete::handle_state_and_render(ui, &output.response, state);

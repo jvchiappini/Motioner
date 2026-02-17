@@ -218,7 +218,7 @@ fn apply_completion_by_index(
         state.completion_snippet_index = None; // will move to first on Tab
 
         // Select the first parameter immediately so user can start typing
-        if let Some(&(ps_byte, pe_byte)) = state.completion_snippet_params.get(0) {
+        if let Some(&(ps_byte, pe_byte)) = state.completion_snippet_params.first() {
             state.completion_snippet_index = Some(0);
 
             if let Some(mut te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {

@@ -1,8 +1,10 @@
 /// Pool de buffers para reutilizar y evitar allocaciones costosas durante el renderizado.
+#[allow(dead_code)]
 pub struct BufferPool {
     buffers: Vec<Vec<u8>>,
 }
 
+#[allow(dead_code)]
 impl BufferPool {
     pub fn new() -> Self {
         Self {

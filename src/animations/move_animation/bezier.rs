@@ -4,6 +4,7 @@ pub fn compute_progress(local_t: f32, p1: (f32, f32), p2: (f32, f32)) -> f32 {
     solve_cubic_bezier(local_t, p1.0, p1.1, p2.0, p2.1)
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(p1: (f32, f32), p2: (f32, f32)) -> String {
     format!(
         "bezier(p1 = ({:.2}, {:.2}), p2 = ({:.2}, {:.2}))",

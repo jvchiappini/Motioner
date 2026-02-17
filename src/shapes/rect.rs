@@ -1,4 +1,5 @@
 /// Rect-specific helpers and constants.
+#[allow(dead_code)]
 pub fn default_color() -> [u8; 4] {
     [200, 120, 120, 255]
 }
@@ -6,6 +7,7 @@ pub fn default_color() -> [u8; 4] {
 // Future: rect-specific utilities can live here
 
 /// Return the DSL snippet line for a rectangle (without animations).
+#[allow(clippy::too_many_arguments)]
 pub fn to_dsl_snippet(
     name: &str,
     x: f32,
@@ -23,6 +25,7 @@ pub fn to_dsl_snippet(
 }
 
 /// Produce the full DSL snippet for a rectangle.
+#[allow(clippy::too_many_arguments)]
 pub fn to_dsl_with_animations(
     name: &str,
     x: f32,

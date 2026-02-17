@@ -457,7 +457,7 @@ pub fn render_frame_color_image_gpu_snapshot(
     let bytes_per_pixel = 4u32;
     let bytes_per_row_unpadded = bytes_per_pixel * preview_w;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = ((bytes_per_row_unpadded + align - 1) / align) * align;
+    let padded_bytes_per_row = bytes_per_row_unpadded.div_ceil(align) * align;
     let output_buffer_size = padded_bytes_per_row as u64 * preview_h as u64;
 
     let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {

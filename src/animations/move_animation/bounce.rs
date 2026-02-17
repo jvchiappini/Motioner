@@ -24,6 +24,7 @@ pub fn compute_progress(local_t: f32, bounciness: f32) -> f32 {
     (1.0 - alpha) * t + alpha * base
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(bounciness: f32) -> String {
     if (bounciness - 1.0).abs() < 1e-6 {
         "bounce".to_string()

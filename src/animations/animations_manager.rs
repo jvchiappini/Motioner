@@ -39,7 +39,7 @@ pub fn animated_xy_for(shape: &Shape, project_time: f32, _project_duration: f32)
             // collect Move animations and sort by start time to be robust
             let mut moves: Vec<crate::animations::move_animation::MoveAnimation> = animations
                 .iter()
-                .filter_map(|a| crate::animations::move_animation::MoveAnimation::from_scene(a))
+                .filter_map(crate::animations::move_animation::MoveAnimation::from_scene)
                 .collect();
             moves.sort_by(|a, b| {
                 a.start

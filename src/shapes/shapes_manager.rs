@@ -285,12 +285,10 @@ pub fn move_node(
     // the removal shifts the target index back by 1.
     let mut actual_to_index = to_index;
     if from.len() == actual_to_parent.len() + 1
-        && &from[..actual_to_parent.len()] == actual_to_parent
+        && from[..actual_to_parent.len()] == actual_to_parent
     {
         if from[from.len() - 1] < to_index {
-            if actual_to_index > 0 {
-                actual_to_index -= 1;
-            }
+            actual_to_index = actual_to_index.saturating_sub(1);
         }
     }
 

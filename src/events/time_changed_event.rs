@@ -35,6 +35,7 @@ pub fn apply_on_time_handlers(
         .with_var("frame", frame as f32);
 
     for handler in handlers {
+        #[allow(clippy::collapsible_if)]
         if handler.name == "on_time" || handler.name == "time_changed" {
             if runtime::run_handler(scene, handler, &ctx) {
                 changed = true;
