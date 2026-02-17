@@ -56,7 +56,7 @@ impl MoveAnimation {
 
         // safe since start < end (if equal, treat as instant end)
         let denom = (self.end - self.start).abs();
-        let local_t = if denom < std::f32::EPSILON {
+        let local_t = if denom < f32::EPSILON {
             1.0
         } else {
             (project_time - self.start) / denom
@@ -90,10 +90,11 @@ impl MoveAnimation {
     }
 
     /// Sample a sequence of positions for this animation at a given FPS.
+    #[allow(dead_code)]
     pub fn positions_by_frame(&self, base_x: f32, base_y: f32, fps: u32) -> Vec<(f32, f32, f32)> {
         let mut frames = Vec::new();
         let duration = (self.end - self.start).abs();
-        if duration < std::f32::EPSILON {
+        if duration < f32::EPSILON {
             frames.push((self.start, self.to_x, self.to_y));
             return frames;
         }
@@ -175,6 +176,7 @@ impl MoveAnimation {
         out
     }
 
+    #[allow(dead_code)]
     pub fn to_dsl_snippet(&self, _element_name: &str, indent: &str) -> String {
         self.to_dsl_block(None, indent)
     }

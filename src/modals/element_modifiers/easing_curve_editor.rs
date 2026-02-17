@@ -336,7 +336,7 @@ pub fn render_easing_curve_editor(
                 .unwrap_or(false);
 
             // Draw Points
-            for (_idx, p) in points.iter().enumerate() {
+            for p in points.iter() {
                 painter.circle_filled(to_screen(p.0, p.1), 5.0, egui::Color32::YELLOW);
             }
 

@@ -290,10 +290,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     let resp = ui.interact(seg_rect, id, egui::Sense::click());
                     if resp.clicked() {
                         // compute new root path from segment
-                        let new_root = match path {
-                            None => None,
-                            Some(p) => Some(p.clone()),
-                        };
+                                                      let new_root = path.clone();
                         let old = state.timeline_root_path.clone();
                         state.timeline_root_path = new_root;
                         state.timeline_prev_root_path = old;
@@ -444,7 +441,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         // regenerate preview frames around the new playhead position
                         if state
                             .preview_cache_center_time
-                            .map_or(true, |c| (c - state.time).abs() > 1e-4)
+                            .is_none_or(|c| (c - state.time).abs() > 1e-4)
                         {
                             // interactive scrubbing → request a *single* fast preview frame (debounced)
                             crate::canvas::request_preview_frames(

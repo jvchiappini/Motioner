@@ -1,7 +1,7 @@
 use crate::scene::Easing;
 
 pub fn compute_progress(local_t: f32, power: f32) -> f32 {
-    if (power - 1.0).abs() < std::f32::EPSILON {
+    if (power - 1.0).abs() < f32::EPSILON {
         local_t
     } else if local_t < 0.5 {
         0.5 * (2.0 * local_t).powf(power)
@@ -10,6 +10,7 @@ pub fn compute_progress(local_t: f32, power: f32) -> f32 {
     }
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(power: f32) -> String {
     if (power - 1.0).abs() < 1e-6 {
         "ease_in_out".to_string()

@@ -15,7 +15,7 @@ pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration
     // First, generate all shapes
     for s in scene.iter() {
         out.push_str(&s.to_dsl());
-        out.push_str("\n");
+        out.push('\n');
     }
 
     // Then, generate all animations as top-level blocks
@@ -32,8 +32,8 @@ pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration
                     if let Some(ma) =
                         crate::animations::move_animation::MoveAnimation::from_scene(a)
                     {
-                        out.push_str(&ma.to_dsl_block(Some(&name), ""));
-                        out.push_str("\n");
+                        out.push_str(&ma.to_dsl_block(Some(name), ""));
+                        out.push('\n');
                     }
                 }
             }
@@ -257,7 +257,7 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                         let mut move_lines = Vec::new();
                         if b.contains('{') {
                             // Block-based move
-                            while let Some(m_line) = lines.next() {
+                            for m_line in lines.by_ref() {
                                 let m = m_line.trim();
                                 if m == "}" {
                                     break;
@@ -284,7 +284,7 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
         } else if line.starts_with("move") && line.contains('{') {
             // top-level move block
             let mut move_lines = Vec::new();
-            while let Some(m_line) = lines.next() {
+            for m_line in lines.by_ref() {
                 let m = m_line.trim();
                 if m == "}" {
                     break;
@@ -308,19 +308,16 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
 
     // Attach pending moves
     for (el, end_t, ex, ey, start_at, easing_kind) in pending_moves {
-        if let Some(s) = shapes.iter_mut().find(|sh| sh.name() == el) {
-            match s {
-                Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-                    animations.push(crate::scene::Animation::Move {
-                        to_x: ex,
-                        to_y: ey,
-                        start: start_at,
-                        end: end_t,
-                        easing: easing_kind,
-                    });
-                }
-                _ => {}
-            }
+        if let Some(Shape::Circle { animations, .. } | Shape::Rect { animations, .. }) =
+            shapes.iter_mut().find(|sh| sh.name() == el)
+        {
+            animations.push(crate::scene::Animation::Move {
+                to_x: ex,
+                to_y: ey,
+                start: start_at,
+                end: end_t,
+                easing: easing_kind,
+            });
         }
     }
 
@@ -428,36 +425,6 @@ pub fn method_color(name: &str) -> Option<[u8; 4]> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_on_time_is_extracted_as_handler() {
-        let src = r#"
-            on_time {
-                move_element(name = "C", x = 0.1, y = 0.2)
-            }
-
-            asghasgbag {
-                move_element(name = "C", x = 0.3, y = 0.4)
-            }
-        "#;
-
-        let handlers = extract_event_handlers_structured(src);
-        assert_eq!(handlers.len(), 1);
-        assert_eq!(handlers[0].name, "on_time");
-        assert_eq!(handlers[0].color, [200, 100, 255, 255]);
-    }
-
-    #[test]
-    fn method_color_registry_contains_move_element() {
-        let c = super::method_color("move_element").expect("move_element color");
-        assert_eq!(c, [255, 160, 80, 255]);
-    }
-}
-
 fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String, String>) {
     match shape {
         Shape::Circle {
@@ -544,3 +511,33 @@ fn add_anim_to_shape(shape: &mut Shape, parsed: crate::animations::move_animatio
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_on_time_is_extracted_as_handler() {
+        let src = r#"
+            on_time {
+                move_element(name = "C", x = 0.1, y = 0.2)
+            }
+
+            asghasgbag {
+                move_element(name = "C", x = 0.3, y = 0.4)
+            }
+        "#;
+
+        let handlers = extract_event_handlers_structured(src);
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].name, "on_time");
+        assert_eq!(handlers[0].color, [200, 100, 255, 255]);
+    }
+
+    #[test]
+    fn method_color_registry_contains_move_element() {
+        let c = super::method_color("move_element").expect("move_element color");
+        assert_eq!(c, [255, 160, 80, 255]);
+    }
+}
+

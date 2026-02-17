@@ -11,6 +11,7 @@ pub fn compute_progress(local_t: f32) -> f32 {
     }
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string() -> String {
     "circ".to_string()
 }

@@ -42,6 +42,7 @@ pub fn compute_progress(local_t: f32, points: &[BezierPoint]) -> f32 {
     solve_cubic_bezier(local_t, x0, y0, x1, y1, x2, y2, x3, y3)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solve_cubic_bezier(
     x_target: f32,
     x0: f32,
@@ -79,6 +80,7 @@ fn cubic_bezier_derivative_1d(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32
     3.0 * u * u * (p1 - p0) + 6.0 * u * t * (p2 - p1) + 3.0 * t * t * (p3 - p2)
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(points: &[BezierPoint]) -> String {
     let pts_str = points
         .iter()

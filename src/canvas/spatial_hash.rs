@@ -62,10 +62,7 @@ impl SpatialHashGrid {
 
         for tx in min_x..=max_x {
             for ty in min_y..=max_y {
-                self.grid
-                    .entry((tx, ty))
-                    .or_insert_with(Vec::new)
-                    .push(shape_idx);
+                self.grid.entry((tx, ty)).or_default().push(shape_idx);
             }
         }
     }
@@ -80,7 +77,9 @@ impl SpatialHashGrid {
             .unwrap_or(&[])
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.grid.clear();
     }
+
 }

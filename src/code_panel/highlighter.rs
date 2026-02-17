@@ -86,7 +86,7 @@ pub(crate) fn highlight_code(
 
             let start = idx;
             let mut end = idx + 1;
-            while let Some((i, next_c)) = chars.next() {
+            for (i, next_c) in chars.by_ref() {
                 end = i + 1;
                 if next_c == '"' {
                     break;
@@ -138,7 +138,7 @@ pub(crate) fn highlight_code(
 
             let color_idx = if ")]}".contains(c) {
                 if bracket_depth > 0 {
-                    bracket_depth -= 1;
+                    bracket_depth = bracket_depth.saturating_sub(1);
                 }
                 bracket_depth
             } else {

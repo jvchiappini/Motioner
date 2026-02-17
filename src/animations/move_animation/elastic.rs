@@ -11,10 +11,10 @@ pub fn compute_progress(local_t: f32, mut amplitude: f32, mut period: f32) -> f3
 
     let pi2 = std::f32::consts::PI * 2.0;
     let t = local_t;
-    if amplitude.abs() < std::f32::EPSILON {
+    if amplitude.abs() < f32::EPSILON {
         amplitude = 1.0;
     }
-    if period.abs() < std::f32::EPSILON {
+    if period.abs() < f32::EPSILON {
         period = 0.3;
     }
 
@@ -34,6 +34,7 @@ pub fn compute_progress(local_t: f32, mut amplitude: f32, mut period: f32) -> f3
     }
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(amplitude: f32, period: f32) -> String {
     if (amplitude - 1.0).abs() < 1e-6 && (period - 0.3).abs() < 1e-6 {
         "elastic".to_string()

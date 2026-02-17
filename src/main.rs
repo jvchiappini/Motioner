@@ -19,6 +19,7 @@ use anyhow::Result;
 use display_info::DisplayInfo;
 use eframe::egui;
 
+#[allow(clippy::field_reassign_with_default)]
 fn main() -> Result<()> {
     let mut native_options = eframe::NativeOptions::default();
     native_options.renderer = eframe::Renderer::Wgpu;
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
 
     if let Ok(displays) = DisplayInfo::all() {
         if let Some(primary) = displays.iter().find(|d| d.is_primary).or(displays.first()) {
-            let scale = primary.scale_factor as f32;
+            let scale = primary.scale_factor;
             let mon_w = primary.width as f32 / scale;
             let mon_h = primary.height as f32 / scale;
 
@@ -107,7 +108,7 @@ fn main() -> Result<()> {
                 Ok(()) => Ok(()),
                 Err(err2) => {
                     eprintln!("Fallback start failed too: {:?}", err2);
-                    return Err(anyhow::anyhow!("eframe fallback start failed: {:#?}", err2));
+                    Err(anyhow::anyhow!("eframe fallback start failed: {:#?}", err2))
                 }
             }
         }

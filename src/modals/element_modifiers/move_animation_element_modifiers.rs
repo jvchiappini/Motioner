@@ -2,6 +2,7 @@ use crate::modals::element_modifiers::easing_curve_editor::render_easing_curve_e
 use crate::scene::{Animation, Easing};
 use eframe::egui;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_move_animation_modifiers(
     ui: &mut egui::Ui,
     ctx: &egui::Context,
@@ -51,15 +52,13 @@ pub fn render_move_animation_modifiers(
             // iterate by index so we can remove safely after
             let mut remove_idx: Option<usize> = None;
 
-            for i in 0..animations.len() {
+            for (i, anim) in animations.iter_mut().enumerate() {
                 // only show Move animations here
-                let Animation::Move {
-                    to_x,
-                    to_y,
-                    start,
-                    end,
-                    easing,
-                } = &mut animations[i];
+                let (to_x, to_y, start, end, easing) = match anim {
+                    Animation::Move { to_x, to_y, start, end, easing } => {
+                        (to_x, to_y, start, end, easing)
+                    }
+                };
 
                 let header_text = format!("Move #{} — {:.2}s → {:.2}s", i + 1, *start, *end);
                     let stable_id = format!("element_modifiers::{}::move::{}", path_id, i);
@@ -219,7 +218,7 @@ pub fn render_move_animation_modifiers(
                             ui.label("Easing Curve:");
 
                             // Use unified curve editor
-                            if render_easing_curve_editor(ui, ctx, easing, i, "move") {
+                            if render_easing_curve_editor(ui, ctx, &mut *easing, i, "move") {
                                 *changed = true;
                             }
                         });

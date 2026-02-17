@@ -27,7 +27,7 @@ pub fn compute_progress(local_t: f32, points: &[(f32, f32)]) -> f32 {
     }
 
     let segment_duration = p1.0 - p0.0;
-    if segment_duration.abs() < std::f32::EPSILON {
+    if segment_duration.abs() < f32::EPSILON {
         p1.1
     } else {
         let segment_t = (local_t - p0.0) / segment_duration;
@@ -35,6 +35,7 @@ pub fn compute_progress(local_t: f32, points: &[(f32, f32)]) -> f32 {
     }
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(points: &[(f32, f32)]) -> String {
     let pts_str = points
         .iter()

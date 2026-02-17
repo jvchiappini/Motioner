@@ -296,6 +296,7 @@ pub fn sample_color_at(state: &AppState, paper_uv: egui::Pos2, time: f32) -> [u8
     ]
 }
 
+#[allow(dead_code)]
 pub fn render_frame_color_image(state: &AppState, time: f32) -> egui::ColorImage {
     let preview_w = (state.render_width as f32 * state.preview_multiplier)
         .round()
@@ -393,7 +394,7 @@ pub fn render_frame_color_image_snapshot(
             continue;
         }
 
-        let (eval_x, eval_y) = animated_xy_for(&shape, time, snap.duration_secs);
+        let (eval_x, eval_y) = animated_xy_for(shape, time, snap.duration_secs);
 
         match shape {
             crate::scene::Shape::Circle { radius, color, .. } => {

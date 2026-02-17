@@ -199,7 +199,7 @@ fn render_node(
     ui: &mut egui::Ui,
     state: &mut AppState,
     path: Vec<usize>,
-    removals: &mut Vec<Vec<usize>>,
+    _removals: &mut Vec<Vec<usize>>,
 ) {
     let is_selected = state.selected_node_path.as_ref() == Some(&path);
     let is_renaming = state.renaming_path.as_ref() == Some(&path);
@@ -378,7 +378,7 @@ fn render_node(
                     for i in 0..children_count {
                         let mut child_path = path.clone();
                         child_path.push(i);
-                        render_node(ui, state, child_path, removals);
+                        render_node(ui, state, child_path, _removals);
                     }
 
                     // Final append zone inside group (only needed if empty)

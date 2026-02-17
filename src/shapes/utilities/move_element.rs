@@ -14,6 +14,7 @@ pub struct MoveElement {
 
 impl MoveElement {
     /// Serialize back to DSL string (keeps expressions verbatim).
+    #[allow(dead_code)]
     pub fn to_dsl_string(&self) -> String {
         format!(
             "move_element(name = \"{}\", x = {}, y = {})",
@@ -72,6 +73,7 @@ impl MoveElement {
     /// `apply_fn`. This helper is convenient for higher-level callers that want
     /// parse+evaluate+apply in one step. `apply_fn` must mutate the shape with
     /// evaluated x/y (for example `element_modifiers::move_element`).
+    #[allow(dead_code)]
     pub fn evaluate_and_apply<F>(
         &self,
         shapes: &mut [Shape],

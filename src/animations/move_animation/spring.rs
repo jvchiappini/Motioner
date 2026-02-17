@@ -12,7 +12,7 @@ pub fn compute_progress(local_t: f32, damping: f32, stiffness: f32, mass: f32) -
 
     // natural frequency
     let omega0 = (stiffness / mass).max(0.0).sqrt();
-    let zeta = if omega0.abs() < std::f32::EPSILON {
+    let zeta = if omega0.abs() < f32::EPSILON {
         1.0
     } else {
         damping / (2.0 * (stiffness * mass).sqrt())
@@ -26,8 +26,7 @@ pub fn compute_progress(local_t: f32, damping: f32, stiffness: f32, mass: f32) -
         let cos = (omega_d * t).cos();
         let sin = (omega_d * t).sin();
         // normalized response that starts at 0 and approaches 1 with damped oscillation
-        let resp = 1.0 - exp_term * (cos + (zeta / (1.0 - zeta * zeta).sqrt()) * sin);
-        resp
+        1.0 - exp_term * (cos + (zeta / (1.0 - zeta * zeta).sqrt()) * sin)
     } else if (zeta - 1.0).abs() < 1e-4 {
         // critically damped — simple decay
         1.0 - (1.0 + omega0 * t) * (-omega0 * t).exp()
@@ -39,6 +38,7 @@ pub fn compute_progress(local_t: f32, damping: f32, stiffness: f32, mass: f32) -
     value.clamp(0.0, 1.0)
 }
 
+#[allow(dead_code)]
 pub fn to_dsl_string(damping: f32, stiffness: f32, mass: f32) -> String {
     if (damping - 0.7).abs() < 1e-6 && (stiffness - 120.0).abs() < 1e-3 && (mass - 1.0).abs() < 1e-6
     {

@@ -7,6 +7,6 @@
 pub mod element_modifiers;
 pub mod move_element;
 
-pub use move_element::MoveElement;
+// pub use move_element::MoveElement;  // removed: not exported/used currently
 
 // Future exports: scale_element, set_opacity, set_fill_color, etc.

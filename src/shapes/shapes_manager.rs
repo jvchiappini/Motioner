@@ -257,10 +257,11 @@ pub fn move_node(
 
     // If they diverge at some index, and at that index from[divergence_idx] < to_parent[divergence_idx],
     // then removing 'from' will decrement the index at divergence_idx in to_parent.
-    if divergence_idx < from.len() && divergence_idx < to_parent.len() {
-        if from[divergence_idx] < to_parent[divergence_idx] {
-            actual_to_parent[divergence_idx] -= 1;
-        }
+    if divergence_idx < from.len()
+        && divergence_idx < to_parent.len()
+        && from[divergence_idx] < to_parent[divergence_idx]
+    {
+        actual_to_parent[divergence_idx] -= 1;
     }
 
     // 2. Remove the source node
@@ -285,13 +286,10 @@ pub fn move_node(
     // the removal shifts the target index back by 1.
     let mut actual_to_index = to_index;
     if from.len() == actual_to_parent.len() + 1
-        && &from[..actual_to_parent.len()] == actual_to_parent
+        && from[..actual_to_parent.len()] == actual_to_parent
+        && from[from.len() - 1] < to_index
     {
-        if from[from.len() - 1] < to_index {
-            if actual_to_index > 0 {
-                actual_to_index -= 1;
-            }
-        }
+        actual_to_index = actual_to_index.saturating_sub(1);
     }
 
     // 4. Insert at target

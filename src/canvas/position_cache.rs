@@ -130,7 +130,7 @@ pub fn build_position_cache_for(
         return None;
     }
 
-    if frame_count.checked_mul(prim_count).unwrap_or(usize::MAX) > MAX_SAMPLES {
+    if frame_count.saturating_mul(prim_count) > MAX_SAMPLES {
         return None;
     }
 
@@ -192,7 +192,7 @@ pub fn build_position_cache_for(
     })
 }
 
-pub fn cached_frame_for<'a>(state: &'a AppState, time: f32) -> Option<&'a Vec<(f32, f32)>> {
+pub fn cached_frame_for(state: &AppState, time: f32) -> Option<&Vec<(f32, f32)>> {
     if let Some(pc) = &state.position_cache {
         if pc.fps == state.fps
             && (pc.duration_secs - state.duration_secs).abs() < 1e-6

@@ -143,6 +143,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             let cached = cached_frame_for(state, state.time);
             let mut flat_idx: usize = 0;
 
+            #[allow(clippy::too_many_arguments)]
             fn fill_gpu_shapes(
                 shapes: &[crate::scene::Shape],
                 gpu_shapes: &mut Vec<GpuShape>,
@@ -411,7 +412,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             shapes: &[crate::scene::Shape],
                             pos: egui::Pos2,
                             composition_rect: egui::Rect,
-                            zoom: f32,
+                            _zoom: f32,
                             current_path: Vec<usize>,
                             current_time: f32,
                             parent_spawn: f32,
@@ -457,7 +458,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                             children,
                                             pos,
                                             composition_rect,
-                                            zoom,
+                                            _zoom,
                                             path,
                                             current_time,
                                             actual_spawn,

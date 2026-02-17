@@ -34,6 +34,7 @@ pub struct AppState {
 
     #[cfg(feature = "wgpu")]
     #[serde(skip)]
+    #[allow(dead_code)]
     pub wgpu_renderer: Option<std::sync::Arc<egui::mutex::Mutex<crate::canvas::GpuResources>>>,
 
     #[serde(skip)]
@@ -89,6 +90,7 @@ pub struct AppState {
     pub dsl_event_handlers: Vec<crate::dsl::runtime::DslHandler>,
     pub export_in_progress: bool,
     #[serde(skip, default = "default_progress")]
+    #[allow(dead_code)]
     pub export_progress: Arc<AtomicUsize>,
     pub last_export_path: Option<PathBuf>,
 
@@ -397,6 +399,7 @@ pub struct ColorPickerData {
 }
 
 #[cfg(feature = "wgpu")]
+#[allow(dead_code)]
 pub struct WgpuRenderer {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,

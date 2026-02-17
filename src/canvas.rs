@@ -26,9 +26,11 @@ pub use gpu::{detect_vram_size, GpuResources};
 
 /// Estructura de compatibilidad para evitar errores de compilación mientras se migra el código.
 /// En el futuro, más lógica de canvas.rs se moverá a sub-módulos específicos.
+#[allow(dead_code)]
 pub struct CanvasManager;
 
 impl CanvasManager {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self
     }
