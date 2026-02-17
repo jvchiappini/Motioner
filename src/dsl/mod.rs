@@ -308,19 +308,16 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
 
     // Attach pending moves
     for (el, end_t, ex, ey, start_at, easing_kind) in pending_moves {
-        if let Some(s) = shapes.iter_mut().find(|sh| sh.name() == el) {
-            match s {
-                Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-                    animations.push(crate::scene::Animation::Move {
-                        to_x: ex,
-                        to_y: ey,
-                        start: start_at,
-                        end: end_t,
-                        easing: easing_kind,
-                    });
-                }
-                _ => {}
-            }
+        if let Some(Shape::Circle { animations, .. } | Shape::Rect { animations, .. }) =
+            shapes.iter_mut().find(|sh| sh.name() == el)
+        {
+            animations.push(crate::scene::Animation::Move {
+                to_x: ex,
+                to_y: ey,
+                start: start_at,
+                end: end_t,
+                easing: easing_kind,
+            });
         }
     }
 

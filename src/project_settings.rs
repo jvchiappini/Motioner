@@ -319,23 +319,22 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 .button("Build Cache Now")
                 .on_hover_text("Pre-calculate object positions for smoother playback")
                 .clicked()
+                && !state.position_cache_build_in_progress
             {
-                if !state.position_cache_build_in_progress {
-                    let (tx, rx) = std::sync::mpsc::channel::<crate::canvas::PositionCache>();
-                    state.position_cache_build_in_progress = true;
-                    state.position_cache_build_rx = Some(rx);
-                    let scene = state.scene.clone();
-                    let fps = state.fps;
-                    let duration = state.duration_secs;
-                    let handlers = state.dsl_event_handlers.clone();
-                    std::thread::spawn(move || {
-                        if let Some(pc) =
-                            crate::canvas::build_position_cache_for(scene, fps, duration, &handlers)
-                        {
-                            let _ = tx.send(pc);
-                        }
-                    });
-                }
+                let (tx, rx) = std::sync::mpsc::channel::<crate::canvas::PositionCache>();
+                state.position_cache_build_in_progress = true;
+                state.position_cache_build_rx = Some(rx);
+                let scene = state.scene.clone();
+                let fps = state.fps;
+                let duration = state.duration_secs;
+                let handlers = state.dsl_event_handlers.clone();
+                std::thread::spawn(move || {
+                    if let Some(pc) =
+                        crate::canvas::build_position_cache_for(scene, fps, duration, &handlers)
+                    {
+                        let _ = tx.send(pc);
+                    }
+                });
             }
 
             if state.position_cache_build_in_progress {
