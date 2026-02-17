@@ -96,6 +96,33 @@ ffmpeg -framerate 30 -i out/frames/frame_%05d.png -c:v libx264 -pix_fmt yuv420p 
 
 ---
 
+## 📦 Releases & downloads
+
+Pre-built binaries are published automatically by GitHub Actions for Windows, macOS and Linux when a `v*` tag is pushed (e.g. `v1.2.3`). Each Release includes:
+
+- Platform-specific archive (zip for Windows, tar.gz for macOS/Linux)
+- SHA256 checksum files (one per asset)
+- Release notes that include the list of commits contained in that tag
+
+How to create a release (recommended):
+
+```powershell
+# create an annotated tag and push it (Actions will publish assets)
+git tag -a v1.2.3 -m "release v1.2.3"
+git push origin v1.2.3
+```
+
+Asset naming convention (examples):
+
+- `motioner_v1.2.3_windows_x86_64.zip`
+- `motioner_v1.2.3_macos_x86_64.tar.gz`
+- `motioner_v1.2.3_linux_x86_64.tar.gz`
+
+Tip: check the Release page on GitHub to view release notes and download platform assets.
+
+
+---
+
 ## 📁 Project Structure
 
 ```

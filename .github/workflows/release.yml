@@ -29,14 +29,32 @@ jobs:
       - name: Build (release)
         run: cargo build --release --locked
 
-      - name: Upload binary artifact
-        # v3 of actions/upload-artifact is deprecated and blocked; use v4
+      - name: Package (Unix: tar.gz)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir -p out
+          TAG=${GITHUB_REF#refs/tags/}
+          OS_NAME=$(echo $RUNNER_OS | tr '[:upper:]' '[:lower:]')
+          ARCHIVE=motioner_${TAG}_${OS_NAME}_x86_64.tar.gz
+          tar -czf out/${ARCHIVE} -C target/release motioner_ui
+          sha256sum out/${ARCHIVE} > out/${ARCHIVE}.sha256
+        shell: bash
+
+      - name: Package (Windows: zip)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $tag = $env:GITHUB_REF -replace 'refs/tags/',''
+          if (!(Test-Path out)) { New-Item -ItemType Directory -Path out | Out-Null }
+          $archive = "motioner_${tag}_windows_x86_64.zip"
+          Compress-Archive -Path target\release\motioner_ui.exe -DestinationPath out\$archive -Force
+          Get-FileHash out\$archive -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $archive" } | Out-File -Encoding ASCII out\$archive.sha256
+
+      - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: motioner_ui-${{ matrix.os }}
-          path: |
-            target/release/motioner_ui
-            target/release/motioner_ui.exe
+          name: motioner-packages-${{ matrix.os }}
+          path: out/*
 
   publish-release:
     name: Create Release and attach assets
@@ -48,25 +66,58 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           path: dist
+            - name: Checkout (full history)
+              uses: actions/checkout@v4
+              with:
+                fetch-depth: 0
+
 
       - name: Package artifacts for Release
         run: |
           set -e
-          mkdir -p out
-          TAG=${GITHUB_REF#refs/tags/}
-          for d in dist/*; do
-            DN=$(basename "$d")
-            if [ -f "$d/motioner_ui.exe" ]; then
-              zip -j out/motioner_ui-${TAG}-windows.zip "$d"/motioner_ui.exe
-            elif [ -f "$d/motioner_ui" ]; then
-              zip -j out/motioner_ui-${TAG}-${DN}.zip "$d"/motioner_ui
-            fi
-          done
+            - name: Generate release notes (include commits)
+              id: release_notes
+              run: |
+                set -e
+                TAG=${GITHUB_REF#refs/tags/}
+                PREV_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:short)' refs/tags | grep -v "^${TAG}$" | head -n1 || true)
+                if [ -n "$PREV_TAG" ]; then
+                  COMMITS=$(git --no-pager log --pretty=format:'- %h %s (%an)' ${PREV_TAG}..${TAG})
+                  COMP_LINK="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+                else
+                  COMMITS=$(git --no-pager log --pretty=format:'- %h %s (%an)' ${TAG})
+                  COMP_LINK=""
+                fi
+                {
+                  echo "# Release ${TAG}"
+                  echo
+                  echo "## Changes"
+                  echo
+                  echo "$COMMITS"
+                  echo
+                  if [ -n "$COMP_LINK" ]; then
+                    echo "Full changelog: ${COMP_LINK}"
+                  fi
+                  echo
+                  echo "## Assets & checksums"
+                  echo
+                  for f in dist/*/*; do
+                    if [ -f "$f" ]; then
+                      echo "- $(basename "$f")"
+                    fi
+                  done
+                } > release-notes.md
+                echo "notes<<EOF" >> $GITHUB_OUTPUT
+                cat release-notes.md >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release and upload assets
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ github.ref_name }}
-          files: out/*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Create GitHub Release and upload assets (with notes)
+              uses: ncipollo/release-action@v1
+              with:
+                tag: ${{ github.ref_name }}
+                name: ${{ github.ref_name }}
+                body: ${{ steps.release_notes.outputs.notes }}
+                files: |
+                  dist/*/*
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
