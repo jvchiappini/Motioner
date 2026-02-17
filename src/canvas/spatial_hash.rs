@@ -81,5 +81,4 @@ impl SpatialHashGrid {
     pub fn clear(&mut self) {
         self.grid.clear();
     }
-
 }

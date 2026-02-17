@@ -290,7 +290,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     let resp = ui.interact(seg_rect, id, egui::Sense::click());
                     if resp.clicked() {
                         // compute new root path from segment
-                                                      let new_root = path.clone();
+                        let new_root = path.clone();
                         let old = state.timeline_root_path.clone();
                         state.timeline_root_path = new_root;
                         state.timeline_prev_root_path = old;

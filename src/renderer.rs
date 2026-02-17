@@ -48,18 +48,18 @@ pub fn render_and_encode(
 
     let out_file = dir_path.join("out.mp4");
     let status = Command::new("ffmpeg")
-                    .args([
-                        "-y",
-                        "-framerate",
-                        &fps.to_string(),
-                        "-i",
-                        &format!("{}/frame_%05d.png", dir_path.display()),
-                        "-c:v",
-                        "libx264",
-                        "-pix_fmt",
-                        "yuv420p",
-                        out_file.to_str().unwrap(),
-                ])
+        .args([
+            "-y",
+            "-framerate",
+            &fps.to_string(),
+            "-i",
+            &format!("{}/frame_%05d.png", dir_path.display()),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            out_file.to_str().unwrap(),
+        ])
         .status()?;
 
     if !status.success() {
