@@ -114,6 +114,13 @@ pub fn render_easing_curve_editor(
                     .color(egui::Color32::GRAY),
             );
         }
+        Easing::CustomBezier { .. } => {
+            ui.label(
+                egui::RichText::new("Drag points & handles. Right-click points to remove.")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
+        }
         _ => {}
     }
 
@@ -188,6 +195,9 @@ pub fn render_easing_curve_editor(
             Easing::Bezier { p1, p2 } => {
                 let u = 1.0 - t;
                 3.0 * u * u * t * p1.1 + 3.0 * u * t * t * p2.1 + t * t * t
+            }
+            Easing::CustomBezier { points } => {
+                crate::animations::move_animation::custom_bezier::compute_progress(t, points)
             }
             Easing::Custom { points } => {
                 if points.is_empty() {
@@ -388,6 +398,134 @@ pub fn render_easing_curve_editor(
             }
 
             // Guardar estado del mouse
+            ui.data_mut(|d| d.insert_temp(was_down_id, pointer_down));
+        }
+        Easing::CustomBezier { points } => {
+            let drag_id = ui.make_persistent_id(format!("custom_bezier_drag_{}_{}", element_type, animation_index));
+            let was_down_id = ui.make_persistent_id(format!("custom_bezier_was_down_{}_{}", element_type, animation_index));
+            
+            // drag_state: (type, index)
+            // type: 0 = point, 1 = handle_left, 2 = handle_right
+            let mut drag_state: Option<(u8, usize)> = ui.data(|d| d.get_temp(drag_id));
+            let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+            let pointer_down = ui.input(|i| i.pointer.primary_down());
+            let was_down = ui.data(|d| d.get_temp::<bool>(was_down_id)).unwrap_or(false);
+
+            // Draw segments/curves and handles
+            for i in 0..points.len() {
+                let p = &points[i];
+                let pos = to_screen(p.pos.0, p.pos.1);
+                
+                // Draw Handles
+                if i > 0 {
+                    let h_left = to_screen(p.pos.0 + p.handle_left.0, p.pos.1 + p.handle_left.1);
+                    painter.line_segment([pos, h_left], egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    painter.circle_filled(h_left, 3.5, egui::Color32::from_rgb(100, 150, 255));
+                }
+                if i < points.len() - 1 {
+                    let h_right = to_screen(p.pos.0 + p.handle_right.0, p.pos.1 + p.handle_right.1);
+                    painter.line_segment([pos, h_right], egui::Stroke::new(1.0, egui::Color32::from_gray(100)));
+                    painter.circle_filled(h_right, 3.5, egui::Color32::from_rgb(100, 150, 255));
+                }
+                
+                // Draw Point
+                painter.circle_filled(pos, 5.0, egui::Color32::YELLOW);
+            }
+
+            // Right click to remove point
+            if response.clicked_by(egui::PointerButton::Secondary) {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let mut to_remove = None;
+                    for (i, p) in points.iter().enumerate() {
+                        if to_screen(p.pos.0, p.pos.1).distance(pos) < 10.0 {
+                            to_remove = Some(i);
+                            break;
+                        }
+                    }
+                    if let Some(idx) = to_remove {
+                        points.remove(idx);
+                        changed = true;
+                    }
+                }
+            }
+
+            // Detectar inicio de drag o agregar punto
+            if pointer_down && !was_down && drag_state.is_none() {
+                if let Some(pos) = pointer_pos {
+                    if rect.contains(pos) {
+                        // 1. Check points
+                        for (i, p) in points.iter().enumerate() {
+                            if to_screen(p.pos.0, p.pos.1).distance(pos) < 10.0 {
+                                drag_state = Some((0, i));
+                                break;
+                            }
+                        }
+                        // 2. Check handles
+                        if drag_state.is_none() {
+                            for (i, p) in points.iter().enumerate() {
+                                if i > 0 {
+                                    let h_left = to_screen(p.pos.0 + p.handle_left.0, p.pos.1 + p.handle_left.1);
+                                    if h_left.distance(pos) < 7.0 {
+                                        drag_state = Some((1, i));
+                                        break;
+                                    }
+                                }
+                                if i < points.len() - 1 {
+                                    let h_right = to_screen(p.pos.0 + p.handle_right.0, p.pos.1 + p.handle_right.1);
+                                    if h_right.distance(pos) < 7.0 {
+                                        drag_state = Some((2, i));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if let Some(state) = drag_state {
+                            ui.data_mut(|d| d.insert_temp(drag_id, state));
+                        } else {
+                            // Add new point
+                            let (nx, ny) = from_screen(pos);
+                            points.push(crate::scene::BezierPoint {
+                                pos: (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)),
+                                handle_left: (-0.05, 0.0),
+                                handle_right: (0.05, 0.0),
+                            });
+                            points.sort_by(|a, b| a.pos.0.partial_cmp(&b.pos.0).unwrap());
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // Update during drag
+            if let Some((typ, idx)) = drag_state {
+                if pointer_down {
+                    if let Some(pos) = pointer_pos {
+                        let (nx, ny) = from_screen(pos);
+                        match typ {
+                            0 => { // Point
+                                points[idx].pos = (nx.clamp(0.0, 1.0), ny.clamp(-0.5, 1.5));
+                                changed = true;
+                            }
+                            1 => { // Handle Left
+                                points[idx].handle_left = (nx - points[idx].pos.0, ny - points[idx].pos.1);
+                                changed = true;
+                            }
+                            2 => { // Handle Right
+                                points[idx].handle_right = (nx - points[idx].pos.0, ny - points[idx].pos.1);
+                                changed = true;
+                            }
+                            _ => {}
+                        }
+                        ctx.request_repaint();
+                    }
+                } else {
+                    ui.data_mut(|d| d.remove::<(u8, usize)>(drag_id));
+                    points.sort_by(|a, b| a.pos.0.partial_cmp(&b.pos.0).unwrap());
+                    changed = true;
+                }
+            }
+
             ui.data_mut(|d| d.insert_temp(was_down_id, pointer_down));
         }
         _ => {}

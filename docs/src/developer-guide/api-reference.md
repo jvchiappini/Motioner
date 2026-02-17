@@ -215,6 +215,26 @@ impl AppState {
         }
     }
 }
+
+### Time-changed DSL event
+
+Motioner exposes a runtime `on_time` event that is emitted continuously while
+the playhead advances. Handlers can be registered in DSL (block form) and
+receive the current `seconds` and `frame` values for each tick.
+
+Example (DSL):
+
+```
+on_time {
+    move_element(name = "Circle", x = seconds * 0.1, y = 0.5)
+}
+```
+
+This example moves the element named `Circle` every frame using the
+`seconds` variable; the DSL currently supports a small set of built-in
+actions (e.g. `move_element`) and arithmetic expressions using `seconds`
+and `frame`.
+
 ```
 
 ## Error Handling

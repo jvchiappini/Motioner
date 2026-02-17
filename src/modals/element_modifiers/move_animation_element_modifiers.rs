@@ -53,15 +53,15 @@ pub fn render_move_animation_modifiers(
 
             for i in 0..animations.len() {
                 // only show Move animations here
-                if let Animation::Move {
+                let Animation::Move {
                     to_x,
                     to_y,
                     start,
                     end,
                     easing,
-                } = &mut animations[i]
-                {
-                    let header_text = format!("Move #{} — {:.2}s → {:.2}s", i + 1, *start, *end);
+                } = &mut animations[i];
+
+                let header_text = format!("Move #{} — {:.2}s → {:.2}s", i + 1, *start, *end);
                     let stable_id = format!("element_modifiers::{}::move::{}", path_id, i);
                     egui::CollapsingHeader::new(header_text)
                         .id_source(stable_id)
@@ -123,8 +123,23 @@ pub fn render_move_animation_modifiers(
                             // Easing selector
                             ui.horizontal(|ui| {
                                 ui.label("Easing:");
+                                let easing_label = match easing {
+                                    Easing::Linear => "Linear",
+                                    Easing::EaseIn { .. } => "EaseIn",
+                                    Easing::EaseOut { .. } => "EaseOut",
+                                    Easing::EaseInOut { .. } => "EaseInOut",
+                                    Easing::Custom { .. } => "Custom",
+                                    Easing::CustomBezier { .. } => "CustomBezier",
+                                    Easing::Bezier { .. } => "Bezier",
+                                    Easing::Sine => "Sine",
+                                    Easing::Expo => "Expo",
+                                    Easing::Circ => "Circ",
+                                    Easing::Spring { .. } => "Spring",
+                                    Easing::Elastic { .. } => "Elastic",
+                                    Easing::Bounce { .. } => "Bounce",
+                                };
                                 egui::ComboBox::from_label("")
-                                    .selected_text(format!("{:?}", easing))
+                                    .selected_text(easing_label)
                                     .show_ui(ui, |ui| {
                                         if ui.selectable_label(matches!(easing, Easing::Linear), "Linear").on_hover_text("Linear — constant speed (uniform velocity)").clicked() {
                                             *easing = Easing::Linear;
@@ -150,6 +165,25 @@ pub fn render_move_animation_modifiers(
                                             *easing = Easing::Custom { points: vec![(0.0, 0.0), (1.0, 1.0)] };
                                             *changed = true;
                                         }
+
+                                        if ui.selectable_label(matches!(easing, Easing::CustomBezier { .. }), "CustomBezier").on_hover_text("CustomBezier — multi-point curve with control handles").clicked() {
+                                            *easing = Easing::CustomBezier { 
+                                                points: vec![
+                                                    crate::scene::BezierPoint { 
+                                                        pos: (0.0, 0.0), 
+                                                        handle_left: (-0.1, 0.0), 
+                                                        handle_right: (0.1, 0.0) 
+                                                    },
+                                                    crate::scene::BezierPoint { 
+                                                        pos: (1.0, 1.0), 
+                                                        handle_left: (-0.1, 0.0), 
+                                                        handle_right: (0.1, 0.0) 
+                                                    }
+                                                ] 
+                                            };
+                                            *changed = true;
+                                        }
+
                                         if ui.selectable_label(matches!(easing, Easing::Bezier { .. }), "Bezier").on_hover_text("Bezier — smooth curve with 2 control points").clicked() {
                                             *easing = Easing::Bezier { p1: (0.42, 0.0), p2: (0.58, 1.0) };
                                             *changed = true;
@@ -191,7 +225,6 @@ pub fn render_move_animation_modifiers(
                         });
 
                     ui.add_space(6.0);
-                }
             }
 
             // perform removal after iteration to avoid borrow issues

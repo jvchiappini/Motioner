@@ -1,3 +1,8 @@
+pub mod evaluator;
+pub mod runtime;
+
+use runtime::DslHandler;
+
 use crate::scene::Shape;
 
 /// Generate a simple DSL string for the given scene.
@@ -162,6 +167,11 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             continue;
         }
 
+        // Event handler lines (e.g. `on_time { ... }`) are NOT parsed here —
+        // we only extract/collect top-level handler *blocks* elsewhere so
+        // individual event modules can keep their parsing/execution logic
+        // inside their own files.
+
         // Handle shape definitions: circle "name" { ... } or circle(...) legacy
         if line.starts_with("circle") || line.starts_with("rect") {
             let is_circle = line.starts_with("circle");
@@ -220,13 +230,6 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                 let inner = &line[open_paren + 1..end_paren];
                 let kv = parse_kv_list(inner);
                 update_shape_from_kv(&mut current_shape, &kv);
-
-                // Check if there is more stuff on the same line (like .animate_to legacy)
-                let remainder = &line[end_paren + 1..].trim();
-                if remainder.contains(".animate_to") {
-                    // Try to parse legacy chained animations on same line
-                    parse_legacy_animations(&mut current_shape, remainder);
-                }
             }
 
             // Check if block follows
@@ -324,6 +327,78 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
     shapes
 }
 
+/// Extract top-level event handler blocks from DSL source as structured objects.
+pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
+    let mut out = Vec::new();
+    let mut chars = src.chars().enumerate().peekable();
+
+    while let Some((i, c)) = chars.peek().cloned() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+
+        let remainder = &src[i..];
+        let mut ident = String::new();
+        for ch in remainder.chars() {
+            if ch.is_alphanumeric() || ch == '_' {
+                ident.push(ch);
+            } else {
+                break;
+            }
+        }
+
+        if ident.is_empty() {
+            chars.next();
+            continue;
+        }
+
+        let id_len = ident.len();
+        let mut found_block = false;
+        let mut block_body = String::new();
+
+        // Check if this identifier is followed by a '{'
+        let after_ident = &remainder[id_len..];
+        if let Some(brace_start) = after_ident.find('{') {
+            // Verify there's only whitespace between ident and {
+            if after_ident[..brace_start].trim().is_empty() {
+                // Find matching closing brace
+                let mut brace_count = 0;
+                let abs_start = i + id_len + brace_start;
+                let mut end_idx = 0;
+
+                for (j, b) in src[abs_start..].chars().enumerate() {
+                    if b == '{' {
+                        brace_count += 1;
+                    } else if b == '}' {
+                        brace_count -= 1;
+                        if brace_count == 0 {
+                            end_idx = abs_start + j + 1;
+                            block_body = src[abs_start + 1..abs_start + j].to_string();
+                            found_block = true;
+                            break;
+                        }
+                    }
+                }
+
+                if found_block {
+                    out.push(DslHandler {
+                        name: ident,
+                        body: block_body,
+                    });
+                    // advance the outer iterator
+                    for _ in 0..(end_idx - i) {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+        }
+        chars.next();
+    }
+    out
+}
+
 fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String, String>) {
     match shape {
         Shape::Circle {
@@ -408,79 +483,5 @@ fn add_anim_to_shape(shape: &mut Shape, parsed: crate::animations::move_animatio
             });
         }
         _ => {}
-    }
-}
-
-fn parse_legacy_animations(shape: &mut Shape, mut line: &str) {
-    // Handle .animate_to(1.0, 0.0).during(0.0, 1.0).ease(linear)
-    while let Some(pos) = line.find(".animate_to(") {
-        let content_start = pos + 12;
-        if let Some(content_end) = line[content_start..].find(')') {
-            let coords = &line[content_start..content_start + content_end];
-            let parts: Vec<&str> = coords.split(',').collect();
-            if parts.len() == 2 {
-                let to_x = parts[0].trim().parse().unwrap_or(0.0);
-                let to_y = parts[1].trim().parse().unwrap_or(0.0);
-
-                let mut start = 0.0;
-                let mut end = 1.0;
-                let mut easing = crate::scene::Easing::Linear;
-
-                // check for .during
-                let mut remainder = &line[content_start + content_end + 1..];
-                if let Some(d_pos) = remainder.find(".during(") {
-                    let d_start = d_pos + 8;
-                    if let Some(d_end) = remainder[d_start..].find(')') {
-                        let times = &remainder[d_start..d_start + d_end];
-                        let t_parts: Vec<&str> = times.split(',').collect();
-                        if t_parts.len() == 2 {
-                            start = t_parts[0].trim().parse().unwrap_or(0.0);
-                            end = t_parts[1].trim().parse().unwrap_or(1.0);
-                        }
-                        remainder = &remainder[d_start + d_end + 1..];
-                    }
-                }
-
-                // check for .ease
-                if let Some(e_pos) = remainder.find(".ease(") {
-                    let e_start = e_pos + 6;
-                    if let Some(e_end) = remainder[e_start..].find(')') {
-                        let e_content = &remainder[e_start..e_start + e_end];
-                        // Simplified easing lookup
-                        if e_content.contains("linear") {
-                            easing = crate::scene::Easing::Linear;
-                        } else if e_content.contains("ease_in_out") {
-                            easing = crate::scene::Easing::EaseInOut { power: 2.0 };
-                        } else if e_content.contains("ease_in") {
-                            easing = crate::scene::Easing::EaseIn { power: 2.0 };
-                        } else if e_content.contains("ease_out") {
-                            easing = crate::scene::Easing::EaseOut { power: 2.0 };
-                        }
-                        line = &remainder[e_start + e_end + 1..];
-                    } else {
-                        line = "";
-                    }
-                } else {
-                    line = remainder;
-                }
-
-                match shape {
-                    Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-                        animations.push(crate::scene::Animation::Move {
-                            to_x,
-                            to_y,
-                            start,
-                            end,
-                            easing,
-                        });
-                    }
-                    _ => {}
-                }
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
     }
 }

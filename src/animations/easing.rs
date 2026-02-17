@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 
 /// Easing kinds for animations (moved from `scene.rs`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BezierPoint {
+    pub pos: (f32, f32),
+    pub handle_left: (f32, f32),  // Relative to pos
+    pub handle_right: (f32, f32), // Relative to pos
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Easing {
     Linear,
     /// Symmetric ease-in/out parameterized by `power` (1.0 == linear).
@@ -23,6 +30,10 @@ pub enum Easing {
     /// but explicitly including them makes editing easier.
     Custom {
         points: Vec<(f32, f32)>,
+    },
+    /// Custom easing with Bezier handles for each point.
+    CustomBezier {
+        points: Vec<BezierPoint>,
     },
     /// Cubic Bezier curve defined by two control points P1 and P2.
     /// P0 is (0,0) and P3 is (1,1).

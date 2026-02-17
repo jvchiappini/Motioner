@@ -204,6 +204,8 @@ impl eframe::App for MyApp {
                 let parsed = crate::dsl::parse_dsl(&state.dsl_code);
                 if !parsed.is_empty() {
                     state.scene = parsed;
+                    // collect DSL event handler blocks (e.g. `on_time { ... }`)
+                    state.dsl_event_handlers = crate::dsl::extract_event_handlers_structured(&state.dsl_code);
                     // regenerate preview for current playhead (single-frame request)
                     crate::canvas::request_preview_frames(
                         state,
@@ -578,18 +580,21 @@ impl eframe::App for MyApp {
                 // Tools (Bottom)
                 ui.horizontal(|ui| {
                     if ui
-                        .button(if state.playing {
-                            "⏸ Pause"
-                        } else {
-                            "▶ Play"
-                        })
+                        .button(if state.playing { "⏸ Pause" } else { "▶ Play" })
                         .clicked()
                     {
                         state.playing = !state.playing;
+                        // When starting playback, ensure DSL handlers are
+                        // registered immediately (don't rely on debounce).
+                        if state.playing {
+                            state.dsl_event_handlers = crate::dsl::extract_event_handlers_structured(&state.dsl_code);
+                            // dispatch initial time event for the current playhead
+                            state.set_time(state.time);
+                        }
                     }
                     if ui.button("⏹ Reset").clicked() {
                         state.playing = false;
-                        state.time = 0.0;
+                        state.set_time(0.0);
                     }
                     ui.label(format!("Time: {:.2}s", state.time));
 
@@ -614,9 +619,13 @@ impl eframe::App for MyApp {
         // Frame update for animation
         if state.playing {
             let dt = ctx.input(|i| i.stable_dt);
-            state.time += dt;
-            if state.time > state.duration_secs {
-                state.time = 0.0; // Loop
+            // advance time and emit via centralized setter
+            let next = state.time + dt;
+            if next > state.duration_secs {
+                // loop back to start
+                state.set_time(0.0);
+            } else {
+                state.set_time(next);
             }
 
             // Request single-frame preview generation for the new playhead time (non-blocking)

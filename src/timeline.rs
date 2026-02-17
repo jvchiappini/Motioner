@@ -213,7 +213,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     let alpha = ((1.0 - t) * 255.0) as u8;
                     let x_off = (1.0 - t) * -8.0;
                     let mut x = header_rect.left() + 8.0 + x_off;
-                    for (i, (label, path)) in prev_crumbs.iter().enumerate() {
+                    for (i, (label, _path)) in prev_crumbs.iter().enumerate() {
                         let mut job = egui::text::LayoutJob::default();
                         job.append(
                             label,
@@ -239,7 +239,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         }
                         let galley = ui.fonts(|f| f.layout_job(job.clone()));
                         let w = galley.size().x;
-                        let seg_rect = egui::Rect::from_min_size(
+                        let _seg_rect = egui::Rect::from_min_size(
                             egui::pos2(x, header_rect.top() + 6.0),
                             egui::vec2(w, header_rect.height() - 12.0),
                         );
@@ -440,7 +440,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         // Convert pointer x → timeline time using the track area's time origin
                         let new_time =
                             (pos.x - time_origin_x + state.timeline_pan_x) / pixels_per_sec;
-                        state.time = new_time.max(0.0);
+                        state.set_time(new_time.max(0.0));
                         // regenerate preview frames around the new playhead position
                         if state.preview_cache_center_time.map_or(true, |c| (c - state.time).abs() > 1e-4) {
                             // interactive scrubbing → request a *single* fast preview frame (debounced)

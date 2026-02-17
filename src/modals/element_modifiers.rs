@@ -34,9 +34,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         .movable(true);
 
     window.show(ctx, |ui| {
-        // Body: render the same controls that previously lived in ui::show_modifier_modal
-        let mut changed = false;
-        if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // Body: render the same controls that previously lived in ui::show_modifier_modal
+            let mut changed = false;
+            if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
             ui.add_space(4.0);
 
             let earliest_spawn = shape.spawn_time();
@@ -375,6 +376,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             );
             crate::events::element_properties_changed_event::on_element_properties_changed(state);
         }
+        });
     });
 
     // If the window was closed by the user, clear the active path

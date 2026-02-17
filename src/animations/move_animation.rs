@@ -1,17 +1,18 @@
 use crate::scene::Easing;
 
 pub mod bezier;
+pub mod bounce;
+pub mod circ;
 pub mod custom;
+pub mod custom_bezier;
 pub mod ease_in;
 pub mod ease_in_out;
 pub mod ease_out;
+pub mod elastic;
+pub mod expo;
 pub mod linear;
 pub mod sine;
-pub mod expo;
-pub mod circ;
 pub mod spring;
-pub mod elastic;
-pub mod bounce;
 
 /// Concrete implementation for a linear "move" animation.
 #[derive(Clone, Debug)]
@@ -26,24 +27,21 @@ pub struct MoveAnimation {
 impl MoveAnimation {
     /// Create from scene::Animation::Move (returns None for other variants).
     pub fn from_scene(anim: &crate::scene::Animation) -> Option<Self> {
-        if let crate::scene::Animation::Move {
+        let crate::scene::Animation::Move {
             to_x,
             to_y,
             start,
             end,
             easing,
-        } = anim
-        {
-            Some(MoveAnimation {
-                to_x: *to_x,
-                to_y: *to_y,
-                start: *start,
-                end: *end,
-                easing: easing.clone(),
-            })
-        } else {
-            None
-        }
+        } = anim;
+
+        Some(MoveAnimation {
+            to_x: *to_x,
+            to_y: *to_y,
+            start: *start,
+            end: *end,
+            easing: easing.clone(),
+        })
     }
 
     /// Sample the animated position given the element's base (x,y) at `project_time`.
@@ -70,13 +68,16 @@ impl MoveAnimation {
             Easing::EaseOut { power } => ease_out::compute_progress(local_t, *power),
             Easing::EaseInOut { power } => ease_in_out::compute_progress(local_t, *power),
             Easing::Custom { points } => custom::compute_progress(local_t, points),
+            Easing::CustomBezier { points } => custom_bezier::compute_progress(local_t, points),
             Easing::Bezier { p1, p2 } => bezier::compute_progress(local_t, *p1, *p2),
             Easing::Sine => sine::compute_progress(local_t),
             Easing::Expo => expo::compute_progress(local_t),
             Easing::Circ => circ::compute_progress(local_t),
-            Easing::Spring { damping, stiffness, mass } => {
-                spring::compute_progress(local_t, *damping, *stiffness, *mass)
-            }
+            Easing::Spring {
+                damping,
+                stiffness,
+                mass,
+            } => spring::compute_progress(local_t, *damping, *stiffness, *mass),
             Easing::Elastic { amplitude, period } => {
                 elastic::compute_progress(local_t, *amplitude, *period)
             }
@@ -114,10 +115,6 @@ impl MoveAnimation {
             Easing::EaseIn { power } => format!("ease_in(power = {:.3})", power),
             Easing::EaseOut { power } => format!("ease_out(power = {:.3})", power),
             Easing::EaseInOut { power } => format!("ease_in_out(power = {:.3})", power),
-            Easing::Bezier { p1, p2 } => format!(
-                "bezier(p1 = ({:.3}, {:.3}), p2 = ({:.3}, {:.3}))",
-                p1.0, p1.1, p2.0, p2.1
-            ),
             Easing::Custom { points } => {
                 let pts: Vec<String> = points
                     .iter()
@@ -125,12 +122,35 @@ impl MoveAnimation {
                     .collect();
                 format!("custom(points = [{}])", pts.join(", "))
             }
+            Easing::CustomBezier { points } => {
+                let pts: Vec<String> = points
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "(({:.3}, {:.3}), ({:.3}, {:.3}), ({:.3}, {:.3}))",
+                            p.pos.0,
+                            p.pos.1,
+                            p.handle_left.0,
+                            p.handle_left.1,
+                            p.handle_right.0,
+                            p.handle_right.1
+                        )
+                    })
+                    .collect();
+                format!("custom_bezier(points = [{}])", pts.join(", "))
+            }
+            Easing::Bezier { p1, p2 } => format!(
+                "bezier(p1 = ({:.3}, {:.3}), p2 = ({:.3}, {:.3}))",
+                p1.0, p1.1, p2.0, p2.1
+            ),
             Easing::Sine => "sine".to_string(),
             Easing::Expo => "expo".to_string(),
             Easing::Circ => "circ".to_string(),
-            Easing::Spring { damping, stiffness, mass } => {
-                spring::to_dsl_string(*damping, *stiffness, *mass)
-            }
+            Easing::Spring {
+                damping,
+                stiffness,
+                mass,
+            } => spring::to_dsl_string(*damping, *stiffness, *mass),
             Easing::Elastic { amplitude, period } => elastic::to_dsl_string(*amplitude, *period),
             Easing::Bounce { bounciness } => bounce::to_dsl_string(*bounciness),
         };
@@ -155,11 +175,10 @@ impl MoveAnimation {
         out
     }
 
-    pub fn to_dsl_snippet(&self, element_name: &str, indent: &str) -> String {
+    pub fn to_dsl_snippet(&self, _element_name: &str, indent: &str) -> String {
         self.to_dsl_block(None, indent)
     }
 }
-=
 
 /// Result produced by parsing a `move { ... }` DSL block.
 #[derive(Clone, Debug)]
@@ -211,7 +230,6 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                 } else {
                     format!("type = {}", val)
                 };
-                
 
                 if let Some(e) = linear::parse_dsl(&clean_val) {
                     easing_kind = e;
@@ -232,6 +250,8 @@ pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
                 } else if let Some(e) = elastic::parse_dsl(&clean_val) {
                     easing_kind = e;
                 } else if let Some(e) = bounce::parse_dsl(&clean_val) {
+                    easing_kind = e;
+                } else if let Some(e) = custom_bezier::parse_dsl(&clean_val) {
                     easing_kind = e;
                 } else if let Some(e) = custom::parse_dsl(&clean_val) {
                     easing_kind = e;

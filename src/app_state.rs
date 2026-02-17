@@ -80,6 +80,13 @@ pub struct AppState {
 
     pub playing: bool,
     pub time: f32,
+    /// Last observed time-changed event (seconds, frame) — for UI/tests. Not serialized.
+    #[serde(skip)]
+    pub last_time_changed: Option<(f32, u32)>,
+    /// Raw DSL event handler blocks parsed from `dsl_code` (e.g. `on_time { ... }`).
+    /// These are runtime-only and not serialized.
+    #[serde(skip)]
+    pub dsl_event_handlers: Vec<crate::dsl::runtime::DslHandler>,
     pub export_in_progress: bool,
     #[serde(skip, default = "default_progress")]
     pub export_progress: Arc<AtomicUsize>,
@@ -283,10 +290,12 @@ impl Default for AppState {
             preview_job_pending: false,
             preview_worker_use_gpu: true,
             preview_cache_auto_clean: true,
-            preview_cache_max_mb: 512,
+            preview_cache_max_mb: 1024,
             compress_preview_cache: false,
             playing: false,
             time: 0.0,
+            last_time_changed: None,
+            dsl_event_handlers: Vec::new(),
             export_in_progress: false,
             export_progress: Arc::new(AtomicUsize::new(0)),
             last_export_path: None,
@@ -363,6 +372,20 @@ impl Default for AppState {
             timeline_prev_root_path: None,
             timeline_breadcrumb_anim_t: 1.0,
         }
+    }
+}
+
+impl AppState {
+    /// Set the playhead time (seconds) and emit the `TimeChangedEvent`.
+    ///
+    /// This centralizes time updates so all callers get identical behavior
+    /// (update state, compute frame, dispatch DSL handlers).
+    pub fn set_time(&mut self, seconds: f32) {
+        self.time = seconds;
+        let frame = (self.time * self.fps as f32).round() as u32;
+        crate::events::time_changed_event::TimeChangedEvent::on_time_changed(
+            self, self.time, frame,
+        );
     }
 }
 

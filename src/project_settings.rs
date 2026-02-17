@@ -36,7 +36,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
     // Animation visual parameters
     let opacity = display_t;
-    let scale = 0.95 + (0.05 * display_t); // Subtle scale up
+    let _scale = 0.95 + (0.05 * display_t); // Subtle scale up
     let slide_offset = 20.0 * (1.0 - display_t); // Slight slide up
 
     let fade_color = egui::Color32::from_black_alpha((200.0 * opacity) as u8);
@@ -66,7 +66,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
     // Calculate centered position
     // We apply the slide offset to Y for the animation
-    let mut window_pos = egui::pos2(
+    let window_pos = egui::pos2(
         center.x - window_width / 2.0,
         center.y - window_height / 2.0 + slide_offset,
     );
@@ -327,9 +327,10 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                     let scene = state.scene.clone();
                     let fps = state.fps;
                     let duration = state.duration_secs;
+                    let handlers = state.dsl_event_handlers.clone();
                     std::thread::spawn(move || {
                         if let Some(pc) =
-                            crate::canvas::build_position_cache_for(scene, fps, duration)
+                            crate::canvas::build_position_cache_for(scene, fps, duration, &handlers)
                         {
                             let _ = tx.send(pc);
                         }
@@ -371,7 +372,7 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
         });
 
         // Memory usage warning
-        let current_mem_mb = (
+        let _current_mem_mb = (
             crate::canvas::position_cache_bytes(state)
                 + state.preview_frame_cache.len() * 4 * 100 * 100
             // VERY Rough estimate if missing dimensions
