@@ -68,7 +68,12 @@ impl MoveElement {
 
         // Default color matches "object teal" used by the code panel highlighter
         let color = color_val.unwrap_or([78, 201, 176, 255]);
-        Ok(MoveElement { name, x_expr, y_expr, color })
+        Ok(MoveElement {
+            name,
+            x_expr,
+            y_expr,
+            color,
+        })
     }
 
     /// Evaluate the stored expressions and apply the move using the provided
@@ -126,7 +131,11 @@ mod tests {
         };
 
         let ctx = crate::dsl::evaluator::EvalContext::new();
-        let res = act.evaluate_and_apply(&mut shapes, &ctx, crate::shapes::utilities::element_modifiers::move_element);
+        let res = act.evaluate_and_apply(
+            &mut shapes,
+            &ctx,
+            crate::shapes::utilities::element_modifiers::move_element,
+        );
         assert!(res.is_ok());
         match &shapes[0] {
             Shape::Circle { x, y, .. } => {
