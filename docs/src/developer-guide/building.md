@@ -8,7 +8,7 @@ Complete guide to building Motioner from source code.
 
 | Tool | Minimum Version | Download |
 |------|----------------|----------|
-| Rust | 1.70+ | [rustup.rs](https://rustup.rs/) |
+| Rust | pinned nightly (see `rust-toolchain.toml`) | The repository uses a pinned nightly toolchain (e.g. `nightly-2026-01-25`) — `rustup` will respect `rust-toolchain.toml` |
 | Git | Any recent | [git-scm.com](https://git-scm.com/) |
 | FFmpeg | 4.0+ | [ffmpeg.org](https://ffmpeg.org/) |
 
@@ -39,6 +39,11 @@ cd Motioner
 Fast compilation, includes debug symbols:
 
 ```powershell
+# Use the toolchain pinned in `rust-toolchain.toml` (rustup does this automatically).
+# If needed, install/override explicitly:
+rustup toolchain install nightly-2026-01-25
+rustup override set nightly-2026-01-25
+
 cargo build
 ```
 
@@ -54,6 +59,7 @@ cargo build
 Optimized binary, slower compilation:
 
 ```powershell
+# Ensure the pinned toolchain is active, then:
 cargo build --release
 ```
 

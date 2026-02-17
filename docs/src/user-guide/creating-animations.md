@@ -32,10 +32,10 @@ Future versions will include:
 
 ### Step 4: Refine
 
-- Scrub timeline to review
-- Adjust keyframe timing
-- Fine-tune easing (future)
-- Test at full speed
+    - Scrub timeline to review
+    - Adjust keyframe timing
+    - Fine-tune easing — use the **Easing Curve Editor** (Modals → Element Modifiers → Easing)
+    - Test at full speed
 
 ## Animation Techniques
 
@@ -69,18 +69,34 @@ Spin and rotate:
 
 ## Scene Management
 
-### Current Implementation
+### Current (user-facing) format — DSL
 
-Animations are defined programmatically in `src/scene.rs`:
+Authors and contributors should use the DSL to describe scenes and animations; the UI reads and writes the same DSL.
 
-```rust
-// Example scene structure
-pub struct Scene {
-    pub objects: Vec<SceneObject>,
-    pub duration_frames: usize,
-    // ... other properties
+Example (DSL):
+
+```
+size(1280, 720)
+timeline(fps = 30, duration = 5.0)
+
+rect "Box" {
+    x = 0.100,
+    y = 0.200,
+    w = 0.200,
+    h = 0.200,
+    color = [255, 255, 255, 255],
+    spawn = 0.00,
+    animations {
+        move {
+            to = (0.800, 0.200),
+            during = 0.000 -> 2.000,
+            ease = linear
+        }
+    }
 }
 ```
+
+Note: the internal Rust representation (shapes, animation enums) exists in the source tree for contributors who work on the engine — but user documentation and examples must use the DSL.
 
 ### Future Features
 
@@ -100,7 +116,7 @@ pub struct Scene {
 ### Reusable Animations
 
 - Copy/paste keyframes
-- Save animation presets (future)
+- Save animation presets (planned): the UI currently offers canvas/project presets; a dedicated "save animation preset" workflow is not implemented yet.
 - Template system (future)
 
 ### Performance

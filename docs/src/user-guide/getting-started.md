@@ -10,12 +10,17 @@ Before you begin, ensure you have the following installed:
 
 | Tool | Version | Purpose | Installation |
 |------|---------|---------|--------------|
-| **Rust** | stable (1.70+) | Build and run Motioner | [Install rustup](https://rustup.rs/) |
+| **Rust** | pinned nightly (see `rust-toolchain.toml`) | Build and run Motioner (project uses a pinned nightly toolchain) | [Install rustup](https://rustup.rs/) |
 | **FFmpeg** | Latest | Video encoding | [Download FFmpeg](https://ffmpeg.org/download.html) |
 
 ### Verify Installation
 
 ```powershell
+# The repository pins a specific Rust toolchain in `rust-toolchain.toml`.
+# `rustup` will normally pick this up automatically; to be explicit:
+rustup toolchain install nightly-2026-01-25
+rustup override set nightly-2026-01-25
+
 # Check Rust installation
 rustc --version
 cargo --version

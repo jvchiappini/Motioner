@@ -8,6 +8,11 @@ circle "Circle" {
     fill = "#78c8ff",
     spawn = 0.00
 }
-on_time {
-    move_element(name = "Circle", x = seconds * 0.1, y = 0.5)
+
+move {
+    element = "Circle",
+    to = (0.700, 0.500),
+    during = 0.000 -> 5.000,
+    ease = ease_in_out(power = 1.000)
 }
+
