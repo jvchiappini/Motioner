@@ -38,12 +38,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                     .export_ffmpeg_log
                     .push("✅ Export finished successfully.".to_string());
                 state.export_ffmpeg_rx = None;
+                state.export_cancel = None;
             }
             FfmpegMsg::Error(err) => {
                 state.export_ffmpeg_done = true;
                 state.export_ffmpeg_error = Some(err.clone());
                 state.export_ffmpeg_log.push(format!("❌ Error: {}", err));
                 state.export_ffmpeg_rx = None;
+                state.export_cancel = None;
             }
         }
     }
@@ -463,7 +465,10 @@ fn draw_export_step(
                                 }
                             }
                         } else {
-                            // Cancel (not yet supported mid-flight — just closes UI)
+                            // Allow user to request cancellation — signal the background
+                            // exporter via the shared atomic flag. The export thread will
+                            // kill ffmpeg and send a final Error/Done message.
+                            let mut clicked = false;
                             if ui
                                 .add(
                                     egui::Button::new(egui::RichText::new("Cancel").size(14.0))
@@ -471,9 +476,19 @@ fn draw_export_step(
                                 )
                                 .clicked()
                             {
-                                // Drop the receiver — background thread will finish but we won't wait.
-                                state.export_ffmpeg_rx = None;
-                                close_modal(state);
+                                clicked = true;
+                            }
+
+                            if clicked {
+                                if let Some(flag) = &state.export_cancel {
+                                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                                    state
+                                        .export_ffmpeg_log
+                                        .push("⏳ Cancellation requested...".to_string());
+                                } else {
+                                    // fallback: no cancel flag available — just close UI
+                                    close_modal(state);
+                                }
                             }
                         }
                     });
@@ -519,6 +534,9 @@ fn start_export(state: &mut AppState) {
 
     let (tx, rx) = std::sync::mpsc::channel::<FfmpegMsg>();
     state.export_ffmpeg_rx = Some(rx);
+    // Shared cancellation flag observed by the background exporter thread.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.export_cancel = Some(cancel_flag.clone());
 
     std::thread::spawn(move || {
         let total_frames = (duration * fps as f32).ceil() as u32;
@@ -826,6 +844,16 @@ fn start_export(state: &mut AppState) {
                     Vec::with_capacity((batch_end - batch_start) as usize);
 
                 for frame_idx in batch_start..batch_end {
+                    // Observe cancellation request and abort cleanly if set.
+                    if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(FfmpegMsg::Log(
+                            "🛑 Export cancelled by user — aborting...".to_string(),
+                        ));
+                        // Kill ffmpeg child if running and exit
+                        let _ = child.kill();
+                        let _ = tx.send(FfmpegMsg::Error("Export cancelled by user".to_string()));
+                        return;
+                    }
                     let raw = render_one_frame!(frame_idx);
 
                     match raw {
@@ -857,6 +885,14 @@ fn start_export(state: &mut AppState) {
                 // Pipe the batch into FFmpeg — one write per frame
                 use std::io::Write;
                 for (i, raw) in batch_frames.iter().enumerate() {
+                    if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(FfmpegMsg::Log(
+                            "🛑 Export cancelled by user — stopping write to ffmpeg...".to_string(),
+                        ));
+                        let _ = child.kill();
+                        let _ = tx.send(FfmpegMsg::Error("Export cancelled by user".to_string()));
+                        return;
+                    }
                     if let Err(e) = stdin.write_all(raw) {
                         let _ = tx.send(FfmpegMsg::Error(format!(
                             "Pipe write error at frame {} (tried to write {} bytes): {}",
@@ -935,8 +971,24 @@ fn start_export(state: &mut AppState) {
 
             // Render + save in batches (RAM cap), but all frames go to disk
             'gif_outer: for batch_start in (0..total_frames).step_by(batch_size as usize) {
+                if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = tx.send(FfmpegMsg::Log(
+                        "🛑 Export cancelled by user — aborting GIF export...".to_string(),
+                    ));
+                    let _ = std::fs::remove_dir_all(&frames_dir);
+                    let _ = tx.send(FfmpegMsg::Error("Export cancelled by user".to_string()));
+                    return;
+                }
                 let batch_end = (batch_start + batch_size).min(total_frames);
                 for frame_idx in batch_start..batch_end {
+                    if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(FfmpegMsg::Log(
+                            "🛑 Export cancelled by user — aborting GIF export...".to_string(),
+                        ));
+                        let _ = std::fs::remove_dir_all(&frames_dir);
+                        let _ = tx.send(FfmpegMsg::Error("Export cancelled by user".to_string()));
+                        return;
+                    }
                     let raw = render_one_frame!(frame_idx);
 
                     let raw = match raw {
@@ -999,6 +1051,11 @@ fn start_export(state: &mut AppState) {
                 .stdout(std::process::Stdio::null());
 
             let _ = tx.send(FfmpegMsg::Log(format!("ffmpeg (GIF): {:?}", cmd)));
+
+            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = tx.send(FfmpegMsg::Error("Export cancelled by user".to_string()));
+                return;
+            }
 
             match cmd.output() {
                 Ok(output) => {
@@ -1238,6 +1295,7 @@ fn close_modal(state: &mut AppState) {
     state.export_ffmpeg_rx = None;
     state.export_ffmpeg_done = false;
     state.export_ffmpeg_error = None;
+    state.export_cancel = None;
     state.export_output_path = None;
     state.export_frames_done = 0;
     state.export_frames_total = 0;

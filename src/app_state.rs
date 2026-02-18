@@ -258,6 +258,10 @@ pub struct AppState {
     pub export_ffmpeg_done: bool,
     #[serde(skip)]
     pub export_ffmpeg_error: Option<String>,
+    /// Cancellation flag shared with the export background thread. When set
+    /// to true the background exporter should stop rendering / kill ffmpeg.
+    #[serde(skip)]
+    pub export_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     #[serde(skip)]
     pub export_frames_done: u32,
     #[serde(skip)]
@@ -430,6 +434,7 @@ impl Default for AppState {
             export_ffmpeg_rx: None,
             export_ffmpeg_done: false,
             export_ffmpeg_error: None,
+            export_cancel: None,
             export_frames_done: 0,
             export_frames_total: 0,
             export_start_time: None,

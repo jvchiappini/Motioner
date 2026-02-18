@@ -8,3 +8,4 @@ move-animations.md
 test.motioner
 # Local release helper (ignored)
 publish-release.bat
+output.mp4

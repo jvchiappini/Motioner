@@ -63,35 +63,88 @@ pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
     let mut fps = None;
     let mut duration = None;
 
-    for line in code.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    // Helper: find balanced content after the identifier (supports multi-line)
+    fn find_balanced_content(
+        src: &str,
+        ident_pos: usize,
+        open: char,
+        close: char,
+    ) -> Option<String> {
+        let bytes = src.as_bytes();
+        let mut open_idx: Option<usize> = None;
+        for (i, &b) in bytes.iter().enumerate().skip(ident_pos) {
+            if (b as char) == open {
+                open_idx = Some(i);
+                break;
+            }
+            // stop if we hit a non-whitespace, non-identifier char before the opener
+            if (b as char).is_ascii_graphic()
+                && (b as char) != ' '
+                && (b as char) != '\n'
+                && (b as char) != '\r'
+                && (b as char) != '\t'
+            {
+                // keep searching — caller should ensure ident_pos is right at identifier
+            }
         }
+        let open_idx = open_idx?;
+        let mut depth: i32 = 0;
+        let mut in_string = false;
+        let mut collected = String::new();
+        for (i, ch) in src[open_idx..].chars().enumerate() {
+            let idx = open_idx + i;
+            if ch == '"' {
+                in_string = !in_string;
+            }
+            if in_string {
+                // include string contents verbatim
+                if idx > open_idx {
+                    collected.push(ch);
+                }
+                continue;
+            }
+            if ch == open {
+                depth += 1;
+                // don't include the very first opening char
+                if depth == 1 {
+                    continue;
+                }
+            } else if ch == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(collected.trim().to_string());
+                }
+            }
 
-        if line.starts_with("size") {
-            let content = line
-                .trim_start_matches("size")
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .trim_start_matches(':')
-                .trim();
-            let parts: Vec<&str> = content.split(',').collect();
+            if depth >= 1 {
+                collected.push(ch);
+            }
+        }
+        None
+    }
+
+    // Work on the full source string so we correctly handle multi-line header blocks
+    if let Some(pos) = code.find("size") {
+        if let Some(inner) = find_balanced_content(code, pos, '(', ')') {
+            let parts: Vec<&str> = inner.split(',').collect();
             if parts.len() == 2 {
                 width = parts[0].trim().parse().ok();
                 height = parts[1].trim().parse().ok();
             }
         }
+    }
 
-        if line.starts_with("timeline") {
-            let content = line
-                .trim_start_matches("timeline")
-                .trim_matches(|c| c == '{' || c == '}' || c == '(' || c == ')')
-                .trim();
-            let stmts = if content.contains(';') {
-                content.split(';')
+    if let Some(pos) = code.find("timeline") {
+        // prefer parentheses first, then braces
+        let inner = find_balanced_content(code, pos, '(', ')')
+            .or_else(|| find_balanced_content(code, pos, '{', '}'))
+            .unwrap_or_default();
+
+        if !inner.is_empty() {
+            let stmts = if inner.contains(';') {
+                inner.split(';')
             } else {
-                content.split(',')
+                inner.split(',')
             };
             for part in stmts {
                 let s = part.trim();
@@ -364,7 +417,6 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                     // Top-level move block without element field - this is an error
                     // We silently skip it during parsing, but this should ideally be
                     // reported to the user as a DSL error
-                    eprintln!("Warning: top-level 'move' block without 'element' field - skipping");
                 }
             }
         }
@@ -654,5 +706,36 @@ mod tests {
     fn method_color_registry_contains_move_element() {
         let c = super::method_color("move_element").expect("move_element color");
         assert_eq!(c, [255, 160, 80, 255]);
+    }
+
+    #[test]
+    fn parse_config_inline_header() {
+        let src = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n";
+        let cfg = parse_config(src).expect("parsed");
+        assert_eq!(cfg.width, 1280);
+        assert_eq!(cfg.height, 720);
+        assert_eq!(cfg.fps, 60);
+        assert!((cfg.duration - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_config_multiline_timeline_and_size() {
+        let src = r#"
+            size(
+                640,
+                360
+            )
+
+            timeline {
+                fps = 30,
+                duration = 2.5
+            }
+        "#;
+
+        let cfg = parse_config(src).expect("parsed multiline");
+        assert_eq!(cfg.width, 640);
+        assert_eq!(cfg.height, 360);
+        assert_eq!(cfg.fps, 30);
+        assert!((cfg.duration - 2.5).abs() < 1e-6);
     }
 }
