@@ -74,7 +74,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
 fn draw_config_step(ui: &mut egui::Ui, state: &mut AppState, screen_rect: egui::Rect) {
     let width = 480.0;
-    let height = 380.0;
+    let height = 460.0;
     let center = screen_rect.center();
     let rect = egui::Rect::from_center_size(center, egui::vec2(width, height));
 
@@ -162,6 +162,55 @@ fn draw_config_step(ui: &mut egui::Ui, state: &mut AppState, screen_rect: egui::
                                     .speed(0.1)
                                     .clamp_range(0.1f32..=3600.0f32),
                             );
+                            ui.end_row();
+
+                            // Batch size
+                            ui.label(
+                                egui::RichText::new("Batch size (frames)")
+                                    .color(egui::Color32::from_white_alpha(200)),
+                            );
+                            ui.vertical(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut state.export_batch_size)
+                                        .speed(1.0)
+                                        .clamp_range(1u32..=500u32),
+                                );
+                                ui.label(
+                                    egui::RichText::new("Lower = less RAM usage")
+                                        .size(10.5)
+                                        .color(egui::Color32::from_white_alpha(90)),
+                                );
+                            });
+                            ui.end_row();
+
+                            // GPU rendering
+                            ui.label(
+                                egui::RichText::new("GPU rendering")
+                                    .color(egui::Color32::from_white_alpha(200)),
+                            );
+                            ui.vertical(|ui| {
+                                ui.checkbox(&mut state.export_use_gpu, "");
+                                ui.label(
+                                    egui::RichText::new("Faster, requires wgpu feature")
+                                        .size(10.5)
+                                        .color(egui::Color32::from_white_alpha(90)),
+                                );
+                            });
+                            ui.end_row();
+
+                            // GPU encoder
+                            ui.label(
+                                egui::RichText::new("GPU encoder (NVENC)")
+                                    .color(egui::Color32::from_white_alpha(200)),
+                            );
+                            ui.vertical(|ui| {
+                                ui.checkbox(&mut state.export_use_gpu_encoder, "");
+                                ui.label(
+                                    egui::RichText::new("Much faster encoding (NVIDIA)")
+                                        .size(10.5)
+                                        .color(egui::Color32::from_white_alpha(90)),
+                                );
+                            });
                             ui.end_row();
                         });
 
@@ -305,6 +354,43 @@ fn draw_export_step(
                                 .animate(true)
                                 .desired_width(ui.available_width()),
                         );
+
+                        // Elapsed time and ETA
+                        if let Some(start_time) = state.export_start_time {
+                            let elapsed = start_time.elapsed();
+                            let elapsed_secs = elapsed.as_secs_f32();
+
+                            let eta_text = if state.export_frames_done > 0 && progress > 0.0 {
+                                let total_estimated = elapsed_secs / progress;
+                                let remaining = total_estimated - elapsed_secs;
+                                format_time_remaining(remaining)
+                            } else {
+                                "calculating…".to_string()
+                            };
+
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "⏱️  Elapsed: {}",
+                                        format_elapsed(elapsed_secs)
+                                    ))
+                                    .size(12.0)
+                                    .color(egui::Color32::from_white_alpha(160)),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!("🕒  ETA: {}", eta_text))
+                                                .size(12.0)
+                                                .color(egui::Color32::from_white_alpha(160)),
+                                        );
+                                    },
+                                );
+                            });
+                        }
+
                         ui.add_space(8.0);
                     }
 
@@ -405,6 +491,7 @@ fn start_export(state: &mut AppState) {
     state.export_ffmpeg_error = None;
     state.export_frames_done = 0;
     state.export_frames_total = 0;
+    state.export_start_time = Some(std::time::Instant::now());
 
     let output_path = match &state.export_output_path {
         Some(p) => p.clone(),
@@ -422,6 +509,9 @@ fn start_export(state: &mut AppState) {
     let width = state.export_modal_width;
     let height = state.export_modal_height;
     let duration = state.export_modal_duration;
+    let batch_size = state.export_batch_size;
+    let use_gpu = state.export_use_gpu;
+    let use_gpu_encoder = state.export_use_gpu_encoder;
     let scene = state.scene.clone();
     let dsl_handlers = state.dsl_event_handlers.clone();
     let font_arc_cache = state.font_arc_cache.clone();
@@ -432,33 +522,40 @@ fn start_export(state: &mut AppState) {
 
     std::thread::spawn(move || {
         let total_frames = (duration * fps as f32).ceil() as u32;
+
+        // H.264/VP9 require even dimensions. Round up here so the render size,
+        // the rawvideo declaration, and the encoded output are all identical —
+        // no scale filter needed and no pixel-count mismatch.
+        let render_w = round_even(width);
+        let render_h = round_even(height);
+
+        if render_w != width || render_h != height {
+            let _ = tx.send(FfmpegMsg::Log(format!(
+                "ℹ️  Adjusted {}×{} → {}×{} (even dimensions required)",
+                width, height, render_w, render_h
+            )));
+        }
+
         let _ = tx.send(FfmpegMsg::Log(format!(
-            "Starting export: {}×{} @ {}fps — {} frames",
-            width, height, fps, total_frames
+            "Starting export: {}×{} @ {}fps — {} frames  |  batch={} frames  |  GPU render={}  encoder={}",
+            render_w, render_h, fps, total_frames, batch_size, use_gpu,
+            if use_gpu_encoder { "NVENC" } else { "libx264" }
         )));
         let _ = tx.send(FfmpegMsg::Progress(0, total_frames));
 
-        // ── Create / clean temp frames directory ───────────────────────────
-        if frames_dir.exists() {
-            // Remove old frames from a previous export
-            let _ = std::fs::remove_dir_all(&frames_dir);
-        }
-        if let Err(e) = std::fs::create_dir_all(&frames_dir) {
-            let _ = tx.send(FfmpegMsg::Error(format!(
-                "Failed to create frames dir {}: {}",
-                frames_dir.display(),
-                e
-            )));
-            return;
-        }
-        let _ = tx.send(FfmpegMsg::Log(format!(
-            "Frames dir: {}",
-            frames_dir.display()
-        )));
+        let ext = output_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4")
+            .to_lowercase();
+
+        // GIF cannot use rawvideo pipe (palette generation needs two passes),
+        // so we keep the old PNG-on-disk path for that format.
+        let use_pipe = ext != "gif";
 
         // ── Initialise headless wgpu device for GPU rendering ──────────────
         #[cfg(feature = "wgpu")]
-        let gpu = {
+        let gpu_resources_opt = if use_gpu {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -479,8 +576,9 @@ fn start_export(state: &mut AppState) {
                             let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
                             let resources =
                                 crate::canvas::gpu::GpuResources::new(&device, target_format);
-                            let _ =
-                                tx.send(FfmpegMsg::Log("GPU renderer initialised.".to_string()));
+                            let _ = tx.send(FfmpegMsg::Log(
+                                "🖥️  GPU renderer initialised (wgpu).".to_string(),
+                            ));
                             Some((
                                 std::sync::Arc::new(device),
                                 std::sync::Arc::new(queue),
@@ -489,7 +587,7 @@ fn start_export(state: &mut AppState) {
                         }
                         Err(e) => {
                             let _ = tx.send(FfmpegMsg::Log(format!(
-                                "GPU init failed ({}), falling back to CPU.",
+                                "⚠️  GPU device init failed ({}), falling back to CPU.",
                                 e
                             )));
                             None
@@ -498,21 +596,31 @@ fn start_export(state: &mut AppState) {
                 }
                 None => {
                     let _ = tx.send(FfmpegMsg::Log(
-                        "No GPU adapter found, falling back to CPU.".to_string(),
+                        "⚠️  No GPU adapter found, falling back to CPU.".to_string(),
                     ));
                     None
                 }
             }
+        } else {
+            let _ = tx.send(FfmpegMsg::Log("🧮  CPU rendering selected.".to_string()));
+            None
         };
         #[cfg(not(feature = "wgpu"))]
-        let gpu: Option<()> = None;
+        let gpu_resources_opt: Option<()> = {
+            if use_gpu {
+                let _ = tx.send(FfmpegMsg::Log(
+                    "⚠️  wgpu feature not compiled in — using CPU.".to_string(),
+                ));
+            }
+            None
+        };
 
-        // ── Render each frame ──────────────────────────────────────────────
+        // ── Snapshot base used by both CPU & GPU renderers ─────────────────
         let snap_base = crate::canvas::preview_worker::RenderSnapshot {
             scene: scene.clone(),
             dsl_event_handlers: dsl_handlers.clone(),
-            render_width: width,
-            render_height: height,
+            render_width: render_w,
+            render_height: render_h,
             preview_multiplier: 1.0,
             duration_secs: duration,
             preview_fps: fps,
@@ -522,192 +630,400 @@ fn start_export(state: &mut AppState) {
             wgpu_render_state: None,
         };
 
+        // ── GPU mutable state (only meaningful when wgpu feature is on) ───
         #[cfg(feature = "wgpu")]
-        let mut gpu_resources = gpu;
+        let mut gpu_res = gpu_resources_opt;
 
-        for frame_idx in 0..total_frames {
-            let t = frame_idx as f32 / fps as f32;
+        // Inline helper: renders frame_idx and returns flat RGBA bytes.
+        // Defined as a local macro so it can mutably borrow gpu_res (a cfg-gated variable).
+        macro_rules! render_one_frame {
+            ($frame_idx:expr) => {{
+                let frame_idx: u32 = $frame_idx;
+                let t = frame_idx as f32 / fps as f32;
 
-            // Render frame via GPU or CPU fallback
-            #[cfg(feature = "wgpu")]
-            let img_result: Result<egui::ColorImage, String> = {
-                if let Some((ref device, ref queue, ref mut resources)) = gpu_resources {
-                    // GPU path: renders circles/rects on GPU, text via CPU text layer, then composite
-                    let gpu_img = crate::canvas::gpu::render_frame_color_image_gpu_snapshot(
-                        device, queue, resources, &snap_base, t,
-                    );
-
-                    // Composite text layer on top (CPU → blend into GPU pixels)
-                    match gpu_img {
-                        Ok(mut img) => {
-                            let mut font_arc_cache_local = font_arc_cache.clone();
-                            if let Some(text_layer) =
-                                crate::canvas::text_rasterizer::rasterize_text_layer(
-                                    &scene,
-                                    width,
-                                    height,
-                                    t,
-                                    duration,
-                                    &mut font_arc_cache_local,
-                                    &font_map,
-                                    &dsl_handlers,
-                                    0.0,
-                                )
-                            {
-                                composite_text_layer(&mut img, &text_layer);
+                #[cfg(feature = "wgpu")]
+                let render_result: Result<egui::ColorImage, String> = {
+                    if let Some((ref device, ref queue, ref mut resources)) = gpu_res {
+                        let gpu_img = crate::canvas::gpu::render_frame_color_image_gpu_snapshot(
+                            device, queue, resources, &snap_base, t,
+                        );
+                        match gpu_img {
+                            Ok(mut img) => {
+                                let mut fac = font_arc_cache.clone();
+                                if let Some(text_layer) =
+                                    crate::canvas::text_rasterizer::rasterize_text_layer(
+                                        &scene,
+                                        render_w,
+                                        render_h,
+                                        t,
+                                        duration,
+                                        &mut fac,
+                                        &font_map,
+                                        &dsl_handlers,
+                                        0.0,
+                                    )
+                                {
+                                    composite_text_layer(&mut img, &text_layer);
+                                }
+                                Ok(img)
                             }
-                            Ok(img)
+                            Err(e) => Err(e),
                         }
-                        Err(e) => Err(e),
+                    } else {
+                        Ok(render_frame_cpu(
+                            &snap_base,
+                            t,
+                            &font_arc_cache,
+                            &font_map,
+                            &dsl_handlers,
+                        ))
                     }
-                } else {
-                    Ok(render_frame_cpu(
-                        &snap_base,
-                        t,
-                        &font_arc_cache,
-                        &font_map,
-                        &dsl_handlers,
-                    ))
-                }
-            };
-            #[cfg(not(feature = "wgpu"))]
-            let img_result: Result<egui::ColorImage, String> = Ok(render_frame_cpu(
-                &snap_base,
-                t,
-                &font_arc_cache,
-                &font_map,
-                &dsl_handlers,
-            ));
+                };
+                #[cfg(not(feature = "wgpu"))]
+                let render_result: Result<egui::ColorImage, String> = Ok(render_frame_cpu(
+                    &snap_base,
+                    t,
+                    &font_arc_cache,
+                    &font_map,
+                    &dsl_handlers,
+                ));
 
-            let img = match img_result {
-                Ok(i) => i,
+                render_result.map(|img| {
+                    img.pixels
+                        .iter()
+                        .flat_map(|p| p.to_array())
+                        .collect::<Vec<u8>>()
+                })
+            }};
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // PATH A: rawvideo pipe into FFmpeg (MP4, WebM) — no disk temp frames
+        // ══════════════════════════════════════════════════════════════════
+        if use_pipe {
+            // Build the ffmpeg command that reads raw RGBA from stdin
+            let mut cmd = std::process::Command::new("ffmpeg");
+            cmd.arg("-y")
+                .arg("-f")
+                .arg("rawvideo")
+                .arg("-pixel_format")
+                .arg("rgba")
+                .arg("-video_size")
+                .arg(format!("{}x{}", render_w, render_h))
+                .arg("-framerate")
+                .arg(fps.to_string())
+                .arg("-i")
+                .arg("pipe:0"); // stdin
+
+            match ext.as_str() {
+                "webm" => {
+                    cmd.args([
+                        "-c:v",
+                        "libvpx-vp9",
+                        "-b:v",
+                        "0",
+                        "-crf",
+                        "30",
+                        "-pix_fmt",
+                        "yuva420p",
+                    ]);
+                }
+                _ => {
+                    // mp4 (default) — dimensions are already even, no scale filter needed
+                    if use_gpu_encoder {
+                        // NVENC (NVIDIA GPU encoder) — much faster, lower CPU usage
+                        cmd.args([
+                            "-c:v",
+                            "h264_nvenc",
+                            "-preset",
+                            "p4", // p1 (fastest) to p7 (slowest/best quality)
+                            "-cq",
+                            "18", // Constant Quality (lower = better, 0-51)
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-movflags",
+                            "+faststart",
+                        ]);
+                    } else {
+                        // libx264 (CPU encoder) — slower but widely compatible
+                        cmd.args([
+                            "-c:v",
+                            "libx264",
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-crf",
+                            "18",
+                            "-preset",
+                            "fast",
+                            "-movflags",
+                            "+faststart",
+                        ]);
+                    }
+                }
+            }
+
+            cmd.arg(&output_path);
+            cmd.stdin(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            cmd.stdout(std::process::Stdio::null());
+
+            let _ = tx.send(FfmpegMsg::Log(format!("ffmpeg (pipe): {:?}", cmd)));
+
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
                 Err(e) => {
                     let _ = tx.send(FfmpegMsg::Error(format!(
-                        "GPU render failed at frame {}: {}",
-                        frame_idx, e
+                        "Failed to launch ffmpeg: {}. Make sure ffmpeg is in PATH.",
+                        e
                     )));
                     return;
                 }
             };
 
-            // Save as PNG
-            let frame_path = frames_dir.join(format!("frame_{:06}.png", frame_idx));
-            if let Err(e) = save_png(&img, &frame_path) {
-                let _ = tx.send(FfmpegMsg::Error(format!(
-                    "Failed to save frame {}: {}",
-                    frame_idx, e
+            let mut stdin = match child.stdin.take() {
+                Some(s) => s,
+                None => {
+                    let _ = tx.send(FfmpegMsg::Error(
+                        "Could not open ffmpeg stdin pipe.".to_string(),
+                    ));
+                    return;
+                }
+            };
+
+            // Spawn a thread to drain FFmpeg stderr so the process doesn't block
+            let tx2 = tx.clone();
+            let stderr_handle = {
+                let stderr = child.stderr.take().unwrap();
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let reader = std::io::BufReader::new(stderr);
+                    let mut count = 0usize;
+                    for line in reader.lines().flatten() {
+                        count += 1;
+                        // Only forward the first 60 lines to avoid flooding the log
+                        if count <= 60 {
+                            let _ = tx2.send(FfmpegMsg::Log(line));
+                        }
+                    }
+                })
+            };
+
+            // ── Render & stream frames in batches ─────────────────────────
+            let log_interval = (total_frames / 10).max(1);
+            let mut had_error = false;
+
+            'outer: for batch_start in (0..total_frames).step_by(batch_size as usize) {
+                let batch_end = (batch_start + batch_size).min(total_frames);
+                let _ = tx.send(FfmpegMsg::Log(format!(
+                    "  Batch {}-{} / {}",
+                    batch_start + 1,
+                    batch_end,
+                    total_frames
                 )));
+
+                // Render this batch
+                let mut batch_frames: Vec<Vec<u8>> =
+                    Vec::with_capacity((batch_end - batch_start) as usize);
+
+                for frame_idx in batch_start..batch_end {
+                    let raw = render_one_frame!(frame_idx);
+
+                    match raw {
+                        Ok(r) => {
+                            // Validate byte count
+                            let expected_bytes = (render_w * render_h * 4) as usize;
+                            if r.len() != expected_bytes {
+                                let _ =
+                                    tx.send(FfmpegMsg::Error(format!(
+                                    "Frame {} size mismatch: got {} bytes, expected {} ({}×{}×4)",
+                                    frame_idx, r.len(), expected_bytes, render_w, render_h
+                                )));
+                                had_error = true;
+                                break 'outer;
+                            }
+                            batch_frames.push(r);
+                        }
+                        Err(e) => {
+                            let _ = tx.send(FfmpegMsg::Error(format!(
+                                "Render error at frame {}: {}",
+                                frame_idx, e
+                            )));
+                            had_error = true;
+                            break 'outer;
+                        }
+                    }
+                }
+
+                // Pipe the batch into FFmpeg — one write per frame
+                use std::io::Write;
+                for (i, raw) in batch_frames.iter().enumerate() {
+                    if let Err(e) = stdin.write_all(raw) {
+                        let _ = tx.send(FfmpegMsg::Error(format!(
+                            "Pipe write error at frame {} (tried to write {} bytes): {}",
+                            batch_start + i as u32,
+                            raw.len(),
+                            e
+                        )));
+                        had_error = true;
+                        break 'outer;
+                    }
+
+                    let done = batch_start + i as u32 + 1;
+                    let _ = tx.send(FfmpegMsg::Progress(done, total_frames));
+                    if done % log_interval == 0 || done == total_frames {
+                        let t = (done - 1) as f32 / fps as f32;
+                        let _ = tx.send(FfmpegMsg::Log(format!(
+                            "  Frame {}/{} ({:.1}s)",
+                            done, total_frames, t
+                        )));
+                    }
+                }
+                // batch_frames is dropped here → memory freed before next batch
+            }
+
+            // Close stdin so FFmpeg knows the stream is done
+            drop(stdin);
+            let _ = stderr_handle.join();
+
+            if had_error {
+                let _ = child.kill();
                 return;
             }
 
-            let done = frame_idx + 1;
-            let _ = tx.send(FfmpegMsg::Progress(done, total_frames));
-            // Log every ~10% of frames
-            let log_interval = (total_frames / 10).max(1);
-            if done % log_interval == 0 || done == total_frames {
-                let _ = tx.send(FfmpegMsg::Log(format!(
-                    "  Frame {}/{} ({:.1}s)",
-                    done, total_frames, t
-                )));
-            }
-        }
-
-        let _ = tx.send(FfmpegMsg::Log(
-            "All frames rendered. Running ffmpeg…".to_string(),
-        ));
-        let _ = tx.send(FfmpegMsg::Progress(total_frames, total_frames));
-
-        // ── Run ffmpeg ──────────────────────────────────────────────────────
-        let input_pattern = frames_dir.join("frame_%06d.png");
-
-        let ext = output_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("mp4")
-            .to_lowercase();
-
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-framerate")
-            .arg(fps.to_string())
-            .arg("-i")
-            .arg(&input_pattern);
-
-        match ext.as_str() {
-            "gif" => {
-                cmd.args([
-                    "-vf",
-                    &format!(
-                        "fps={},scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
-                        fps, width, height
-                    ),
-                    "-loop", "0",
-                ]);
-            }
-            "webm" => {
-                cmd.args([
-                    "-c:v",
-                    "libvpx-vp9",
-                    "-b:v",
-                    "0",
-                    "-crf",
-                    "30",
-                    "-pix_fmt",
-                    "yuva420p",
-                ]);
-            }
-            _ => {
-                // mp4 default
-                cmd.args([
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-crf",
-                    "18",
-                    "-preset",
-                    "fast",
-                    "-movflags",
-                    "+faststart",
-                ]);
-                let vf = format!("scale={}:{}", round_even(width), round_even(height));
-                cmd.arg("-vf").arg(&vf);
-            }
-        }
-
-        cmd.arg(&output_path);
-        cmd.stderr(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-
-        let _ = tx.send(FfmpegMsg::Log(format!("ffmpeg: {:?}", cmd)));
-
-        match cmd.output() {
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                for line in stderr.lines().take(80) {
-                    let _ = tx.send(FfmpegMsg::Log(line.to_string()));
-                }
-                if output.status.success() {
+            match child.wait() {
+                Ok(status) if status.success() => {
+                    let _ = tx.send(FfmpegMsg::Progress(total_frames, total_frames));
                     let _ = tx.send(FfmpegMsg::Log(format!(
-                        "Output saved to: {}",
+                        "✅ Output saved to: {}",
                         output_path.display()
                     )));
-                    // Clean up temp frames
-                    let _ = std::fs::remove_dir_all(&frames_dir);
                     let _ = tx.send(FfmpegMsg::Done);
-                } else {
-                    let code = output.status.code().unwrap_or(-1);
+                }
+                Ok(status) => {
+                    let code = status.code().unwrap_or(-1);
                     let _ = tx.send(FfmpegMsg::Error(format!(
-                        "ffmpeg exited with code {}. Check ffmpeg is installed and in PATH.",
+                        "ffmpeg exited with code {}. Check log above for details.",
                         code
                     )));
                 }
+                Err(e) => {
+                    let _ = tx.send(FfmpegMsg::Error(format!("ffmpeg wait error: {}", e)));
+                }
             }
-            Err(e) => {
+
+        // ══════════════════════════════════════════════════════════════════
+        // PATH B: GIF — needs palette pass, so keep PNG-on-disk approach
+        //         but still process in batches to cap RAM.
+        // ══════════════════════════════════════════════════════════════════
+        } else {
+            if frames_dir.exists() {
+                let _ = std::fs::remove_dir_all(&frames_dir);
+            }
+            if let Err(e) = std::fs::create_dir_all(&frames_dir) {
                 let _ = tx.send(FfmpegMsg::Error(format!(
-                    "Failed to launch ffmpeg: {}. Make sure ffmpeg is installed and in PATH.",
+                    "Failed to create frames dir: {}",
                     e
                 )));
+                return;
+            }
+            let _ = tx.send(FfmpegMsg::Log(format!(
+                "GIF mode — temp frames: {}",
+                frames_dir.display()
+            )));
+
+            let log_interval = (total_frames / 10).max(1);
+
+            // Render + save in batches (RAM cap), but all frames go to disk
+            'gif_outer: for batch_start in (0..total_frames).step_by(batch_size as usize) {
+                let batch_end = (batch_start + batch_size).min(total_frames);
+                for frame_idx in batch_start..batch_end {
+                    let raw = render_one_frame!(frame_idx);
+
+                    let raw = match raw {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let _ = tx.send(FfmpegMsg::Error(format!(
+                                "Render error at frame {}: {}",
+                                frame_idx, e
+                            )));
+                            break 'gif_outer;
+                        }
+                    };
+
+                    let frame_path = frames_dir.join(format!("frame_{:06}.png", frame_idx));
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [render_w as usize, render_h as usize],
+                        &raw,
+                    );
+                    if let Err(e) = save_png(&img, &frame_path) {
+                        let _ = tx.send(FfmpegMsg::Error(format!(
+                            "Failed to save frame {}: {}",
+                            frame_idx, e
+                        )));
+                        break 'gif_outer;
+                    }
+
+                    let done = frame_idx + 1;
+                    let _ = tx.send(FfmpegMsg::Progress(done, total_frames));
+                    if done % log_interval == 0 || done == total_frames {
+                        let t = frame_idx as f32 / fps as f32;
+                        let _ = tx.send(FfmpegMsg::Log(format!(
+                            "  Frame {}/{} ({:.1}s)",
+                            done, total_frames, t
+                        )));
+                    }
+                }
+                // batch_frames dropped → memory freed between batches
+            }
+
+            let _ = tx.send(FfmpegMsg::Log(
+                "All frames saved. Running ffmpeg (GIF palette pass)…".to_string(),
+            ));
+            let _ = tx.send(FfmpegMsg::Progress(total_frames, total_frames));
+
+            let input_pattern = frames_dir.join("frame_%06d.png");
+            let mut cmd = std::process::Command::new("ffmpeg");
+            cmd.arg("-y")
+                .arg("-framerate").arg(fps.to_string())
+                .arg("-i").arg(&input_pattern)
+                .args([
+                    "-vf",
+                    &format!(
+                        "fps={},scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+                        fps, render_w, render_h
+                    ),
+                    "-loop", "0",
+                ])
+                .arg(&output_path)
+                .stderr(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null());
+
+            let _ = tx.send(FfmpegMsg::Log(format!("ffmpeg (GIF): {:?}", cmd)));
+
+            match cmd.output() {
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    for line in stderr.lines().take(60) {
+                        let _ = tx.send(FfmpegMsg::Log(line.to_string()));
+                    }
+                    if output.status.success() {
+                        let _ = tx.send(FfmpegMsg::Log(format!(
+                            "✅ Output saved to: {}",
+                            output_path.display()
+                        )));
+                        let _ = std::fs::remove_dir_all(&frames_dir);
+                        let _ = tx.send(FfmpegMsg::Done);
+                    } else {
+                        let code = output.status.code().unwrap_or(-1);
+                        let _ = tx.send(FfmpegMsg::Error(format!(
+                            "ffmpeg (GIF) exited with code {}.",
+                            code
+                        )));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(FfmpegMsg::Error(format!("Failed to launch ffmpeg: {}.", e)));
+                }
             }
         }
     });
@@ -925,4 +1241,42 @@ fn close_modal(state: &mut AppState) {
     state.export_output_path = None;
     state.export_frames_done = 0;
     state.export_frames_total = 0;
+    state.export_start_time = None;
+}
+
+// ─── Time formatting helpers ─────────────────────────────────────────────────
+
+fn format_elapsed(secs: f32) -> String {
+    let total_secs = secs as u32;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+fn format_time_remaining(secs: f32) -> String {
+    if secs < 0.0 {
+        return "soon".to_string();
+    }
+    let total_secs = secs as u32;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("~{}h {}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("~{}m {}s", minutes, seconds)
+    } else if seconds > 10 {
+        format!("~{}s", seconds)
+    } else {
+        "<10s".to_string()
+    }
 }

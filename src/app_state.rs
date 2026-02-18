@@ -259,6 +259,15 @@ pub struct AppState {
     pub export_frames_done: u32,
     #[serde(skip)]
     pub export_frames_total: u32,
+    /// Start time of the export (for elapsed/ETA calculation)
+    #[serde(skip)]
+    pub export_start_time: Option<std::time::Instant>,
+    /// Number of frames to render before flushing to FFmpeg (controls peak RAM usage)
+    pub export_batch_size: u32,
+    /// Whether to use GPU acceleration for export rendering
+    pub export_use_gpu: bool,
+    /// Whether to use GPU encoder (NVENC/h264_nvenc) instead of CPU libx264
+    pub export_use_gpu_encoder: bool,
 
     // UI: Elements modal (floating palette from Scene Graph)
     pub show_elements_modal: bool,
@@ -419,6 +428,10 @@ impl Default for AppState {
             export_ffmpeg_error: None,
             export_frames_done: 0,
             export_frames_total: 0,
+            export_start_time: None,
+            export_batch_size: 30,
+            export_use_gpu: true,
+            export_use_gpu_encoder: true,
             anim_modal_target_idx: 0,
             show_elements_modal: false,
             show_animations_modal: false,

@@ -6,7 +6,10 @@ use eframe::egui_wgpu;
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;
 
-pub const MAX_GPU_TEXTURE_SIZE: u32 = 2048;
+// Maximum texture size for GPU rendering. Modern GPUs support 16384+, but we
+// set a conservative limit here. This can be increased for export rendering.
+// Preview uses a lower effective limit via preview_multiplier to stay responsive.
+pub const MAX_GPU_TEXTURE_SIZE: u32 = 8192;
 
 use super::preview_worker::RenderSnapshot;
 
