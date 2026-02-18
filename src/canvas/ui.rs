@@ -316,19 +316,25 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             None
         };
 
-        // Check if we have a native GPU cached frame for this time
+        // Check if we have a native GPU cached frame for this time. When a
+        // side panel that can modify the scene (Code or SceneGraph) is open
+        // we prefer the live composition callback to avoid swapping between
+        // 'cached texture' and 'callback render' which produces visible
+        // flicker on high-refresh displays.
         let mut drawn_from_cache = false;
-        if let Some(tex_id) = state.preview_native_texture_id {
-            if let Some(t) = state.preview_cache_center_time {
-                // Tolerance of 1/2 frame
-                if (t - state.time).abs() < (1.0 / state.fps as f32) * 0.5 {
-                    painter.image(
-                        tex_id,
-                        composition_rect,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
-                    );
-                    drawn_from_cache = true;
+        if state.active_tab.is_none() {
+            if let Some(tex_id) = state.preview_native_texture_id {
+                if let Some(t) = state.preview_cache_center_time {
+                    // Tolerance of 1/2 frame
+                    if (t - state.time).abs() < (1.0 / state.fps as f32) * 0.5 {
+                        painter.image(
+                            tex_id,
+                            composition_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                        drawn_from_cache = true;
+                    }
                 }
             }
         }

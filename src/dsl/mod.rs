@@ -13,13 +13,13 @@ pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration
         "size({}, {})\ntimeline(fps = {}, duration = {:.2})\n\n",
         width, height, fps, duration
     ));
-    // First, generate all shapes
+    // First, generate all shapes (without inline animations)
     for s in scene.iter() {
         out.push_str(&s.to_dsl(""));
         out.push('\n');
     }
 
-    // Then, generate all animations as top-level blocks
+    // Then, generate all animations as top-level blocks with element references
     for s in scene.iter() {
         let name = s.name();
         let animations = match s {
@@ -35,6 +35,7 @@ pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration
                     if let Some(ma) =
                         crate::animations::move_animation::MoveAnimation::from_scene(a)
                     {
+                        // Always generate with element name for top-level blocks
                         out.push_str(&ma.to_dsl_block(Some(name), ""));
                         out.push('\n');
                     }
@@ -155,7 +156,11 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             }
             if let Some(eq) = p.find('=') {
                 let key = p[..eq].trim().to_string();
-                let val = p[eq + 1..].trim().trim_end_matches(',').trim_matches('"').to_string();
+                let val = p[eq + 1..]
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim_matches('"')
+                    .to_string();
                 map.insert(key, val);
             }
         }
@@ -199,7 +204,13 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             if name.is_empty() {
                 name = format!(
                     "{}_{}",
-                    if is_circle { "Circle" } else if is_rect { "Rect" } else { "Text" },
+                    if is_circle {
+                        "Circle"
+                    } else if is_rect {
+                        "Rect"
+                    } else {
+                        "Text"
+                    },
                     shapes.len()
                 );
             }
@@ -271,20 +282,33 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                                 break;
                             }
                             if s.starts_with("span(") {
-                                let inner = s.trim_start_matches("span(").trim_end_matches(')').trim_end_matches(',');
+                                let inner = s
+                                    .trim_start_matches("span(")
+                                    .trim_end_matches(')')
+                                    .trim_end_matches(',');
                                 let kv = parse_kv_list(inner);
                                 // The text is the first positional or "text" key
                                 let text = if let Some(t) = kv.get("text") {
                                     t.clone()
                                 } else {
                                     // Hacky extract positional first arg
-                                    s.find('"').and_then(|start| {
-                                        s[start+1..].find('"').map(|end| s[start+1..start+1+end].to_string())
-                                    }).unwrap_or_default()
+                                    s.find('"')
+                                        .and_then(|start| {
+                                            s[start + 1..].find('"').map(|end| {
+                                                s[start + 1..start + 1 + end].to_string()
+                                            })
+                                        })
+                                        .unwrap_or_default()
                                 };
-                                
-                                let font = kv.get("font").cloned().unwrap_or_else(|| "System".to_string());
-                                let size = kv.get("size").and_then(|s| s.parse().ok()).unwrap_or(24.0_f32 / 720.0);
+
+                                let font = kv
+                                    .get("font")
+                                    .cloned()
+                                    .unwrap_or_else(|| "System".to_string());
+                                let size = kv
+                                    .get("size")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(24.0_f32 / 720.0);
                                 let mut color = [255, 255, 255, 255];
                                 if let Some(fill) = kv.get("fill") {
                                     if fill.starts_with('#') && fill.len() >= 7 {
@@ -297,8 +321,13 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                                         }
                                     }
                                 }
-                                
-                                span_list.push(crate::shapes::text::TextSpan { text, font, size, color });
+
+                                span_list.push(crate::shapes::text::TextSpan {
+                                    text,
+                                    font,
+                                    size,
+                                    color,
+                                });
                             }
                         }
                         if let Shape::Text(ref mut t) = current_shape {
@@ -312,7 +341,7 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             }
             shapes.push(current_shape);
         } else if line.starts_with("move") && line.contains('{') {
-            // top-level move block
+            // top-level move block - MUST have element field
             let mut move_lines = Vec::new();
             for m_line in lines.by_ref() {
                 let m = m_line.trim();
@@ -331,6 +360,11 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                         parsed.start,
                         parsed.easing,
                     ));
+                } else {
+                    // Top-level move block without element field - this is an error
+                    // We silently skip it during parsing, but this should ideally be
+                    // reported to the user as a DSL error
+                    eprintln!("Warning: top-level 'move' block without 'element' field - skipping");
                 }
             }
         }

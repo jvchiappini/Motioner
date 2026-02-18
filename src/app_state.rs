@@ -64,6 +64,9 @@ pub struct AppState {
     /// Center time of the cached preview frames, if any
     #[serde(skip)]
     pub preview_cache_center_time: Option<f32>,
+    /// When true, a preview request should be issued once the editor becomes idle.
+    #[serde(skip)]
+    pub preview_pending_from_code: bool,
     /// Background preview worker channels (job sender + result receiver)
     #[serde(skip)]
     pub preview_worker_tx: Option<std::sync::mpsc::Sender<crate::canvas::PreviewJob>>,
@@ -400,6 +403,7 @@ impl Default for AppState {
             autosave_cooldown_secs: 0.5,
             last_code_edit_time: None,
             last_scene_parse_time: 0.0,
+            preview_pending_from_code: false,
             autosave_pending: false,
             autosave_last_success_time: None,
             autosave_error: None,

@@ -100,11 +100,14 @@ impl eframe::App for MyApp {
 
         // Ensure fonts used in scene are loaded in egui
         let mut used_fonts = std::collections::HashSet::new();
-        fn collect_fonts(shapes: &[crate::scene::Shape], fonts: &mut std::collections::HashSet<String>) {
+        fn collect_fonts(
+            shapes: &[crate::scene::Shape],
+            fonts: &mut std::collections::HashSet<String>,
+        ) {
             for s in shapes {
                 match s {
-                    crate::scene::Shape::Text(t) => { 
-                        fonts.insert(t.font.clone()); 
+                    crate::scene::Shape::Text(t) => {
+                        fonts.insert(t.font.clone());
                         for span in &t.spans {
                             fonts.insert(span.font.clone());
                         }
@@ -119,7 +122,11 @@ impl eframe::App for MyApp {
         for font_name in used_fonts {
             if font_name != "System" && !font_name.is_empty() {
                 if let Some(path) = state.font_map.get(&font_name) {
-                    if crate::shapes::fonts::load_font(&mut state.font_definitions, &font_name, path) {
+                    if crate::shapes::fonts::load_font(
+                        &mut state.font_definitions,
+                        &font_name,
+                        path,
+                    ) {
                         fonts_changed = true;
                     }
                     if !state.font_arc_cache.contains_key(&font_name) {
@@ -231,7 +238,9 @@ impl eframe::App for MyApp {
         if let Some(last_edit) = state.last_code_edit_time {
             // parse after ~120ms of inactivity
             let parse_debounce = 0.12_f64;
-            if now - last_edit > parse_debounce && now - state.last_scene_parse_time > 0.0 {
+            if now - last_edit > parse_debounce
+                && now - state.last_scene_parse_time > parse_debounce
+            {
                 // Try to parse configuration (non-fatal). Do NOT show errors while typing.
                 if let Ok(config) = crate::dsl::parse_config(&state.dsl_code) {
                     state.fps = config.fps;
@@ -240,22 +249,74 @@ impl eframe::App for MyApp {
                     state.render_height = config.height;
                 }
 
-                // Try to parse DSL into scene; only update scene & preview on successful parse
+                // Try to parse DSL into scene; only update scene on successful parse.
+                // We throttle preview requests when the Code editor is active to avoid
+                // rapid texture swaps that produce visible flicker on high-refresh monitors.
                 let parsed = crate::dsl::parse_dsl(&state.dsl_code);
                 if !parsed.is_empty() {
                     state.scene = parsed;
                     // collect DSL event handler blocks (e.g. `on_time { ... }`)
                     state.dsl_event_handlers =
                         crate::dsl::extract_event_handlers_structured(&state.dsl_code);
-                    // regenerate preview for current playhead (single-frame request)
+
+                    // If the Code panel is active, defer/ throttle preview requests so
+                    // the live composition callback (which renders `state.scene`) is
+                    // used for immediate feedback and we avoid swapping textures.
+                    const CODE_PREVIEW_IDLE_SECS: f64 = 0.45; // wait this long after last edit
+
+                    let do_request = if state.active_tab == Some(PanelTab::Code) {
+                        if let Some(last_edit) = state.last_code_edit_time {
+                            // If user has been idle for long enough, request now;
+                            // otherwise mark pending so we request when idle.
+                            if now - last_edit > CODE_PREVIEW_IDLE_SECS {
+                                true
+                            } else {
+                                state.preview_pending_from_code = true;
+                                false
+                            }
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
+                    };
+
+                    if do_request {
+                        crate::canvas::request_preview_frames(
+                            state,
+                            state.time,
+                            crate::canvas::PreviewMode::Single,
+                        );
+                        state.preview_pending_from_code = false;
+                    }
+                }
+
+                state.last_scene_parse_time = now;
+            }
+        }
+
+        // If a preview request was deferred while editing code, trigger it once
+        // the editor has been idle long enough. This keeps immediate UI feedback
+        // via live composition while avoiding frequent texture swaps.
+        if state.preview_pending_from_code {
+            if let Some(last_edit) = state.last_code_edit_time {
+                const CODE_PREVIEW_IDLE_SECS: f64 = 0.45;
+                if now - last_edit > CODE_PREVIEW_IDLE_SECS {
                     crate::canvas::request_preview_frames(
                         state,
                         state.time,
                         crate::canvas::PreviewMode::Single,
                     );
+                    state.preview_pending_from_code = false;
                 }
-
-                state.last_scene_parse_time = now;
+            } else {
+                // safety: no last_edit timestamp — request immediately
+                crate::canvas::request_preview_frames(
+                    state,
+                    state.time,
+                    crate::canvas::PreviewMode::Single,
+                );
+                state.preview_pending_from_code = false;
             }
         }
         if now - (state.last_update as f64) > 1.0 {
