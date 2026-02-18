@@ -22,7 +22,8 @@ pub struct Uniforms {
     pub mag_y: f32,
     pub mag_active: f32,
     pub time: f32,
-    pub _padding: [f32; 3], // 17 floats + 3 = 20 floats (80 bytes)
+    pub pixels_per_point: f32,
+    pub _padding: [f32; 2],
 }
 
 #[repr(C)]
@@ -57,7 +58,7 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        screen_descriptor: &egui_wgpu::ScreenDescriptor,
         _egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
@@ -116,8 +117,8 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         uniforms[14] = m_pos.y;
         uniforms[15] = mag_active;
         uniforms[16] = self.time;
-        
         uniforms[16] = self.time;
+        uniforms[17] = screen_descriptor.pixels_per_point;
         
         queue.write_buffer(
             &resources.uniform_buffer,
@@ -130,14 +131,42 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
 
     fn paint<'a>(
         &'a self,
-        _info: egui::PaintCallbackInfo,
+        info: egui::PaintCallbackInfo,
         render_pass: &mut wgpu::RenderPass<'a>,
         callback_resources: &'a egui_wgpu::CallbackResources,
     ) {
         let resources: &GpuResources = callback_resources.get().unwrap();
         render_pass.set_pipeline(&resources.pipeline);
         render_pass.set_bind_group(0, &resources.bind_group, &[]);
-        render_pass.draw(0..6, 0..self.shapes.len() as u32);
+
+        // Set scissor rect to clip rendering to the paper area
+        // Scissor rect in wgpu is in absolute physical pixels of the framebuffer
+        let ppp = info.pixels_per_point;
+        let vp = info.viewport_in_pixels();
+
+        // paper_rect is in logical egui points; convert to absolute physical pixels
+        let px0 = (self.paper_rect.min.x * ppp).round() as u32;
+        let py0 = (self.paper_rect.min.y * ppp).round() as u32;
+        let px1 = (self.paper_rect.max.x * ppp).round() as u32;
+        let py1 = (self.paper_rect.max.y * ppp).round() as u32;
+
+        // Clamp to the viewport (also in absolute physical pixels)
+        let vx0 = vp.left_px as u32;
+        let vy0 = vp.top_px as u32;
+        let vx1 = vx0 + vp.width_px as u32;
+        let vy1 = vy0 + vp.height_px as u32;
+
+        let sx = px0.clamp(vx0, vx1);
+        let sy = py0.clamp(vy0, vy1);
+        let ex = px1.clamp(vx0, vx1);
+        let ey = py1.clamp(vy0, vy1);
+        let sw = ex.saturating_sub(sx);
+        let sh = ey.saturating_sub(sy);
+
+        if sw > 0 && sh > 0 {
+            render_pass.set_scissor_rect(sx, sy, sw, sh);
+            render_pass.draw(0..6, 0..self.shapes.len() as u32);
+        }
     }
 }
 
@@ -148,6 +177,7 @@ pub struct GpuResources {
     pub uniform_buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
     pub bind_group_layout: wgpu::BindGroupLayout,
+    pub target_format: wgpu::TextureFormat,
 }
 
 #[cfg(feature = "wgpu")]
@@ -253,6 +283,7 @@ impl GpuResources {
             uniform_buffer,
             bind_group,
             bind_group_layout,
+            target_format,
         }
     }
 }
@@ -273,6 +304,15 @@ pub fn detect_vram_size(adapter_info: &wgpu::AdapterInfo) -> usize {
     );
 
     estimated_vram
+}
+
+fn srgb_to_linear(u: u8) -> f32 {
+    let x = u as f32 / 255.0;
+    if x <= 0.04045 {
+        x / 12.92
+    } else {
+        ((x + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 #[cfg(feature = "wgpu")]
@@ -356,9 +396,9 @@ pub fn render_frame_color_image_gpu_snapshot(
                     pos: [x_px, y_px],
                     size: [radius_px, radius_px],
                     color: [
-                        c.color[0] as f32 / 255.0,
-                        c.color[1] as f32 / 255.0,
-                        c.color[2] as f32 / 255.0,
+                        srgb_to_linear(c.color[0]),
+                        srgb_to_linear(c.color[1]),
+                        srgb_to_linear(c.color[2]),
                         c.color[3] as f32 / 255.0,
                     ],
                     shape_type: 0,
@@ -383,9 +423,9 @@ pub fn render_frame_color_image_gpu_snapshot(
                     pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
                     size: [w_px / 2.0, h_px / 2.0],
                     color: [
-                        r.color[0] as f32 / 255.0,
-                        r.color[1] as f32 / 255.0,
-                        r.color[2] as f32 / 255.0,
+                        srgb_to_linear(r.color[0]),
+                        srgb_to_linear(r.color[1]),
+                        srgb_to_linear(r.color[2]),
                         r.color[3] as f32 / 255.0,
                     ],
                     shape_type: 1,
@@ -434,7 +474,8 @@ pub fn render_frame_color_image_gpu_snapshot(
         count: gpu_shapes.len() as f32,
         mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
         time,
-        _padding: [0.0; 3],
+        pixels_per_point: 1.0,
+        _padding: [0.0; 2],
     };
 
     queue.write_buffer(
@@ -453,7 +494,7 @@ pub fn render_frame_color_image_gpu_snapshot(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: resources.target_format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
@@ -573,7 +614,12 @@ pub fn render_frame_native_texture(
                      out.push(GpuShape {
                          pos: [x_px, y_px],
                          size: [radius_px, radius_px],
-                         color: [c.color[0] as f32 / 255.0, c.color[1] as f32 / 255.0, c.color[2] as f32 / 255.0, c.color[3] as f32 / 255.0],
+                         color: [
+                             srgb_to_linear(c.color[0]),
+                             srgb_to_linear(c.color[1]),
+                             srgb_to_linear(c.color[2]),
+                             c.color[3] as f32 / 255.0,
+                         ],
                          shape_type: 0,
                          spawn_time: spawn,
                          p1: 0, p2: 0,
@@ -590,7 +636,12 @@ pub fn render_frame_native_texture(
                      out.push(GpuShape {
                          pos: [x_px + w_px/2.0, y_px + h_px/2.0],
                          size: [w_px/2.0, h_px/2.0],
-                         color: [r.color[0] as f32 / 255.0, r.color[1] as f32 / 255.0, r.color[2] as f32 / 255.0, r.color[3] as f32 / 255.0],
+                         color: [
+                             srgb_to_linear(r.color[0]),
+                             srgb_to_linear(r.color[1]),
+                             srgb_to_linear(r.color[2]),
+                             r.color[3] as f32 / 255.0,
+                         ],
                          shape_type: 1,
                          spawn_time: spawn,
                          p1: 0, p2: 0,
@@ -614,7 +665,8 @@ pub fn render_frame_native_texture(
         count: gpu_shapes.len() as f32,
         mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
         time,
-        _padding: [0.0; 3],
+        pixels_per_point: 1.0,
+        _padding: [0.0; 2],
     };
 
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -625,7 +677,7 @@ pub fn render_frame_native_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: resources.target_format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
