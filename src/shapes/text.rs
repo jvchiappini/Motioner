@@ -23,6 +23,8 @@ pub struct Text {
     pub spans: Vec<TextSpan>,
     pub spawn_time: f32,
     #[serde(default)]
+    pub z_index: i32,
+    #[serde(default)]
     pub animations: Vec<crate::scene::Animation>,
     #[serde(default = "super::shapes_manager::default_visible")]
     pub visible: bool,
@@ -40,6 +42,7 @@ impl Default for Text {
             color: [255, 255, 255, 255],
             spans: Vec::new(),
             spawn_time: 0.0,
+            z_index: 0,
             animations: Vec::new(),
             visible: true,
         }
@@ -150,6 +153,9 @@ impl ShapeDescriptor for Text {
             if ui.add(egui::DragValue::new(&mut self.spawn_time).speed(0.1).prefix("Spawn: ")).changed() {
                 changed = true;
             }
+            if ui.add(egui::DragValue::new(&mut self.z_index).speed(1).prefix("Z-Index: ")).changed() {
+                changed = true;
+            }
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -229,8 +235,8 @@ impl ShapeDescriptor for Text {
 
     fn to_dsl(&self, indent: &str) -> String {
         let mut out = format!(
-            "{}text \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    value = \"{}\",\n{}    font = \"{}\",\n{}    size = {:.4},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2},\n",
-            indent, self.name, indent, self.x, indent, self.y, indent, self.value.replace('"', "\\\""), indent, self.font, indent, self.size, indent, self.color[0], self.color[1], self.color[2], indent, self.spawn_time
+            "{}text \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    value = \"{}\",\n{}    font = \"{}\",\n{}    size = {:.4},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2},\n{}    z = {},\n",
+            indent, self.name, indent, self.x, indent, self.y, indent, self.value.replace('"', "\\\""), indent, self.font, indent, self.size, indent, self.color[0], self.color[1], self.color[2], indent, self.spawn_time, indent, self.z_index
         );
         
         if !self.spans.is_empty() {

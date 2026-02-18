@@ -124,8 +124,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 // 3. Render Color Pickers for hex color strings
                 handle_color_pickers(ui, state, &output);
 
-                // Render & handle gutter (extracted)
-                gutter::render_gutter(ui, &output, text_edit_id, &state.dsl_code, gutter_width);
+                // Render & handle gutter (extracted). Pass DSL diagnostics for inline markers.
+                gutter::render_gutter(
+                    ui,
+                    &output,
+                    text_edit_id,
+                    &state.dsl_code,
+                    &state.dsl_diagnostics,
+                    gutter_width,
+                );
 
                 // finally store the response so outer scope can use it
                 editor_response = Some(output.response);
@@ -134,14 +141,32 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             // retrieve the TextEdit response we captured from the horizontal layout
             let output = editor_response.expect("text edit response");
 
-            // Autosave behavior: on any editor change, persist DSL silently,
-            // attempt to parse/apply configuration and regenerate preview if parse succeeds.
+            // Autosave behavior: on any editor change, persist DSL silently.
+            // Run a *quick* validation immediately so we can block autosave
+            // while the user types clearly-invalid content (prevents saving
+            // arbitrary garbage). Full parsing/scene update remains debounced
+            // in `ui::update`.
             if output.changed() {
                 // mark edit time so App::update will debounce the actual disk write
                 state.last_code_edit_time = Some(ui.ctx().input(|i| i.time));
-                state.autosave_pending = true;
 
-                // Parsing and scene/preview updates are debounced and handled in `ui::update`
+                // Quick immediate validation: if there are diagnostics, block
+                // autosave right away and show the error; otherwise allow
+                // autosave to proceed after the debounce interval.
+                let diagnostics = crate::dsl::validate_dsl(&state.dsl_code);
+                if diagnostics.is_empty() {
+                    state.dsl_diagnostics.clear();
+                    state.autosave_pending = true;
+                    state.autosave_error = None;
+                } else {
+                    state.dsl_diagnostics = diagnostics.clone();
+                    state.autosave_pending = false;
+                    state.autosave_error = Some(diagnostics[0].message.clone());
+                }
+
+                // Parsing and scene/preview updates are still debounced and
+                // handled in `ui::update` (so preview updates don't happen on
+                // every keystroke).
             }
 
             output

@@ -140,9 +140,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Rect implicitly from -1 to 1. Check if snapped UV is outside.
         let d = max(abs(effective_uv.x), abs(effective_uv.y)) - 1.0;
         if (d > 0.0) { alpha = 0.0; } else { alpha = 1.0; }
-    } else if (in.shape_type == 2) { // Texto: atlas snapeado al mismo grid que los demás elementos
-        let atlas_uv = vec2<f32>(snapped_x, snapped_y);
-        return textureSample(text_atlas, text_sampler, atlas_uv);
+    } else if (in.shape_type == 2) { // Texto: muestra la tira del atlas asignada a este elemento.
+        // tex_uv ya está interpolado en el rango [uv0, uv1] del atlas vertical.
+        return textureSample(text_atlas, text_sampler, in.tex_uv);
     }
 
     return vec4<f32>(in.color.rgb, in.color.a * alpha);

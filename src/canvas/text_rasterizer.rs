@@ -25,6 +25,120 @@ pub struct TextRasterResult {
     pub height: u32,
 }
 
+/// Rasteriza UN elemento `Text` en un buffer RGBA independiente del tamaño `rw × rh`.
+/// Retorna `None` si no se dibujó ningún píxel visible (texto invisible o sin fuente).
+pub fn rasterize_single_text(
+    text_shape: &crate::scene::Shape,
+    rw: u32,
+    rh: u32,
+    current_time: f32,
+    project_duration: f32,
+    font_arc_cache: &mut HashMap<String, FontArc>,
+    font_map: &HashMap<String, std::path::PathBuf>,
+    handlers: &[crate::dsl::runtime::DslHandler],
+    parent_spawn: f32,
+) -> Option<TextRasterResult> {
+    if rw == 0 || rh == 0 {
+        return None;
+    }
+
+    // Asegurar fuente del sistema en caché
+    if !font_arc_cache.contains_key("__system__") {
+        if let Some(font) = get_system_font(font_map) {
+            font_arc_cache.insert("__system__".to_string(), font);
+        }
+    }
+
+    let mut pixels = vec![0u8; (rw * rh * 4) as usize];
+    let mut has_text = false;
+    let frame_idx = (current_time * 60.0).round() as u32;
+
+    // Extraer el Text interior
+    let t = match text_shape {
+        crate::scene::Shape::Text(t) => t,
+        _ => return None,
+    };
+
+    if !t.visible {
+        return None;
+    }
+
+    let actual_spawn = text_shape.spawn_time().max(parent_spawn);
+    if current_time < actual_spawn {
+        return None;
+    }
+
+    // Posición animada
+    let mut transient = text_shape.clone();
+    crate::events::time_changed_event::apply_on_time_handlers(
+        std::slice::from_mut(&mut transient),
+        handlers,
+        current_time,
+        frame_idx,
+    );
+    let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
+        &transient,
+        current_time,
+        project_duration,
+    );
+
+    let x_px = (eval_x * rw as f32).round() as i32;
+    let y_px = (eval_y * rh as f32).round() as i32;
+
+    if t.spans.is_empty() {
+        let color = t.color;
+        let font_name = if t.font == "System" || t.font.is_empty() {
+            None
+        } else {
+            Some(t.font.as_str())
+        };
+        let font = resolve_font(font_name, font_arc_cache, font_map);
+        let size_px = t.size * rh as f32;
+        draw_text_to_buffer(
+            &mut pixels,
+            rw,
+            rh,
+            &t.value,
+            font.as_ref(),
+            size_px,
+            x_px,
+            y_px,
+            color,
+            &mut has_text,
+        );
+    } else {
+        let mut cursor_x = x_px;
+        for span in &t.spans {
+            let font_name = if span.font == "System" || span.font.is_empty() {
+                None
+            } else {
+                Some(span.font.as_str())
+            };
+            let font = resolve_font(font_name, font_arc_cache, font_map);
+            let size_px = span.size * rh as f32;
+            let advance = draw_text_to_buffer(
+                &mut pixels,
+                rw,
+                rh,
+                &span.text,
+                font.as_ref(),
+                size_px,
+                cursor_x,
+                y_px,
+                span.color,
+                &mut has_text,
+            );
+            cursor_x += advance;
+        }
+    }
+
+    if has_text {
+        Some(TextRasterResult { pixels, width: rw, height: rh })
+    } else {
+        None
+    }
+}
+
 /// Rasteriza todos los elementos de tipo `Text` de la escena en un buffer RGBA.
 pub fn rasterize_text_layer(
     shapes: &[crate::scene::Shape],

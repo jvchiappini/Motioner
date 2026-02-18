@@ -95,6 +95,9 @@ pub struct AppState {
     /// These are runtime-only and not serialized.
     #[serde(skip)]
     pub dsl_event_handlers: Vec<crate::dsl::runtime::DslHandler>,
+    /// Diagnostics produced by DSL validation (shown inline in editor).
+    #[serde(skip)]
+    pub dsl_diagnostics: Vec<crate::dsl::Diagnostic>,
     pub export_in_progress: bool,
     #[serde(skip, default = "default_progress")]
     #[allow(dead_code)]
@@ -355,6 +358,7 @@ impl Default for AppState {
             time: 0.0,
             last_time_changed: None,
             dsl_event_handlers: Vec::new(),
+            dsl_diagnostics: Vec::new(),
             export_in_progress: false,
             export_progress: Arc::new(AtomicUsize::new(0)),
             last_export_path: None,

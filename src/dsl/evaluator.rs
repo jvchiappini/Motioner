@@ -1,94 +1,103 @@
+/// Expression evaluator for the Motioner DSL.
+///
+/// Evaluates simple mathematical expressions (e.g. `seconds * 0.1 + 0.5`)
+/// against a variable context.  Used by the runtime to resolve dynamic
+/// values inside event handler actions.
+
 use std::collections::HashMap;
 
-/// Result of evaluating a DSL expression.
-pub type EvalResult = Result<f32, String>;
+// ─── Context ─────────────────────────────────────────────────────────────────
 
-/// Context containing variables available for expression evaluation (e.g., "seconds", "frame").
+/// Variables available during expression evaluation (e.g. `seconds`, `frame`).
 pub struct EvalContext {
     pub variables: HashMap<String, f32>,
 }
 
 impl EvalContext {
     pub fn new() -> Self {
-        Self {
-            variables: HashMap::new(),
-        }
+        Self { variables: HashMap::new() }
     }
 
+    /// Builder-style helper: add a variable and return `self`.
     pub fn with_var(mut self, name: &str, val: f32) -> Self {
         self.variables.insert(name.to_string(), val);
         self
     }
 }
 
-/// Evaluates a mathematical expression string using the provided context.
+impl Default for EvalContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ─── Public entry point ───────────────────────────────────────────────────────
+
+/// The result type for expression evaluation.
+pub type EvalResult = Result<f32, String>;
+
+/// Evaluate a mathematical expression against a variable context.
+///
+/// Supported operators: `+`, `-`, `*`, `/`.
+/// Supported atoms: numeric literals and variable names from `ctx`.
 pub fn evaluate(expr: &str, ctx: &EvalContext) -> EvalResult {
     let tokens = tokenize(expr);
     if tokens.is_empty() {
         return Err("Empty expression".to_string());
     }
     let mut it = tokens.iter().peekable();
-    parse_expr(&mut it, ctx).ok_or_else(|| "Failed to parse expression".to_string())
+    parse_expr(&mut it, ctx).ok_or_else(|| format!("Failed to evaluate: '{}'", expr))
 }
+
+// ─── Tokens ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 enum Tok<'a> {
     Num(f32),
     Ident(&'a str),
     Op(char),
-    LPar,
-    RPar,
+    LParen,
+    RParen,
 }
 
-fn tokenize<'a>(s: &'a str) -> Vec<Tok<'a>> {
+fn tokenize(s: &str) -> Vec<Tok<'_>> {
     let mut out = Vec::new();
     let mut i = 0usize;
     let bytes = s.as_bytes();
+
     while i < s.len() {
         let c = bytes[i] as char;
-        if c.is_whitespace() {
-            i += 1;
-            continue;
-        }
-        if c == '(' {
-            out.push(Tok::LPar);
-            i += 1;
-            continue;
-        }
-        if c == ')' {
-            out.push(Tok::RPar);
-            i += 1;
-            continue;
-        }
-        if "+-*/".contains(c) {
-            out.push(Tok::Op(c));
-            i += 1;
-            continue;
-        }
-        if c.is_ascii_digit() || c == '.' {
-            let start = i;
-            while i < s.len() && ((bytes[i] as char).is_ascii_digit() || (bytes[i] as char) == '.')
-            {
-                i += 1;
+
+        if c.is_whitespace() { i += 1; continue; }
+
+        match c {
+            '(' => { out.push(Tok::LParen); i += 1; }
+            ')' => { out.push(Tok::RParen); i += 1; }
+            '+' | '-' | '*' | '/' => { out.push(Tok::Op(c)); i += 1; }
+            _ if c.is_ascii_digit() || c == '.' => {
+                let start = i;
+                while i < s.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                    i += 1;
+                }
+                if let Ok(v) = s[start..i].parse::<f32>() {
+                    out.push(Tok::Num(v));
+                }
             }
-            if let Ok(v) = s[start..i].parse::<f32>() {
-                out.push(Tok::Num(v));
+            _ if c.is_alphabetic() => {
+                let start = i;
+                while i < s.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                out.push(Tok::Ident(&s[start..i]));
             }
-            continue;
+            _ => { i += 1; }
         }
-        if c.is_alphabetic() {
-            let start = i;
-            while i < s.len() && ((bytes[i] as char).is_alphanumeric() || (bytes[i] as char) == '_')
-            {
-                i += 1;
-            }
-            out.push(Tok::Ident(&s[start..i]));
-            continue;
-        }
-        i += 1;
     }
+
     out
 }
+
+// ─── Recursive-descent parser ─────────────────────────────────────────────────
 
 use std::iter::Peekable;
 use std::slice::Iter;
@@ -103,11 +112,7 @@ fn parse_addsub<'a>(it: &mut Peekable<Iter<'a, Tok<'a>>>, ctx: &EvalContext) -> 
         let op = *op;
         it.next();
         let r = parse_muldiv(it, ctx)?;
-        if op == '+' {
-            v += r;
-        } else {
-            v -= r;
-        }
+        v = if op == '+' { v + r } else { v - r };
     }
     Some(v)
 }
@@ -118,11 +123,7 @@ fn parse_muldiv<'a>(it: &mut Peekable<Iter<'a, Tok<'a>>>, ctx: &EvalContext) -> 
         let op = *op;
         it.next();
         let r = parse_primary(it, ctx)?;
-        if op == '*' {
-            v *= r;
-        } else {
-            v /= r;
-        }
+        v = if op == '*' { v * r } else { v / r };
     }
     Some(v)
 }
@@ -131,13 +132,9 @@ fn parse_primary<'a>(it: &mut Peekable<Iter<'a, Tok<'a>>>, ctx: &EvalContext) ->
     match it.next() {
         Some(Tok::Num(n)) => Some(*n),
         Some(Tok::Ident(id)) => ctx.variables.get(*id).copied(),
-        Some(Tok::LPar) => {
+        Some(Tok::LParen) => {
             let v = parse_expr(it, ctx)?;
-            if matches!(it.next(), Some(Tok::RPar)) {
-                Some(v)
-            } else {
-                None
-            }
+            if matches!(it.next(), Some(Tok::RParen)) { Some(v) } else { None }
         }
         _ => None,
     }

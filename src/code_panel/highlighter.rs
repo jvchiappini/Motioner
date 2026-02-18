@@ -25,6 +25,8 @@ pub(crate) fn highlight_code(
     let mut bracket_depth: usize = 0;
 
     while let Some((idx, c)) = chars.next() {
+        // If there are diagnostics for this region, we could add inline underline
+        // but keep highlighting logic fast — gutter will show markers and tooltips.
         // 1. Whitespace
         if c.is_whitespace() {
             if idx > last_idx {

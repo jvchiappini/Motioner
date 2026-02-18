@@ -7,6 +7,7 @@ pub(crate) fn render_gutter(
     output: &egui::text_edit::TextEditOutput,
     text_edit_id: egui::Id,
     dsl_code: &str,
+    diagnostics: &[crate::dsl::Diagnostic],
     gutter_width: f32,
 ) {
     // Reserve gutter area (will scroll together with the TextEdit because
@@ -53,6 +54,13 @@ pub(crate) fn render_gutter(
 
     let mut current_logical_line = 0;
 
+    // Build a quick lookup for diagnostics by 1-based line number
+    let mut diag_map: std::collections::HashMap<usize, &crate::dsl::Diagnostic> =
+        std::collections::HashMap::new();
+    for d in diagnostics.iter() {
+        diag_map.entry(d.line).or_insert(d);
+    }
+
     for row in &galley.rows {
         // Get character start index for this row using the galley's cursor system
         // We use the vertical center of the row to ensure we hit the right row
@@ -85,17 +93,49 @@ pub(crate) fn render_gutter(
             let num = format!("{}", line_index + 1);
             let is_active = line_index == active_line_idx;
 
-            gutter_painter.text(
-                egui::pos2(full_gutter_rect.right() - 8.0, y),
-                egui::Align2::RIGHT_TOP,
-                num,
-                font_id.clone(),
-                if is_active {
-                    egui::Color32::from_rgb(220, 220, 220)
-                } else {
-                    gutter_text_color
-                },
-            );
+            // Draw diagnostic marker if present for this line
+            if diag_map.contains_key(&(line_index + 1)) {
+                // small red dot to indicate an error on this logical line
+                let dot_center = egui::pos2(full_gutter_rect.left() + 14.0, y + row.rect.height() * 0.5);
+                gutter_painter.circle_filled(dot_center, 5.0, egui::Color32::from_rgb(200, 80, 80));
+
+                // Also draw the line number slightly right-shifted
+                gutter_painter.text(
+                    egui::pos2(full_gutter_rect.right() - 8.0, y),
+                    egui::Align2::RIGHT_TOP,
+                    num,
+                    font_id.clone(),
+                    if is_active {
+                        egui::Color32::from_rgb(220, 220, 220)
+                    } else {
+                        gutter_text_color
+                    },
+                );
+
+                // If pointer is over the dot area, show a tooltip via ctx (best-effort)
+                if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
+                    let hit_rect = egui::Rect::from_center_size(dot_center, egui::vec2(16.0, row.rect.height()));
+                    if hit_rect.contains(pointer_pos) {
+                        // Indicate interactivity via cursor. Detailed message is
+                        // already surfaced in the editor header (`autosave_error`).
+                        ui.ctx().output_mut(|out| {
+                            out.cursor_icon = egui::CursorIcon::Help;
+                        });
+                    }
+                }
+            } else {
+                gutter_painter.text(
+                    egui::pos2(full_gutter_rect.right() - 8.0, y),
+                    egui::Align2::RIGHT_TOP,
+                    num,
+                    font_id.clone(),
+                    if is_active {
+                        egui::Color32::from_rgb(220, 220, 220)
+                    } else {
+                        gutter_text_color
+                    },
+                );
+            }
         }
     }
 
@@ -107,7 +147,39 @@ pub(crate) fn render_gutter(
             // Use the galley to find the cursor at the clicked position
             let cursor = galley.cursor_from_pos(egui::vec2(0.0, galley_y));
             let char_idx = cursor.ccursor.index;
-            let ccursor = egui::text::CCursor::new(char_idx);
+            // If click is on the left-side marker region and the clicked logical
+            // line has a diagnostic, jump to the diagnostic column instead.
+            let click_x = pos.x;
+            let marker_hit_x = full_gutter_rect.left() + 4.0..=full_gutter_rect.left() + 28.0;
+
+            let ccursor = if marker_hit_x.contains(&click_x) {
+                // compute logical line and try to find diagnostic for it
+                let logical_line = dsl_code
+                    .chars()
+                    .take(char_idx)
+                    .filter(|&c| c == '\n')
+                    .count();
+                let line_no = logical_line + 1;
+                if let Some(diag) = diagnostics.iter().find(|d| d.line == line_no) {
+                    // compute char index for diag.line/diag.column
+                    let mut idx = 0usize;
+                    let mut cur_line = 1usize;
+                    for ch in dsl_code.chars() {
+                        if cur_line == diag.line && idx >= (diag.column.saturating_sub(1)) {
+                            break;
+                        }
+                        if ch == '\n' {
+                            cur_line += 1;
+                        }
+                        idx += ch.len_utf8();
+                    }
+                    egui::text::CCursor::new(idx)
+                } else {
+                    egui::text::CCursor::new(char_idx)
+                }
+            } else {
+                egui::text::CCursor::new(char_idx)
+            };
 
             if let Some(mut te_state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
                 te_state

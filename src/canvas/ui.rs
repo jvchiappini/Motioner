@@ -141,10 +141,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         let cached = cached_frame_for(state, state.time);
         let mut flat_idx: usize = 0;
 
+        // Información de cada elemento Text encontrado en la escena durante fill_gpu_shapes.
+        // Guardamos el índice en gpu_shapes donde insertamos el placeholder y el shape clonado
+        // para rasterizarlo por separado después.
+        struct TextEntry {
+            gpu_idx: usize,           // posición en gpu_shapes (antes del reverse)
+            shape: crate::scene::Shape,
+            parent_spawn: f32,
+        }
+        let mut text_entries: Vec<TextEntry> = Vec::new();
+
         #[allow(clippy::too_many_arguments)]
         fn fill_gpu_shapes(
             shapes: &[crate::scene::Shape],
             gpu_shapes: &mut Vec<GpuShape>,
+            text_entries: &mut Vec<TextEntry>,
             render_width: f32,
             render_height: f32,
             parent_spawn: f32,
@@ -239,13 +250,33 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         });
                     }
                     crate::scene::Shape::Text(..) => {
-                        // El texto se maneja por separado mediante rasterización CPU → atlas GPU
+                        // Insertar placeholder; las UVs se rellenan después de rasterizar.
+                        let gpu_idx = gpu_shapes.len();
+                        let rw = render_width;
+                        let rh = render_height;
+                        gpu_shapes.push(GpuShape {
+                            pos: [rw / 2.0, rh / 2.0],
+                            size: [rw / 2.0, rh / 2.0],
+                            color: [1.0, 1.0, 1.0, 1.0],
+                            shape_type: 2,
+                            spawn_time: my_spawn,
+                            p1: 0,
+                            p2: 0,
+                            uv0: [0.0, 0.0], // se rellena más abajo
+                            uv1: [1.0, 1.0], // se rellena más abajo
+                        });
+                        text_entries.push(TextEntry {
+                            gpu_idx,
+                            shape: shape.clone(),
+                            parent_spawn: my_spawn,
+                        });
                         *flat_idx += 1;
                     }
                     crate::scene::Shape::Group { children, .. } => {
                         fill_gpu_shapes(
                             children,
                             gpu_shapes,
+                            text_entries,
                             render_width,
                             render_height,
                             my_spawn,
@@ -263,6 +294,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         fill_gpu_shapes(
             &state.scene,
             &mut gpu_shapes,
+            &mut text_entries,
             state.render_width as f32,
             state.render_height as f32,
             0.0,
@@ -273,39 +305,56 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             &state.dsl_event_handlers,
         );
 
-        // Reverse so that scene index 0 (top of the scene graph) paints last = on top.
+        // Scene index 0 = top of scene graph = rendered last (on top).
+        // Reversing achieves painter's-algorithm ordering without z_index.
         gpu_shapes.reverse();
 
-        // Rasterizar texto en CPU → textura GPU (resolución del proyecto = píxeles visibles)
-        let text_layer = crate::canvas::text_rasterizer::rasterize_text_layer(
-            &state.scene,
-            state.render_width,
-            state.render_height,
-            state.time,
-            state.duration_secs,
-            &mut state.font_arc_cache,
-            &state.font_map,
-            &state.dsl_event_handlers,
-            0.0,
-        );
+        // --- Atlas de texto por elemento ---
+        // Rasterizamos cada Text por separado en una franja del atlas vertical.
+        // Atlas: ancho = render_width, alto = render_height * N (una fila por texto).
+        // GpuShape placeholder en gpu_shapes ya tiene shape_type=2; actualizamos sus UVs.
+        //
+        // NOTA: gpu_shapes fue invertido, así que el índice original `gpu_idx` ahora está
+        // en la posición `gpu_shapes.len() - 1 - gpu_idx` dentro del vec.
+        let n_texts = text_entries.len();
+        let text_pixels = if n_texts > 0 {
+            let rw = state.render_width;
+            let rh = state.render_height;
+            let atlas_h = rh * n_texts as u32;
+            let mut atlas = vec![0u8; (rw * atlas_h * 4) as usize];
 
-        // Si hay texto, agregar un GpuShape tipo 2 (quad pantalla completa)
-        let text_pixels = if let Some(ref tl) = text_layer {
-            // Quad que cubre toda la resolución del proyecto
-            let rw = state.render_width as f32;
-            let rh = state.render_height as f32;
-            gpu_shapes.push(GpuShape {
-                pos: [rw / 2.0, rh / 2.0],
-                size: [rw / 2.0, rh / 2.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                shape_type: 2,
-                spawn_time: 0.0,
-                p1: 0,
-                p2: 0,
-                uv0: [0.0, 0.0],
-                uv1: [1.0, 1.0],
-            });
-            Some((tl.pixels.clone(), tl.width, tl.height))
+            for (tile_idx, entry) in text_entries.iter().enumerate() {
+                // UV de la franja de este tile en el atlas
+                let uv0_y = tile_idx as f32 / n_texts as f32;
+                let uv1_y = (tile_idx + 1) as f32 / n_texts as f32;
+
+                // Rasterizar este texto a su propio buffer rh×rw
+                if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
+                    &entry.shape,
+                    rw,
+                    rh,
+                    state.time,
+                    state.duration_secs,
+                    &mut state.font_arc_cache,
+                    &state.font_map,
+                    &state.dsl_event_handlers,
+                    entry.parent_spawn,
+                ) {
+                    // Copiar píxeles al atlas en la franja correcta
+                    let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
+                    let copy_len = (rw * rh * 4) as usize;
+                    atlas[row_offset..row_offset + copy_len].copy_from_slice(&result.pixels);
+                }
+
+                // Actualizar UVs del placeholder (que ahora está en posición invertida)
+                let reversed_idx = gpu_shapes.len() - 1 - entry.gpu_idx;
+                if let Some(s) = gpu_shapes.get_mut(reversed_idx) {
+                    s.uv0 = [0.0, uv0_y];
+                    s.uv1 = [1.0, uv1_y];
+                }
+            }
+
+            Some((atlas, rw, atlas_h))
         } else {
             None
         };

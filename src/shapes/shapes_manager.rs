@@ -68,30 +68,40 @@ impl Shape {
         match self {
             Shape::Circle(c) => {
                 let mut out = c.to_dsl(&indent);
-                for anim in &c.animations {
-                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
-                        out.push_str(&ma.to_dsl_block(None, &indent));
-                        out.push('\n');
+                // Only append nested animation blocks when this shape is not at
+                // the top-level (indent_level > 0). Top-level animation
+                // blocks are emitted by `dsl::generate_dsl()` so emitting them
+                // here would duplicate them.
+                if indent_level > 0 {
+                    for anim in &c.animations {
+                        if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                            out.push_str(&ma.to_dsl_block(None, &indent));
+                            out.push('\n');
+                        }
                     }
                 }
                 out
             }
             Shape::Rect(r) => {
                 let mut out = r.to_dsl(&indent);
-                for anim in &r.animations {
-                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
-                        out.push_str(&ma.to_dsl_block(None, &indent));
-                        out.push('\n');
+                if indent_level > 0 {
+                    for anim in &r.animations {
+                        if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                            out.push_str(&ma.to_dsl_block(None, &indent));
+                            out.push('\n');
+                        }
                     }
                 }
                 out
             }
             Shape::Text(t) => {
                 let mut out = t.to_dsl(&indent);
-                for anim in &t.animations {
-                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
-                        out.push_str(&ma.to_dsl_block(None, &indent));
-                        out.push('\n');
+                if indent_level > 0 {
+                    for anim in &t.animations {
+                        if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                            out.push_str(&ma.to_dsl_block(None, &indent));
+                            out.push('\n');
+                        }
                     }
                 }
                 out

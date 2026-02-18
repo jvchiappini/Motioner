@@ -1,458 +1,161 @@
+﻿/// Motioner DSL - public module facade.
+///
+/// The DSL pipeline is split into focused sub-modules:
+///
+/// | Module          | Responsibility                                          |
+/// |-----------------|---------------------------------------------------------|
+/// | [`ast`]         | All AST node types (no logic, pure data)                |
+/// | [`lexer`]       | Tokeniser: source text -> Vec<SpannedToken>             |
+/// | [`parser`]      | Parser: source text -> Vec<Statement> + config parser   |
+/// | [`validator`]   | Diagnostics: source text -> Vec<Diagnostic>             |
+/// | [`generator`]   | Code-gen: scene -> DSL string + event handler extraction|
+/// | [`evaluator`]   | Expression evaluator for runtime actions                |
+/// | [`runtime`]     | Handler executor: runs actions against the scene        |
+///
+/// Callers should import from this module; the sub-module layout is an
+/// implementation detail and may change.
+pub mod ast;
 pub mod evaluator;
+pub mod generator;
+pub mod lexer;
+pub mod parser;
 pub mod runtime;
+pub mod validator;
 
-use runtime::DslHandler;
+// --- Re-exports ---------------------------------------------------------------
+
+pub use generator::{extract_event_handlers, generate};
+pub use parser::{method_color, parse_config};
+pub use runtime::DslHandler;
+pub use validator::{validate, Diagnostic};
+
+// --- Legacy shims (keep existing call-sites compiling) -----------------------
 
 use crate::scene::Shape;
-use crate::shapes::ShapeDescriptor;
 
-/// Generate a simple DSL string for the given scene.
+/// Convenience wrapper: generate DSL from a scene.
+/// Prefer calling [`generate`] directly.
+#[inline]
 pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "size({}, {})\ntimeline(fps = {}, duration = {:.2})\n\n",
-        width, height, fps, duration
-    ));
-    // First, generate all shapes (without inline animations)
-    for s in scene.iter() {
-        out.push_str(&s.to_dsl(""));
-        out.push('\n');
-    }
-
-    // Then, generate all animations as top-level blocks with element references
-    for s in scene.iter() {
-        let name = s.name();
-        let animations = match s {
-            Shape::Circle(c) => &c.animations,
-            Shape::Rect(r) => &r.animations,
-            Shape::Text(t) => &t.animations,
-            _ => continue,
-        };
-
-        for a in animations {
-            match a {
-                crate::scene::Animation::Move { .. } => {
-                    if let Some(ma) =
-                        crate::animations::move_animation::MoveAnimation::from_scene(a)
-                    {
-                        // Always generate with element name for top-level blocks
-                        out.push_str(&ma.to_dsl_block(Some(name), ""));
-                        out.push('\n');
-                    }
-                }
-            }
-        }
-    }
-
-    out
+    generate(scene, width, height, fps, duration)
 }
 
-/// Simple parser struct to hold extracted values
-pub struct ProjectConfig {
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-    pub duration: f32,
+/// Convenience wrapper: validate DSL and return diagnostics.
+/// Prefer calling [`validate`] directly.
+#[inline]
+pub fn validate_dsl(src: &str) -> Vec<Diagnostic> {
+    validate(src)
 }
 
-/// Validates and parses just the header configuration (size, fps, duration).
-/// Returns error string if validation fails.
-pub fn parse_config(code: &str) -> Result<ProjectConfig, String> {
-    let mut width = None;
-    let mut height = None;
-    let mut fps = None;
-    let mut duration = None;
-
-    // Helper: find balanced content after the identifier (supports multi-line)
-    fn find_balanced_content(
-        src: &str,
-        ident_pos: usize,
-        open: char,
-        close: char,
-    ) -> Option<String> {
-        let bytes = src.as_bytes();
-        let mut open_idx: Option<usize> = None;
-        for (i, &b) in bytes.iter().enumerate().skip(ident_pos) {
-            if (b as char) == open {
-                open_idx = Some(i);
-                break;
-            }
-            // stop if we hit a non-whitespace, non-identifier char before the opener
-            if (b as char).is_ascii_graphic()
-                && (b as char) != ' '
-                && (b as char) != '\n'
-                && (b as char) != '\r'
-                && (b as char) != '\t'
-            {
-                // keep searching — caller should ensure ident_pos is right at identifier
-            }
-        }
-        let open_idx = open_idx?;
-        let mut depth: i32 = 0;
-        let mut in_string = false;
-        let mut collected = String::new();
-        for (i, ch) in src[open_idx..].chars().enumerate() {
-            let idx = open_idx + i;
-            if ch == '"' {
-                in_string = !in_string;
-            }
-            if in_string {
-                // include string contents verbatim
-                if idx > open_idx {
-                    collected.push(ch);
-                }
-                continue;
-            }
-            if ch == open {
-                depth += 1;
-                // don't include the very first opening char
-                if depth == 1 {
-                    continue;
-                }
-            } else if ch == close {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(collected.trim().to_string());
-                }
-            }
-
-            if depth >= 1 {
-                collected.push(ch);
-            }
-        }
-        None
-    }
-
-    // Work on the full source string so we correctly handle multi-line header blocks
-    if let Some(pos) = code.find("size") {
-        if let Some(inner) = find_balanced_content(code, pos, '(', ')') {
-            let parts: Vec<&str> = inner.split(',').collect();
-            if parts.len() == 2 {
-                width = parts[0].trim().parse().ok();
-                height = parts[1].trim().parse().ok();
-            }
-        }
-    }
-
-    if let Some(pos) = code.find("timeline") {
-        // prefer parentheses first, then braces
-        let inner = find_balanced_content(code, pos, '(', ')')
-            .or_else(|| find_balanced_content(code, pos, '{', '}'))
-            .unwrap_or_default();
-
-        if !inner.is_empty() {
-            let stmts = if inner.contains(';') {
-                inner.split(';')
-            } else {
-                inner.split(',')
-            };
-            for part in stmts {
-                let s = part.trim();
-                if s.starts_with("fps") {
-                    if let Some(eq) = s.find('=') {
-                        fps = s[eq + 1..].trim().parse().ok();
-                    } else {
-                        fps = s
-                            .trim_start_matches("fps")
-                            .trim_start_matches(':')
-                            .trim()
-                            .parse()
-                            .ok();
-                    }
-                }
-                if s.starts_with("duration") {
-                    if let Some(eq) = s.find('=') {
-                        duration = s[eq + 1..].trim().parse().ok();
-                    } else {
-                        duration = s
-                            .trim_start_matches("duration")
-                            .trim_start_matches(':')
-                            .trim()
-                            .parse()
-                            .ok();
-                    }
-                }
-            }
-        }
-    }
-
-    if width.is_none() || height.is_none() {
-        return Err("Missing 'size(width, height)' configuration".to_string());
-    }
-    if fps.is_none() {
-        return Err("Missing 'timeline { fps = ... }' configuration".to_string());
-    }
-    if duration.is_none() {
-        return Err("Missing 'timeline { duration = ... }' configuration".to_string());
-    }
-
-    Ok(ProjectConfig {
-        width: width.unwrap(),
-        height: height.unwrap(),
-        fps: fps.unwrap(),
-        duration: duration.unwrap(),
-    })
+/// Convenience wrapper: extract event handlers from DSL source.
+/// Prefer calling [`extract_event_handlers`] directly.
+#[inline]
+pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
+    extract_event_handlers(src)
 }
 
-/// Stub parser: in the future this will parse DSL -> Scene (AST).
-/// For now returns an empty vec (placeholder).
-pub fn parse_dsl(_src: &str) -> Vec<Shape> {
+/// Find the byte index of the `)` matching the `(` at `open_pos` inside `s`.
+/// Used by the code panel to locate function-call argument list boundaries.
+pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
+    lexer::find_matching_close(s, open_pos, '(', ')')
+}
+
+/// Parse DSL source and return a scene as a `Vec<Shape>`.
+///
+/// This converts the typed AST produced by [`parser::parse`] into the concrete
+/// scene types used by the rest of the application.  Unknown or malformed
+/// constructs are silently skipped so the editor can show a partial scene while
+/// the user is still typing.
+pub fn parse_dsl(src: &str) -> Vec<Shape> {
+    use crate::shapes::text::TextSpan as SceneTextSpan;
+    use crate::shapes::{circle::Circle, rect::Rect, text::Text};
+    use ast::Statement;
+
+    let stmts = parser::parse(src);
     let mut shapes: Vec<Shape> = Vec::new();
-    let mut lines = _src.lines().map(|l| l.trim()).peekable();
+    let mut pending_moves: Vec<(String, ast::MoveBlock)> = Vec::new();
 
-    fn parse_kv_list(s: &str) -> std::collections::HashMap<String, String> {
-        let mut map = std::collections::HashMap::new();
-        for part in s.split(',') {
-            let p = part.trim();
-            if p.is_empty() {
-                continue;
-            }
-            if let Some(eq) = p.find('=') {
-                let key = p[..eq].trim().to_string();
-                let val = p[eq + 1..]
-                    .trim()
-                    .trim_end_matches(',')
-                    .trim_matches('"')
-                    .to_string();
-                map.insert(key, val);
-            }
-        }
-        map
-    }
-
-    // collect top-level move blocks that reference elements
-    let mut pending_moves: Vec<(String, f32, f32, f32, f32, crate::scene::Easing)> = Vec::new();
-
-    while let Some(line) = lines.next() {
-        if line.is_empty() {
-            continue;
-        }
-
-        // Event handler lines (e.g. `on_time { ... }`) are NOT parsed here —
-        // we only extract/collect top-level handler *blocks* elsewhere so
-        // individual event modules can keep their parsing/execution logic
-        // inside their own files.
-
-        // Handle shape definitions: circle "name" { ... } or circle(...) legacy
-        if line.starts_with("circle") || line.starts_with("rect") || line.starts_with("text") {
-            let is_circle = line.starts_with("circle");
-            let is_rect = line.starts_with("rect");
-            let _is_text = line.starts_with("text");
-            let mut name = String::new();
-
-            // Extract name from circle "name" or circle(name="name")
-            if let Some(quote_start) = line.find('"') {
-                if let Some(quote_end) = line[quote_start + 1..].find('"') {
-                    name = line[quote_start + 1..quote_start + 1 + quote_end].to_string();
+    for stmt in stmts {
+        match stmt {
+            Statement::Circle(n) => {
+                let mut c = Circle::default();
+                c.name = n.name;
+                c.x = n.x;
+                c.y = n.y;
+                c.radius = n.radius;
+                c.spawn_time = n.spawn;
+                c.z_index = n.z_index;
+                if let Some(col) = n.fill {
+                    c.color = col.to_array();
                 }
-            } else if let Some(open_paren) = line.find('(') {
-                let end_paren = line.rfind(')').unwrap_or(line.len());
-                let inner = &line[open_paren + 1..end_paren];
-                let kv = parse_kv_list(inner);
-                if let Some(n) = kv.get("name") {
-                    name = n.clone();
+                for mv in n.animations {
+                    c.animations.push(ast_move_to_scene(&mv));
                 }
+                shapes.push(Shape::Circle(c));
             }
-
-            if name.is_empty() {
-                name = format!(
-                    "{}_{}",
-                    if is_circle {
-                        "Circle"
-                    } else if is_rect {
-                        "Rect"
-                    } else {
-                        "Text"
-                    },
-                    shapes.len()
-                );
+            Statement::Rect(n) => {
+                let mut r = Rect::default();
+                r.name = n.name;
+                r.x = n.x;
+                r.y = n.y;
+                r.w = n.w;
+                r.h = n.h;
+                r.spawn_time = n.spawn;
+                r.z_index = n.z_index;
+                if let Some(col) = n.fill {
+                    r.color = col.to_array();
+                }
+                for mv in n.animations {
+                    r.animations.push(ast_move_to_scene(&mv));
+                }
+                shapes.push(Shape::Rect(r));
             }
-
-            let mut current_shape = if is_circle {
-                crate::shapes::circle::Circle::create_default(name)
-            } else if is_rect {
-                crate::shapes::rect::Rect::create_default(name)
-            } else {
-                crate::shapes::text::Text::create_default(name)
-            };
-
-            // If legacy format circle(x=1, y=2), apply values
-            if let Some(open_paren) = line.find('(') {
-                let end_paren = line.rfind(')').unwrap_or(line.len());
-                let inner = &line[open_paren + 1..end_paren];
-                let kv = parse_kv_list(inner);
-                update_shape_from_kv(&mut current_shape, &kv);
+            Statement::Text(n) => {
+                let mut t = Text::default();
+                t.name = n.name;
+                t.x = n.x;
+                t.y = n.y;
+                t.size = n.size;
+                t.font = n.font;
+                t.value = n.value;
+                t.spawn_time = n.spawn;
+                t.z_index = n.z_index;
+                if let Some(col) = n.fill {
+                    t.color = col.to_array();
+                }
+                t.spans = n
+                    .spans
+                    .into_iter()
+                    .map(|sp| SceneTextSpan {
+                        text: sp.text,
+                        font: sp.font,
+                        size: sp.size,
+                        color: sp.color.to_array(),
+                    })
+                    .collect();
+                for mv in n.animations {
+                    t.animations.push(ast_move_to_scene(&mv));
+                }
+                shapes.push(Shape::Text(t));
             }
-
-            // Check if block follows
-            let mut has_block = line.contains('{');
-            if !has_block {
-                if let Some(next) = lines.peek() {
-                    if next.starts_with('{') {
-                        lines.next();
-                        has_block = true;
-                    }
+            Statement::Move(mv) => {
+                if let Some(el) = mv.element.clone() {
+                    pending_moves.push((el, mv));
                 }
             }
-
-            if has_block {
-                while let Some(inner_line) = lines.next() {
-                    let b = inner_line.trim();
-                    if b == "}" {
-                        break;
-                    }
-                    if b.is_empty() {
-                        continue;
-                    }
-
-                    if b.starts_with("move") && (b.contains('{') || b.contains('(')) {
-                        let mut move_lines = Vec::new();
-                        if b.contains('{') {
-                            // Block-based move
-                            for m_line in lines.by_ref() {
-                                let m = m_line.trim();
-                                if m == "}" {
-                                    break;
-                                }
-                                move_lines.push(m);
-                            }
-                        } else {
-                            // Single line move(to=..., ...)
-                            move_lines.push(b);
-                        }
-
-                        if let Some(parsed) =
-                            crate::animations::move_animation::parse_move_block(&move_lines)
-                        {
-                            add_anim_to_shape(&mut current_shape, parsed);
-                        }
-                    } else if b.starts_with("spans") && b.contains('[') {
-                        // Parse spans list
-                        let mut span_list = Vec::new();
-                        for s_line in lines.by_ref() {
-                            let s = s_line.trim();
-                            if s == "]" || s == "]," {
-                                break;
-                            }
-                            if s.starts_with("span(") {
-                                let inner = s
-                                    .trim_start_matches("span(")
-                                    .trim_end_matches(')')
-                                    .trim_end_matches(',');
-                                let kv = parse_kv_list(inner);
-                                // The text is the first positional or "text" key
-                                let text = if let Some(t) = kv.get("text") {
-                                    t.clone()
-                                } else {
-                                    // Hacky extract positional first arg
-                                    s.find('"')
-                                        .and_then(|start| {
-                                            s[start + 1..].find('"').map(|end| {
-                                                s[start + 1..start + 1 + end].to_string()
-                                            })
-                                        })
-                                        .unwrap_or_default()
-                                };
-
-                                let font = kv
-                                    .get("font")
-                                    .cloned()
-                                    .unwrap_or_else(|| "System".to_string());
-                                let size = kv
-                                    .get("size")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(24.0_f32 / 720.0);
-                                let mut color = [255, 255, 255, 255];
-                                if let Some(fill) = kv.get("fill") {
-                                    if fill.starts_with('#') && fill.len() >= 7 {
-                                        if let Ok(r) = u8::from_str_radix(&fill[1..3], 16) {
-                                            if let Ok(g) = u8::from_str_radix(&fill[3..5], 16) {
-                                                if let Ok(b) = u8::from_str_radix(&fill[5..7], 16) {
-                                                    color = [r, g, b, 255];
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                span_list.push(crate::shapes::text::TextSpan {
-                                    text,
-                                    font,
-                                    size,
-                                    color,
-                                });
-                            }
-                        }
-                        if let Shape::Text(ref mut t) = current_shape {
-                            t.spans = span_list;
-                        }
-                    } else if b.contains('=') {
-                        let kv = parse_kv_list(b);
-                        update_shape_from_kv(&mut current_shape, &kv);
-                    }
-                }
-            }
-            shapes.push(current_shape);
-        } else if line.starts_with("move") && line.contains('{') {
-            // top-level move block - MUST have element field
-            let mut move_lines = Vec::new();
-            for m_line in lines.by_ref() {
-                let m = m_line.trim();
-                if m == "}" {
-                    break;
-                }
-                move_lines.push(m);
-            }
-            if let Some(parsed) = crate::animations::move_animation::parse_move_block(&move_lines) {
-                if let Some(el) = parsed.element.clone() {
-                    pending_moves.push((
-                        el,
-                        parsed.end,
-                        parsed.to_x,
-                        parsed.to_y,
-                        parsed.start,
-                        parsed.easing,
-                    ));
-                } else {
-                    // Top-level move block without element field - this is an error
-                    // We silently skip it during parsing, but this should ideally be
-                    // reported to the user as a DSL error
-                }
-            }
+            // Header and event handlers are not scene shapes.
+            Statement::Header(_) | Statement::EventHandler(_) => {}
         }
     }
 
-    // Attach pending moves
-    for (el, end_t, ex, ey, start_at, easing_kind) in pending_moves {
-        if let Some(sh) = shapes.iter_mut().find(|sh| sh.name() == el) {
-            match sh {
-                Shape::Circle(c) => {
-                    c.animations.push(crate::scene::Animation::Move {
-                        to_x: ex,
-                        to_y: ey,
-                        start: start_at,
-                        end: end_t,
-                        easing: easing_kind,
-                    });
-                }
-                Shape::Rect(r) => {
-                    r.animations.push(crate::scene::Animation::Move {
-                        to_x: ex,
-                        to_y: ey,
-                        start: start_at,
-                        end: end_t,
-                        easing: easing_kind,
-                    });
-                }
-                Shape::Text(t) => {
-                    t.animations.push(crate::scene::Animation::Move {
-                        to_x: ex,
-                        to_y: ey,
-                        start: start_at,
-                        end: end_t,
-                        easing: easing_kind,
-                    });
-                }
+    // Attach top-level move blocks to their target shapes.
+    for (target, mv) in pending_moves {
+        if let Some(shape) = shapes.iter_mut().find(|s| s.name() == target) {
+            let anim = ast_move_to_scene(&mv);
+            match shape {
+                Shape::Circle(c) => c.animations.push(anim),
+                Shape::Rect(r) => r.animations.push(anim),
+                Shape::Text(t) => t.animations.push(anim),
                 _ => {}
             }
         }
@@ -461,281 +164,62 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
     shapes
 }
 
-/// Extract top-level event handler blocks from DSL source as structured objects.
-pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
-    let mut out = Vec::new();
-    let mut chars = src.chars().enumerate().peekable();
+// ─── AST → scene conversion helpers ─────────────────────────────────────────
 
-    while let Some((i, c)) = chars.peek().cloned() {
-        if c.is_whitespace() {
-            chars.next();
-            continue;
-        }
+fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
+    use crate::scene::Animation;
 
-        let remainder = &src[i..];
-        let mut ident = String::new();
-        for ch in remainder.chars() {
-            if ch.is_alphanumeric() || ch == '_' {
-                ident.push(ch);
-            } else {
-                break;
-            }
-        }
-
-        if ident.is_empty() {
-            chars.next();
-            continue;
-        }
-
-        let id_len = ident.len();
-        let mut found_block = false;
-        let mut block_body = String::new();
-
-        // Check if this identifier is followed by a '{'
-        let after_ident = &remainder[id_len..];
-        if let Some(brace_start) = after_ident.find('{') {
-            // Verify there's only whitespace between ident and {
-            if after_ident[..brace_start].trim().is_empty() {
-                // Find matching closing brace
-                let mut brace_count = 0;
-                let abs_start = i + id_len + brace_start;
-                let mut end_idx = 0;
-
-                for (j, b) in src[abs_start..].chars().enumerate() {
-                    if b == '{' {
-                        brace_count += 1;
-                    } else if b == '}' {
-                        brace_count -= 1;
-                        if brace_count == 0 {
-                            end_idx = abs_start + j + 1;
-                            block_body = src[abs_start + 1..abs_start + j].to_string();
-                            found_block = true;
-                            break;
-                        }
-                    }
-                }
-
-                if found_block {
-                    // Always advance the outer iterator past the block so we don't
-                    // re-parse the block body as top-level identifiers.
-                    for _ in 0..(end_idx - i) {
-                        chars.next();
-                    }
-
-                    // Only treat *recognized* event handler names as handlers.
-                    // Currently we accept only `on_time` as a top-level event.
-                    if let Some(col) = event_color(&ident) {
-                        out.push(DslHandler {
-                            name: ident,
-                            body: block_body,
-                            color: col,
-                        });
-                    } else {
-                        // Unknown top-level block — skip registering it as a handler.
-                    }
-
-                    continue;
-                }
-            }
-        }
-        chars.next();
-    }
-    out
-}
-
-/// Return the display color for a known top-level event name (RGBA), or None
-/// if the name is not a recognized event. Add new events here to whitelist
-/// them for handler extraction + coloring in the editor.
-pub fn event_color(name: &str) -> Option<[u8; 4]> {
-    match name {
-        "on_time" => Some([200, 100, 255, 255]), // purple for events
-        _ => None,
+    let easing = ast_easing_to_scene(&mv.easing);
+    Animation::Move {
+        to_x: mv.to.0,
+        to_y: mv.to.1,
+        start: mv.during.0,
+        end: mv.during.1,
+        easing,
     }
 }
 
-/// Return the display color for a known DSL method (e.g. `move_element`).
-/// Methods listed here will get a distinct color in the editor; callers may
-/// still allow per-call color override (e.g. `move_element(color = "#rrggbb")`).
-pub fn method_color(name: &str) -> Option<[u8; 4]> {
-    match name {
-        "move_element" => Some([255, 160, 80, 255]), // orange for methods
-        _ => None,
-    }
-}
-fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String, String>) {
-    match shape {
-        Shape::Circle(c) => {
-            if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) {
-                c.x = v;
-            }
-            if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) {
-                c.y = v;
-            }
-            if let Some(v) = kv.get("radius").and_then(|s| s.parse().ok()) {
-                c.radius = v;
-            }
-            if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) {
-                c.spawn_time = v;
-            }
-            if let Some(fill) = kv.get("fill") {
-                if fill.starts_with('#') && fill.len() >= 7 {
-                    let red = u8::from_str_radix(&fill[1..3], 16).unwrap_or(120);
-                    let green = u8::from_str_radix(&fill[3..5], 16).unwrap_or(200);
-                    let blue = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
-                    c.color = [red, green, blue, 255];
-                }
-            }
-        }
-        Shape::Rect(r) => {
-            if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) {
-                r.x = v;
-            }
-            if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) {
-                r.y = v;
-            }
-            if let Some(v) = kv.get("width").or(kv.get("w")).and_then(|s| s.parse().ok()) {
-                r.w = v;
-            }
-            if let Some(v) = kv
-                .get("height")
-                .or(kv.get("h"))
-                .and_then(|s| s.parse().ok())
-            {
-                r.h = v;
-            }
-            if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) {
-                r.spawn_time = v;
-            }
-            if let Some(fill) = kv.get("fill") {
-                if fill.starts_with('#') && fill.len() >= 7 {
-                    let red = u8::from_str_radix(&fill[1..3], 16).unwrap_or(200);
-                    let green = u8::from_str_radix(&fill[3..5], 16).unwrap_or(120);
-                    let blue = u8::from_str_radix(&fill[5..7], 16).unwrap_or(120);
-                    r.color = [red, green, blue, 255];
-                }
-            }
-        }
-        Shape::Text(t) => {
-            if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) {
-                t.x = v;
-            }
-            if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) {
-                t.y = v;
-            }
-            if let Some(v) = kv.get("size").and_then(|s| s.parse().ok()) {
-                t.size = v;
-            }
-            if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) {
-                t.spawn_time = v;
-            }
-            if let Some(f) = kv.get("value") {
-                t.value = f.clone();
-            }
-            if let Some(f) = kv.get("font") {
-                t.font = f.clone();
-            }
-            if let Some(fill) = kv.get("fill") {
-                if fill.starts_with('#') && fill.len() >= 7 {
-                    let red = u8::from_str_radix(&fill[1..3], 16).unwrap_or(255);
-                    let green = u8::from_str_radix(&fill[3..5], 16).unwrap_or(255);
-                    let blue = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
-                    t.color = [red, green, blue, 255];
-                }
-            }
-        }
-        _ => {}
-    }
-}
+fn ast_easing_to_scene(kind: &ast::EasingKind) -> crate::scene::Easing {
+    use crate::scene::{BezierPoint, Easing};
+    use ast::EasingKind;
 
-fn add_anim_to_shape(shape: &mut Shape, parsed: crate::animations::move_animation::ParsedMove) {
-    match shape {
-        Shape::Circle(c) => {
-            c.animations.push(crate::scene::Animation::Move {
-                to_x: parsed.to_x,
-                to_y: parsed.to_y,
-                start: parsed.start,
-                end: parsed.end,
-                easing: parsed.easing,
-            });
-        }
-        Shape::Rect(r) => {
-            r.animations.push(crate::scene::Animation::Move {
-                to_x: parsed.to_x,
-                to_y: parsed.to_y,
-                start: parsed.start,
-                end: parsed.end,
-                easing: parsed.easing,
-            });
-        }
-        Shape::Text(t) => {
-            t.animations.push(crate::scene::Animation::Move {
-                to_x: parsed.to_x,
-                to_y: parsed.to_y,
-                start: parsed.start,
-                end: parsed.end,
-                easing: parsed.easing,
-            });
-        }
-        _ => {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_on_time_is_extracted_as_handler() {
-        let src = r#"
-            on_time {
-                move_element(name = "C", x = 0.1, y = 0.2)
-            }
-
-            asghasgbag {
-                move_element(name = "C", x = 0.3, y = 0.4)
-            }
-        "#;
-
-        let handlers = extract_event_handlers_structured(src);
-        assert_eq!(handlers.len(), 1);
-        assert_eq!(handlers[0].name, "on_time");
-        assert_eq!(handlers[0].color, [200, 100, 255, 255]);
-    }
-
-    #[test]
-    fn method_color_registry_contains_move_element() {
-        let c = super::method_color("move_element").expect("move_element color");
-        assert_eq!(c, [255, 160, 80, 255]);
-    }
-
-    #[test]
-    fn parse_config_inline_header() {
-        let src = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n";
-        let cfg = parse_config(src).expect("parsed");
-        assert_eq!(cfg.width, 1280);
-        assert_eq!(cfg.height, 720);
-        assert_eq!(cfg.fps, 60);
-        assert!((cfg.duration - 5.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn parse_config_multiline_timeline_and_size() {
-        let src = r#"
-            size(
-                640,
-                360
-            )
-
-            timeline {
-                fps = 30,
-                duration = 2.5
-            }
-        "#;
-
-        let cfg = parse_config(src).expect("parsed multiline");
-        assert_eq!(cfg.width, 640);
-        assert_eq!(cfg.height, 360);
-        assert_eq!(cfg.fps, 30);
-        assert!((cfg.duration - 2.5).abs() < 1e-6);
+    match kind {
+        EasingKind::Linear => Easing::Linear,
+        EasingKind::EaseIn { power } => Easing::EaseIn { power: *power },
+        EasingKind::EaseOut { power } => Easing::EaseOut { power: *power },
+        EasingKind::EaseInOut { power } => Easing::EaseInOut { power: *power },
+        EasingKind::Sine => Easing::Sine,
+        EasingKind::Expo => Easing::Expo,
+        EasingKind::Circ => Easing::Circ,
+        EasingKind::Bezier { p1, p2 } => Easing::Bezier { p1: *p1, p2: *p2 },
+        EasingKind::Spring {
+            damping,
+            stiffness,
+            mass,
+        } => Easing::Spring {
+            damping: *damping,
+            stiffness: *stiffness,
+            mass: *mass,
+        },
+        EasingKind::Elastic { amplitude, period } => Easing::Elastic {
+            amplitude: *amplitude,
+            period: *period,
+        },
+        EasingKind::Bounce { bounciness } => Easing::Bounce {
+            bounciness: *bounciness,
+        },
+        EasingKind::Custom { points } => Easing::Custom {
+            points: points.clone(),
+        },
+        EasingKind::CustomBezier { points } => Easing::CustomBezier {
+            points: points
+                .iter()
+                .map(|p| BezierPoint {
+                    pos: p.pos,
+                    handle_left: p.handle_left,
+                    handle_right: p.handle_right,
+                })
+                .collect(),
+        },
     }
 }

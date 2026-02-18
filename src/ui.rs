@@ -212,10 +212,22 @@ impl eframe::App for MyApp {
         // Throttle system stats update (e.g. every 1.0s)
         let now = ctx.input(|i| i.time);
         // -- Autosave debounce handling ---------------------------------
-        if state.autosave_pending {
-            if let Some(last_edit) = state.last_code_edit_time {
-                if now - last_edit > state.autosave_cooldown_secs as f64 {
-                    // perform the autosave (silent) and set indicator
+        // On idle (after `autosave_cooldown_secs`) re-run validation and
+        // attempt an autosave if the DSL is valid. This ensures that a file
+        // previously marked invalid but later corrected will be re-checked
+        // and saved automatically once the user is idle.
+        if let Some(last_edit) = state.last_code_edit_time {
+            if now - last_edit > state.autosave_cooldown_secs as f64 {
+                // Re-validate the DSL on idle regardless of the current
+                // `autosave_pending` flag so fixes are picked up.
+                let diags = crate::dsl::validate_dsl(&state.dsl_code);
+                if !diags.is_empty() {
+                    // Still invalid — surface diagnostics and block autosave.
+                    state.dsl_diagnostics = diags.clone();
+                    state.autosave_pending = false;
+                    state.autosave_error = Some(diags[0].message.clone());
+                } else {
+                    // Valid now — attempt the silent write and clear diagnostics.
                     match crate::events::element_properties_changed_event::write_dsl_to_project(
                         state, false,
                     ) {
@@ -223,6 +235,7 @@ impl eframe::App for MyApp {
                             state.autosave_pending = false;
                             state.autosave_last_success_time = Some(now);
                             state.autosave_error = None;
+                            state.dsl_diagnostics.clear();
                         }
                         Err(e) => {
                             state.autosave_pending = false;
@@ -241,57 +254,72 @@ impl eframe::App for MyApp {
             if now - last_edit > parse_debounce
                 && now - state.last_scene_parse_time > parse_debounce
             {
-                // Try to parse configuration (non-fatal). Do NOT show errors while typing.
-                if let Ok(config) = crate::dsl::parse_config(&state.dsl_code) {
-                    state.fps = config.fps;
-                    state.duration_secs = config.duration;
-                    state.render_width = config.width;
-                    state.render_height = config.height;
-                }
+                // 1) Run lightweight validation and surface diagnostics immediately.
+                let diagnostics = crate::dsl::validate_dsl(&state.dsl_code);
+                if !diagnostics.is_empty() {
+                    // Show diagnostics in editor and prevent autosave from proceeding.
+                    state.dsl_diagnostics = diagnostics.clone();
+                    state.autosave_pending = false;
+                    state.autosave_error = Some(diagnostics[0].message.clone());
+                    // Don't update scene/preview while code contains errors.
+                    state.last_scene_parse_time = now;
+                } else {
+                    // Clear previous diagnostics and autosave error
+                    state.dsl_diagnostics.clear();
+                    state.autosave_error = None;
 
-                // Try to parse DSL into scene; only update scene on successful parse.
-                // We throttle preview requests when the Code editor is active to avoid
-                // rapid texture swaps that produce visible flicker on high-refresh monitors.
-                let parsed = crate::dsl::parse_dsl(&state.dsl_code);
-                if !parsed.is_empty() {
-                    state.scene = parsed;
-                    // collect DSL event handler blocks (e.g. `on_time { ... }`)
-                    state.dsl_event_handlers =
-                        crate::dsl::extract_event_handlers_structured(&state.dsl_code);
+                    // Try to parse configuration (non-fatal). Do NOT show errors while typing.
+                    if let Ok(config) = crate::dsl::parse_config(&state.dsl_code) {
+                        state.fps = config.fps;
+                        state.duration_secs = config.duration;
+                        state.render_width = config.width;
+                        state.render_height = config.height;
+                    }
 
-                    // If the Code panel is active, defer/ throttle preview requests so
-                    // the live composition callback (which renders `state.scene`) is
-                    // used for immediate feedback and we avoid swapping textures.
-                    const CODE_PREVIEW_IDLE_SECS: f64 = 0.45; // wait this long after last edit
+                    // Try to parse DSL into scene; only update scene on successful parse.
+                    // We throttle preview requests when the Code editor is active to avoid
+                    // rapid texture swaps that produce visible flicker on high-refresh monitors.
+                    let parsed = crate::dsl::parse_dsl(&state.dsl_code);
+                    if !parsed.is_empty() {
+                        state.scene = parsed;
+                        // collect DSL event handler blocks (e.g. `on_time { ... }`)
+                        state.dsl_event_handlers =
+                            crate::dsl::extract_event_handlers_structured(&state.dsl_code);
 
-                    let do_request = if state.active_tab == Some(PanelTab::Code) {
-                        if let Some(last_edit) = state.last_code_edit_time {
-                            // If user has been idle for long enough, request now;
-                            // otherwise mark pending so we request when idle.
-                            if now - last_edit > CODE_PREVIEW_IDLE_SECS {
-                                true
+                        // If the Code panel is active, defer/ throttle preview requests so
+                        // the live composition callback (which renders `state.scene`) is
+                        // used for immediate feedback and we avoid swapping textures.
+                        const CODE_PREVIEW_IDLE_SECS: f64 = 0.45; // wait this long after last edit
+
+                        let do_request = if state.active_tab == Some(PanelTab::Code) {
+                            if let Some(last_edit) = state.last_code_edit_time {
+                                // If user has been idle for long enough, request now;
+                                // otherwise mark pending so we request when idle.
+                                if now - last_edit > CODE_PREVIEW_IDLE_SECS {
+                                    true
+                                } else {
+                                    state.preview_pending_from_code = true;
+                                    false
+                                }
                             } else {
-                                state.preview_pending_from_code = true;
-                                false
+                                true
                             }
                         } else {
                             true
+                        };
+
+                        if do_request {
+                            crate::canvas::request_preview_frames(
+                                state,
+                                state.time,
+                                crate::canvas::PreviewMode::Single,
+                            );
+                            state.preview_pending_from_code = false;
                         }
-                    } else {
-                        true
-                    };
-
-                    if do_request {
-                        crate::canvas::request_preview_frames(
-                            state,
-                            state.time,
-                            crate::canvas::PreviewMode::Single,
-                        );
-                        state.preview_pending_from_code = false;
                     }
-                }
 
-                state.last_scene_parse_time = now;
+                    state.last_scene_parse_time = now;
+                }
             }
         }
 

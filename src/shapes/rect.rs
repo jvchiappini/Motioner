@@ -13,6 +13,8 @@ pub struct Rect {
     pub color: [u8; 4],
     pub spawn_time: f32,
     #[serde(default)]
+    pub z_index: i32,
+    #[serde(default)]
     pub animations: Vec<crate::scene::Animation>,
     #[serde(default = "super::shapes_manager::default_visible")]
     pub visible: bool,
@@ -28,6 +30,7 @@ impl Default for Rect {
             h: 0.2,
             color: [200, 120, 120, 255],
             spawn_time: 0.0,
+            z_index: 0,
             animations: Vec::new(),
             visible: true,
         }
@@ -73,12 +76,13 @@ impl ShapeDescriptor for Rect {
         });
         
         ui.add(egui::DragValue::new(&mut self.spawn_time).speed(0.1).prefix("Spawn: "));
+        ui.add(egui::DragValue::new(&mut self.z_index).speed(1).prefix("Z-Index: "));
     }
 
     fn to_dsl(&self, indent: &str) -> String {
         format!(
-            "{}rect \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    width = {:.3},\n{}    height = {:.3},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2}\n{}}}\n",
-            indent, self.name, indent, self.x, indent, self.y, indent, self.w, indent, self.h, indent, self.color[0], self.color[1], self.color[2], indent, self.spawn_time, indent
+            "{}rect \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    width = {:.3},\n{}    height = {:.3},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2},\n{}    z = {}\n{}}}\n",
+            indent, self.name, indent, self.x, indent, self.y, indent, self.w, indent, self.h, indent, self.color[0], self.color[1], self.color[2], indent, self.spawn_time, indent, self.z_index, indent
         )
     }
 

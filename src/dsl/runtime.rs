@@ -1,53 +1,67 @@
+/// DSL runtime: executes event handler bodies against the current scene.
+///
+/// Event handlers are extracted from DSL source by [`crate::dsl::generator`]
+/// and stored as [`DslHandler`] structs.  At each relevant moment (e.g. on
+/// every frame tick) the application calls [`run_handler`] to apply the
+/// handler's actions to the scene.
+///
+/// **Adding a new action:**  
+/// 1. Implement a parser in the relevant `shapes/utilities/` module.  
+/// 2. Add a `dispatch_action` branch here that calls it.
+
 use super::evaluator::{self, EvalContext};
 use crate::scene::Shape;
 
-/// Structured representation of an event handler extracted from DSL code.
+// ─── Handler type ─────────────────────────────────────────────────────────────
+
+/// A top-level event handler extracted from DSL source.
 #[derive(Clone, Debug)]
 pub struct DslHandler {
+    /// Event name, e.g. `"on_time"`.
     pub name: String,
+    /// Raw body text; executed line by line by [`run_handler`].
     pub body: String,
-    /// Display color for this handler (RGBA). Used by UI to color-code handlers.
+    /// Editor highlight color (RGBA).
     pub color: [u8; 4],
 }
 
-/// Dispatches actions for a given event.
-/// This is the central point to extend the DSL with new actions or triggers.
+// ─── Execution ────────────────────────────────────────────────────────────────
+
+/// Execute all actions in `handler` against the scene.
+///
+/// Returns `true` if at least one action modified the scene.
 pub fn run_handler(shapes: &mut [Shape], handler: &DslHandler, ctx: &EvalContext) -> bool {
     let mut changed = false;
-
-    // Split body into lines and process each as an action
     for line in handler.body.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with("//") {
             continue;
         }
-
         if dispatch_action(shapes, line, ctx).is_ok() {
             changed = true;
         }
     }
-
     changed
 }
 
-/// Recognizes and executes individual actions within a handler block.
-/// Add new commands here (e.g., scale_element, set_color, etc.)
+// ─── Action dispatcher ────────────────────────────────────────────────────────
+
+/// Route a single action line to the appropriate executor.
+///
+/// **Add new actions here** following the existing pattern.
 fn dispatch_action(shapes: &mut [Shape], line: &str, ctx: &EvalContext) -> Result<(), String> {
     if line.starts_with("move_element") {
         return exec_move_element(shapes, line, ctx);
     }
 
-    // Future actions can be added here easily:
-    // if line.starts_with("set_opacity") { ... }
-
-    Err(format!("Unknown action: {}", line))
+    Err(format!("Unknown action: '{}'", line))
 }
 
+// ─── Action executors ─────────────────────────────────────────────────────────
+
 fn exec_move_element(shapes: &mut [Shape], line: &str, ctx: &EvalContext) -> Result<(), String> {
-    // Parse the DSL action using the centralized `MoveElement` parser,
-    // then evaluate expressions and delegate mutation to the element_modifiers manager.
     let action = crate::shapes::utilities::move_element::MoveElement::parse_dsl(line)?;
-    let xv = evaluator::evaluate(&action.x_expr, ctx)?;
-    let yv = evaluator::evaluate(&action.y_expr, ctx)?;
-    crate::shapes::utilities::element_modifiers::move_element(shapes, &action.name, xv, yv)
+    let x = evaluator::evaluate(&action.x_expr, ctx)?;
+    let y = evaluator::evaluate(&action.y_expr, ctx)?;
+    crate::shapes::utilities::element_modifiers::move_element(shapes, &action.name, x, y)
 }
