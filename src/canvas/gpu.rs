@@ -8,6 +8,23 @@ use eframe::wgpu;
 
 pub const MAX_GPU_TEXTURE_SIZE: u32 = 2048;
 
+use super::preview_worker::RenderSnapshot;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Uniforms {
+    pub resolution: [f32; 2],
+    pub preview_res: [f32; 2],
+    pub paper_rect: [f32; 4],
+    pub viewport_rect: [f32; 4],
+    pub count: f32,
+    pub mag_x: f32,
+    pub mag_y: f32,
+    pub mag_active: f32,
+    pub time: f32,
+    pub _padding: [f32; 3], // 17 floats + 3 = 20 floats (80 bytes)
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuShape {
@@ -30,6 +47,8 @@ pub struct CompositionCallback {
     pub viewport_rect: egui::Rect,
     pub magnifier_pos: Option<egui::Pos2>,
     pub time: f32,
+    pub shared_device: Option<std::sync::Arc<wgpu::Device>>, // Para el caché GPU-to-GPU
+    pub shared_queue: Option<std::sync::Arc<wgpu::Queue>>,
 }
 
 #[cfg(feature = "wgpu")]
@@ -97,7 +116,9 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         uniforms[14] = m_pos.y;
         uniforms[15] = mag_active;
         uniforms[16] = self.time;
-
+        
+        uniforms[16] = self.time;
+        
         queue.write_buffer(
             &resources.uniform_buffer,
             0,
@@ -116,7 +137,7 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         let resources: &GpuResources = callback_resources.get().unwrap();
         render_pass.set_pipeline(&resources.pipeline);
         render_pass.set_bind_group(0, &resources.bind_group, &[]);
-        render_pass.draw(0..6, 0..1);
+        render_pass.draw(0..6, 0..self.shapes.len() as u32);
     }
 }
 
@@ -144,7 +165,7 @@ impl GpuResources {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
@@ -179,18 +200,21 @@ impl GpuResources {
                 entry_point: "vs_main",
                 buffers: &[],
             },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING), // USAMOS BLENDING POR HARDWARE
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
 
@@ -317,20 +341,25 @@ pub fn render_frame_color_image_gpu_snapshot(
             continue;
         }
         match shape {
-            crate::scene::Shape::Circle { radius, color, .. } => {
+            crate::scene::Shape::Circle(c) => {
                 let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
                     shape,
                     time,
                     snap.duration_secs,
                 );
+                
+                let radius_px = c.radius * snap.render_width as f32;
+                let x_px = eval_x * snap.render_width as f32;
+                let y_px = eval_y * snap.render_height as f32;
+
                 gpu_shapes.push(GpuShape {
-                    pos: [eval_x, eval_y],
-                    size: [*radius, 0.0],
+                    pos: [x_px, y_px],
+                    size: [radius_px, radius_px],
                     color: [
-                        color[0] as f32 / 255.0,
-                        color[1] as f32 / 255.0,
-                        color[2] as f32 / 255.0,
-                        color[3] as f32 / 255.0,
+                        c.color[0] as f32 / 255.0,
+                        c.color[1] as f32 / 255.0,
+                        c.color[2] as f32 / 255.0,
+                        c.color[3] as f32 / 255.0,
                     ],
                     shape_type: 0,
                     spawn_time: *actual_spawn,
@@ -338,20 +367,26 @@ pub fn render_frame_color_image_gpu_snapshot(
                     p2: 0,
                 });
             }
-            crate::scene::Shape::Rect { w, h, color, .. } => {
+            crate::scene::Shape::Rect(r) => {
                 let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
                     shape,
                     time,
                     snap.duration_secs,
                 );
+
+                let w_px = r.w * snap.render_width as f32;
+                let h_px = r.h * snap.render_height as f32;
+                let x_px = eval_x * snap.render_width as f32;
+                let y_px = eval_y * snap.render_height as f32;
+
                 gpu_shapes.push(GpuShape {
-                    pos: [eval_x + *w / 2.0, eval_y + *h / 2.0],
-                    size: [*w / 2.0, *h / 2.0],
+                    pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
+                    size: [w_px / 2.0, h_px / 2.0],
                     color: [
-                        color[0] as f32 / 255.0,
-                        color[1] as f32 / 255.0,
-                        color[2] as f32 / 255.0,
-                        color[3] as f32 / 255.0,
+                        r.color[0] as f32 / 255.0,
+                        r.color[1] as f32 / 255.0,
+                        r.color[2] as f32 / 255.0,
+                        r.color[3] as f32 / 255.0,
                     ],
                     shape_type: 1,
                     spawn_time: *actual_spawn,
@@ -391,28 +426,21 @@ pub fn render_frame_color_image_gpu_snapshot(
         queue.write_buffer(&resources.shape_buffer, 0, shape_data);
     }
 
-    let mut uniforms: [f32; 20] = [0.0; 20];
-    uniforms[0] = snap.render_width as f32;
-    uniforms[1] = snap.render_height as f32;
-    uniforms[2] = snap.render_width as f32 * snap.preview_multiplier;
-    uniforms[3] = snap.render_height as f32 * snap.preview_multiplier;
-    uniforms[4] = 0.0;
-    uniforms[5] = 0.0;
-    uniforms[6] = snap.render_width as f32;
-    uniforms[7] = snap.render_height as f32;
-    uniforms[8] = 0.0;
-    uniforms[9] = 0.0;
-    uniforms[10] = snap.render_width as f32;
-    uniforms[11] = snap.render_height as f32;
-    uniforms[12] = gpu_shapes.len() as f32;
-    uniforms[13] = 0.0;
-    uniforms[14] = 0.0;
-    uniforms[15] = 0.0;
-    uniforms[16] = time;
+    let uniforms = Uniforms {
+        resolution: [snap.render_width as f32, snap.render_height as f32],
+        preview_res: [preview_w as f32, preview_h as f32],
+        paper_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
+        viewport_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
+        count: gpu_shapes.len() as f32,
+        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        time,
+        _padding: [0.0; 3],
+    };
+
     queue.write_buffer(
         &resources.uniform_buffer,
         0,
-        bytemuck::cast_slice(&uniforms),
+        bytemuck::bytes_of(&uniforms),
     );
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -426,7 +454,7 @@ pub fn render_frame_color_image_gpu_snapshot(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -451,8 +479,14 @@ pub fn render_frame_color_image_gpu_snapshot(
         });
         rpass.set_pipeline(&resources.pipeline);
         rpass.set_bind_group(0, &resources.bind_group, &[]);
-        rpass.draw(0..6, 0..1);
+        // ¡MAGIA! Dibujamos todas las formas en una sola llamada instanciada
+        // 6 vértices por quad, 'shapes.len()' instancias.
+        if !gpu_shapes.is_empty() {
+            rpass.draw(0..6, 0..gpu_shapes.len() as u32);
+        }
     }
+
+    // SI NO TENEMOS QUE BAJARLO A CPU, TERMINAMOS AQUÍ
 
     let bytes_per_pixel = 4u32;
     let bytes_per_row_unpadded = bytes_per_pixel * preview_w;
@@ -493,26 +527,132 @@ pub fn render_frame_color_image_gpu_snapshot(
 
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
-    buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
-        let _ = tx.send(res);
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        tx.send(result).unwrap();
     });
     device.poll(wgpu::Maintain::Wait);
-    match rx.recv() {
-        Ok(Ok(())) => {
-            let data = buffer_slice.get_mapped_range();
-            let mut pixels: Vec<u8> = Vec::with_capacity((preview_w * preview_h * 4) as usize);
-            for row in 0..preview_h as usize {
-                let start = row * padded_bytes_per_row as usize;
-                let end = start + bytes_per_row_unpadded as usize;
-                pixels.extend_from_slice(&data[start..end]);
-            }
-            drop(data);
-            output_buffer.unmap();
-            Ok(egui::ColorImage::from_rgba_unmultiplied(
-                [preview_w as usize, preview_h as usize],
-                &pixels,
-            ))
-        }
-        _ => Err("wgpu readback failed".to_string()),
+    rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+
+    let data = buffer_slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((preview_w * preview_h * 4) as usize);
+    for y in 0..preview_h {
+        let row_start = (y * padded_bytes_per_row) as usize;
+        let row_end = row_start + (preview_w * bytes_per_pixel) as usize;
+        pixels.extend_from_slice(&data[row_start..row_end]);
     }
+
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [preview_w as usize, preview_h as usize],
+        &pixels,
+    ))
+}
+
+pub fn render_frame_native_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    resources: &GpuResources,
+    snap: &RenderSnapshot,
+    time: f32,
+) -> anyhow::Result<wgpu::Texture> {
+    let preview_w = (snap.render_width as f32 * snap.preview_multiplier).round() as u32;
+    let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round() as u32;
+
+    let mut gpu_shapes = Vec::new();
+        fn fill_recursive(shapes: &[crate::scene::Shape], out: &mut Vec<GpuShape>, current_time: f32, parent_spawn: f32, duration: f32, rw: f32, rh: f32) {
+        for s in shapes {
+             let spawn = s.spawn_time().max(parent_spawn);
+             match s {
+                 crate::scene::Shape::Group { children, .. } => fill_recursive(children, out, current_time, spawn, duration, rw, rh),
+                 crate::scene::Shape::Circle(c) => {
+                     let (x, y) = crate::animations::animations_manager::animated_xy_for(s, current_time, duration);
+                     
+                     let radius_px = c.radius * rw;
+                     let x_px = x * rw;
+                     let y_px = y * rh;
+
+                     out.push(GpuShape {
+                         pos: [x_px, y_px],
+                         size: [radius_px, radius_px],
+                         color: [c.color[0] as f32 / 255.0, c.color[1] as f32 / 255.0, c.color[2] as f32 / 255.0, c.color[3] as f32 / 255.0],
+                         shape_type: 0,
+                         spawn_time: spawn,
+                         p1: 0, p2: 0,
+                     });
+                 }
+                 crate::scene::Shape::Rect(r) => {
+                     let (x, y) = crate::animations::animations_manager::animated_xy_for(s, current_time, duration);
+                     
+                     let w_px = r.w * rw;
+                     let h_px = r.h * rh;
+                     let x_px = x * rw;
+                     let y_px = y * rh;
+
+                     out.push(GpuShape {
+                         pos: [x_px + w_px/2.0, y_px + h_px/2.0],
+                         size: [w_px/2.0, h_px/2.0],
+                         color: [r.color[0] as f32 / 255.0, r.color[1] as f32 / 255.0, r.color[2] as f32 / 255.0, r.color[3] as f32 / 255.0],
+                         shape_type: 1,
+                         spawn_time: spawn,
+                         p1: 0, p2: 0,
+                     });
+                 }
+                 _ => {}
+             }
+        }
+    }
+    fill_recursive(&snap.scene, &mut gpu_shapes, time, 0.0, snap.duration_secs, snap.render_width as f32, snap.render_height as f32);
+
+    if !gpu_shapes.is_empty() {
+        queue.write_buffer(&resources.shape_buffer, 0, bytemuck::cast_slice(&gpu_shapes));
+    }
+
+    let uniforms = Uniforms {
+        resolution: [snap.render_width as f32, snap.render_height as f32],
+        preview_res: [preview_w as f32, preview_h as f32],
+        paper_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
+        viewport_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
+        count: gpu_shapes.len() as f32,
+        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        time,
+        _padding: [0.0; 3],
+    };
+
+    queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("gpu_cache_texture"),
+        size: wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    {
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+        rpass.set_pipeline(&resources.pipeline);
+        rpass.set_bind_group(0, &resources.bind_group, &[]);
+        if !gpu_shapes.is_empty() {
+            rpass.draw(0..6, 0..gpu_shapes.len() as u32);
+        }
+    }
+    queue.submit(Some(encoder.finish()));
+    Ok(texture)
 }

@@ -68,9 +68,9 @@ mod handler_tests {
 
         let found = state.scene.iter().find(|s| s.name() == "Circle").unwrap();
         match found {
-            crate::scene::Shape::Circle { x, y, .. } => {
-                assert!(((*x) - 0.2).abs() < 1e-3);
-                assert!(((*y) - 0.25).abs() < 1e-3);
+            crate::scene::Shape::Circle(c) => {
+                assert!((c.x - 0.2).abs() < 1e-3);
+                assert!((c.y - 0.25).abs() < 1e-3);
             }
             _ => panic!("expected circle"),
         }

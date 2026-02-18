@@ -9,9 +9,19 @@ pub fn move_element(shapes: &mut [Shape], name: &str, x: f32, y: f32) -> Result<
     for sh in shapes.iter_mut() {
         if sh.name() == name {
             match sh {
-                Shape::Circle { x: sx, y: sy, .. } | Shape::Rect { x: sx, y: sy, .. } => {
-                    *sx = x;
-                    *sy = y;
+                Shape::Circle(c) => {
+                    c.x = x;
+                    c.y = y;
+                    found = true;
+                }
+                Shape::Rect(r) => {
+                    r.x = x;
+                    r.y = y;
+                    found = true;
+                }
+                Shape::Text(t) => {
+                    t.x = x;
+                    t.y = y;
                     found = true;
                 }
                 _ => {}
@@ -33,21 +43,12 @@ mod tests {
 
     #[test]
     fn move_element_updates_position() {
-        let mut shapes = vec![Shape::Circle {
-            name: "C".to_string(),
-            x: 0.0,
-            y: 0.0,
-            radius: 1.0,
-            color: crate::shapes::circle::default_color(),
-            spawn_time: 0.0,
-            animations: Vec::new(),
-            visible: true,
-        }];
+        let mut shapes = vec![crate::shapes::circle::Circle::create_default("C".to_string())];
         assert!(move_element(&mut shapes, "C", 0.5, 0.25).is_ok());
         match &shapes[0] {
-            Shape::Circle { x, y, .. } => {
-                assert!((*x - 0.5).abs() < 1e-6);
-                assert!((*y - 0.25).abs() < 1e-6);
+            Shape::Circle(c) => {
+                assert!((c.x - 0.5).abs() < 1e-6);
+                assert!((c.y - 0.25).abs() < 1e-6);
             }
             _ => panic!("expected circle"),
         }

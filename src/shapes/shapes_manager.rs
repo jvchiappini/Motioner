@@ -1,37 +1,16 @@
 use serde::{Deserialize, Serialize};
+use crate::shapes::ShapeDescriptor;
 
-fn default_visible() -> bool {
+pub fn default_visible() -> bool {
     true
 }
 
 /// Shape enum moved from `scene.rs` to `src/shapes/shapes_manager.rs`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {
-    Circle {
-        name: String,
-        x: f32,
-        y: f32,
-        radius: f32,
-        color: [u8; 4],
-        spawn_time: f32,
-        #[serde(default)]
-        animations: Vec<crate::scene::Animation>,
-        #[serde(default = "default_visible")]
-        visible: bool,
-    },
-    Rect {
-        name: String,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        color: [u8; 4],
-        spawn_time: f32,
-        #[serde(default)]
-        animations: Vec<crate::scene::Animation>,
-        #[serde(default = "default_visible")]
-        visible: bool,
-    },
+    Circle(crate::shapes::circle::Circle),
+    Rect(crate::shapes::rect::Rect),
+    Text(crate::shapes::text::Text),
     /// Non-visual group that can contain other shapes.
     Group {
         name: String,
@@ -42,69 +21,81 @@ pub enum Shape {
 }
 
 impl Shape {
+    pub fn descriptor(&self) -> Option<&dyn crate::shapes::ShapeDescriptor> {
+        match self {
+            Shape::Circle(c) => Some(c),
+            Shape::Rect(r) => Some(r),
+            Shape::Text(t) => Some(t),
+            Shape::Group { .. } => None,
+        }
+    }
+
+    pub fn descriptor_mut(&mut self) -> Option<&mut dyn crate::shapes::ShapeDescriptor> {
+        match self {
+            Shape::Circle(c) => Some(c),
+            Shape::Rect(r) => Some(r),
+            Shape::Text(t) => Some(t),
+            Shape::Group { .. } => None,
+        }
+    }
     pub fn is_visible(&self) -> bool {
         match self {
-            Shape::Circle { visible, .. } => *visible,
-            Shape::Rect { visible, .. } => *visible,
+            Shape::Circle(c) => c.visible,
+            Shape::Rect(r) => r.visible,
+            Shape::Text(t) => t.visible,
             Shape::Group { visible, .. } => *visible,
         }
     }
 
     pub fn set_visible(&mut self, v: bool) {
         match self {
-            Shape::Circle { visible, .. } => *visible = v,
-            Shape::Rect { visible, .. } => *visible = v,
+            Shape::Circle(c) => c.visible = v,
+            Shape::Rect(r) => r.visible = v,
+            Shape::Text(t) => t.visible = v,
             Shape::Group { visible, .. } => *visible = v,
         }
     }
 
-    pub fn to_dsl(&self) -> String {
-        self.to_dsl_impl(0)
+    pub fn to_dsl(&self, indent: &str) -> String {
+        // If indent is empty, we use our internal to_dsl_impl(0) logic
+        // but if it's not empty, we might want to respect it.
+        // For simplicity with existing code, let's just use to_dsl_impl.
+        self.to_dsl_impl(indent.len() / 4)
     }
 
     fn to_dsl_impl(&self, indent_level: usize) -> String {
         let indent = "    ".repeat(indent_level);
         match self {
-            Shape::Circle {
-                name,
-                x,
-                y,
-                radius,
-                color,
-                spawn_time,
-                animations,
-                ..
-            } => crate::shapes::circle::to_dsl_with_animations(
-                name,
-                *x,
-                *y,
-                *radius,
-                *color,
-                *spawn_time,
-                animations,
-                &indent,
-            ),
-            Shape::Rect {
-                name,
-                x,
-                y,
-                w,
-                h,
-                color,
-                spawn_time,
-                animations,
-                ..
-            } => crate::shapes::rect::to_dsl_with_animations(
-                name,
-                *x,
-                *y,
-                *w,
-                *h,
-                *color,
-                *spawn_time,
-                animations,
-                &indent,
-            ),
+            Shape::Circle(c) => {
+                let mut out = c.to_dsl(&indent);
+                for anim in &c.animations {
+                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                        out.push_str(&ma.to_dsl_block(None, &indent));
+                        out.push('\n');
+                    }
+                }
+                out
+            }
+            Shape::Rect(r) => {
+                let mut out = r.to_dsl(&indent);
+                for anim in &r.animations {
+                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                        out.push_str(&ma.to_dsl_block(None, &indent));
+                        out.push('\n');
+                    }
+                }
+                out
+            }
+            Shape::Text(t) => {
+                let mut out = t.to_dsl(&indent);
+                for anim in &t.animations {
+                    if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                        out.push_str(&ma.to_dsl_block(None, &indent));
+                        out.push('\n');
+                    }
+                }
+                out
+            }
             Shape::Group { name, children, .. } => {
                 let mut items: Vec<String> = Vec::new();
                 for c in children {
@@ -126,30 +117,35 @@ impl Shape {
     }
 
     pub fn sample_scene() -> Vec<Shape> {
-        vec![Shape::Circle {
-            name: "Circle".to_string(),
-            x: 0.5,
-            y: 0.5,
-            radius: 0.1,
-            color: crate::shapes::circle::default_color(),
-            spawn_time: 0.0,
-            animations: Vec::new(),
-            visible: true,
-        }]
+        vec![
+            Shape::Circle(crate::shapes::circle::Circle::default()),
+            Shape::Text(crate::shapes::text::Text::default()),
+        ]
     }
 
     pub fn name(&self) -> &str {
         match self {
-            Shape::Circle { name, .. } => name,
-            Shape::Rect { name, .. } => name,
+            Shape::Circle(c) => &c.name,
+            Shape::Rect(r) => &r.name,
+            Shape::Text(t) => &t.name,
             Shape::Group { name, .. } => name,
+        }
+    }
+
+    pub fn set_name(&mut self, new_name: String) {
+        match self {
+            Shape::Circle(c) => c.name = new_name,
+            Shape::Rect(r) => r.name = new_name,
+            Shape::Text(t) => t.name = new_name,
+            Shape::Group { name, .. } => *name = new_name,
         }
     }
 
     pub fn spawn_time(&self) -> f32 {
         match self {
-            Shape::Circle { spawn_time, .. } => *spawn_time,
-            Shape::Rect { spawn_time, .. } => *spawn_time,
+            Shape::Circle(c) => c.spawn_time,
+            Shape::Rect(r) => r.spawn_time,
+            Shape::Text(t) => t.spawn_time,
             Shape::Group { children, .. } => {
                 let mut min_t = f32::INFINITY;
                 for child in children {

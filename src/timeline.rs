@@ -391,11 +391,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         );
 
                         let fill_color = match shape {
-                            Shape::Circle { color, .. } | Shape::Rect { color, .. } => {
-                                egui::Color32::from_rgba_premultiplied(
-                                    color[0], color[1], color[2], color[3],
-                                )
-                            }
+                            Shape::Circle(c) => egui::Color32::from_rgba_premultiplied(
+                                c.color[0], c.color[1], c.color[2], c.color[3],
+                            ),
+                            Shape::Rect(r) => egui::Color32::from_rgba_premultiplied(
+                                r.color[0], r.color[1], r.color[2], r.color[3],
+                            ),
+                            Shape::Text(t) => egui::Color32::from_rgba_premultiplied(
+                                t.color[0], t.color[1], t.color[2], t.color[3],
+                            ),
                             Shape::Group { .. } => egui::Color32::from_gray(120),
                         };
 

@@ -130,6 +130,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     let path = std::path::PathBuf::from(&state.project_path_input);
                                     if path.exists() && path.is_dir() {
                                         state.project_path = Some(path);
+                                        state.refresh_fonts();
                                         state.show_welcome = false;
                                     } else if !path.exists() {
                                         state.path_validation_error =

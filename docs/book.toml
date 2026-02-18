@@ -1,6 +1,6 @@
 [book]
 title = "Motioner Documentation"
-authors = ["Juan Vasco Chiappini"]
+authors = ["José Valentino Chiappini"]
 description = "Comprehensive documentation for Motioner - A modern animation editor built in Rust"
 language = "en"
 src = "src"

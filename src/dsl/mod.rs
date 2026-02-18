@@ -4,6 +4,7 @@ pub mod runtime;
 use runtime::DslHandler;
 
 use crate::scene::Shape;
+use crate::shapes::ShapeDescriptor;
 
 /// Generate a simple DSL string for the given scene.
 pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
@@ -14,7 +15,7 @@ pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration
     ));
     // First, generate all shapes
     for s in scene.iter() {
-        out.push_str(&s.to_dsl());
+        out.push_str(&s.to_dsl(""));
         out.push('\n');
     }
 
@@ -22,7 +23,9 @@ pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration
     for s in scene.iter() {
         let name = s.name();
         let animations = match s {
-            Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => animations,
+            Shape::Circle(c) => &c.animations,
+            Shape::Rect(r) => &r.animations,
+            Shape::Text(t) => &t.animations,
             _ => continue,
         };
 
@@ -152,7 +155,7 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             }
             if let Some(eq) = p.find('=') {
                 let key = p[..eq].trim().to_string();
-                let val = p[eq + 1..].trim().trim_matches('"').to_string();
+                let val = p[eq + 1..].trim().trim_end_matches(',').trim_matches('"').to_string();
                 map.insert(key, val);
             }
         }
@@ -173,8 +176,10 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
         // inside their own files.
 
         // Handle shape definitions: circle "name" { ... } or circle(...) legacy
-        if line.starts_with("circle") || line.starts_with("rect") {
+        if line.starts_with("circle") || line.starts_with("rect") || line.starts_with("text") {
             let is_circle = line.starts_with("circle");
+            let is_rect = line.starts_with("rect");
+            let _is_text = line.starts_with("text");
             let mut name = String::new();
 
             // Extract name from circle "name" or circle(name="name")
@@ -194,34 +199,17 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
             if name.is_empty() {
                 name = format!(
                     "{}_{}",
-                    if is_circle { "Circle" } else { "Rect" },
+                    if is_circle { "Circle" } else if is_rect { "Rect" } else { "Text" },
                     shapes.len()
                 );
             }
 
             let mut current_shape = if is_circle {
-                Shape::Circle {
-                    name,
-                    x: 0.5,
-                    y: 0.5,
-                    radius: 0.1,
-                    color: [120, 200, 255, 255],
-                    spawn_time: 0.0,
-                    animations: Vec::new(),
-                    visible: true,
-                }
+                crate::shapes::circle::Circle::create_default(name)
+            } else if is_rect {
+                crate::shapes::rect::Rect::create_default(name)
             } else {
-                Shape::Rect {
-                    name,
-                    x: 0.4,
-                    y: 0.4,
-                    w: 0.2,
-                    h: 0.2,
-                    color: [200, 120, 120, 255],
-                    spawn_time: 0.0,
-                    animations: Vec::new(),
-                    visible: true,
-                }
+                crate::shapes::text::Text::create_default(name)
             };
 
             // If legacy format circle(x=1, y=2), apply values
@@ -274,6 +262,48 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                         {
                             add_anim_to_shape(&mut current_shape, parsed);
                         }
+                    } else if b.starts_with("spans") && b.contains('[') {
+                        // Parse spans list
+                        let mut span_list = Vec::new();
+                        for s_line in lines.by_ref() {
+                            let s = s_line.trim();
+                            if s == "]" || s == "]," {
+                                break;
+                            }
+                            if s.starts_with("span(") {
+                                let inner = s.trim_start_matches("span(").trim_end_matches(')').trim_end_matches(',');
+                                let kv = parse_kv_list(inner);
+                                // The text is the first positional or "text" key
+                                let text = if let Some(t) = kv.get("text") {
+                                    t.clone()
+                                } else {
+                                    // Hacky extract positional first arg
+                                    s.find('"').and_then(|start| {
+                                        s[start+1..].find('"').map(|end| s[start+1..start+1+end].to_string())
+                                    }).unwrap_or_default()
+                                };
+                                
+                                let font = kv.get("font").cloned().unwrap_or_else(|| "System".to_string());
+                                let size = kv.get("size").and_then(|s| s.parse().ok()).unwrap_or(24.0);
+                                let mut color = [255, 255, 255, 255];
+                                if let Some(fill) = kv.get("fill") {
+                                    if fill.starts_with('#') && fill.len() >= 7 {
+                                        if let Ok(r) = u8::from_str_radix(&fill[1..3], 16) {
+                                            if let Ok(g) = u8::from_str_radix(&fill[3..5], 16) {
+                                                if let Ok(b) = u8::from_str_radix(&fill[5..7], 16) {
+                                                    color = [r, g, b, 255];
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                span_list.push(crate::shapes::text::TextSpan { text, font, size, color });
+                            }
+                        }
+                        if let Shape::Text(ref mut t) = current_shape {
+                            t.spans = span_list;
+                        }
                     } else if b.contains('=') {
                         let kv = parse_kv_list(b);
                         update_shape_from_kv(&mut current_shape, &kv);
@@ -308,16 +338,37 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
 
     // Attach pending moves
     for (el, end_t, ex, ey, start_at, easing_kind) in pending_moves {
-        if let Some(Shape::Circle { animations, .. } | Shape::Rect { animations, .. }) =
-            shapes.iter_mut().find(|sh| sh.name() == el)
-        {
-            animations.push(crate::scene::Animation::Move {
-                to_x: ex,
-                to_y: ey,
-                start: start_at,
-                end: end_t,
-                easing: easing_kind,
-            });
+        if let Some(sh) = shapes.iter_mut().find(|sh| sh.name() == el) {
+            match sh {
+                Shape::Circle(c) => {
+                    c.animations.push(crate::scene::Animation::Move {
+                        to_x: ex,
+                        to_y: ey,
+                        start: start_at,
+                        end: end_t,
+                        easing: easing_kind,
+                    });
+                }
+                Shape::Rect(r) => {
+                    r.animations.push(crate::scene::Animation::Move {
+                        to_x: ex,
+                        to_y: ey,
+                        start: start_at,
+                        end: end_t,
+                        easing: easing_kind,
+                    });
+                }
+                Shape::Text(t) => {
+                    t.animations.push(crate::scene::Animation::Move {
+                        to_x: ex,
+                        to_y: ey,
+                        start: start_at,
+                        end: end_t,
+                        easing: easing_kind,
+                    });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -427,69 +478,82 @@ pub fn method_color(name: &str) -> Option<[u8; 4]> {
 }
 fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String, String>) {
     match shape {
-        Shape::Circle {
-            x,
-            y,
-            radius,
-            color,
-            spawn_time,
-            ..
-        } => {
+        Shape::Circle(c) => {
             if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) {
-                *x = v;
+                c.x = v;
             }
             if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) {
-                *y = v;
+                c.y = v;
             }
             if let Some(v) = kv.get("radius").and_then(|s| s.parse().ok()) {
-                *radius = v;
+                c.radius = v;
             }
             if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) {
-                *spawn_time = v;
+                c.spawn_time = v;
             }
             if let Some(fill) = kv.get("fill") {
                 if fill.starts_with('#') && fill.len() >= 7 {
-                    let r = u8::from_str_radix(&fill[1..3], 16).unwrap_or(120);
-                    let g = u8::from_str_radix(&fill[3..5], 16).unwrap_or(200);
-                    let b = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
-                    *color = [r, g, b, 255];
+                    let red = u8::from_str_radix(&fill[1..3], 16).unwrap_or(120);
+                    let green = u8::from_str_radix(&fill[3..5], 16).unwrap_or(200);
+                    let blue = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
+                    c.color = [red, green, blue, 255];
                 }
             }
         }
-        Shape::Rect {
-            x,
-            y,
-            w,
-            h,
-            color,
-            spawn_time,
-            ..
-        } => {
+        Shape::Rect(r) => {
             if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) {
-                *x = v;
+                r.x = v;
             }
             if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) {
-                *y = v;
+                r.y = v;
             }
             if let Some(v) = kv.get("width").or(kv.get("w")).and_then(|s| s.parse().ok()) {
-                *w = v;
+                r.w = v;
             }
             if let Some(v) = kv
                 .get("height")
                 .or(kv.get("h"))
                 .and_then(|s| s.parse().ok())
             {
-                *h = v;
+                r.h = v;
             }
             if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) {
-                *spawn_time = v;
+                r.spawn_time = v;
             }
             if let Some(fill) = kv.get("fill") {
                 if fill.starts_with('#') && fill.len() >= 7 {
-                    let r = u8::from_str_radix(&fill[1..3], 16).unwrap_or(200);
-                    let g = u8::from_str_radix(&fill[3..5], 16).unwrap_or(120);
-                    let b = u8::from_str_radix(&fill[5..7], 16).unwrap_or(120);
-                    *color = [r, g, b, 255];
+                    let red = u8::from_str_radix(&fill[1..3], 16).unwrap_or(200);
+                    let green = u8::from_str_radix(&fill[3..5], 16).unwrap_or(120);
+                    let blue = u8::from_str_radix(&fill[5..7], 16).unwrap_or(120);
+                    r.color = [red, green, blue, 255];
+                }
+            }
+        }
+        Shape::Text(t) => {
+            if let Some(v) = kv.get("x").and_then(|s| s.parse().ok()) {
+                t.x = v;
+            }
+            if let Some(v) = kv.get("y").and_then(|s| s.parse().ok()) {
+                t.y = v;
+            }
+            if let Some(v) = kv.get("size").and_then(|s| s.parse().ok()) {
+                t.size = v;
+            }
+            if let Some(v) = kv.get("spawn").and_then(|s| s.parse().ok()) {
+                t.spawn_time = v;
+            }
+            if let Some(f) = kv.get("value") {
+                t.value = f.clone();
+            }
+            if let Some(f) = kv.get("font") {
+                t.font = f.clone();
+            }
+            if let Some(fill) = kv.get("fill") {
+                if fill.starts_with('#') && fill.len() >= 7 {
+                    let red = u8::from_str_radix(&fill[1..3], 16).unwrap_or(255);
+                    let green = u8::from_str_radix(&fill[3..5], 16).unwrap_or(255);
+                    let blue = u8::from_str_radix(&fill[5..7], 16).unwrap_or(255);
+                    t.color = [red, green, blue, 255];
                 }
             }
         }
@@ -499,8 +563,26 @@ fn update_shape_from_kv(shape: &mut Shape, kv: &std::collections::HashMap<String
 
 fn add_anim_to_shape(shape: &mut Shape, parsed: crate::animations::move_animation::ParsedMove) {
     match shape {
-        Shape::Circle { animations, .. } | Shape::Rect { animations, .. } => {
-            animations.push(crate::scene::Animation::Move {
+        Shape::Circle(c) => {
+            c.animations.push(crate::scene::Animation::Move {
+                to_x: parsed.to_x,
+                to_y: parsed.to_y,
+                start: parsed.start,
+                end: parsed.end,
+                easing: parsed.easing,
+            });
+        }
+        Shape::Rect(r) => {
+            r.animations.push(crate::scene::Animation::Move {
+                to_x: parsed.to_x,
+                to_y: parsed.to_y,
+                start: parsed.start,
+                end: parsed.end,
+                easing: parsed.easing,
+            });
+        }
+        Shape::Text(t) => {
+            t.animations.push(crate::scene::Animation::Move {
                 to_x: parsed.to_x,
                 to_y: parsed.to_y,
                 start: parsed.start,

@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::dsl;
 use crate::scene::{move_node, Shape};
+use crate::shapes::ShapeDescriptor;
 use eframe::egui;
 use eframe::egui::{Color32, Frame, Id, InnerResponse, LayerId, Order, Sense};
 use std::any::Any;
@@ -147,31 +148,22 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         added = true;
                     }
                     if ui.button("⭕   Circle").clicked() {
-                        state.scene.push(Shape::Circle {
-                            name: format!("Circle #{}", state.scene.len()),
-                            x: 0.5,
-                            y: 0.5,
-                            radius: 0.1,
-                            color: [120, 200, 255, 255],
-                            spawn_time: 0.0,
-                            animations: Vec::new(),
-                            visible: true,
-                        });
+                        state.scene.push(crate::shapes::circle::Circle::create_default(
+                            format!("Circle #{}", state.scene.len())
+                        ));
                         state.position_cache = None; // scene changed
                         added = true;
                     }
                     if ui.button("⬜  Rectangle").clicked() {
-                        state.scene.push(Shape::Rect {
-                            name: format!("Rect #{}", state.scene.len()),
-                            x: 0.4,
-                            y: 0.4,
-                            w: 0.2,
-                            h: 0.2,
-                            color: [200, 120, 120, 255],
-                            spawn_time: 0.0,
-                            animations: Vec::new(),
-                            visible: true,
-                        });
+                        state.scene.push(crate::shapes::rect::Rect::create_default(
+                            format!("Rect #{}", state.scene.len())
+                        ));
+                        added = true;
+                    }
+                    if ui.button("🔤  Text").clicked() {
+                        state.scene.push(crate::shapes::text::Text::create_default(
+                            format!("Text #{}", state.scene.len())
+                        ));
                         added = true;
                     }
 
@@ -204,28 +196,29 @@ fn render_node(
     let is_selected = state.selected_node_path.as_ref() == Some(&path);
     let is_renaming = state.renaming_path.as_ref() == Some(&path);
 
-    let (is_group, children_count, node_name, icon, icon_color, is_visible) = {
-        if let Some(shape) = crate::scene::get_shape(&state.scene, &path) {
-            let name = shape.name().to_string();
-            let vis = shape.is_visible();
-            match shape {
-                Shape::Group { children, .. } => (
-                    true,
-                    children.len(),
-                    name,
-                    "📦",
-                    Color32::from_rgb(255, 200, 100),
-                    vis,
-                ),
-                Shape::Circle { .. } => {
-                    (false, 0, name, "⭕", Color32::from_rgb(100, 200, 255), vis)
+            let (is_group, children_count, node_name, icon, icon_color, is_visible) = {
+                if let Some(shape) = crate::scene::get_shape(&state.scene, &path) {
+                    let name = shape.name().to_string();
+                    let vis = shape.is_visible();
+                    match shape {
+                        Shape::Group { children, .. } => (
+                            true,
+                            children.len(),
+                            name,
+                            "📦",
+                            Color32::from_rgb(255, 200, 100),
+                            vis,
+                        ),
+                        Shape::Circle(..) => {
+                            (false, 0, name, "⭕", Color32::from_rgb(100, 200, 255), vis)
+                        }
+                        Shape::Rect(..) => (false, 0, name, "⬜", Color32::from_rgb(255, 100, 100), vis),
+                        Shape::Text(..) => (false, 0, name, "🔤", Color32::from_rgb(200, 255, 100), vis),
+                    }
+                } else {
+                    return;
                 }
-                Shape::Rect { .. } => (false, 0, name, "⬜", Color32::from_rgb(255, 100, 100), vis),
-            }
-        } else {
-            return;
-        }
-    };
+            };
 
     let drag_id = Id::new("scene_drag").with(&path);
 
@@ -276,11 +269,7 @@ fn render_node(
             }
             if res.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, &path) {
-                    match shape {
-                        Shape::Group { name, .. } => *name = state.rename_buffer.clone(),
-                        Shape::Circle { name, .. } => *name = state.rename_buffer.clone(),
-                        Shape::Rect { name, .. } => *name = state.rename_buffer.clone(),
-                    }
+                    shape.set_name(state.rename_buffer.clone());
                 }
                 state.renaming_path = None;
                 state.dsl_code = dsl::generate_dsl(

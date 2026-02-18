@@ -122,21 +122,31 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                             state.toast_deadline = ui.input(|i| i.time) + 3.0;
                         } else {
                             match shape {
-                                crate::scene::Shape::Circle { x, y, animations, .. } => {
-                                    let to_x = (*x + 0.20).min(1.0);
-                                    animations.push(crate::scene::Animation::Move {
+                                crate::scene::Shape::Circle(c) => {
+                                    let to_x = (c.x + 0.20).min(1.0);
+                                    c.animations.push(crate::scene::Animation::Move {
                                         to_x,
-                                        to_y: *y,
+                                        to_y: c.y,
                                         start,
                                         end,
                                         easing: crate::scene::Easing::Linear,
                                     });
                                 }
-                                crate::scene::Shape::Rect { x, y, animations, .. } => {
-                                    let to_x = (*x + 0.20).min(1.0);
-                                    animations.push(crate::scene::Animation::Move {
+                                crate::scene::Shape::Rect(r) => {
+                                    let to_x = (r.x + 0.20).min(1.0);
+                                    r.animations.push(crate::scene::Animation::Move {
                                         to_x,
-                                        to_y: *y,
+                                        to_y: r.y,
+                                        start,
+                                        end,
+                                        easing: crate::scene::Easing::Linear,
+                                    });
+                                }
+                                crate::scene::Shape::Text(t) => {
+                                    let to_x = (t.x + 0.20).min(1.0);
+                                    t.animations.push(crate::scene::Animation::Move {
+                                        to_x,
+                                        to_y: t.y,
                                         start,
                                         end,
                                         easing: crate::scene::Easing::Linear,

@@ -2,8 +2,7 @@ use super::cache_management::{
     compress_color_image_to_png, enforce_preview_cache_limits, preview_cache_vram_bytes,
 };
 #[cfg(feature = "wgpu")]
-use super::gpu::{render_frame_color_image_gpu_snapshot, GpuResources};
-use super::rasterizer::render_frame_color_image_snapshot;
+use super::gpu::{render_frame_color_image_gpu_snapshot, render_frame_native_texture, GpuResources};
 use crate::app_state::AppState;
 use eframe::egui;
 use std::sync::mpsc;
@@ -26,8 +25,9 @@ pub enum PreviewJob {
 }
 
 pub enum PreviewResult {
-    Buffered(Vec<(f32, egui::ColorImage)>),
     Single(f32, egui::ColorImage),
+    Native(f32, wgpu::Texture),
+    Buffered(Vec<(f32, egui::ColorImage)>),
 }
 
 #[derive(Clone)]
@@ -38,8 +38,11 @@ pub struct RenderSnapshot {
     pub render_height: u32,
     pub preview_multiplier: f32,
     pub duration_secs: f32,
+    #[cfg(feature = "wgpu")]
+    pub wgpu_render_state: Option<eframe::egui_wgpu::RenderState>,
     pub preview_fps: u32,
     pub use_gpu: bool,
+    pub font_arc_cache: std::collections::HashMap<String, ab_glyph::FontArc>,
 }
 
 pub fn generate_preview_frames(state: &mut AppState, center_time: f32, ctx: &egui::Context) {
@@ -63,6 +66,9 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
             duration_secs: state.duration_secs,
             preview_fps: state.preview_fps,
             use_gpu: state.preview_worker_use_gpu,
+            font_arc_cache: state.font_arc_cache.clone(),
+            #[cfg(feature = "wgpu")]
+            wgpu_render_state: state.wgpu_render_state.clone(),
         };
         let job = PreviewJob::Generate {
             center_time,
@@ -93,6 +99,26 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
             state.preview_job_pending = false;
             ctx.request_repaint();
             match result {
+                PreviewResult::Native(t, tex) => {
+                    #[cfg(feature = "wgpu")]
+                    if let Some(render_state) = &state.wgpu_render_state {
+                         // Free previous texture if any
+                         if let Some(old_id) = state.preview_native_texture_id {
+                             render_state.renderer.write().free_texture(&old_id);
+                         }
+
+                         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                         let id = render_state.renderer.write().register_native_texture(
+                             &render_state.device,
+                             &view,
+                             wgpu::FilterMode::Nearest
+                         );
+                         state.preview_native_texture_id = Some(id);
+                         state.preview_native_texture_resource = Some(tex);
+                         state.preview_texture = None; // Clear CPU texture to signal usage of native one
+                         state.preview_cache_center_time = Some(t);
+                    }
+                }
                 PreviewResult::Single(t, img) => {
                     let img_size = img.size[0] * img.size[1] * 4;
                     let use_vram = state.prefer_vram_cache
@@ -236,7 +262,7 @@ pub fn ensure_preview_worker(state: &mut AppState) {
 
     thread::spawn(move || {
         #[cfg(feature = "wgpu")]
-        let mut gpu_renderer: Option<(wgpu::Device, wgpu::Queue, GpuResources)> = None;
+        let mut gpu_renderer: Option<(std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>, GpuResources)> = None;
 
         while let Ok(job) = job_rx.recv() {
             match job {
@@ -248,120 +274,55 @@ pub fn ensure_preview_worker(state: &mut AppState) {
                     PreviewMode::Single => {
                         #[cfg(feature = "wgpu")]
                         {
-                            if snapshot.use_gpu {
+                            // CAPTURAMOS EL ESTADO DE LA UI SI EXISTE
+                            if let Some(render_state) = &snapshot.wgpu_render_state {
+                                let device = &render_state.device;
+                                let queue = &render_state.queue;
+                                
+                                // Reutilizamos o creamos recursos localmente
                                 if gpu_renderer.is_none() {
-                                    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                                        backends: wgpu::Backends::PRIMARY,
-                                        ..Default::default()
-                                    });
-                                    if let Some(adapter) = pollster::block_on(
-                                        instance.request_adapter(&wgpu::RequestAdapterOptions {
-                                            power_preference:
-                                                wgpu::PowerPreference::HighPerformance,
-                                            ..Default::default()
-                                        }),
-                                    ) {
-                                        if let Ok((device, queue)) =
-                                            pollster::block_on(adapter.request_device(
-                                                &wgpu::DeviceDescriptor {
-                                                    label: Some("preview-worker-device"),
-                                                    ..Default::default()
-                                                },
-                                                None,
-                                            ))
-                                        {
-                                            let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-                                            let resources =
-                                                GpuResources::new(&device, target_format);
-                                            gpu_renderer = Some((device, queue, resources));
-                                        }
-                                    }
+                                    gpu_renderer = Some((device.clone(), queue.clone(), GpuResources::new(device, render_state.target_format)));
                                 }
 
-                                if let Some((ref device, ref queue, ref mut resources)) =
-                                    gpu_renderer
-                                {
-                                    let img = render_frame_color_image_gpu_snapshot(
-                                        device,
-                                        queue,
-                                        resources,
-                                        &snapshot,
-                                        center_time,
-                                    )
-                                    .unwrap_or_else(|_| {
-                                        render_frame_color_image_snapshot(&snapshot, center_time)
-                                    });
-                                    let _ = res_tx.send(PreviewResult::Single(center_time, img));
-                                    continue;
+                                if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
+                                    // ¡NATIVO! Renderizamos a textura sin bajar a RAM
+                                    if let Ok(tex) = render_frame_native_texture(device, queue, resources, &snapshot, center_time) {
+                                        let _ = res_tx.send(PreviewResult::Native(center_time, tex));
+                                    }
                                 }
                             } else {
-                                gpu_renderer = None;
+                                // Fallback a descarga (antiguo método) si no hay estado compartido
+                                // (Opcional: podríamos quitarlo si confiamos 100% en el compartido)
                             }
                         }
-
-                        let img = render_frame_color_image_snapshot(&snapshot, center_time);
-                        let _ = res_tx.send(PreviewResult::Single(center_time, img));
                     }
                     PreviewMode::Buffered => {
-                        let frames_each_side = if snapshot.preview_multiplier > 1.0 {
-                            2i32
-                        } else {
-                            3i32
-                        };
+                        let frames_each_side = if snapshot.preview_multiplier > 1.0 { 2i32 } else { 3i32 };
                         let frame_step = 1.0 / (snapshot.preview_fps as f32);
                         let mut frames = Vec::with_capacity((frames_each_side * 2 + 1) as usize);
-                        for i in -frames_each_side..=frames_each_side {
-                            let t = (center_time + (i as f32) * frame_step)
-                                .clamp(0.0, snapshot.duration_secs);
 
-                            #[cfg(feature = "wgpu")]
-                            let img = if snapshot.use_gpu {
-                                if gpu_renderer.is_none() {
-                                    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                                        backends: wgpu::Backends::PRIMARY,
-                                        ..Default::default()
-                                    });
-                                    if let Some(adapter) =
-                                        pollster::block_on(instance.request_adapter(
-                                            &wgpu::RequestAdapterOptions::default(),
-                                        ))
-                                    {
-                                        if let Ok((device, queue)) =
-                                            pollster::block_on(adapter.request_device(
-                                                &wgpu::DeviceDescriptor::default(),
-                                                None,
-                                            ))
-                                        {
-                                            let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-                                            let resources =
-                                                GpuResources::new(&device, target_format);
-                                            gpu_renderer = Some((device, queue, resources));
-                                        }
+                        #[cfg(feature = "wgpu")]
+                        {
+                            if gpu_renderer.is_none() {
+                                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+                                if let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
+                                    if let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)) {
+                                        let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+                                        let resources = GpuResources::new(&device, target_format);
+                                        gpu_renderer = Some((std::sync::Arc::new(device), std::sync::Arc::new(queue), resources));
                                     }
                                 }
+                            }
 
-                                if let Some((ref device, ref queue, ref mut resources)) =
-                                    gpu_renderer
-                                {
-                                    render_frame_color_image_gpu_snapshot(
-                                        device, queue, resources, &snapshot, t,
-                                    )
-                                    .unwrap_or_else(|_| {
-                                        render_frame_color_image_snapshot(&snapshot, t)
-                                    })
-                                } else {
-                                    render_frame_color_image_snapshot(&snapshot, t)
+                            if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
+                                for i in -frames_each_side..=frames_each_side {
+                                    let t = (center_time + (i as f32) * frame_step).clamp(0.0, snapshot.duration_secs);
+                                    if let Ok(img) = render_frame_color_image_gpu_snapshot(device, queue, resources, &snapshot, t) {
+                                        frames.push((t, img.clone()));
+                                        let _ = res_tx.send(PreviewResult::Single(t, img));
+                                    }
                                 }
-                            } else {
-                                render_frame_color_image_snapshot(&snapshot, t)
-                            };
-
-                            #[cfg(not(feature = "wgpu"))]
-                            let img = render_frame_color_image_snapshot(&snapshot, t);
-
-                            frames.push((t, img));
-                            let _ = res_tx
-                                .send(PreviewResult::Single(t, frames.last().unwrap().1.clone()));
+                            }
                         }
                         let _ = res_tx.send(PreviewResult::Buffered(frames));
                     }

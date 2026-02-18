@@ -25,47 +25,42 @@ pub fn scene_fingerprint(
 
     fn hash_shape<H: Hasher>(s: &crate::scene::Shape, h: &mut H) {
         match s {
-            crate::scene::Shape::Circle {
-                name,
-                x,
-                y,
-                radius,
-                color,
-                spawn_time,
-                animations,
-                visible,
-            } => {
-                name.hash(h);
-                (x.to_bits()).hash(h);
-                (y.to_bits()).hash(h);
-                (radius.to_bits()).hash(h);
-                color.hash(h);
-                (spawn_time.to_bits()).hash(h);
-                visible.hash(h);
-                for a in animations {
+            crate::scene::Shape::Circle(c) => {
+                c.name.hash(h);
+                c.x.to_bits().hash(h);
+                c.y.to_bits().hash(h);
+                c.radius.to_bits().hash(h);
+                c.color.hash(h);
+                c.spawn_time.to_bits().hash(h);
+                c.visible.hash(h);
+                for a in &c.animations {
                     format!("{:?}", a).hash(h);
                 }
             }
-            crate::scene::Shape::Rect {
-                name,
-                x,
-                y,
-                w,
-                h: hh,
-                color,
-                spawn_time,
-                animations,
-                visible,
-            } => {
-                name.hash(h);
-                (x.to_bits()).hash(h);
-                (y.to_bits()).hash(h);
-                (w.to_bits()).hash(h);
-                (hh.to_bits()).hash(h);
-                color.hash(h);
-                (spawn_time.to_bits()).hash(h);
-                visible.hash(h);
-                for a in animations {
+            crate::scene::Shape::Rect(r) => {
+                r.name.hash(h);
+                r.x.to_bits().hash(h);
+                r.y.to_bits().hash(h);
+                r.w.to_bits().hash(h);
+                r.h.to_bits().hash(h);
+                r.color.hash(h);
+                r.spawn_time.to_bits().hash(h);
+                r.visible.hash(h);
+                for a in &r.animations {
+                    format!("{:?}", a).hash(h);
+                }
+            }
+            crate::scene::Shape::Text(t) => {
+                t.name.hash(h);
+                t.x.to_bits().hash(h);
+                t.y.to_bits().hash(h);
+                t.value.hash(h);
+                t.font.hash(h);
+                t.size.to_bits().hash(h);
+                t.color.hash(h);
+                t.spawn_time.to_bits().hash(h);
+                t.visible.hash(h);
+                for a in &t.animations {
                     format!("{:?}", a).hash(h);
                 }
             }
@@ -162,10 +157,15 @@ pub fn build_position_cache_for(
             row.push((px, py));
 
             let bbox = match prim {
-                crate::scene::Shape::Circle { radius, .. } => {
-                    BoundingBox::from_circle(px, py, *radius)
+                crate::scene::Shape::Circle(c) => {
+                    BoundingBox::from_circle(px, py, c.radius)
                 }
-                crate::scene::Shape::Rect { w, h, .. } => BoundingBox::from_rect(px, py, *w, *h),
+                crate::scene::Shape::Rect(r) => BoundingBox::from_rect(px, py, r.w, r.h),
+                crate::scene::Shape::Text(t) => {
+                    let h_uv = t.size / 720.0;
+                    let w_uv = (t.value.len() as f32 * t.size * 0.5) / 1280.0;
+                    BoundingBox::from_rect(px, py, w_uv, h_uv)
+                }
                 _ => BoundingBox {
                     min_x: px,
                     min_y: py,

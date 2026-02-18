@@ -1,7 +1,14 @@
+struct VertexInput {
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+};
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) screen_pos: vec2<f32>,
+    @location(0) local_uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) @interpolate(flat) shape_type: i32,
+    @location(3) @interpolate(flat) size: vec2<f32>,
 };
 
 struct Shape {
@@ -24,105 +31,67 @@ struct Uniforms {
     mag_y: f32,
     mag_active: f32,
     time: f32,
-    p1: f32,
-    p2: f32,
-    p3: f32,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var out: VertexOutput;
-    
-    var pos = vec2<f32>(0.0, 0.0);
-    var uv = vec2<f32>(0.0, 0.0);
-    
-    if (vertex_index == 0u) { 
-        pos = vec2<f32>(-1.0, -1.0); uv = vec2<f32>(0.0, 1.0); 
-    } else if (vertex_index == 1u) { 
-        pos = vec2<f32>( 1.0, -1.0); uv = vec2<f32>(1.0, 1.0); 
-    } else if (vertex_index == 2u) { 
-        pos = vec2<f32>(-1.0,  1.0); uv = vec2<f32>(0.0, 0.0); 
-    } else if (vertex_index == 3u) { 
-        pos = vec2<f32>(-1.0,  1.0); uv = vec2<f32>(0.0, 0.0); 
-    } else if (vertex_index == 4u) { 
-        pos = vec2<f32>( 1.0, -1.0); uv = vec2<f32>(1.0, 1.0); 
-    } else { 
-        pos = vec2<f32>( 1.0,  1.0); uv = vec2<f32>(1.0, 0.0); 
-    }
-
-    out.position = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = uv;
-    // Map UVs (0..1) to viewport coordinates
-    out.screen_pos = mix(uniforms.viewport_rect.xy, uniforms.viewport_rect.zw, uv);
-    return out;
 }
 
 @group(0) @binding(0) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(1) var<uniform> uniforms: Uniforms;
 
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    let s = shapes[in.instance_index];
+    var out: VertexOutput;
+
+    // Si el objeto aún no "nace", lo mandamos fuera de pantalla
+    // if (uniforms.time < s.spawn_time) {
+    //    out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    //    return out;
+    // }
+
+    // Coordenadas del Quad (-1..1)
+    var quad_pos = vec2<f32>(0.0, 0.0);
+    if (in.vertex_index == 0u) { quad_pos = vec2<f32>(-1.0, -1.0); }
+    else if (in.vertex_index == 1u) { quad_pos = vec2<f32>(1.0, -1.0); }
+    else if (in.vertex_index == 2u) { quad_pos = vec2<f32>(-1.0, 1.0); }
+    else if (in.vertex_index == 3u) { quad_pos = vec2<f32>(-1.0, 1.0); }
+    else if (in.vertex_index == 4u) { quad_pos = vec2<f32>(1.0, -1.0); }
+    else { quad_pos = vec2<f32>(1.0, 1.0); }
+
+    out.local_uv = quad_pos; // Para calcular el SDF en el fragment shader
+    out.color = s.color;
+    out.shape_type = s.shape_type;
+    out.size = s.size;
+
+    // Transformación: De coordenadas normalizadas de escena (0..1) a coordenadas de clip (-1..1)
+    // El tamaño del quad depende del tamaño del objeto
+    let world_pos_px = s.pos + (quad_pos * s.size);
+    let world_pos_norm = world_pos_px / uniforms.resolution;
+    
+    // Map normalized (0..1) to paper area, then to screen
+    let screen_pos = mix(uniforms.paper_rect.xy, uniforms.paper_rect.zw, world_pos_norm);
+    
+    // Convert screen pixel position to NDC (-1..1)
+    let ndc_pos = (screen_pos - uniforms.viewport_rect.xy) / (uniforms.viewport_rect.zw - uniforms.viewport_rect.xy) * 2.0 - 1.0;
+    
+    // Invertimos Y porque WGPU e imagen van al revés
+    out.position = vec4<f32>(ndc_pos.x, -ndc_pos.y, 0.0, 1.0);
+    
+    return out;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let p_min = uniforms.paper_rect.xy;
-    let p_max = uniforms.paper_rect.zw;
+    var alpha = 1.0;
     
-    // Magnifier Logic
-    var final_uv_pos = in.screen_pos;
-    var is_magnifier = false;
-    
-    if (uniforms.mag_active > 0.5) {
-        let mag_center = vec2<f32>(uniforms.mag_x, uniforms.mag_y);
-        let dist_to_mag = distance(in.screen_pos, mag_center);
-        let mag_radius = 80.0; 
-        
-        if (dist_to_mag < mag_radius) {
-            is_magnifier = true;
-            let rel = (in.screen_pos - mag_center) / 8.0; 
-            final_uv_pos = mag_center + rel;
-        } else if (dist_to_mag < mag_radius + 2.0) {
-            return vec4<f32>(1.0, 0.5, 0.0, 1.0); 
-        }
+    if (in.shape_type == 0) { // Circle
+        let d = length(in.local_uv) - 1.0;
+        // Anti-aliasing suave
+        let aa = fwidth(d);
+        alpha = 1.0 - smoothstep(-aa, aa, d);
+    } else if (in.shape_type == 1) { // Rect
+        // El quad ya tiene forma de rectángulo, así que alpha es casi siempre 1.0
+        // pero podemos redondear esquinas aquí si quisiéramos
+        alpha = 1.0;
     }
 
-    if (final_uv_pos.x < p_min.x || final_uv_pos.x > p_max.x || 
-        final_uv_pos.y < p_min.y || final_uv_pos.y > p_max.y) {
-        discard;
-    }
-
-    let paper_uv = (final_uv_pos - p_min) / (p_max - p_min);
-    let snapped_uv = (floor(paper_uv * uniforms.preview_res) + 0.5) / uniforms.preview_res;
-    let pixel_pos = snapped_uv * uniforms.resolution;
-
-    var color = vec4<f32>(1.0, 1.0, 1.0, 1.0); 
-
-    for (var i = 0u; i < u32(uniforms.count); i++) {
-        let s = shapes[i];
-        if (uniforms.time < s.spawn_time) {
-            continue;
-        }
-        let shape_pos_pixel = s.pos * uniforms.resolution;
-        var alpha = 0.0;
-        let aa = length(uniforms.resolution / uniforms.preview_res) * 0.5;
-
-        if (s.shape_type == 0) {
-            let d = distance(pixel_pos, shape_pos_pixel) - (s.size.x * uniforms.resolution.x);
-            alpha = 1.0 - smoothstep(-aa, aa, d);
-        } else if (s.shape_type == 1) {
-            let d_vec = abs(pixel_pos - shape_pos_pixel) - (s.size * uniforms.resolution);
-            let d = length(max(d_vec, vec2<f32>(0.0))) + min(max(d_vec.x, d_vec.y), 0.0);
-            alpha = 1.0 - smoothstep(-aa, aa, d);
-        }
-
-        let src = vec4<f32>(s.color.rgb, s.color.a * alpha);
-        color = vec4<f32>(mix(color.rgb, src.rgb, src.a), color.a);
-    }
-
-    if (is_magnifier) {
-        let grid_uv = paper_uv * uniforms.preview_res;
-        let grid = step(0.90, fract(grid_uv.x)) + step(0.90, fract(grid_uv.y));
-        if (grid > 0.0) {
-            color = mix(color, vec4<f32>(0.5, 0.5, 0.5, 1.0), 0.2);
-        }
-    }
-
-    return color;
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }

@@ -34,11 +34,15 @@ pub struct AppState {
 
     #[cfg(feature = "wgpu")]
     #[serde(skip)]
-    #[allow(dead_code)]
-    pub wgpu_renderer: Option<std::sync::Arc<egui::mutex::Mutex<crate::canvas::GpuResources>>>,
+    pub wgpu_render_state: Option<eframe::egui_wgpu::RenderState>,
 
     #[serde(skip)]
     pub preview_texture: Option<egui::TextureHandle>,
+    #[serde(skip)]
+    pub preview_native_texture_id: Option<egui::TextureId>,
+    #[serde(skip)]
+    #[cfg(feature = "wgpu")]
+    pub preview_native_texture_resource: Option<wgpu::Texture>,
     /// Cached preview frames around the current playhead (time, image)
     #[serde(skip)]
     pub preview_frame_cache: Vec<(f32, egui::ColorImage)>,
@@ -247,6 +251,13 @@ pub struct AppState {
     pub timeline_breadcrumb_anim_t: f32,
     /// If set, timeline shows only the children of this scene path (e.g. [2, 1])
     pub timeline_root_path: Option<Vec<usize>>,
+    pub available_fonts: Vec<String>,
+    #[serde(skip)]
+    pub font_map: std::collections::HashMap<String, std::path::PathBuf>,
+    #[serde(skip)]
+    pub font_definitions: egui::FontDefinitions,
+    #[serde(skip)]
+    pub font_arc_cache: std::collections::HashMap<String, ab_glyph::FontArc>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,8 +289,11 @@ impl Default for AppState {
             preview_multiplier: 1.0,
             preview_fps: 60,
             #[cfg(feature = "wgpu")]
-            wgpu_renderer: None,
+            wgpu_render_state: None,
             preview_texture: None,
+            preview_native_texture_id: None,
+            #[cfg(feature = "wgpu")]
+            preview_native_texture_resource: None,
             preview_frame_cache: Vec::new(),
             preview_texture_cache: Vec::new(),
             estimated_vram_bytes: 0,     // Se detecta en runtime
@@ -373,6 +387,10 @@ impl Default for AppState {
             timeline_root_path: None,
             timeline_prev_root_path: None,
             timeline_breadcrumb_anim_t: 1.0,
+            available_fonts: crate::shapes::fonts::list_system_fonts().into_iter().map(|(n, _)| n).collect(),
+            font_map: crate::shapes::fonts::list_system_fonts().into_iter().collect(),
+            font_definitions: egui::FontDefinitions::default(),
+            font_arc_cache: std::collections::HashMap::new(),
         }
     }
 }
@@ -388,6 +406,30 @@ impl AppState {
         crate::events::time_changed_event::TimeChangedEvent::on_time_changed(
             self, self.time, frame,
         );
+    }
+
+    pub fn refresh_fonts(&mut self) {
+        let mut all_fonts = crate::shapes::fonts::list_system_fonts();
+        if let Some(path) = &self.project_path {
+            let ws_fonts = crate::shapes::fonts::list_workspace_fonts(path);
+            all_fonts.extend(ws_fonts);
+        }
+        all_fonts.sort_by(|a, b| a.0.cmp(&b.0));
+        all_fonts.dedup_by(|a, b| a.0 == b.0);
+        
+        self.available_fonts = all_fonts.iter().map(|(n, _)| n.clone()).collect();
+        self.font_map = all_fonts.into_iter().collect();
+    }
+
+    pub fn request_dsl_update(&mut self) {
+        self.dsl_code = crate::dsl::generate_dsl(
+            &self.scene,
+            self.render_width,
+            self.render_height,
+            self.fps,
+            self.duration_secs,
+        );
+        crate::events::element_properties_changed_event::on_element_properties_changed(self);
     }
 }
 

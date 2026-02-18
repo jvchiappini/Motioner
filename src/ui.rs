@@ -32,6 +32,7 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
                 crate::app_state::CompletionItem { label: "color".into(), insert_text: "color".into(), is_snippet: false },
                 crate::app_state::CompletionItem { label: "circle".into(), insert_text: "circle \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    radius = 0.10,\n    fill = \"#78c8ff\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
                 crate::app_state::CompletionItem { label: "rect".into(), insert_text: "rect \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    width = 0.30,\n    height = 0.20,\n    fill = \"#c87878\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
+                crate::app_state::CompletionItem { label: "text".into(), insert_text: "text \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    value = \"Hello\",\n    font = \"System\",\n    size = 24.0,\n    fill = \"#ffffff\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
                 crate::app_state::CompletionItem { label: "move".into(), insert_text: "move {\n    element = \"Name\",\n    to = (0.50, 0.50),\n    during = 0.00 -> 1.00,\n    ease = linear\n}\n".into(), is_snippet: true },
             ];
 
@@ -75,13 +76,16 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
 
     // Check if we have wgpu access
     #[cfg(feature = "wgpu")]
-    if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {
-        let device = &wgpu_render_state.device;
-        let target_format = wgpu_render_state.target_format;
+    if let Some(render_state) = &_cc.wgpu_render_state {
+        state.preview_worker_use_gpu = true;
+        state.wgpu_render_state = Some(render_state.clone());
+
+        let device = &render_state.device;
+        let target_format = render_state.target_format;
 
         // We'll insert our custom resources into the callback_resources map
         use crate::canvas::GpuResources;
-        let mut renderer = wgpu_render_state.renderer.write();
+        let mut renderer = render_state.renderer.write();
         renderer
             .callback_resources
             .insert(GpuResources::new(device, target_format));
@@ -93,6 +97,42 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
+
+        // Ensure fonts used in scene are loaded in egui
+        let mut used_fonts = std::collections::HashSet::new();
+        fn collect_fonts(shapes: &[crate::scene::Shape], fonts: &mut std::collections::HashSet<String>) {
+            for s in shapes {
+                match s {
+                    crate::scene::Shape::Text(t) => { 
+                        fonts.insert(t.font.clone()); 
+                        for span in &t.spans {
+                            fonts.insert(span.font.clone());
+                        }
+                    }
+                    crate::scene::Shape::Group { children, .. } => collect_fonts(children, fonts),
+                    _ => {}
+                }
+            }
+        }
+        collect_fonts(&state.scene, &mut used_fonts);
+        let mut fonts_changed = false;
+        for font_name in used_fonts {
+            if font_name != "System" && !font_name.is_empty() {
+                if let Some(path) = state.font_map.get(&font_name) {
+                    if crate::shapes::fonts::load_font(&mut state.font_definitions, &font_name, path) {
+                        fonts_changed = true;
+                    }
+                    if !state.font_arc_cache.contains_key(&font_name) {
+                        if let Some(font) = crate::shapes::fonts::load_font_arc(path) {
+                            state.font_arc_cache.insert(font_name.clone(), font);
+                        }
+                    }
+                }
+            }
+        }
+        if fonts_changed {
+            ctx.set_fonts(state.font_definitions.clone());
+        }
 
         // --- Global Color Picker Window (Top-level, unconstrained) ---
         if let Some(mut data) = state.color_picker_data.clone() {
