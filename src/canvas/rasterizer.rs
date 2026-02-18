@@ -39,6 +39,8 @@ pub fn sample_color_at(state: &AppState, paper_uv: egui::Pos2, time: f32) -> [u8
 
     let mut all_primitives = Vec::new();
     collect_primitives(&state.scene, 0.0, &mut all_primitives);
+    // Reverse so that scene index 0 (top of scene graph) wins = sampled last.
+    all_primitives.reverse();
 
     // Búsqueda simple de formas para el color picker (CPU)
     for (shape, actual_spawn) in &all_primitives {

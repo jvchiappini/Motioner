@@ -9,6 +9,7 @@ struct VertexOutput {
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) shape_type: i32,
     @location(3) @interpolate(flat) size: vec2<f32>,
+    @location(4) tex_uv: vec2<f32>,
 };
 
 struct Shape {
@@ -19,6 +20,8 @@ struct Shape {
     spawn_time: f32,
     p1: i32,
     p2: i32,
+    uv0: vec2<f32>,   // UV min en el atlas de texto
+    uv1: vec2<f32>,   // UV max en el atlas de texto
 }
 
 struct Uniforms {
@@ -36,6 +39,8 @@ struct Uniforms {
 
 @group(0) @binding(0) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(1) var<uniform> uniforms: Uniforms;
+@group(0) @binding(2) var text_atlas: texture_2d<f32>;
+@group(0) @binding(3) var text_sampler: sampler;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -44,17 +49,23 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     // Coordenadas del Quad (-1..1)
     var quad_pos = vec2<f32>(0.0, 0.0);
-    if (in.vertex_index == 0u) { quad_pos = vec2<f32>(-1.0, -1.0); }
-    else if (in.vertex_index == 1u) { quad_pos = vec2<f32>(1.0, -1.0); }
-    else if (in.vertex_index == 2u) { quad_pos = vec2<f32>(-1.0, 1.0); }
-    else if (in.vertex_index == 3u) { quad_pos = vec2<f32>(-1.0, 1.0); }
-    else if (in.vertex_index == 4u) { quad_pos = vec2<f32>(1.0, -1.0); }
-    else { quad_pos = vec2<f32>(1.0, 1.0); }
+    var quad_uv01 = vec2<f32>(0.0, 0.0); // UV local 0..1 del quad
+    if (in.vertex_index == 0u) { quad_pos = vec2<f32>(-1.0, -1.0); quad_uv01 = vec2<f32>(0.0, 1.0); }
+    else if (in.vertex_index == 1u) { quad_pos = vec2<f32>(1.0, -1.0); quad_uv01 = vec2<f32>(1.0, 1.0); }
+    else if (in.vertex_index == 2u) { quad_pos = vec2<f32>(-1.0, 1.0); quad_uv01 = vec2<f32>(0.0, 0.0); }
+    else if (in.vertex_index == 3u) { quad_pos = vec2<f32>(-1.0, 1.0); quad_uv01 = vec2<f32>(0.0, 0.0); }
+    else if (in.vertex_index == 4u) { quad_pos = vec2<f32>(1.0, -1.0); quad_uv01 = vec2<f32>(1.0, 1.0); }
+    else { quad_pos = vec2<f32>(1.0, 1.0); quad_uv01 = vec2<f32>(1.0, 0.0); }
 
     out.local_uv = quad_pos; // Para calcular el SDF en el fragment shader
     out.color = s.color;
     out.shape_type = s.shape_type;
     out.size = s.size;
+
+    // UV interpolada en el rango [uv0, uv1] del atlas de texto.
+    // Invertimos Y porque el NDC tiene Y invertido respecto al buffer CPU (Y=0 arriba en imagen).
+    let quad_uv01_flipped = vec2<f32>(quad_uv01.x, 1.0 - quad_uv01.y);
+    out.tex_uv = mix(s.uv0, s.uv1, quad_uv01_flipped);
 
     // Transformación: De coordenadas normalizadas de escena (0..1) a coordenadas de clip (-1..1)
     // El tamaño del quad depende del tamaño del objeto
@@ -75,7 +86,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    
+
     // -- Pixelation Logic --
     // Convert Screen Coords -> Normalized Paper Coords
     // NOTE: in.position is in PHYSICAL pixels. paper_rect is in LOGICAL points.
@@ -101,7 +112,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Center of the virtual pixel
     let snapped_x = floor(norm_x * grid_w) / grid_w + (0.5 / grid_w);
     let snapped_y = floor(norm_y * grid_h) / grid_h + (0.5 / grid_h);
-    
+
     let dx = snapped_x - norm_x;
     let dy = snapped_y - norm_y;
     
@@ -129,6 +140,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Rect implicitly from -1 to 1. Check if snapped UV is outside.
         let d = max(abs(effective_uv.x), abs(effective_uv.y)) - 1.0;
         if (d > 0.0) { alpha = 0.0; } else { alpha = 1.0; }
+    } else if (in.shape_type == 2) { // Texto: atlas snapeado al mismo grid que los demás elementos
+        let atlas_uv = vec2<f32>(snapped_x, snapped_y);
+        return textureSample(text_atlas, text_sampler, atlas_uv);
     }
 
     return vec4<f32>(in.color.rgb, in.color.a * alpha);

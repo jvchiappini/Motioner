@@ -36,7 +36,7 @@ impl Default for Text {
             y: 0.5,
             value: "Hello".to_string(),
             font: "System".to_string(),
-            size: 24.0,
+            size: 24.0 / 720.0,  // Fraction of render_height (escala con la resolución)
             color: [255, 255, 255, 255],
             spans: Vec::new(),
             spawn_time: 0.0,
@@ -72,7 +72,9 @@ impl ShapeDescriptor for Text {
                 }
             });
             
-            if ui.add(egui::Slider::new(&mut self.size, 1.0..=200.0).text("Size")).changed() {
+            let mut size_pct = self.size * 100.0;
+            if ui.add(egui::Slider::new(&mut size_pct, 0.1..=50.0).suffix("%").text("Size")).changed() {
+                self.size = size_pct / 100.0;
                 changed = true;
             }
 
@@ -189,7 +191,9 @@ impl ShapeDescriptor for Text {
                             });
                         span.font = s_font;
                         
-                        if ui.add(egui::DragValue::new(&mut span.size).speed(1.0).clamp_range(1.0..=500.0)).changed() {
+                        let mut span_pct = span.size * 100.0;
+                        if ui.add(egui::DragValue::new(&mut span_pct).speed(0.1).clamp_range(0.1..=50.0).suffix("%")).changed() {
+                            span.size = span_pct / 100.0;
                             changed = true;
                         }
 
@@ -225,7 +229,7 @@ impl ShapeDescriptor for Text {
 
     fn to_dsl(&self, indent: &str) -> String {
         let mut out = format!(
-            "{}text \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    value = \"{}\",\n{}    font = \"{}\",\n{}    size = {:.1},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2},\n",
+            "{}text \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    value = \"{}\",\n{}    font = \"{}\",\n{}    size = {:.4},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2},\n",
             indent, self.name, indent, self.x, indent, self.y, indent, self.value.replace('"', "\\\""), indent, self.font, indent, self.size, indent, self.color[0], self.color[1], self.color[2], indent, self.spawn_time
         );
         
@@ -233,7 +237,7 @@ impl ShapeDescriptor for Text {
             out.push_str(&format!("{}    spans = [\n", indent));
             for span in &self.spans {
                 out.push_str(&format!(
-                    "{}        span(\"{}\", font=\"{}\", size={:.1}, fill=\"#{:02x}{:02x}{:02x}\"),\n",
+                    "{}        span(\"{}\", font=\"{}\", size={:.4}, fill=\"#{:02x}{:02x}{:02x}\"),\n",
                     indent, span.text.replace('"', "\\\""), span.font, span.size, span.color[0], span.color[1], span.color[2]
                 ));
             }

@@ -284,7 +284,7 @@ pub fn parse_dsl(_src: &str) -> Vec<Shape> {
                                 };
                                 
                                 let font = kv.get("font").cloned().unwrap_or_else(|| "System".to_string());
-                                let size = kv.get("size").and_then(|s| s.parse().ok()).unwrap_or(24.0);
+                                let size = kv.get("size").and_then(|s| s.parse().ok()).unwrap_or(24.0_f32 / 720.0);
                                 let mut color = [255, 255, 255, 255];
                                 if let Some(fill) = kv.get("fill") {
                                     if fill.starts_with('#') && fill.len() >= 7 {

@@ -233,6 +233,33 @@ pub struct AppState {
 
     pub modifier_active_path: Option<Vec<usize>>,
 
+    // Export Modal
+    pub show_export_modal: bool,
+    /// 0 = config confirmation, 1 = ffmpeg progress
+    pub export_modal_step: u8,
+    pub export_modal_fps: u32,
+    pub export_modal_width: u32,
+    pub export_modal_height: u32,
+    pub export_modal_duration: f32,
+    /// Output path chosen by user for ffmpeg export
+    #[serde(skip)]
+    pub export_output_path: Option<std::path::PathBuf>,
+    /// Accumulated ffmpeg log lines
+    #[serde(skip)]
+    pub export_ffmpeg_log: Vec<String>,
+    /// Receiver for ffmpeg status messages from background thread
+    #[serde(skip)]
+    pub export_ffmpeg_rx: Option<std::sync::mpsc::Receiver<crate::modals::export::FfmpegMsg>>,
+    /// Whether the ffmpeg export finished (success / error)
+    #[serde(skip)]
+    pub export_ffmpeg_done: bool,
+    #[serde(skip)]
+    pub export_ffmpeg_error: Option<String>,
+    #[serde(skip)]
+    pub export_frames_done: u32,
+    #[serde(skip)]
+    pub export_frames_total: u32,
+
     // UI: Elements modal (floating palette from Scene Graph)
     pub show_elements_modal: bool,
     // UI: Animations modal (floating palette from Scene Graph)
@@ -379,6 +406,19 @@ impl Default for AppState {
             rename_buffer: String::new(),
             expanded_nodes: HashSet::new(),
             modifier_active_path: None,
+            show_export_modal: false,
+            export_modal_step: 0,
+            export_modal_fps: 60,
+            export_modal_width: 1280,
+            export_modal_height: 720,
+            export_modal_duration: 5.0,
+            export_output_path: None,
+            export_ffmpeg_log: Vec::new(),
+            export_ffmpeg_rx: None,
+            export_ffmpeg_done: false,
+            export_ffmpeg_error: None,
+            export_frames_done: 0,
+            export_frames_total: 0,
             anim_modal_target_idx: 0,
             show_elements_modal: false,
             show_animations_modal: false,
@@ -387,8 +427,13 @@ impl Default for AppState {
             timeline_root_path: None,
             timeline_prev_root_path: None,
             timeline_breadcrumb_anim_t: 1.0,
-            available_fonts: crate::shapes::fonts::list_system_fonts().into_iter().map(|(n, _)| n).collect(),
-            font_map: crate::shapes::fonts::list_system_fonts().into_iter().collect(),
+            available_fonts: crate::shapes::fonts::list_system_fonts()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            font_map: crate::shapes::fonts::list_system_fonts()
+                .into_iter()
+                .collect(),
             font_definitions: egui::FontDefinitions::default(),
             font_arc_cache: std::collections::HashMap::new(),
         }
@@ -416,7 +461,7 @@ impl AppState {
         }
         all_fonts.sort_by(|a, b| a.0.cmp(&b.0));
         all_fonts.dedup_by(|a, b| a.0 == b.0);
-        
+
         self.available_fonts = all_fonts.iter().map(|(n, _)| n.clone()).collect();
         self.font_map = all_fonts.into_iter().collect();
     }

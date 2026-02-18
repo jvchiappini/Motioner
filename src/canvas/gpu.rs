@@ -36,6 +36,8 @@ pub struct GpuShape {
     pub spawn_time: f32,
     pub p1: i32,
     pub p2: i32,
+    pub uv0: [f32; 2], // UV min en el atlas de texto
+    pub uv1: [f32; 2], // UV max en el atlas de texto
 }
 
 #[cfg(feature = "wgpu")]
@@ -50,6 +52,8 @@ pub struct CompositionCallback {
     pub time: f32,
     pub shared_device: Option<std::sync::Arc<wgpu::Device>>, // Para el caché GPU-to-GPU
     pub shared_queue: Option<std::sync::Arc<wgpu::Queue>>,
+    /// Píxeles RGBA del texto rasterizado en CPU (tamaño render_width * render_height)
+    pub text_pixels: Option<(Vec<u8>, u32, u32)>, // (data, w, h)
 }
 
 #[cfg(feature = "wgpu")]
@@ -84,8 +88,21 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
                         binding: 1,
                         resource: resources.uniform_buffer.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&resources.text_atlas_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&resources.text_sampler),
+                    },
                 ],
             });
+        }
+
+        // Actualizar atlas de texto si se proporcionaron píxeles nuevos
+        if let Some((ref pixels, w, h)) = self.text_pixels {
+            resources.update_text_atlas(device, queue, pixels, w, h);
         }
 
         if !self.shapes.is_empty() {
@@ -119,7 +136,7 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         uniforms[16] = self.time;
         uniforms[16] = self.time;
         uniforms[17] = screen_descriptor.pixels_per_point;
-        
+
         queue.write_buffer(
             &resources.uniform_buffer,
             0,
@@ -178,6 +195,11 @@ pub struct GpuResources {
     pub bind_group: wgpu::BindGroup,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub target_format: wgpu::TextureFormat,
+    // Text atlas: textura que contiene el texto rasterizado en CPU
+    pub text_atlas_texture: wgpu::Texture,
+    pub text_atlas_view: wgpu::TextureView,
+    pub text_sampler: wgpu::Sampler,
+    pub text_atlas_size: [u32; 2],
 }
 
 #[cfg(feature = "wgpu")]
@@ -211,6 +233,24 @@ impl GpuResources {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
+                    count: None,
+                },
+                // Binding 2: text atlas texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Binding 3: text sampler (NEAREST = pixelated)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -262,6 +302,36 @@ impl GpuResources {
             mapped_at_creation: false,
         });
 
+        // Atlas inicial de texto: 1x1 transparente
+        let initial_atlas_size = [1u32, 1u32];
+        let text_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("text_atlas"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let text_atlas_view =
+            text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Sampler NEAREST para texto pixelado
+        let text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("text_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("composition_bind_group"),
             layout: &bind_group_layout,
@@ -274,6 +344,14 @@ impl GpuResources {
                     binding: 1,
                     resource: uniform_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&text_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&text_sampler),
+                },
             ],
         });
 
@@ -284,7 +362,90 @@ impl GpuResources {
             bind_group,
             bind_group_layout,
             target_format,
+            text_atlas_texture,
+            text_atlas_view,
+            text_sampler,
+            text_atlas_size: initial_atlas_size,
         }
+    }
+
+    /// Actualiza la textura de atlas de texto con nuevos píxeles RGBA.
+    /// Si el tamaño cambia, recrea la textura y el bind_group.
+    pub fn update_text_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pixels: &[u8], // RGBA8, tamaño: w*h*4
+        w: u32,
+        h: u32,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        // Si el tamaño cambió, recrear la textura
+        if self.text_atlas_size[0] != w || self.text_atlas_size[1] != h {
+            self.text_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("text_atlas"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.text_atlas_view = self
+                .text_atlas_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.text_atlas_size = [w, h];
+            // Recrear bind_group con la nueva view
+            self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("composition_bind_group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.shape_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&self.text_atlas_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                    },
+                ],
+            });
+        }
+        // Subir los píxeles
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.text_atlas_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 }
 
@@ -375,6 +536,8 @@ pub fn render_frame_color_image_gpu_snapshot(
 
     let mut all = Vec::new();
     collect_prims(&working_scene, 0.0, &mut all);
+    // Reverse so that scene index 0 (top of scene graph) is drawn last = on top.
+    all.reverse();
 
     for (shape, actual_spawn) in all.iter() {
         if time < *actual_spawn {
@@ -387,7 +550,7 @@ pub fn render_frame_color_image_gpu_snapshot(
                     time,
                     snap.duration_secs,
                 );
-                
+
                 let radius_px = c.radius * snap.render_width as f32;
                 let x_px = eval_x * snap.render_width as f32;
                 let y_px = eval_y * snap.render_height as f32;
@@ -405,6 +568,8 @@ pub fn render_frame_color_image_gpu_snapshot(
                     spawn_time: *actual_spawn,
                     p1: 0,
                     p2: 0,
+                    uv0: [0.0, 0.0],
+                    uv1: [0.0, 0.0],
                 });
             }
             crate::scene::Shape::Rect(r) => {
@@ -432,6 +597,8 @@ pub fn render_frame_color_image_gpu_snapshot(
                     spawn_time: *actual_spawn,
                     p1: 0,
                     p2: 0,
+                    uv0: [0.0, 0.0],
+                    uv1: [0.0, 0.0],
                 });
             }
             _ => {}
@@ -472,17 +639,15 @@ pub fn render_frame_color_image_gpu_snapshot(
         paper_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
         viewport_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
         count: gpu_shapes.len() as f32,
-        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        mag_x: 0.0,
+        mag_y: 0.0,
+        mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
         _padding: [0.0; 2],
     };
 
-    queue.write_buffer(
-        &resources.uniform_buffer,
-        0,
-        bytemuck::bytes_of(&uniforms),
-    );
+    queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("preview_offscreen"),
@@ -495,7 +660,9 @@ pub fn render_frame_color_image_gpu_snapshot(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: resources.target_format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -572,7 +739,9 @@ pub fn render_frame_color_image_gpu_snapshot(
         tx.send(result).unwrap();
     });
     device.poll(wgpu::Maintain::Wait);
-    rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    rx.recv()
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
 
     let data = buffer_slice.get_mapped_range();
     let mut pixels = Vec::with_capacity((preview_w * preview_h * 4) as usize);
@@ -599,62 +768,98 @@ pub fn render_frame_native_texture(
     let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round() as u32;
 
     let mut gpu_shapes = Vec::new();
-        fn fill_recursive(shapes: &[crate::scene::Shape], out: &mut Vec<GpuShape>, current_time: f32, parent_spawn: f32, duration: f32, rw: f32, rh: f32) {
+    fn fill_recursive(
+        shapes: &[crate::scene::Shape],
+        out: &mut Vec<GpuShape>,
+        current_time: f32,
+        parent_spawn: f32,
+        duration: f32,
+        rw: f32,
+        rh: f32,
+    ) {
         for s in shapes {
-             let spawn = s.spawn_time().max(parent_spawn);
-             match s {
-                 crate::scene::Shape::Group { children, .. } => fill_recursive(children, out, current_time, spawn, duration, rw, rh),
-                 crate::scene::Shape::Circle(c) => {
-                     let (x, y) = crate::animations::animations_manager::animated_xy_for(s, current_time, duration);
-                     
-                     let radius_px = c.radius * rw;
-                     let x_px = x * rw;
-                     let y_px = y * rh;
+            let spawn = s.spawn_time().max(parent_spawn);
+            match s {
+                crate::scene::Shape::Group { children, .. } => {
+                    fill_recursive(children, out, current_time, spawn, duration, rw, rh)
+                }
+                crate::scene::Shape::Circle(c) => {
+                    let (x, y) = crate::animations::animations_manager::animated_xy_for(
+                        s,
+                        current_time,
+                        duration,
+                    );
 
-                     out.push(GpuShape {
-                         pos: [x_px, y_px],
-                         size: [radius_px, radius_px],
-                         color: [
-                             srgb_to_linear(c.color[0]),
-                             srgb_to_linear(c.color[1]),
-                             srgb_to_linear(c.color[2]),
-                             c.color[3] as f32 / 255.0,
-                         ],
-                         shape_type: 0,
-                         spawn_time: spawn,
-                         p1: 0, p2: 0,
-                     });
-                 }
-                 crate::scene::Shape::Rect(r) => {
-                     let (x, y) = crate::animations::animations_manager::animated_xy_for(s, current_time, duration);
-                     
-                     let w_px = r.w * rw;
-                     let h_px = r.h * rh;
-                     let x_px = x * rw;
-                     let y_px = y * rh;
+                    let radius_px = c.radius * rw;
+                    let x_px = x * rw;
+                    let y_px = y * rh;
 
-                     out.push(GpuShape {
-                         pos: [x_px + w_px/2.0, y_px + h_px/2.0],
-                         size: [w_px/2.0, h_px/2.0],
-                         color: [
-                             srgb_to_linear(r.color[0]),
-                             srgb_to_linear(r.color[1]),
-                             srgb_to_linear(r.color[2]),
-                             r.color[3] as f32 / 255.0,
-                         ],
-                         shape_type: 1,
-                         spawn_time: spawn,
-                         p1: 0, p2: 0,
-                     });
-                 }
-                 _ => {}
-             }
+                    out.push(GpuShape {
+                        pos: [x_px, y_px],
+                        size: [radius_px, radius_px],
+                        color: [
+                            srgb_to_linear(c.color[0]),
+                            srgb_to_linear(c.color[1]),
+                            srgb_to_linear(c.color[2]),
+                            c.color[3] as f32 / 255.0,
+                        ],
+                        shape_type: 0,
+                        spawn_time: spawn,
+                        p1: 0,
+                        p2: 0,
+                        uv0: [0.0, 0.0],
+                        uv1: [0.0, 0.0],
+                    });
+                }
+                crate::scene::Shape::Rect(r) => {
+                    let (x, y) = crate::animations::animations_manager::animated_xy_for(
+                        s,
+                        current_time,
+                        duration,
+                    );
+
+                    let w_px = r.w * rw;
+                    let h_px = r.h * rh;
+                    let x_px = x * rw;
+                    let y_px = y * rh;
+
+                    out.push(GpuShape {
+                        pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
+                        size: [w_px / 2.0, h_px / 2.0],
+                        color: [
+                            srgb_to_linear(r.color[0]),
+                            srgb_to_linear(r.color[1]),
+                            srgb_to_linear(r.color[2]),
+                            r.color[3] as f32 / 255.0,
+                        ],
+                        shape_type: 1,
+                        spawn_time: spawn,
+                        p1: 0,
+                        p2: 0,
+                        uv0: [0.0, 0.0],
+                        uv1: [0.0, 0.0],
+                    });
+                }
+                _ => {}
+            }
         }
     }
-    fill_recursive(&snap.scene, &mut gpu_shapes, time, 0.0, snap.duration_secs, snap.render_width as f32, snap.render_height as f32);
+    fill_recursive(
+        &snap.scene,
+        &mut gpu_shapes,
+        time,
+        0.0,
+        snap.duration_secs,
+        snap.render_width as f32,
+        snap.render_height as f32,
+    );
 
     if !gpu_shapes.is_empty() {
-        queue.write_buffer(&resources.shape_buffer, 0, bytemuck::cast_slice(&gpu_shapes));
+        queue.write_buffer(
+            &resources.shape_buffer,
+            0,
+            bytemuck::cast_slice(&gpu_shapes),
+        );
     }
 
     let uniforms = Uniforms {
@@ -663,7 +868,9 @@ pub fn render_frame_native_texture(
         paper_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
         viewport_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
         count: gpu_shapes.len() as f32,
-        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        mag_x: 0.0,
+        mag_y: 0.0,
+        mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
         _padding: [0.0; 2],
@@ -673,7 +880,11 @@ pub fn render_frame_native_texture(
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("gpu_cache_texture"),
-        size: wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: preview_w,
+            height: preview_h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -683,7 +894,8 @@ pub fn render_frame_native_texture(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,

@@ -276,6 +276,11 @@ impl eframe::App for MyApp {
             crate::modals::animations::show(ctx, state);
         }
 
+        // Export modal (blocks all interaction behind it)
+        if state.show_export_modal {
+            crate::modals::export::show(ctx, state);
+        }
+
         // 1. Toolbar Strip (Far Left)
         egui::SidePanel::left("toolbar_panel")
             .resizable(false)
@@ -645,12 +650,18 @@ impl eframe::App for MyApp {
                     ui.label(format!("Time: {:.2}s", state.time));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Export DSL").clicked() {
-                            // rfd is not in dependencies yet
-                            // if let Some(path) = rfd::FileDialog::new().save_file() {
-                            //    let _ = std::fs::write(path, &state.dsl_code);
-                            // }
-                            println!("Export DSL clicked (File dialog requires 'rfd' crate)");
+                        if ui.button("Export").clicked() {
+                            // Seed modal with current project settings so user can review/adjust
+                            state.export_modal_fps = state.fps;
+                            state.export_modal_width = state.render_width;
+                            state.export_modal_height = state.render_height;
+                            state.export_modal_duration = state.duration_secs;
+                            state.export_modal_step = 0;
+                            state.export_ffmpeg_log.clear();
+                            state.export_ffmpeg_done = false;
+                            state.export_ffmpeg_error = None;
+                            state.export_ffmpeg_rx = None;
+                            state.show_export_modal = true;
                         }
                     });
                 });

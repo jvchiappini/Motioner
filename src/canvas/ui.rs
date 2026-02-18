@@ -7,111 +7,6 @@ use crate::app_state::AppState;
 use eframe::egui;
 
 /// Renderiza y maneja las interacciones para el área del canvas central.
-/// Renderiza y maneja las interacciones para el área del canvas central.
-#[allow(clippy::too_many_arguments)]
-fn draw_text_overlay(
-    ui_painter: &egui::Painter,
-    shapes: &[crate::scene::Shape],
-    composition_rect: egui::Rect,
-    zoom: f32,
-    current_time: f32,
-    parent_spawn: f32,
-    project_duration: f32,
-    cached: Option<&Vec<(f32, f32)>>,
-    flat_idx: &mut usize,
-    handlers: &[crate::dsl::runtime::DslHandler],
-) {
-    let frame_idx = (current_time * 60.0).round() as u32;
-    for shape in shapes {
-        let actual_spawn = shape.spawn_time().max(parent_spawn);
-        if current_time < actual_spawn {
-            continue;
-        }
-        match shape {
-            crate::scene::Shape::Circle(_) | crate::scene::Shape::Rect(_) => {
-                *flat_idx += 1;
-            }
-            crate::scene::Shape::Text(t) => {
-                let (eval_x, eval_y) = if let Some(frame) = cached {
-                    let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
-                    *flat_idx += 1;
-                    p
-                } else {
-                    *flat_idx += 1;
-                    let mut transient = shape.clone();
-                    crate::events::time_changed_event::apply_on_time_handlers(
-                        std::slice::from_mut(&mut transient),
-                        handlers,
-                        current_time,
-                        frame_idx,
-                    );
-                    animated_xy_for(&transient, current_time, project_duration)
-                };
-
-                let pos = composition_rect.min
-                    + egui::vec2(
-                        eval_x * composition_rect.width(),
-                        eval_y * composition_rect.height(),
-                    );
-
-                if t.spans.is_empty() {
-                    let c = egui::Color32::from_rgba_unmultiplied(
-                        t.color[0], t.color[1], t.color[2], t.color[3],
-                    );
-                    let family = if t.font == "System" || t.font.is_empty() {
-                        egui::FontFamily::Proportional
-                    } else {
-                        let f_name = egui::FontFamily::Name(t.font.clone().into());
-                        let is_bound = ui_painter.ctx().fonts(|f| f.families().iter().any(|fam| fam == &f_name));
-                        if is_bound { f_name } else { egui::FontFamily::Proportional }
-                    };
-                    let font_id = egui::FontId::new(t.size * zoom, family);
-                    ui_painter.text(pos, egui::Align2::LEFT_TOP, &t.value, font_id, c);
-                } else {
-                    let mut job = egui::text::LayoutJob::default();
-                    for span in &t.spans {
-                        let c = egui::Color32::from_rgba_unmultiplied(
-                            span.color[0], span.color[1], span.color[2], span.color[3],
-                        );
-                        let family = if span.font == "System" || span.font.is_empty() {
-                            egui::FontFamily::Proportional
-                        } else {
-                            let f_name = egui::FontFamily::Name(span.font.clone().into());
-                            let is_bound = ui_painter.ctx().fonts(|f| f.families().iter().any(|fam| fam == &f_name));
-                            if is_bound { f_name } else { egui::FontFamily::Proportional }
-                        };
-                        job.append(
-                            &span.text,
-                            0.0,
-                            egui::TextFormat {
-                                font_id: egui::FontId::new(span.size * zoom, family),
-                                color: c,
-                                ..Default::default()
-                            }
-                        );
-                    }
-                    let galley = ui_painter.ctx().fonts(|f| f.layout_job(job));
-                    ui_painter.galley(pos, galley, egui::Color32::TRANSPARENT);
-                }
-            }
-            crate::scene::Shape::Group { children, .. } => {
-                draw_text_overlay(
-                    ui_painter,
-                    children,
-                    composition_rect,
-                    zoom,
-                    current_time,
-                    actual_spawn,
-                    project_duration,
-                    cached,
-                    flat_idx,
-                    handlers,
-                );
-            }
-        }
-    }
-}
-
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
     egui::Frame::canvas(ui.style()).show(ui, |ui| {
         let (rect, response) = ui.allocate_exact_size(
@@ -259,7 +154,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             flat_idx: &mut usize,
             handlers: &[crate::dsl::runtime::DslHandler],
         ) {
-            let frame_idx = (current_time * 60.0).round() as u32; 
+            let frame_idx = (current_time * 60.0).round() as u32;
             for shape in shapes {
                 let my_spawn = shape.spawn_time().max(parent_spawn);
                 match shape {
@@ -279,7 +174,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             );
                             animated_xy_for(&transient, current_time, project_duration)
                         };
-                        
+
                         // Scale to pixels
                         // Radius is relative to Width (as per egui drawer)
                         let radius_px = c.radius * render_width;
@@ -299,6 +194,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             spawn_time: my_spawn,
                             p1: 0,
                             p2: 0,
+                            uv0: [0.0, 0.0],
+                            uv1: [0.0, 0.0],
                         });
                     }
                     crate::scene::Shape::Rect(r) => {
@@ -337,9 +234,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             spawn_time: my_spawn,
                             p1: 0,
                             p2: 0,
+                            uv0: [0.0, 0.0],
+                            uv1: [0.0, 0.0],
                         });
                     }
                     crate::scene::Shape::Text(..) => {
+                        // El texto se maneja por separado mediante rasterización CPU → atlas GPU
                         *flat_idx += 1;
                     }
                     crate::scene::Shape::Group { children, .. } => {
@@ -372,6 +272,43 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             &mut flat_idx,
             &state.dsl_event_handlers,
         );
+
+        // Reverse so that scene index 0 (top of the scene graph) paints last = on top.
+        gpu_shapes.reverse();
+
+        // Rasterizar texto en CPU → textura GPU (resolución del proyecto = píxeles visibles)
+        let text_layer = crate::canvas::text_rasterizer::rasterize_text_layer(
+            &state.scene,
+            state.render_width,
+            state.render_height,
+            state.time,
+            state.duration_secs,
+            &mut state.font_arc_cache,
+            &state.font_map,
+            &state.dsl_event_handlers,
+            0.0,
+        );
+
+        // Si hay texto, agregar un GpuShape tipo 2 (quad pantalla completa)
+        let text_pixels = if let Some(ref tl) = text_layer {
+            // Quad que cubre toda la resolución del proyecto
+            let rw = state.render_width as f32;
+            let rh = state.render_height as f32;
+            gpu_shapes.push(GpuShape {
+                pos: [rw / 2.0, rh / 2.0],
+                size: [rw / 2.0, rh / 2.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                shape_type: 2,
+                spawn_time: 0.0,
+                p1: 0,
+                p2: 0,
+                uv0: [0.0, 0.0],
+                uv1: [1.0, 1.0],
+            });
+            Some((tl.pixels.clone(), tl.width, tl.height))
+        } else {
+            None
+        };
 
         let magnifier_pos = if state.picker_active {
             ui.input(|i| i.pointer.hover_pos())
@@ -410,27 +347,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                     time: state.time,
                     shared_device: None,
                     shared_queue: None,
+                    text_pixels,
                 },
             );
             painter.add(cb);
         }
-
-        // Capa de texto sobre el render de GPU
-        let mut text_idx = 0;
-        let mut ui_painter = ui.painter_at(composition_rect);
-        ui_painter.set_clip_rect(composition_rect);
-        draw_text_overlay(
-            &ui_painter,
-            &state.scene,
-            composition_rect,
-            zoom,
-            state.time,
-            0.0,
-            state.duration_secs,
-            cached,
-            &mut text_idx,
-            &state.dsl_event_handlers,
-        );
 
         if main_ui_enabled && response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -467,14 +388,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 }
                                 let mut path = current_path.clone();
                                 path.push(i);
-                                 match shape {
+                                match shape {
                                     crate::scene::Shape::Circle(c) => {
                                         let center = composition_rect.left_top()
                                             + egui::vec2(
                                                 c.x * composition_rect.width(),
                                                 c.y * composition_rect.height(),
                                             );
-                                        if pos.distance(center) <= c.radius * composition_rect.width()
+                                        if pos.distance(center)
+                                            <= c.radius * composition_rect.width()
                                         {
                                             return Some(path);
                                         }
@@ -502,10 +424,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                                 t.x * composition_rect.width(),
                                                 t.y * composition_rect.height(),
                                             );
-                                        
-                                        let height_px = t.size * (composition_rect.height() / render_height as f32);
+
+                                        let height_px = t.size * composition_rect.height();
                                         let width_px = t.value.len() as f32 * height_px * 0.5; // Very rough
-                                        let rect = egui::Rect::from_min_size(min, egui::vec2(width_px, height_px));
+                                        let rect = egui::Rect::from_min_size(
+                                            min,
+                                            egui::vec2(width_px, height_px),
+                                        );
                                         if rect.contains(pos) {
                                             return Some(path);
                                         }
@@ -601,7 +526,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 t.x * composition_rect.width(),
                                 t.y * composition_rect.height(),
                             );
-                        let height_px = t.size * (composition_rect.height() / render_height as f32);
+                        let height_px = t.size * composition_rect.height();
                         let width_px = t.value.len() as f32 * height_px * 0.5;
                         painter.rect_stroke(
                             egui::Rect::from_min_size(min, egui::vec2(width_px, height_px)),

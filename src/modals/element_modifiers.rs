@@ -389,7 +389,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     ui.end_row();
 
                                     ui.label("Base Size:");
-                                    if ui.add(egui::DragValue::new(&mut t.size).speed(1.0).clamp_range(1.0..=500.0)).changed() {
+                                    let mut size_pct = t.size * 100.0;
+                                    if ui.add(egui::DragValue::new(&mut size_pct).speed(0.1).clamp_range(0.1..=50.0).suffix("%")).changed() {
+                                        t.size = size_pct / 100.0;
                                         changed = true;
                                     }
                                     ui.end_row();
@@ -462,7 +464,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 span.font = s_font;
                                                 
                                                 ui.label("Size:");
-                                                if ui.add(egui::DragValue::new(&mut span.size).speed(1.0).clamp_range(1.0..=500.0)).changed() {
+                                                let mut span_pct = span.size * 100.0;
+                                                if ui.add(egui::DragValue::new(&mut span_pct).speed(0.1).clamp_range(0.1..=50.0).suffix("%")).changed() {
+                                                    span.size = span_pct / 100.0;
                                                     changed = true;
                                                 }
 

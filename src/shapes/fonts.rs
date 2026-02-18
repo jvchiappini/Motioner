@@ -2,6 +2,18 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use eframe::egui;
 
+/// Comprueba si una fuente tiene al menos los glifos ASCII básicos necesarios
+/// para texto normal (letras, dígitos, '?'). Descarta fuentes de símbolos/iconos
+/// como AMDT_Symbols que no tienen glifos ASCII y causarían un panic en egui.
+fn has_latin_glyphs(path: &Path) -> bool {
+    let Ok(data) = fs::read(path) else { return false };
+    let Ok(font) = ab_glyph::FontArc::try_from_vec(data) else { return false };
+    // Comprobar que al menos 'A', 'a', '0' y '?' tienen glifo real (id != 0)
+    use ab_glyph::Font;
+    let test_chars = ['A', 'a', '0', '?'];
+    test_chars.iter().all(|&ch| font.glyph_id(ch).0 != 0)
+}
+
 pub fn list_system_fonts() -> Vec<(String, PathBuf)> {
     let mut fonts = Vec::new();
     #[cfg(target_os = "windows")]
@@ -14,7 +26,10 @@ pub fn list_system_fonts() -> Vec<(String, PathBuf)> {
                     let ext = ext.to_string_lossy().to_lowercase();
                     if ext == "ttf" || ext == "otf" {
                         if let Some(name) = path.file_stem() {
-                            fonts.push((name.to_string_lossy().to_string(), path));
+                            // Solo incluir fuentes que tengan glifos latinos básicos
+                            if has_latin_glyphs(&path) {
+                                fonts.push((name.to_string_lossy().to_string(), path));
+                            }
                         }
                     }
                 }
@@ -22,8 +37,6 @@ pub fn list_system_fonts() -> Vec<(String, PathBuf)> {
         }
     }
     // TODO: Add Linux/macOS paths if needed
-    
-    // Fallback?
     
     fonts.sort_by(|a, b| a.0.cmp(&b.0));
     fonts.dedup_by(|a, b| a.0 == b.0);
@@ -48,7 +61,9 @@ fn scan_fonts_recursive(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
                 let ext = ext.to_string_lossy().to_lowercase();
                 if ext == "ttf" || ext == "otf" {
                     if let Some(name) = path.file_stem() {
-                        out.push((name.to_string_lossy().to_string(), path));
+                        if has_latin_glyphs(&path) {
+                            out.push((name.to_string_lossy().to_string(), path));
+                        }
                     }
                 }
             }
