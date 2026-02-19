@@ -96,7 +96,8 @@ pub(crate) fn render_gutter(
             // Draw diagnostic marker if present for this line
             if diag_map.contains_key(&(line_index + 1)) {
                 // small red dot to indicate an error on this logical line
-                let dot_center = egui::pos2(full_gutter_rect.left() + 14.0, y + row.rect.height() * 0.5);
+                let dot_center =
+                    egui::pos2(full_gutter_rect.left() + 14.0, y + row.rect.height() * 0.5);
                 gutter_painter.circle_filled(dot_center, 5.0, egui::Color32::from_rgb(200, 80, 80));
 
                 // Also draw the line number slightly right-shifted
@@ -114,7 +115,10 @@ pub(crate) fn render_gutter(
 
                 // If pointer is over the dot area, show a tooltip via ctx (best-effort)
                 if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
-                    let hit_rect = egui::Rect::from_center_size(dot_center, egui::vec2(16.0, row.rect.height()));
+                    let hit_rect = egui::Rect::from_center_size(
+                        dot_center,
+                        egui::vec2(16.0, row.rect.height()),
+                    );
                     if hit_rect.contains(pointer_pos) {
                         // Indicate interactivity via cursor. Detailed message is
                         // already surfaced in the editor header (`autosave_error`).

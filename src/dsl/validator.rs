@@ -8,7 +8,6 @@
 /// 5. Empty blocks
 /// 6. Top-level `move {}` missing `element`
 /// 7. Stray top-level assignments
-
 use super::parser;
 
 // ─── Diagnostic ───────────────────────────────────────────────────────────────
@@ -129,7 +128,11 @@ fn check_header_config(src: &str, diags: &mut Vec<Diagnostic>) {
             .or_else(|| src.find("timeline"))
             .unwrap_or(0);
         let (ln, col) = byte_to_line_col(src, pos);
-        diags.push(Diagnostic { message: msg, line: ln, column: col });
+        diags.push(Diagnostic {
+            message: msg,
+            line: ln,
+            column: col,
+        });
     }
 }
 
@@ -209,11 +212,20 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
         // Track brace depth (ignore braces inside strings).
         let mut in_str = false;
         for ch in line.chars() {
-            if ch == '"' { in_str = !in_str; continue; }
-            if in_str { continue; }
+            if ch == '"' {
+                in_str = !in_str;
+                continue;
+            }
+            if in_str {
+                continue;
+            }
             match ch {
                 '{' => brace_depth += 1,
-                '}' => { if brace_depth > 0 { brace_depth -= 1; } }
+                '}' => {
+                    if brace_depth > 0 {
+                        brace_depth -= 1;
+                    }
+                }
                 _ => {}
             }
         }
@@ -262,8 +274,13 @@ pub fn find_matching_brace(s: &str, open_pos: usize) -> Option<usize> {
     let mut depth: i32 = 0;
     let mut in_string = false;
     for (i, ch) in s[open_pos..].char_indices() {
-        if ch == '"' { in_string = !in_string; continue; }
-        if in_string { continue; }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
         match ch {
             '{' => depth += 1,
             '}' => {

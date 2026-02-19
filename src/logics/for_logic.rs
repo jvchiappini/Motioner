@@ -13,13 +13,20 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
 
     // header looks like: for <ident> in <expr>
     let header = header.trim();
-    let after_for = header.strip_prefix("for").ok_or("for: invalid header")?.trim();
+    let after_for = header
+        .strip_prefix("for")
+        .ok_or("for: invalid header")?
+        .trim();
     let parts: Vec<&str> = after_for.splitn(3, ' ').collect();
     if parts.len() < 3 || parts[1] != "in" {
         return Err("for: expected 'for <var> in <iterable>'".to_string());
     }
     let var_name = parts[0].trim();
-    let iterable = after_for.splitn(2, "in").nth(1).ok_or("for: missing iterable")?.trim();
+    let iterable = after_for
+        .splitn(2, "in")
+        .nth(1)
+        .ok_or("for: missing iterable")?
+        .trim();
 
     // Range form?
     if iterable.contains("..") {
@@ -27,7 +34,11 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
         if rng.len() != 2 {
             return Err("for: invalid range".to_string());
         }
-        let start = if rng[0].trim().is_empty() { 0.0 } else { evaluator::evaluate(rng[0].trim(), ctx)? };
+        let start = if rng[0].trim().is_empty() {
+            0.0
+        } else {
+            evaluator::evaluate(rng[0].trim(), ctx)?
+        };
         let end = evaluator::evaluate(rng[1].trim(), ctx)?;
         let start_i = start as i32;
         let end_i = end as i32;
@@ -81,5 +92,8 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
         return Ok(modified);
     }
 
-    Err(format!("for: iterable '{}' not found or not a list", iterable))
+    Err(format!(
+        "for: iterable '{}' not found or not a list",
+        iterable
+    ))
 }

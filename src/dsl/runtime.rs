@@ -219,7 +219,11 @@ fn dispatch_action(
                     val.pop();
                     val = val.trim_end().to_string();
                 }
-                return if key.is_empty() { None } else { Some((key, val)) };
+                return if key.is_empty() {
+                    None
+                } else {
+                    Some((key, val))
+                };
             }
             None
         }
@@ -228,15 +232,17 @@ fn dispatch_action(
         let mut created_shapes: Vec<crate::scene::Shape> = Vec::new();
         if parsed.is_empty() {
             // fallback: instantiate a default by keyword
-            let kw = line
-                .trim_start()
-                .split_whitespace()
-                .next()
-                .unwrap_or("");
+            let kw = line.trim_start().split_whitespace().next().unwrap_or("");
             match kw {
-                "circle" => created_shapes.push(crate::shapes::circle::Circle::create_default("Spawned".into())),
-                "rect" => created_shapes.push(crate::shapes::rect::Rect::create_default("Spawned".into())),
-                "text" => created_shapes.push(crate::shapes::text::Text::create_default("Spawned".into())),
+                "circle" => created_shapes.push(crate::shapes::circle::Circle::create_default(
+                    "Spawned".into(),
+                )),
+                "rect" => {
+                    created_shapes.push(crate::shapes::rect::Rect::create_default("Spawned".into()))
+                }
+                "text" => {
+                    created_shapes.push(crate::shapes::text::Text::create_default("Spawned".into()))
+                }
                 _ => {}
             }
         } else {

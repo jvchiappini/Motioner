@@ -47,7 +47,9 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
 
     let mut changed = false;
 
-    let mut ctx = EvalContext::new().with_var("seconds", seconds).with_var("frame", frame as f32);
+    let mut ctx = EvalContext::new()
+        .with_var("seconds", seconds)
+        .with_var("frame", frame as f32);
 
     // 1) materialize shapes + keep original sampled props for diffing
     let mut originals: Vec<Option<FrameProps>> = Vec::new();
@@ -173,7 +175,9 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
     let spawned = ctx.take_spawned_shapes();
     if !spawned.is_empty() {
         for s in spawned {
-            if let Some(ek) = crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(&s, fps) {
+            if let Some(ek) =
+                crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(&s, fps)
+            {
                 elements_vec.push(ek);
             }
         }
@@ -219,7 +223,9 @@ pub fn apply_on_time_handlers_collect_spawns(
 ) -> bool {
     let mut changed = false;
 
-    let mut ctx = EvalContext::new().with_var("seconds", seconds).with_var("frame", frame as f32);
+    let mut ctx = EvalContext::new()
+        .with_var("seconds", seconds)
+        .with_var("frame", frame as f32);
 
     for handler in handlers {
         if handler.name == "on_time" || handler.name == "time_changed" {

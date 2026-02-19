@@ -82,7 +82,10 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
     let body = &block[brace + 1..end_brace];
 
     let mut invert = false;
-    let mut cond = header.strip_prefix("if").ok_or("if: invalid header")?.trim();
+    let mut cond = header
+        .strip_prefix("if")
+        .ok_or("if: invalid header")?
+        .trim();
     if cond.starts_with("not ") {
         invert = true;
         cond = cond.trim_start_matches("not ").trim();

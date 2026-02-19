@@ -4,10 +4,9 @@
 ///   `Scene → DSL string`
 ///
 /// The read direction lives in [`crate::dsl::parser`].
-
 use super::parser;
-use crate::scene::{Animation, Shape};
 use crate::animations::move_animation::MoveAnimation;
+use crate::scene::{Animation, Shape};
 
 // ─── Public entry points ──────────────────────────────────────────────────────
 
@@ -111,7 +110,11 @@ pub fn extract_event_handlers(src: &str) -> Vec<crate::dsl::runtime::DslHandler>
                     }
 
                     if let Some(color) = parser::event_handler_color(&ident) {
-                        out.push(DslHandler { name: ident, body, color });
+                        out.push(DslHandler {
+                            name: ident,
+                            body,
+                            color,
+                        });
                     }
                     continue;
                 }

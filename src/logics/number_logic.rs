@@ -5,7 +5,13 @@ use crate::scene::Shape;
 /// `set a = a + 1`.
 pub fn exec(_shapes: &mut [Shape], line: &str, ctx: &mut EvalContext) -> Result<bool, String> {
     // accept both `let name = expr` and `set name = expr`
-    let rest = if line.starts_with("let ") { &line[4..] } else if line.starts_with("set ") { &line[4..] } else { line };
+    let rest = if line.starts_with("let ") {
+        &line[4..]
+    } else if line.starts_with("set ") {
+        &line[4..]
+    } else {
+        line
+    };
     let parts: Vec<&str> = rest.splitn(2, '=').collect();
     if parts.len() != 2 {
         return Err("invalid assignment".to_string());

@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use crate::shapes::ShapeDescriptor;
 use crate::app_state::AppState;
+use crate::shapes::ShapeDescriptor;
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TextSpan {
@@ -16,9 +16,9 @@ pub struct Text {
     pub name: String,
     pub x: f32,
     pub y: f32,
-    pub value: String, // Default/Legacy
-    pub font: String,  // Default/Legacy
-    pub size: f32,    // Default/Legacy
+    pub value: String,  // Default/Legacy
+    pub font: String,   // Default/Legacy
+    pub size: f32,      // Default/Legacy
     pub color: [u8; 4], // Default/Legacy
     pub spans: Vec<TextSpan>,
     pub spawn_time: f32,
@@ -42,23 +42,27 @@ impl Default for Text {
             y: 0.5,
             value: "Hello".to_string(),
             font: "System".to_string(),
-            size: 24.0 / 720.0,  // Fraction of render_height (escala con la resolución)
+            size: 24.0 / 720.0, // Fraction of render_height (escala con la resolución)
             color: [255, 255, 255, 255],
             spans: Vec::new(),
             spawn_time: 0.0,
-                kill_time: None, // Initialize kill_time
-                ephemeral: false, // Initialize ephemeral
-                z_index: 0,
-                animations: Vec::new(),
+            kill_time: None,  // Initialize kill_time
+            ephemeral: false, // Initialize ephemeral
+            z_index: 0,
+            animations: Vec::new(),
             visible: true,
         }
     }
 }
 
 impl ShapeDescriptor for Text {
-    fn dsl_keyword(&self) -> &'static str { "text" }
-    fn icon(&self) -> &'static str { "📝" }
-    
+    fn dsl_keyword(&self) -> &'static str {
+        "text"
+    }
+    fn icon(&self) -> &'static str {
+        "📝"
+    }
+
     fn draw_modifiers(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         let mut changed = false;
 
@@ -69,28 +73,41 @@ impl ShapeDescriptor for Text {
                     changed = true;
                 }
             });
-            
+
             if ui.checkbox(&mut self.visible, "Visible").changed() {
                 changed = true;
             }
-            
+
             ui.horizontal(|ui| {
                 ui.label("Text:");
                 if ui.text_edit_singleline(&mut self.value).changed() {
                     changed = true;
                 }
             });
-            
+
             let mut size_pct = self.size * 100.0;
-            if ui.add(egui::Slider::new(&mut size_pct, 0.1..=50.0).suffix("%").text("Size")).changed() {
+            if ui
+                .add(
+                    egui::Slider::new(&mut size_pct, 0.1..=50.0)
+                        .suffix("%")
+                        .text("Size"),
+                )
+                .changed()
+            {
                 self.size = size_pct / 100.0;
                 changed = true;
             }
 
-            if ui.add(egui::Slider::new(&mut self.x, 0.0..=1.0).text("X")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut self.x, 0.0..=1.0).text("X"))
+                .changed()
+            {
                 changed = true;
             }
-            if ui.add(egui::Slider::new(&mut self.y, 0.0..=1.0).text("Y")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut self.y, 0.0..=1.0).text("Y"))
+                .changed()
+            {
                 changed = true;
             }
 
@@ -103,13 +120,18 @@ impl ShapeDescriptor for Text {
                     .show_ui(ui, |ui| {
                         for font_name in &state.available_fonts {
                             let f_fam = egui::FontFamily::Name(font_name.clone().into());
-                            let is_bound = ui.ctx().fonts(|f| f.families().iter().any(|fam| fam == &f_fam));
+                            let is_bound = ui
+                                .ctx()
+                                .fonts(|f| f.families().iter().any(|fam| fam == &f_fam));
                             let text = if is_bound {
                                 egui::RichText::new(font_name).family(f_fam)
                             } else {
                                 egui::RichText::new(font_name)
                             };
-                            if ui.selectable_value(&mut selected_font, font_name.clone(), text).changed() {
+                            if ui
+                                .selectable_value(&mut selected_font, font_name.clone(), text)
+                                .changed()
+                            {
                                 changed = true;
                             }
                         }
@@ -122,21 +144,35 @@ impl ShapeDescriptor for Text {
                 egui::FontFamily::Proportional
             } else {
                 let f_name = egui::FontFamily::Name(self.font.clone().into());
-                let is_bound = ui.ctx().fonts(|f| f.families().iter().any(|fam| fam == &f_name));
-                if is_bound { f_name } else { egui::FontFamily::Proportional }
+                let is_bound = ui
+                    .ctx()
+                    .fonts(|f| f.families().iter().any(|fam| fam == &f_name));
+                if is_bound {
+                    f_name
+                } else {
+                    egui::FontFamily::Proportional
+                }
             };
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.painter().rect_filled(ui.available_rect_before_wrap(), 4.0, egui::Color32::from_black_alpha(40));
+                ui.painter().rect_filled(
+                    ui.available_rect_before_wrap(),
+                    4.0,
+                    egui::Color32::from_black_alpha(40),
+                );
                 ui.vertical(|ui| {
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("AaBb 123").font(egui::FontId::new(18.0, preview_fam)).color(egui::Color32::LIGHT_GRAY));
+                    ui.label(
+                        egui::RichText::new("AaBb 123")
+                            .font(egui::FontId::new(18.0, preview_fam))
+                            .color(egui::Color32::LIGHT_GRAY),
+                    );
                     ui.add_space(4.0);
                 });
             });
             ui.add_space(4.0);
-            
+
             ui.horizontal(|ui| {
                 ui.label("Color:");
                 let mut color_f32 = [
@@ -145,7 +181,10 @@ impl ShapeDescriptor for Text {
                     self.color[2] as f32 / 255.0,
                     self.color[3] as f32 / 255.0,
                 ];
-                if ui.color_edit_button_rgba_unmultiplied(&mut color_f32).changed() {
+                if ui
+                    .color_edit_button_rgba_unmultiplied(&mut color_f32)
+                    .changed()
+                {
                     self.color = [
                         (color_f32[0] * 255.0) as u8,
                         (color_f32[1] * 255.0) as u8,
@@ -155,14 +194,23 @@ impl ShapeDescriptor for Text {
                     changed = true;
                 }
             });
-            
-            if ui.add(egui::DragValue::new(&mut self.spawn_time).speed(0.1).prefix("Spawn: ")).changed() {
+
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.spawn_time)
+                        .speed(0.1)
+                        .prefix("Spawn: "),
+                )
+                .changed()
+            {
                 changed = true;
             }
             // optional kill time
             ui.horizontal(|ui| {
                 let mut k = self.kill_time.unwrap_or(f32::NAN);
-                let ch = ui.add(egui::DragValue::new(&mut k).speed(0.1).prefix("Kill: ")).changed();
+                let ch = ui
+                    .add(egui::DragValue::new(&mut k).speed(0.1).prefix("Kill: "))
+                    .changed();
                 if ch {
                     if k.is_nan() {
                         self.kill_time = None;
@@ -186,7 +234,7 @@ impl ShapeDescriptor for Text {
                     changed = true;
                 }
             });
-            
+
             let mut to_remove = None;
             for (i, span) in self.spans.iter_mut().enumerate() {
                 ui.group(|ui| {
@@ -198,7 +246,7 @@ impl ShapeDescriptor for Text {
                             to_remove = Some(i);
                         }
                     });
-                    
+
                     ui.horizontal(|ui| {
                         let mut s_font = span.font.clone();
                         egui::ComboBox::from_id_source(format!("sidebar_font_{}", i))
@@ -212,9 +260,17 @@ impl ShapeDescriptor for Text {
                                 }
                             });
                         span.font = s_font;
-                        
+
                         let mut span_pct = span.size * 100.0;
-                        if ui.add(egui::DragValue::new(&mut span_pct).speed(0.1).clamp_range(0.1..=50.0).suffix("%")).changed() {
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut span_pct)
+                                    .speed(0.1)
+                                    .clamp_range(0.1..=50.0)
+                                    .suffix("%"),
+                            )
+                            .changed()
+                        {
                             span.size = span_pct / 100.0;
                             changed = true;
                         }
@@ -225,7 +281,10 @@ impl ShapeDescriptor for Text {
                             span.color[2] as f32 / 255.0,
                             span.color[3] as f32 / 255.0,
                         ];
-                        if ui.color_edit_button_rgba_unmultiplied(&mut color_f32).changed() {
+                        if ui
+                            .color_edit_button_rgba_unmultiplied(&mut color_f32)
+                            .changed()
+                        {
                             span.color = [
                                 (color_f32[0] * 255.0) as u8,
                                 (color_f32[1] * 255.0) as u8,
@@ -237,7 +296,7 @@ impl ShapeDescriptor for Text {
                     });
                 });
             }
-            
+
             if let Some(i) = to_remove {
                 self.spans.remove(i);
                 changed = true;
@@ -279,12 +338,18 @@ impl ShapeDescriptor for Text {
             for span in &self.spans {
                 out.push_str(&format!(
                     "{}\t\tspan(\"{}\", font=\"{}\", size={:.4}, fill=\"#{:02x}{:02x}{:02x}\"),\n",
-                    indent, span.text.replace('"', "\\\""), span.font, span.size, span.color[0], span.color[1], span.color[2]
+                    indent,
+                    span.text.replace('"', "\\\""),
+                    span.font,
+                    span.size,
+                    span.color[0],
+                    span.color[1],
+                    span.color[2]
                 ));
             }
             out.push_str(&format!("{}\t]\n", indent));
         }
-        
+
         out.push_str(&format!("{}}}\n", indent));
         out
     }

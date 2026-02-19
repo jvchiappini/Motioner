@@ -358,8 +358,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 // duration bar (spawn -> project end)
                 let spawn = elem.spawn_frame as f32 / elem.fps as f32;
                 let start_x = time_origin_x + (spawn * pixels_per_sec) - state.timeline_pan_x;
-                let shape_end_time = elem.kill_frame.map(|kf| kf as f32 / elem.fps as f32).unwrap_or(state.duration_secs);
-                let end_x = time_origin_x + (shape_end_time * pixels_per_sec) - state.timeline_pan_x;
+                let shape_end_time = elem
+                    .kill_frame
+                    .map(|kf| kf as f32 / elem.fps as f32)
+                    .unwrap_or(state.duration_secs);
+                let end_x =
+                    time_origin_x + (shape_end_time * pixels_per_sec) - state.timeline_pan_x;
 
                 if end_x > start_x
                     && start_x < track_area_rect.right()
@@ -382,9 +386,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             .and_then(|p| p.color)
                             .map(|c| egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], c[3]))
                             .unwrap_or_else(|| match elem.kind.as_str() {
-                                "circle" => egui::Color32::from_rgba_premultiplied(120, 200, 255, 255),
-                                "rect" => egui::Color32::from_rgba_premultiplied(255, 100, 100, 255),
-                                "text" => egui::Color32::from_rgba_premultiplied(200, 255, 100, 255),
+                                "circle" => {
+                                    egui::Color32::from_rgba_premultiplied(120, 200, 255, 255)
+                                }
+                                "rect" => {
+                                    egui::Color32::from_rgba_premultiplied(255, 100, 100, 255)
+                                }
+                                "text" => {
+                                    egui::Color32::from_rgba_premultiplied(200, 255, 100, 255)
+                                }
                                 _ => egui::Color32::from_gray(120),
                             });
 

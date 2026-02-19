@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::autocomplete; // Added this
+use crate::autocomplete;
 use eframe::egui;
 
 mod gutter;
@@ -59,10 +59,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // (avoids borrow-checker conflicts with other mutable UI closures).
     let handlers = state.dsl_event_handlers.clone();
 
+    // Custom layouter that applies the DSL syntax highlighter to the editor's
+    // layout job. Kept short and local so it can capture `defined_names` /
+    // `handlers` without extra indirection.
     let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
         let mut layout_job = egui::text::LayoutJob::default();
-        highlight_code(&mut layout_job, string, &defined_names, &handlers); // custom highlighter with handler colors
-        layout_job.wrap.max_width = wrap_width; // no wrapping
+        highlight_code(&mut layout_job, string, &defined_names, &handlers);
+        layout_job.wrap.max_width = wrap_width;
         ui.fonts(|f| f.layout_job(layout_job))
     };
 
@@ -181,9 +184,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         });
 
     if state.completion_popup_open {
-        // We still need a repaint for the popup to show up if it's new,
-        // but it's better handled in handle_state_and_render now.
-        // I'll keep it here just in case but without the spam.
+        // Keep a minimal placeholder so re-paint can occur when the
+        // completion popup is requested; detailed rendering is handled
+        // by `autocomplete::handle_state_and_render`.
     }
 
     if is_fullscreen {
@@ -201,24 +204,36 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     }
 }
 
-/// Find the index of the matching `)` for the `(` at `open_pos` inside `s`.
-/// Returns `Some(idx)` (byte index relative to `s`) or `None` if not found.
+/// Return the byte index of the matching `)` for the `(` located at
+/// `open_pos` inside `s`. Returns `None` when no matching closing paren
+/// is found. The function ignores parentheses that appear inside string
+/// literals and correctly handles escaped quotes (e.g. `"`).
 pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
-    // Iterate starting at the byte index `open_pos` (don't use `Iterator::skip`)
-    let mut depth: i32 = 0;
-    let mut in_string = false;
     if open_pos >= s.len() {
         return None;
     }
+
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut prev_was_escape = false;
+
     for (i, ch) in s[open_pos..].char_indices() {
         let idx = open_pos + i; // byte index relative to `s`
-        if ch == '"' {
+
+        // Toggle string state unless the quote is escaped.
+        if ch == '"' && !prev_was_escape {
             in_string = !in_string;
+            prev_was_escape = false;
             continue;
         }
+
+        // Track escape state for the next character inside strings
+        prev_was_escape = ch == '\\' && in_string && !prev_was_escape;
+
         if in_string {
             continue;
         }
+
         if ch == '(' {
             depth += 1;
         } else if ch == ')' {
@@ -228,6 +243,7 @@ pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
             }
         }
     }
+
     None
 }
 
@@ -243,6 +259,16 @@ mod tests {
         let matched = find_matching_paren(s, open).expect("matched");
         assert_eq!(&s[matched..matched + 1], ")");
         // ensure it matched the final closing paren before " tail"
+        assert!(s[matched + 1..].starts_with(" tail"));
+    }
+
+    #[test]
+    fn find_matching_paren_handles_escaped_quotes() {
+        // Ensure escaped quotes inside strings do not confuse the parser
+        let s = r#"call(a, b("foo\"(ignored)"), c) tail"#;
+        let open = s.find('(').unwrap();
+        let matched = find_matching_paren(s, open).expect("matched");
+        assert_eq!(&s[matched..matched + 1], ")");
         assert!(s[matched + 1..].starts_with(" tail"));
     }
 }

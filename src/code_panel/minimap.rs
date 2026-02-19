@@ -46,30 +46,30 @@ pub fn render_minimap(
             if x > rect.right() {
                 break;
             }
-
+            // Decide a color and whether this token is a comment (rest of line)
+            let is_comment = c == '/' && chars.peek() == Some(&'/');
             let color = if c.is_whitespace() {
                 None
             } else if c.is_ascii_digit() {
-                Some(egui::Color32::from_rgb(181, 206, 168)) // Number green
-            } else if "\"".contains(c) {
-                Some(egui::Color32::from_rgb(206, 145, 120)) // String
+                Some(egui::Color32::from_rgb(181, 206, 168)) // numbers
+            } else if c == '"' {
+                Some(egui::Color32::from_rgb(206, 145, 120)) // strings
             } else if "()[]{}".contains(c) {
-                Some(egui::Color32::from_rgb(255, 200, 50)) // Bracket Gold
-            } else if c == '/' && chars.peek() == Some(&'/') {
-                // Comment - rest of line
-                Some(egui::Color32::from_rgb(90, 120, 90)) // Comment Green
+                Some(egui::Color32::from_rgb(255, 200, 50)) // brackets
+            } else if is_comment {
+                Some(egui::Color32::from_rgb(90, 120, 90)) // comment (rest of line)
             } else if c.is_lowercase() {
-                Some(egui::Color32::from_rgb(86, 156, 214)) // Keyword/Param Blue
+                Some(egui::Color32::from_rgb(86, 156, 214)) // keyword/param
             } else if c.is_uppercase() {
-                Some(egui::Color32::from_rgb(78, 201, 176)) // Object Teal
+                Some(egui::Color32::from_rgb(78, 201, 176)) // object name
             } else {
                 Some(egui::Color32::from_gray(120))
             };
 
             if let Some(col) = color {
-                // If it's a comment, draw a long bar
-                if col == egui::Color32::from_rgb(80, 100, 80) {
-                    let len = line.len() as f32 * mm_char_width; // Approx
+                if is_comment {
+                    // draw the rest of the line as a single block for performance
+                    let len = line.len() as f32 * mm_char_width; // approximate
                     painter.rect_filled(
                         egui::Rect::from_min_size(
                             egui::pos2(x, y),
@@ -78,7 +78,7 @@ pub fn render_minimap(
                         1.0,
                         col,
                     );
-                    break; // Next line
+                    break; // next line
                 }
 
                 painter.rect_filled(

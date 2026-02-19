@@ -3,7 +3,13 @@ use crate::scene::Shape;
 
 /// Execute string `let`/`set` assignments, e.g. `let s = "hello"`.
 pub fn exec(_shapes: &mut [Shape], line: &str, ctx: &mut EvalContext) -> Result<bool, String> {
-    let rest = if line.starts_with("let ") { &line[4..] } else if line.starts_with("set ") { &line[4..] } else { line };
+    let rest = if line.starts_with("let ") {
+        &line[4..]
+    } else if line.starts_with("set ") {
+        &line[4..]
+    } else {
+        line
+    };
     let parts: Vec<&str> = rest.splitn(2, '=').collect();
     if parts.len() != 2 {
         return Err("invalid string assignment".to_string());

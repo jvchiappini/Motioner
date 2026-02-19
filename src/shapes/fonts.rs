@@ -1,13 +1,17 @@
-use std::path::{Path, PathBuf};
-use std::fs;
 use eframe::egui;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Comprueba si una fuente tiene al menos los glifos ASCII básicos necesarios
 /// para texto normal (letras, dígitos, '?'). Descarta fuentes de símbolos/iconos
 /// como AMDT_Symbols que no tienen glifos ASCII y causarían un panic en egui.
 fn has_latin_glyphs(path: &Path) -> bool {
-    let Ok(data) = fs::read(path) else { return false };
-    let Ok(font) = ab_glyph::FontArc::try_from_vec(data) else { return false };
+    let Ok(data) = fs::read(path) else {
+        return false;
+    };
+    let Ok(font) = ab_glyph::FontArc::try_from_vec(data) else {
+        return false;
+    };
     // Comprobar que al menos 'A', 'a', '0' y '?' tienen glifo real (id != 0)
     use ab_glyph::Font;
     let test_chars = ['A', 'a', '0', '?'];
@@ -37,7 +41,7 @@ pub fn list_system_fonts() -> Vec<(String, PathBuf)> {
         }
     }
     // TODO: Add Linux/macOS paths if needed
-    
+
     fonts.sort_by(|a, b| a.0.cmp(&b.0));
     fonts.dedup_by(|a, b| a.0 == b.0);
     fonts
@@ -78,12 +82,10 @@ pub fn load_font(font_def: &mut egui::FontDefinitions, name: &str, path: &std::p
     }
 
     if let Ok(font_data) = fs::read(path) {
-        font_def.font_data.insert(
-            name.to_owned(),
-            egui::FontData::from_owned(font_data),
-        );
-        
-        
+        font_def
+            .font_data
+            .insert(name.to_owned(), egui::FontData::from_owned(font_data));
+
         // Also register as its own family name so FontFamily::Name("FontName") works
         font_def.families.insert(
             egui::FontFamily::Name(name.to_owned().into()),

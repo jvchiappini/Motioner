@@ -139,7 +139,11 @@ pub fn rasterize_single_text(
     }
 
     if has_text {
-        Some(TextRasterResult { pixels, width: rw, height: rh })
+        Some(TextRasterResult {
+            pixels,
+            width: rw,
+            height: rh,
+        })
     } else {
         None
     }

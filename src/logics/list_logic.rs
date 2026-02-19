@@ -4,7 +4,13 @@ use crate::scene::Shape;
 /// Parse a list literal like `[1, 2, 3]` or `["a", "b"]` and store it in a var.
 /// Usage: `let items = [1, 2, 3]` or `let names = ["A","B"]`.
 pub fn exec(_shapes: &mut [Shape], line: &str, ctx: &mut EvalContext) -> Result<bool, String> {
-    let rest = if line.starts_with("let ") { &line[4..] } else if line.starts_with("set ") { &line[4..] } else { line };
+    let rest = if line.starts_with("let ") {
+        &line[4..]
+    } else if line.starts_with("set ") {
+        &line[4..]
+    } else {
+        line
+    };
     let parts: Vec<&str> = rest.splitn(2, '=').collect();
     if parts.len() != 2 {
         return Err("invalid list assignment".to_string());
