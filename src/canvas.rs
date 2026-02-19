@@ -6,7 +6,6 @@
 pub mod buffer_pool;
 pub mod cache_management;
 pub mod gpu;
-pub mod position_cache;
 pub mod preview_worker;
 pub mod rasterizer;
 pub mod spatial_hash;
@@ -15,7 +14,7 @@ pub mod tile_cache;
 pub mod ui;
 
 // Re-exportar funciones clave para facilidad de uso
-pub use position_cache::{build_position_cache_for, position_cache_bytes, PositionCache};
+// `position_cache` removed — caching logic simplified; keep canvas submodules here.
 pub use preview_worker::{
     generate_preview_frames, poll_preview_results, request_preview_frames, PreviewJob, PreviewMode,
     PreviewResult,

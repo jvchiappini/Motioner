@@ -1,6 +1,5 @@
 #[cfg(feature = "wgpu")]
 use super::gpu::{CompositionCallback, GpuShape};
-use super::position_cache::{build_position_cache, cached_frame_for};
 use super::rasterizer::sample_color_at;
 use crate::animations::animations_manager::animated_xy_for;
 use crate::app_state::AppState;
@@ -9,6 +8,18 @@ use eframe::egui;
 /// Renderiza y maneja las interacciones para el área del canvas central.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
     egui::Frame::canvas(ui.style()).show(ui, |ui| {
+        // Materialize `ElementKeyframes` into temporary `Shape` instances
+        // sampled at the current playhead time. This lets the existing
+        // canvas rendering/pathfinding logic keep working while the
+        // canonical storage is `ElementKeyframes`.
+        let mut live_shapes: Vec<crate::scene::Shape> = Vec::new();
+        for elem in &state.scene {
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, elem.fps);
+            if let Some(s) = elem.to_shape_at_frame(frame_idx) {
+                live_shapes.push(s);
+            }
+        }
+
         let (rect, response) = ui.allocate_exact_size(
             ui.available_size(),
             egui::Sense::drag().union(egui::Sense::click()),
@@ -131,21 +142,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             egui::Stroke::new(1.0, egui::Color32::BLACK),
         );
 
-        if state.position_cache.is_none() {
-            if let Some(pc) = build_position_cache(state) {
-                state.position_cache = Some(pc);
-            }
-        }
+        // PositionCache removed — always compute on-the-fly; no cached frame available.
 
         let mut gpu_shapes = Vec::new();
-        let cached = cached_frame_for(state, state.time);
+        // position cache removed => no cached per-frame positions available
+        let cached: Option<&Vec<(f32, f32)>> = None;
         let mut flat_idx: usize = 0;
 
         // Información de cada elemento Text encontrado en la escena durante fill_gpu_shapes.
         // Guardamos el índice en gpu_shapes donde insertamos el placeholder y el shape clonado
         // para rasterizarlo por separado después.
         struct TextEntry {
-            gpu_idx: usize,           // posición en gpu_shapes (antes del reverse)
+            gpu_idx: usize, // posición en gpu_shapes (antes del reverse)
             shape: crate::scene::Shape,
             parent_spawn: f32,
         }
@@ -299,7 +307,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         }
 
         fill_gpu_shapes(
-            &state.scene,
+            &live_shapes,
             &mut gpu_shapes,
             &mut text_entries,
             state.render_width as f32,
@@ -517,7 +525,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         }
 
                         let hit_path = find_hit_path(
-                            &state.scene,
+                            &live_shapes,
                             pos,
                             composition_rect,
                             zoom,
@@ -611,7 +619,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                     }
                 }
             }
-            let mut current_node = state.scene.get(path[0]);
+            let mut current_node = live_shapes.get(path[0]);
             for &idx in &path[1..] {
                 current_node = match current_node {
                     Some(crate::scene::Shape::Group { children, .. }) => children.get(idx),

@@ -1,4 +1,3 @@
-use super::position_cache::position_cache_bytes;
 use crate::app_state::AppState;
 use eframe::egui;
 use image::codecs::png::PngEncoder;
@@ -26,7 +25,8 @@ pub fn preview_cache_vram_bytes(state: &AppState) -> usize {
 }
 
 pub fn total_preview_cache_bytes(state: &AppState) -> usize {
-    preview_cache_ram_bytes(state) + preview_cache_vram_bytes(state) + position_cache_bytes(state)
+    // Position cache removed — only include preview caches (RAM + VRAM).
+    preview_cache_ram_bytes(state) + preview_cache_vram_bytes(state)
 }
 
 pub fn color_image_to_rgba_bytes(img: &egui::ColorImage) -> Vec<u8> {

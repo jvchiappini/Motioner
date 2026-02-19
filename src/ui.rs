@@ -118,7 +118,8 @@ impl eframe::App for MyApp {
                 }
             }
         }
-        collect_fonts(&state.scene, &mut used_fonts);
+        let legacy_shapes = crate::shapes::element_store::to_legacy_shapes(&state.scene);
+        collect_fonts(&legacy_shapes, &mut used_fonts);
         let mut fonts_changed = false;
         for font_name in used_fonts {
             if font_name != "System" && !font_name.is_empty() {
@@ -199,7 +200,7 @@ impl eframe::App for MyApp {
             && state.last_synced_settings != current_settings
         {
             state.dsl_code = dsl::generate_dsl(
-                &state.scene,
+                &crate::shapes::element_store::to_legacy_shapes(&state.scene),
                 state.render_width,
                 state.render_height,
                 state.fps,
@@ -287,10 +288,17 @@ impl eframe::App for MyApp {
                         // Do NOT preserve previously runtime-spawned (ephemeral)
                         // shapes here — keeping them caused runaway accumulation
                         // when the editor re-parsed while playback was running.
-                        state.scene = parsed;
+                        // Convert parsed `Shape`s into `ElementKeyframes` for the runtime
+                        state.scene = parsed
+                            .into_iter()
+                            .filter_map(|s| {
+                                crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
+                                    &s, state.fps,
+                                )
+                            })
+                            .collect();
                         // Recompute any caches that depend on the scene.
-                        state.position_cache = None;
-                        state.position_cache_build_in_progress = false;
+                        // position cache removed — no-op
                         // collect DSL event handler blocks (e.g. `on_time { ... }`)
                         state.dsl_event_handlers =
                             crate::dsl::extract_event_handlers_structured(&state.dsl_code);
@@ -432,7 +440,7 @@ impl eframe::App for MyApp {
                         // Update DSL code always if switching TO code
                         if state.active_tab != Some(target) {
                             state.dsl_code = dsl::generate_dsl(
-                                &state.scene,
+                                &crate::shapes::element_store::to_legacy_shapes(&state.scene),
                                 state.render_width,
                                 state.render_height,
                                 state.fps,
@@ -802,17 +810,7 @@ impl eframe::App for MyApp {
 
         // Poll background preview worker results and integrate textures (UI thread)
         crate::canvas::poll_preview_results(state, ctx);
-        // Poll for asynchronous position-cache build completion
-        if let Some(rx) = &state.position_cache_build_rx {
-            if let Ok(pc) = rx.try_recv() {
-                state.position_cache = Some(pc);
-                state.position_cache_build_in_progress = false;
-                state.toast_message = Some("Position cache ready".to_string());
-                state.toast_type = crate::app_state::ToastType::Info;
-                state.toast_deadline = ctx.input(|i| i.time) + 2.0;
-                state.position_cache_build_rx = None;
-            }
-        }
+        // position-cache background build removed — nothing to poll
 
         if state.show_settings {
             crate::project_settings::show(ctx, state);

@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::scene::{get_shape_mut, Shape};
+use crate::shapes::element_store::{ElementKeyframes, FrameProps};
 use eframe::egui;
 
 pub mod easing_curve_editor;
@@ -36,531 +36,760 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             // Body: render the same controls that previously lived in ui::show_modifier_modal
             let mut changed = false;
-            if let Some(shape) = get_shape_mut(&mut state.scene, &path) {
-                ui.add_space(4.0);
+            // We only support top-level paths for now (ElementKeyframes are flat)
+            let Some(elem) = path.get(0).and_then(|&i| state.scene.get_mut(i)) else {
+                return;
+            };
+            ui.add_space(4.0);
 
-                let earliest_spawn = shape.spawn_time();
+            let earliest_spawn = elem.spawn_frame as f32 / elem.fps as f32;
 
-                // Stable identifier for this element's modifier UI (used as id_source
-                // for collapsing headers so they don't reset when labels change).
-                let path_id = state
-                    .modifier_active_path
-                    .as_ref()
-                    .map(|p| {
-                        p.iter()
-                            .map(|n| n.to_string())
-                            .collect::<Vec<_>>()
-                            .join("-")
-                    })
-                    .unwrap_or_else(|| "root".to_string());
+            // Stable identifier for this element's modifier UI (used as id_source
+            // for collapsing headers so they don't reset when labels change).
+            let path_id = state
+                .modifier_active_path
+                .as_ref()
+                .map(|p| {
+                    p.iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join("-")
+                })
+                .unwrap_or_else(|| "root".to_string());
 
-                match shape {
-                    Shape::Circle(c) => {
-                        ui.group(|ui| {
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("⭕").size(18.0));
-                                    ui.label(
-                                        egui::RichText::new("Circle Parameters")
-                                            .strong()
-                                            .size(14.0),
-                                    );
-                                });
-                                ui.separator();
-
-                                egui::Grid::new("circle_grid")
-                                    .num_columns(2)
-                                    .spacing([12.0, 8.0])
-                                    .show(ui, |ui| {
-                                        ui.label("Name:");
-                                        if ui.text_edit_singleline(&mut c.name).changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Visible:");
-                                        if ui.checkbox(&mut c.visible, "").changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Spawn Time:");
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    &mut c.spawn_time,
-                                                    0.0..=state.duration_secs,
-                                                )
-                                                .suffix("s"),
-                                            )
-                                            .changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position X:");
-                                        let mut val_x = c.x * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_x, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            c.x = val_x / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position Y:");
-                                        let mut val_y = c.y * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_y, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            c.y = val_y / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Radius:");
-                                        let mut val_r = c.radius * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_r, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            c.radius = val_r / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Color:");
-                                        if ui.color_edit_button_srgba_unmultiplied(&mut c.color).changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-                                    });
-
-                                ui.add_space(4.0);
-                                // Render Move animations using dedicated module
-                                move_animation_element_modifiers::render_move_animation_modifiers(
-                                    ui,
-                                    ctx,
-                                    &mut c.animations,
-                                    c.spawn_time,
-                                    state.duration_secs,
-                                    c.x,
-                                    c.y,
-                                    &path_id,
-                                    &mut changed,
-                                );
-                            });
-                        });
-                    }
-                    Shape::Rect(r) => {
-                        ui.group(|ui| {
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("⬜").size(18.0));
-                                    ui.label(
-                                        egui::RichText::new("Rectangle Parameters")
-                                            .strong()
-                                            .size(14.0),
-                                    );
-                                });
-                                ui.separator();
-
-                                egui::Grid::new("rect_grid")
-                                    .num_columns(2)
-                                    .spacing([12.0, 8.0])
-                                    .show(ui, |ui| {
-                                        ui.label("Name:");
-                                        if ui.text_edit_singleline(&mut r.name).changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Visible:");
-                                        if ui.checkbox(&mut r.visible, "").changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Spawn Time:");
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    &mut r.spawn_time,
-                                                    0.0..=state.duration_secs,
-                                                )
-                                                .suffix("s"),
-                                            )
-                                            .changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position X:");
-                                        let mut val_x = r.x * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_x, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            r.x = val_x / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Position Y:");
-                                        let mut val_y = r.y * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_y, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            r.y = val_y / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Width:");
-                                        let mut val_w = r.w * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_w, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            r.w = val_w / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Height:");
-                                        let mut val_h = r.h * 100.0;
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut val_h, 0.0..=100.0)
-                                                    .suffix("%")
-                                                    .clamp_to_range(false),
-                                            )
-                                            .changed()
-                                        {
-                                            r.h = val_h / 100.0;
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Color:");
-                                        if ui.color_edit_button_srgba_unmultiplied(&mut r.color).changed()
-                                        {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-                                    });
-
-                                ui.add_space(4.0);
-                                // Render Move animations using dedicated module
-                                move_animation_element_modifiers::render_move_animation_modifiers(
-                                    ui,
-                                    ctx,
-                                    &mut r.animations,
-                                    r.spawn_time,
-                                    state.duration_secs,
-                                    r.x,
-                                    r.y,
-                                    &path_id,
-                                    &mut changed,
-                                );
-                            });
-                        });
-                    }
-                    Shape::Text(t) => {
+            match elem.kind.as_str() {
+                "circle" => {
+                    ui.group(|ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("📝").size(24.0));
-                                ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new("Text Element").strong().size(16.0));
-                                    ui.label(egui::RichText::new(format!("Name: {}", t.name)).small().weak());
-                                });
+                                ui.label(egui::RichText::new("⭕").size(18.0));
+                                ui.label(
+                                    egui::RichText::new("Circle Parameters").strong().size(14.0),
+                                );
                             });
-                            ui.add_space(8.0);
                             ui.separator();
-                            ui.add_space(8.0);
 
-                            // --- SECTION: BASIC INFO ---
-                            ui.label(egui::RichText::new("Identification").strong());
-                            egui::Grid::new("text_basic_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                            egui::Grid::new("circle_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 8.0])
+                                .show(ui, |ui| {
+                                    ui.label("Name:");
+                                    if ui.text_edit_singleline(&mut elem.name).changed() {
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Visible:");
+                                    let mut vis =
+                                        elem.visible.first().map(|kf| kf.value).unwrap_or(true);
+                                    if ui.checkbox(&mut vis, "").changed() {
+                                        elem.visible.clear();
+                                        elem.visible.push(crate::shapes::element_store::Keyframe {
+                                            frame: elem.spawn_frame,
+                                            value: vis,
+                                            easing: crate::animations::easing::Easing::Linear,
+                                        });
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Spawn Time:");
+                                    let mut spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut spawn_secs,
+                                                0.0..=state.duration_secs,
+                                            )
+                                            .suffix("s"),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.spawn_frame =
+                                            crate::shapes::element_store::seconds_to_frame(
+                                                spawn_secs, elem.fps,
+                                            );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Position X:");
+                                    let mut val_x = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.x)
+                                        .unwrap_or(0.5)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_x, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: Some(val_x / 100.0),
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Position Y:");
+                                    let mut val_y = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.y)
+                                        .unwrap_or(0.5)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_y, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: Some(val_y / 100.0),
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Radius:");
+                                    let mut val_r = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.radius)
+                                        .unwrap_or(0.1)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_r, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: Some(val_r / 100.0),
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Color:");
+                                    let mut color = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.color)
+                                        .unwrap_or([120, 200, 255, 255]);
+                                    if ui
+                                        .color_edit_button_srgba_unmultiplied(&mut color)
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: Some(color),
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+                                });
+
+                            ui.add_space(4.0);
+                            // Render Move animations using dedicated module
+                            let base_x = elem
+                                .sample(elem.spawn_frame)
+                                .and_then(|p| p.x)
+                                .unwrap_or(0.5);
+                            let base_y = elem
+                                .sample(elem.spawn_frame)
+                                .and_then(|p| p.y)
+                                .unwrap_or(0.5);
+                            move_animation_element_modifiers::render_move_animation_modifiers(
+                                ui,
+                                ctx,
+                                &mut elem.animations,
+                                elem.spawn_frame as f32 / elem.fps as f32,
+                                state.duration_secs,
+                                base_x,
+                                base_y,
+                                &path_id,
+                                &mut changed,
+                            );
+                        });
+                    });
+                }
+                "rect" => {
+                    ui.group(|ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("⬜").size(18.0));
+                                ui.label(
+                                    egui::RichText::new("Rectangle Parameters")
+                                        .strong()
+                                        .size(14.0),
+                                );
+                            });
+                            ui.separator();
+
+                            egui::Grid::new("rect_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 8.0])
+                                .show(ui, |ui| {
+                                    ui.label("Name:");
+                                    if ui.text_edit_singleline(&mut elem.name).changed() {
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Visible:");
+                                    let mut vis =
+                                        elem.visible.first().map(|kf| kf.value).unwrap_or(true);
+                                    if ui.checkbox(&mut vis, "").changed() {
+                                        elem.visible.clear();
+                                        elem.visible.push(crate::shapes::element_store::Keyframe {
+                                            frame: elem.spawn_frame,
+                                            value: vis,
+                                            easing: crate::animations::easing::Easing::Linear,
+                                        });
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Spawn Time:");
+                                    let mut spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut spawn_secs,
+                                                0.0..=state.duration_secs,
+                                            )
+                                            .suffix("s"),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.spawn_frame =
+                                            crate::shapes::element_store::seconds_to_frame(
+                                                spawn_secs, elem.fps,
+                                            );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Position X:");
+                                    let mut val_x = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.x)
+                                        .unwrap_or(0.5)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_x, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: Some(val_x / 100.0),
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Position Y:");
+                                    let mut val_y = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.y)
+                                        .unwrap_or(0.5)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_y, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: Some(val_y / 100.0),
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Width:");
+                                    let mut val_w = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.w)
+                                        .unwrap_or(0.3)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_w, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: Some(val_w / 100.0),
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Height:");
+                                    let mut val_h = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.h)
+                                        .unwrap_or(0.2)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut val_h, 0.0..=100.0)
+                                                .suffix("%")
+                                                .clamp_to_range(false),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: Some(val_h / 100.0),
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label("Color:");
+                                    let mut color = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.color)
+                                        .unwrap_or([255, 100, 100, 255]);
+                                    if ui
+                                        .color_edit_button_srgba_unmultiplied(&mut color)
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: Some(color),
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+                                });
+
+                            ui.add_space(4.0);
+                            // Render Move animations using dedicated module
+                            let base_x = elem
+                                .sample(elem.spawn_frame)
+                                .and_then(|p| p.x)
+                                .unwrap_or(0.5);
+                            let base_y = elem
+                                .sample(elem.spawn_frame)
+                                .and_then(|p| p.y)
+                                .unwrap_or(0.5);
+                            move_animation_element_modifiers::render_move_animation_modifiers(
+                                ui,
+                                ctx,
+                                &mut elem.animations,
+                                elem.spawn_frame as f32 / elem.fps as f32,
+                                state.duration_secs,
+                                base_x,
+                                base_y,
+                                &path_id,
+                                &mut changed,
+                            );
+                        });
+                    });
+                }
+                "text" => {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("📝").size(24.0));
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("Text Element").strong().size(16.0));
+                                ui.label(
+                                    egui::RichText::new(format!("Name: {}", elem.name))
+                                        .small()
+                                        .weak(),
+                                );
+                            });
+                        });
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        // --- SECTION: BASIC INFO ---
+                        ui.label(egui::RichText::new("Identification").strong());
+                        egui::Grid::new("text_basic_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
                                 ui.label("Name:");
-                                if ui.text_edit_singleline(&mut t.name).changed() { changed = true; }
+                                if ui.text_edit_singleline(&mut elem.name).changed() {
+                                    changed = true;
+                                }
                                 ui.end_row();
 
                                 ui.label("Visibility:");
-                                if ui.checkbox(&mut t.visible, "Visible").changed() { changed = true; }
-                                ui.end_row();
-                            });
-                            ui.add_space(12.0);
-
-                            // --- SECTION: TRANSFORM ---
-                            ui.label(egui::RichText::new("Transform & Timing").strong());
-                            egui::Grid::new("text_transform_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                                ui.label("Position:");
-                                ui.horizontal(|ui| {
-                                    ui.label("X");
-                                    if ui.add(egui::DragValue::new(&mut t.x).speed(0.01).clamp_range(0.0..=1.0)).changed() { changed = true; }
-                                    ui.add_space(8.0);
-                                    ui.label("Y");
-                                    if ui.add(egui::DragValue::new(&mut t.y).speed(0.01).clamp_range(0.0..=1.0)).changed() { changed = true; }
-                                });
-                                ui.end_row();
-
-                                ui.label("Spawn Time:");
-                                if ui.add(egui::Slider::new(&mut t.spawn_time, 0.0..=state.duration_secs).suffix("s")).changed() {
+                                let mut vis =
+                                    elem.visible.first().map(|kf| kf.value).unwrap_or(true);
+                                if ui.checkbox(&mut vis, "Visible").changed() {
+                                    elem.visible.clear();
+                                    elem.visible.push(crate::shapes::element_store::Keyframe {
+                                        frame: elem.spawn_frame,
+                                        value: vis,
+                                        easing: crate::animations::easing::Easing::Linear,
+                                    });
                                     changed = true;
                                 }
                                 ui.end_row();
                             });
-                            ui.add_space(12.0);
+                        ui.add_space(12.0);
 
-                            // --- SECTION: CONTENT & BASE STYLE ---
-                            ui.label(egui::RichText::new("Content & Base Style").strong());
-                            ui.group(|ui| {
-                                egui::Grid::new("text_content_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        // --- SECTION: TRANSFORM ---
+                        ui.label(egui::RichText::new("Transform & Timing").strong());
+                        egui::Grid::new("text_transform_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label("Position:");
+                                ui.horizontal(|ui| {
+                                    ui.label("X");
+                                    let mut x = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.x)
+                                        .unwrap_or(0.5);
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut x)
+                                                .speed(0.01)
+                                                .clamp_range(0.0..=1.0),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: Some(x),
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                    ui.add_space(8.0);
+                                    ui.label("Y");
+                                    let mut y = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.y)
+                                        .unwrap_or(0.5);
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut y)
+                                                .speed(0.01)
+                                                .clamp_range(0.0..=1.0),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: Some(y),
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
+                                });
+                                ui.end_row();
+
+                                ui.label("Spawn Time:");
+                                let mut spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut spawn_secs,
+                                            0.0..=state.duration_secs,
+                                        )
+                                        .suffix("s"),
+                                    )
+                                    .changed()
+                                {
+                                    elem.spawn_frame =
+                                        crate::shapes::element_store::seconds_to_frame(
+                                            spawn_secs, elem.fps,
+                                        );
+                                    changed = true;
+                                }
+                                ui.end_row();
+                            });
+                        ui.add_space(12.0);
+
+                        // --- SECTION: CONTENT & BASE STYLE ---
+                        ui.label(egui::RichText::new("Content & Base Style").strong());
+                        ui.group(|ui| {
+                            egui::Grid::new("text_content_grid")
+                                .num_columns(2)
+                                .spacing([12.0, 8.0])
+                                .show(ui, |ui| {
                                     ui.label("Text:");
-                                    if ui.text_edit_singleline(&mut t.value).changed() { changed = true; }
-                                    ui.end_row();
-
-                                    ui.label("Font Family:");
-                                    let mut selected_font = t.font.clone();
-                                    egui::ComboBox::from_id_source(format!("{}_font_combo", t.name))
-                                        .selected_text(&selected_font)
-                                        .show_ui(ui, |ui| {
-                                            for font_name in &state.available_fonts {
-                                                let f_fam = egui::FontFamily::Name(font_name.clone().into());
-                                                let is_bound = ui.ctx().fonts(|f| f.families().iter().any(|fam| fam == &f_fam));
-                                                let text = if is_bound {
-                                                    egui::RichText::new(font_name).family(f_fam)
-                                                } else {
-                                                    egui::RichText::new(font_name)
-                                                };
-                                                if ui.selectable_value(&mut selected_font, font_name.clone(), text).changed() {
-                                                    changed = true;
-                                                }
-                                            }
-                                        });
-                                    t.font = selected_font;
-                                    ui.end_row();
-
-                                    // Preview Area
-                                    ui.label("Preview:");
-                                    let preview_fam = if t.font == "System" || t.font.is_empty() {
-                                        egui::FontFamily::Proportional
-                                    } else {
-                                        let f_name = egui::FontFamily::Name(t.font.clone().into());
-                                        let is_bound = ui.ctx().fonts(|f| f.families().iter().any(|fam| fam == &f_name));
-                                        if is_bound { f_name } else { egui::FontFamily::Proportional }
-                                    };
-                                    ui.horizontal(|ui| {
-                                        ui.painter().rect_filled(ui.available_rect_before_wrap(), 4.0, egui::Color32::from_black_alpha(30));
-                                        ui.add_space(10.0);
-                                        ui.label(egui::RichText::new("AaBbCc 123").font(egui::FontId::new(24.0, preview_fam)));
-                                    });
+                                    let mut val = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.value)
+                                        .unwrap_or_else(|| "".to_string());
+                                    if ui.text_edit_singleline(&mut val).changed() {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: Some(val.clone()),
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
+                                        changed = true;
+                                    }
                                     ui.end_row();
 
                                     ui.label("Base Size:");
-                                    let mut size_pct = t.size * 100.0;
-                                    if ui.add(egui::DragValue::new(&mut size_pct).speed(0.1).clamp_range(0.1..=50.0).suffix("%")).changed() {
-                                        t.size = size_pct / 100.0;
+                                    let mut size_pct = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.size)
+                                        .unwrap_or(24.0)
+                                        * 100.0;
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut size_pct)
+                                                .speed(0.1)
+                                                .clamp_range(0.1..=50.0)
+                                                .suffix("%"),
+                                        )
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: Some(size_pct / 100.0),
+                                                value: None,
+                                                color: None,
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
                                         changed = true;
                                     }
                                     ui.end_row();
 
                                     ui.label("Base Color:");
-                                    if ui.color_edit_button_srgba_unmultiplied(&mut t.color).changed() {
+                                    let mut color = elem
+                                        .sample(elem.spawn_frame)
+                                        .and_then(|p| p.color)
+                                        .unwrap_or([200, 255, 100, 255]);
+                                    if ui
+                                        .color_edit_button_srgba_unmultiplied(&mut color)
+                                        .changed()
+                                    {
+                                        elem.insert_frame(
+                                            elem.spawn_frame,
+                                            FrameProps {
+                                                x: None,
+                                                y: None,
+                                                radius: None,
+                                                w: None,
+                                                h: None,
+                                                size: None,
+                                                value: None,
+                                                color: Some(color),
+                                                visible: None,
+                                                z_index: None,
+                                            },
+                                        );
                                         changed = true;
                                     }
                                     ui.end_row();
                                 });
-                            });
-                            ui.add_space(12.0);
-
-                            // --- SECTION: RICH TEXT SPANS ---
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Rich Text Spans").strong());
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("➕").color(egui::Color32::LIGHT_GREEN)).on_hover_text("Add new text span segment").clicked() {
-                                        t.spans.push(crate::shapes::text::TextSpan {
-                                            text: "New Segment".to_string(),
-                                            font: t.font.clone(),
-                                            size: t.size,
-                                            color: t.color,
-                                        });
-                                        changed = true;
-                                    }
-                                });
-                            });
-                            
-                            if t.spans.is_empty() {
-                                ui.label(egui::RichText::new("No spans defined. Using base text and style.").small().weak());
-                            } else {
-                                let mut to_remove = None;
-                                let mut to_move_up = None;
-                                let mut to_move_down = None;
-
-                                let num_spans = t.spans.len();
-                                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                                    for (i, span) in t.spans.iter_mut().enumerate() {
-                                        ui.group(|ui| {
-                                            ui.horizontal(|ui| {
-                                                ui.label(egui::RichText::new(format!("#{}", i+1)).weak());
-                                                if ui.text_edit_singleline(&mut span.text).changed() {
-                                                    changed = true;
-                                                }
-                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                    if ui.button("🗑").on_hover_text("Delete span").clicked() { to_remove = Some(i); }
-                                                    if i < num_spans - 1 {
-                                                        if ui.button("🔽").clicked() { to_move_down = Some(i); }
-                                                    }
-                                                    if i > 0 {
-                                                        if ui.button("🔼").clicked() { to_move_up = Some(i); }
-                                                    }
-                                                });
-                                            });
-                                            
-                                            ui.horizontal(|ui| {
-                                                ui.label("Font:");
-                                                let mut s_font = span.font.clone();
-                                                egui::ComboBox::from_id_source(format!("font_{}_{}", t.name, i))
-                                                    .selected_text(&s_font)
-                                                    .width(120.0)
-                                                    .show_ui(ui, |ui| {
-                                                        for f in &state.available_fonts {
-                                                            if ui.selectable_value(&mut s_font, f.clone(), f).changed() {
-                                                                changed = true;
-                                                            }
-                                                        }
-                                                    });
-                                                span.font = s_font;
-                                                
-                                                ui.label("Size:");
-                                                let mut span_pct = span.size * 100.0;
-                                                if ui.add(egui::DragValue::new(&mut span_pct).speed(0.1).clamp_range(0.1..=50.0).suffix("%")).changed() {
-                                                    span.size = span_pct / 100.0;
-                                                    changed = true;
-                                                }
-
-                                                ui.label("Color:");
-                                                if ui.color_edit_button_srgba_unmultiplied(&mut span.color).changed() {
-                                                    changed = true;
-                                                }
-                                            });
-                                        });
-                                    }
-                                });
-
-                                if let Some(i) = to_remove { t.spans.remove(i); changed = true; }
-                                if let Some(i) = to_move_up { t.spans.swap(i, i - 1); changed = true; }
-                                if let Some(i) = to_move_down { t.spans.swap(i, i + 1); changed = true; }
-                            }
-
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(12.0);
-
-                            // --- SECTION: ANIMATIONS ---
-                            move_animation_element_modifiers::render_move_animation_modifiers(
-                                ui,
-                                ctx,
-                                &mut t.animations,
-                                t.spawn_time,
-                                state.duration_secs,
-                                t.x,
-                                t.y,
-                                &path_id,
-                                &mut changed,
-                            );
                         });
-                    }
-                    Shape::Group {
-                        name,
-                        children: _,
-                        visible,
-                    } => {
-                        ui.group(|ui| {
-                            ui.vertical(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("📦").size(18.0));
-                                    ui.label(
-                                        egui::RichText::new("Group Parameters").strong().size(14.0),
-                                    );
-                                });
-                                ui.separator();
+                        ui.add_space(12.0);
 
-                                egui::Grid::new("group_grid")
-                                    .num_columns(2)
-                                    .spacing([12.0, 8.0])
-                                    .show(ui, |ui| {
-                                        ui.label("Visible:");
-                                        if ui.checkbox(visible, "").changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Name:");
-                                        if ui.text_edit_singleline(name).changed() {
-                                            changed = true;
-                                        }
-                                        ui.end_row();
-
-                                        ui.label("Earliest Spawn:");
-                                        ui.label(
-                                            egui::RichText::new(format!("{:.2}s", earliest_spawn))
-                                                .weak(),
-                                        );
-                                        ui.end_row();
-                                    });
-
-                                ui.add_space(4.0);
-                            });
-                        });
-                    }
+                        // --- SECTION: ANIMATIONS ---
+                        let base_x = elem
+                            .sample(elem.spawn_frame)
+                            .and_then(|p| p.x)
+                            .unwrap_or(0.5);
+                        let base_y = elem
+                            .sample(elem.spawn_frame)
+                            .and_then(|p| p.y)
+                            .unwrap_or(0.5);
+                        move_animation_element_modifiers::render_move_animation_modifiers(
+                            ui,
+                            ctx,
+                            &mut elem.animations,
+                            elem.spawn_frame as f32 / elem.fps as f32,
+                            state.duration_secs,
+                            base_x,
+                            base_y,
+                            &path_id,
+                            &mut changed,
+                        );
+                    });
                 }
-            } else {
-                ui.label("No element found at this path.");
-                state.modifier_active_path = None;
-            }
+                "group" => {
+                    ui.group(|ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("📦").size(18.0));
+                                ui.label(
+                                    egui::RichText::new("Group Parameters").strong().size(14.0),
+                                );
+                            });
+                            ui.separator();
+                        }); // ui.vertical
+                    }); // ui.group
+                }
+                _ => {
+                    // unknown kind: no-op
+                }
+            } // match elem.kind
 
-            // Persist changes immediately if any
             if changed {
-                state.position_cache = None; // invalidate cache
                 state.request_dsl_update();
+                // position cache removed — no-op
+                crate::events::element_properties_changed_event::on_element_properties_changed(
+                    state,
+                );
             }
-        });
-    });
-
-    // If the window was closed by the user, clear the active path
-    if !open {
-        state.modifier_active_path = None;
-    }
+        }); // ScrollArea
+    }); // window.show
 }

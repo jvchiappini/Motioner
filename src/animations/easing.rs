@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 /// Easing kinds for animations (moved from `scene.rs`).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BezierPoint {
     pub pos: (f32, f32),
     pub handle_left: (f32, f32),  // Relative to pos
     pub handle_right: (f32, f32), // Relative to pos
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Easing {
     Linear,
     /// Symmetric ease-in/out parameterized by `power` (1.0 == linear).

@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::scene::Shape;
+use crate::shapes::element_store::ElementKeyframes;
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
@@ -31,22 +31,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 state.timeline_pan_y -= scroll_delta.y;
             }
 
-            // Decide which scene paths are visible in the timeline (supports drilling into groups)
+            // Decide which scene paths are visible in the timeline (group-drill is
+            // not supported for ElementKeyframes yet; treat root as top-level)
             let mut visible_paths: Vec<Vec<usize>> = Vec::new();
             if let Some(root_path) = state.timeline_root_path.as_ref() {
-                match crate::scene::get_shape(&state.scene, root_path) {
-                    Some(Shape::Group { children, .. }) => {
-                        for j in 0..children.len() {
-                            let mut p = root_path.clone();
-                            p.push(j);
-                            visible_paths.push(p);
-                        }
-                    }
-                    // invalid root (not a group) — reset to top-level
-                    _ => {
-                        state.timeline_root_path = None;
-                    }
-                }
+                // groups/nesting are not yet represented in ElementKeyframes;
+                // reset to top-level for now
+                state.timeline_root_path = None;
             }
             if visible_paths.is_empty() {
                 for i in 0..state.scene.len() {
@@ -195,8 +186,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             let mut prefix: Vec<usize> = Vec::new();
                             for &idx in p.iter() {
                                 prefix.push(idx);
-                                if let Some(s) = crate::scene::get_shape(&state.scene, &prefix) {
-                                    acc.push((s.name().to_string(), Some(prefix.clone())));
+                                if let Some(elem) = state.scene.get(idx) {
+                                    acc.push((elem.name.clone(), Some(prefix.clone())));
                                 } else {
                                     acc.push((format!("#{}", idx), Some(prefix.clone())));
                                 }
@@ -308,8 +299,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             }
 
             for (i, path) in visible_paths.iter().enumerate() {
-                let shape = match crate::scene::get_shape(&state.scene, path) {
-                    Some(s) => s,
+                let elem = match state.scene.get(path[0]) {
+                    Some(e) => e,
                     None => continue,
                 };
                 let y = start_y + (i as f32 * row_height);
@@ -337,8 +328,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     egui::Stroke::new(1.0, egui::Color32::from_gray(50)),
                 );
 
-                // sticky label in gutter (top-aligned) — use actual shape name
-                let label = shape.name().to_string();
+                // sticky label in gutter (top-aligned) — use element name
+                let label = elem.name.clone();
                 gutter_painter.text(
                     egui::pos2(gutter_rect.left() + 8.0, y + 4.0),
                     egui::Align2::LEFT_TOP,
@@ -355,14 +346,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 let row_id = egui::Id::new("timeline_row").with(path.clone());
                 let row_resp = ui.interact(full_row_rect, row_id, egui::Sense::click());
                 if row_resp.double_clicked() {
-                    if let Shape::Group { .. } = shape {
-                        let old = state.timeline_root_path.clone();
-                        state.timeline_root_path = Some(path.clone());
-                        state.timeline_prev_root_path = old;
-                        state.timeline_breadcrumb_anim_t = 0.0;
-                        // reset horizontal pan so user sees group content from start
-                        state.timeline_pan_x = 0.0;
-                    }
+                    // group drilling is not implemented for ElementKeyframes yet;
+                    // just select the element
                     state.selected_node_path = Some(path.clone());
                     state.selected = Some(path[0]);
                 } else if row_resp.clicked() {
@@ -371,9 +356,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 }
 
                 // duration bar (spawn -> project end)
-                let spawn = shape.spawn_time();
+                let spawn = elem.spawn_frame as f32 / elem.fps as f32;
                 let start_x = time_origin_x + (spawn * pixels_per_sec) - state.timeline_pan_x;
-                let shape_end_time = shape.kill_time().unwrap_or(state.duration_secs);
+                let shape_end_time = elem.kill_frame.map(|kf| kf as f32 / elem.fps as f32).unwrap_or(state.duration_secs);
                 let end_x = time_origin_x + (shape_end_time * pixels_per_sec) - state.timeline_pan_x;
 
                 if end_x > start_x
@@ -390,18 +375,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             egui::pos2(bar_right, y + row_height - pad),
                         );
 
-                        let fill_color = match shape {
-                            Shape::Circle(c) => egui::Color32::from_rgba_premultiplied(
-                                c.color[0], c.color[1], c.color[2], c.color[3],
-                            ),
-                            Shape::Rect(r) => egui::Color32::from_rgba_premultiplied(
-                                r.color[0], r.color[1], r.color[2], r.color[3],
-                            ),
-                            Shape::Text(t) => egui::Color32::from_rgba_premultiplied(
-                                t.color[0], t.color[1], t.color[2], t.color[3],
-                            ),
-                            Shape::Group { .. } => egui::Color32::from_gray(120),
-                        };
+                        // prefer sampling the element's color at spawn_frame; fall
+                        // back to a kind-based default when missing
+                        let fill_color = elem
+                            .sample(elem.spawn_frame)
+                            .and_then(|p| p.color)
+                            .map(|c| egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], c[3]))
+                            .unwrap_or_else(|| match elem.kind.as_str() {
+                                "circle" => egui::Color32::from_rgba_premultiplied(120, 200, 255, 255),
+                                "rect" => egui::Color32::from_rgba_premultiplied(255, 100, 100, 255),
+                                "text" => egui::Color32::from_rgba_premultiplied(200, 255, 100, 255),
+                                _ => egui::Color32::from_gray(120),
+                            });
 
                         track_painter.rect_filled(bar_rect, 3.0, fill_color);
                         track_painter.rect_stroke(

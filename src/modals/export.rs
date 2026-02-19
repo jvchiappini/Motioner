@@ -527,7 +527,8 @@ fn start_export(state: &mut AppState) {
     let batch_size = state.export_batch_size;
     let use_gpu = state.export_use_gpu;
     let use_gpu_encoder = state.export_use_gpu_encoder;
-    let scene = state.scene.clone();
+    // clone ElementKeyframes for export worker
+    let ek_scene = state.scene.clone();
     let dsl_handlers = state.dsl_event_handlers.clone();
     let font_arc_cache = state.font_arc_cache.clone();
     let font_map = state.font_map.clone();
@@ -635,7 +636,7 @@ fn start_export(state: &mut AppState) {
 
         // ── Snapshot base used by both CPU & GPU renderers ─────────────────
         let snap_base = crate::canvas::preview_worker::RenderSnapshot {
-            scene: scene.clone(),
+            scene: ek_scene.clone(),
             dsl_event_handlers: dsl_handlers.clone(),
             render_width: render_w,
             render_height: render_h,
@@ -667,22 +668,9 @@ fn start_export(state: &mut AppState) {
                         );
                         match gpu_img {
                             Ok(mut img) => {
-                                let mut fac = font_arc_cache.clone();
-                                if let Some(text_layer) =
-                                    crate::canvas::text_rasterizer::rasterize_text_layer(
-                                        &scene,
-                                        render_w,
-                                        render_h,
-                                        t,
-                                        duration,
-                                        &mut fac,
-                                        &font_map,
-                                        &dsl_handlers,
-                                        0.0,
-                                    )
-                                {
-                                    composite_text_layer(&mut img, &text_layer);
-                                }
+                                // Text compositing disabled for export preview — return
+                                // the GPU snapshot as-is (currently white).
+                                // TODO: re-enable text compositing when renderer is ready.
                                 Ok(img)
                             }
                             Err(e) => Err(e),
@@ -1126,118 +1114,11 @@ fn render_frame_cpu(
     font_map: &std::collections::HashMap<String, std::path::PathBuf>,
     dsl_handlers: &[crate::dsl::runtime::DslHandler],
 ) -> egui::ColorImage {
-    use crate::animations::animations_manager::animated_xy_for;
-    use crate::scene::Shape;
-
+    // CPU renderer disabled — return a plain white image for export frames.
+    // TODO: implement CPU composition using ElementKeyframes when ready.
     let w = snap.render_width as usize;
     let h = snap.render_height as usize;
-    let mut pixels = vec![[255u8, 255, 255, 255]; w * h];
-
-    fn collect_prims(shapes: &[Shape], parent_spawn: f32, out: &mut Vec<(Shape, f32)>) {
-        for s in shapes {
-            let my_spawn = s.spawn_time().max(parent_spawn);
-            match s {
-                Shape::Group { children, .. } => collect_prims(children, my_spawn, out),
-                _ => out.push((s.clone(), my_spawn)),
-            }
-        }
-    }
-
-    let mut all = Vec::new();
-    collect_prims(&snap.scene, 0.0, &mut all);
-    // Reverse so that scene index 0 (top of scene graph) paints last = on top.
-    all.reverse();
-
-    let width_f = w as f32;
-    let height_f = h as f32;
-
-    for (shape, spawn) in &all {
-        if time < *spawn {
-            continue;
-        }
-
-        let (ax, ay) = animated_xy_for(shape, time, snap.duration_secs);
-
-        match shape {
-            Shape::Circle(c) => {
-                let cx = ax * width_f;
-                let cy = ay * height_f;
-                let r = c.radius * width_f;
-                let r2 = r * r;
-                let min_x = ((cx - r).floor() as isize).max(0) as usize;
-                let max_x = ((cx + r).ceil() as isize).min(w as isize - 1) as usize;
-                let min_y = ((cy - r).floor() as isize).max(0) as usize;
-                let max_y = ((cy + r).ceil() as isize).min(h as isize - 1) as usize;
-
-                for py in min_y..=max_y {
-                    for px in min_x..=max_x {
-                        let dx = px as f32 + 0.5 - cx;
-                        let dy = py as f32 + 0.5 - cy;
-                        if dx * dx + dy * dy <= r2 {
-                            let alpha = c.color[3] as f32 / 255.0;
-                            let dst = &mut pixels[py * w + px];
-                            blend(dst, &c.color, alpha);
-                        }
-                    }
-                }
-            }
-            Shape::Rect(rc) => {
-                let cx = ax * width_f;
-                let cy = ay * height_f;
-                let rw = rc.w * width_f;
-                let rh = rc.h * height_f;
-                let x0 = ((cx - rw * 0.5).floor() as isize).max(0) as usize;
-                let x1 = ((cx + rw * 0.5).ceil() as isize).min(w as isize - 1) as usize;
-                let y0 = ((cy - rh * 0.5).floor() as isize).max(0) as usize;
-                let y1 = ((cy + rh * 0.5).ceil() as isize).min(h as isize - 1) as usize;
-
-                let alpha = rc.color[3] as f32 / 255.0;
-                for py in y0..=y1 {
-                    for px in x0..=x1 {
-                        let dst = &mut pixels[py * w + px];
-                        blend(dst, &rc.color, alpha);
-                    }
-                }
-            }
-            Shape::Text(..) => {
-                // Text is handled via the rasterize_text_layer pass below
-            }
-            Shape::Group { .. } => {} // already flattened
-        }
-    }
-
-    // Composite text layer (uses the same rasterizer as the live preview)
-    let mut font_arc_cache_local = font_arc_cache.clone();
-    if let Some(text_layer) = crate::canvas::text_rasterizer::rasterize_text_layer(
-        &snap.scene,
-        snap.render_width,
-        snap.render_height,
-        time,
-        snap.duration_secs,
-        &mut font_arc_cache_local,
-        font_map,
-        dsl_handlers,
-        0.0,
-    ) {
-        // Blend text pixels (RGBA) on top
-        let pixel_count = w * h;
-        for i in 0..pixel_count.min(text_layer.pixels.len() / 4) {
-            let ta = text_layer.pixels[i * 4 + 3];
-            if ta == 0 {
-                continue;
-            }
-            let src = [
-                text_layer.pixels[i * 4],
-                text_layer.pixels[i * 4 + 1],
-                text_layer.pixels[i * 4 + 2],
-                ta,
-            ];
-            let alpha = ta as f32 / 255.0;
-            blend(&mut pixels[i], &src, alpha);
-        }
-    }
-
-    let flat: Vec<u8> = pixels.iter().flat_map(|p| *p).collect();
+    let flat = vec![255u8; w * h * 4];
     egui::ColorImage::from_rgba_unmultiplied([w, h], &flat)
 }
 

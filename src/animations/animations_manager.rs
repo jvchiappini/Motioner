@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Animation model (moved here from `scene.rs`). Re-exported from `crate::scene` for
 /// backward compatibility.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Animation {
     Move {
         to_x: f32,

@@ -2,21 +2,28 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-x = 0.100,
-y = 0.250,
-radius = 0.080,
-fill = "#78c8ff",
-spawn = 0.00
+	x = 0.500,
+	y = 0.500,
+	radius = 0.100,
+	fill = "#78c8ff",
+	spawn = 0.00
 }
 
-on_time {
-	let name = "Circle____"+frame
-	let position = seconds*0.1
-	circle name {
-		x = position,
-		y = 0.5,
-		radius = 0.08,
-		fill = "#39ff0d"
-		spawn = seconds
-	}
+text "Text" {
+	x = 0.500,
+	y = 0.500,
+	value = "Hello",
+	font = "System",
+	size = 0.0333,
+	fill = "#ffffff",
+	spawn = 0.00,
+}
+
+rect "Rect #2" {
+	x = 0.400,
+	y = 0.400,
+	width = 0.200,
+	height = 0.200,
+	fill = "#c87878",
+	spawn = 0.00
 }

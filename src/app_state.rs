@@ -1,4 +1,4 @@
-use crate::scene::{Scene, Shape};
+use crate::shapes::element_store::ElementKeyframes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -104,7 +104,7 @@ pub struct AppState {
     pub export_progress: Arc<AtomicUsize>,
     pub last_export_path: Option<PathBuf>,
 
-    pub scene: Scene,
+    pub scene: Vec<ElementKeyframes>,
     pub selected: Option<usize>,
     /// Selected node path in the scene graph. Example: `[0]` (top-level), `[0,2]` (child index 2 of top 0)
     pub selected_node_path: Option<Vec<usize>>,
@@ -148,19 +148,7 @@ pub struct AppState {
     #[serde(skip)]
     pub last_composition_rect: Option<egui::Rect>,
 
-    /// Optional precomputed position cache (per-frame, flattened scene).
-    /// When present, rendering uses these precomputed positions instead of
-    /// re-evaluating animations on every paint. Cleared when the scene or
-    /// timing changes.
-    #[serde(skip)]
-    pub position_cache: Option<crate::canvas::PositionCache>,
-
-    /// If a background position-cache build is running, this is true.
-    #[serde(skip)]
-    pub position_cache_build_in_progress: bool,
-    /// Receiver for background-built PositionCache (one-shot)
-    #[serde(skip)]
-    pub position_cache_build_rx: Option<std::sync::mpsc::Receiver<crate::canvas::PositionCache>>,
+    // Position cache removed — previously used for precomputing per-frame positions.
 
     // UI Animation State
     pub settings_open_time: Option<f64>,
@@ -362,7 +350,13 @@ impl Default for AppState {
             export_in_progress: false,
             export_progress: Arc::new(AtomicUsize::new(0)),
             last_export_path: None,
-            scene: Shape::sample_scene(),
+            // populate scene as ElementKeyframes converted from legacy sample_scene
+            scene: crate::shapes::shapes_manager::Shape::sample_scene()
+                .into_iter()
+                .filter_map(|s| {
+                    crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(&s, 60)
+                })
+                .collect(),
             selected: None,
             selected_node_path: None,
             show_dsl: false,
@@ -386,9 +380,6 @@ impl Default for AppState {
             canvas_pan_x: 0.0,
             canvas_pan_y: 0.0,
             last_composition_rect: None,
-            position_cache: None,
-            position_cache_build_in_progress: false,
-            position_cache_build_rx: None,
             settings_open_time: None,
             settings_is_closing: false,
             duration_input_buffer: "5.0".to_string(), // Initialize with default duration
@@ -494,7 +485,7 @@ impl AppState {
 
     pub fn request_dsl_update(&mut self) {
         self.dsl_code = crate::dsl::generate_dsl(
-            &self.scene,
+            &crate::shapes::element_store::to_legacy_shapes(&self.scene),
             self.render_width,
             self.render_height,
             self.fps,
@@ -507,26 +498,27 @@ impl AppState {
     /// preserve any runtime-created (ephemeral) shapes that were previously appended
     /// to the live scene. Ephemeral shapes are appended to the parsed scene unless a
     /// parsed shape already uses the same name (to avoid accidental duplicates).
-    pub fn apply_parsed_scene(&mut self, mut parsed_scene: Vec<crate::scene::Shape>) {
-        // collect existing ephemeral shapes from the current scene
-        let mut existing_ephemeral: Vec<crate::scene::Shape> = self
-            .scene
-            .iter()
-            .filter(|s| s.is_ephemeral())
-            .cloned()
+    pub fn apply_parsed_scene(&mut self, parsed_scene: Vec<crate::scene::Shape>) {
+        // preserve existing ephemeral ElementKeyframes
+        let mut existing_ephemeral: Vec<crate::shapes::element_store::ElementKeyframes> =
+            self.scene.iter().filter(|s| s.ephemeral).cloned().collect();
+
+        // convert parsed Scene (Vec<Shape>) into ElementKeyframes
+        let mut new_scene: Vec<crate::shapes::element_store::ElementKeyframes> = parsed_scene
+            .into_iter()
+            .filter_map(|s| {
+                crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(&s, self.fps)
+            })
             .collect();
 
-        if !existing_ephemeral.is_empty() {
-            // append only those ephemerals whose name is not present in parsed_scene
-            for e in existing_ephemeral.drain(..) {
-                let name = e.name().to_string();
-                if !parsed_scene.iter().any(|p| p.name() == name) {
-                    parsed_scene.push(e);
-                }
+        // append ephemerals that don't conflict by name
+        for ek in existing_ephemeral.drain(..) {
+            if !new_scene.iter().any(|p| p.name == ek.name) {
+                new_scene.push(ek);
             }
         }
 
-        self.scene = parsed_scene;
+        self.scene = new_scene;
     }
 }
 

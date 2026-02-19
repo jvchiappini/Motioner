@@ -1,6 +1,6 @@
 ﻿use crate::app_state::AppState;
 use crate::dsl;
-use crate::scene::{move_node, Shape};
+use crate::shapes::element_store::ElementKeyframes;
 use crate::shapes::ShapeDescriptor;
 use eframe::egui;
 use eframe::egui::{Color32, Frame, Id, InnerResponse, LayerId, Order, Sense};
@@ -38,19 +38,27 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         });
 
     // Execute the queued move exactly once per frame.
-    if let Some((from, to_parent, to_idx)) = state.move_request.take() {
-        if let Some(new_path) = move_node(&mut state.scene, &from, &to_parent, to_idx) {
-            state.selected_node_path = Some(new_path);
-            // Invalidate caches so the preview re-renders immediately.
-            state.position_cache = None;
-            state.dsl_code = dsl::generate_dsl(
-                &state.scene,
-                state.render_width,
-                state.render_height,
-                state.fps,
-                state.duration_secs,
-            );
-            crate::events::element_properties_changed_event::on_element_properties_changed(state);
+    if let Some((from, _to_parent, to_idx)) = state.move_request.take() {
+        // simple top-level move for flat ElementKeyframes list
+        if !from.is_empty() {
+            let src = from[0];
+            if src < state.scene.len() {
+                let node = state.scene.remove(src);
+                let insert_at = to_idx.min(state.scene.len());
+                state.scene.insert(insert_at, node);
+                state.selected_node_path = Some(vec![insert_at]);
+                // position cache removed — no-op
+                state.dsl_code = dsl::generate_dsl(
+                    &[], // generator currently expects Shape; leave empty for now
+                    state.render_width,
+                    state.render_height,
+                    state.fps,
+                    state.duration_secs,
+                );
+                crate::events::element_properties_changed_event::on_element_properties_changed(
+                    state,
+                );
+            }
         }
     }
 
@@ -88,8 +96,16 @@ fn render_root_drop_zone(
 
         if state.scene.is_empty() {
             let hovered = is_dragging && ui.rect_contains_pointer(rect);
-            let stroke_color = if hovered { Color32::LIGHT_BLUE } else { Color32::from_gray(60) };
-            let text_color = if hovered { Color32::WHITE } else { Color32::from_gray(120) };
+            let stroke_color = if hovered {
+                Color32::LIGHT_BLUE
+            } else {
+                Color32::from_gray(60)
+            };
+            let text_color = if hovered {
+                Color32::WHITE
+            } else {
+                Color32::from_gray(120)
+            };
 
             ui.painter()
                 .rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color));
@@ -111,16 +127,18 @@ fn render_root_drop_zone(
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn render_node(ui: &mut egui::Ui, state: &mut AppState, path: Vec<usize>) {
-    let Some(shape) = crate::scene::get_shape(&state.scene, &path) else {
-        return;
+    let element = match state.scene.get(path[0]) {
+        Some(e) => e,
+        None => return,
     };
 
-    let is_group = matches!(shape, Shape::Group { .. });
-    let children_count =
-        if let Shape::Group { children, .. } = shape { children.len() } else { 0 };
-    let node_name = shape.name().to_string();
-    let is_visible = shape.is_visible();
-    let (icon, icon_color) = shape_icon(shape);
+    // ElementKeyframes are a flat list for now; groups are represented by
+    // elements with kind == "group" but child nesting isn't supported yet.
+    let is_group = element.kind == "group";
+    let children_count = 0usize;
+    let node_name = element.name.clone();
+    let is_visible = element.visible.first().map(|kf| kf.value).unwrap_or(true);
+    let (icon, icon_color) = element_icon(element);
 
     let is_selected = state.selected_node_path.as_ref() == Some(&path);
     let is_renaming = state.renaming_path.as_ref() == Some(&path);
@@ -129,13 +147,30 @@ fn render_node(ui: &mut egui::Ui, state: &mut AppState, path: Vec<usize>) {
     let (zone_res, drop_payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
         if is_group {
             render_group_node(
-                ui, state, &path, drag_id, &node_name, icon, icon_color,
-                is_visible, is_selected, is_renaming, children_count,
+                ui,
+                state,
+                &path,
+                drag_id,
+                &node_name,
+                icon,
+                icon_color,
+                is_visible,
+                is_selected,
+                is_renaming,
+                children_count,
             );
         } else {
             render_leaf_node(
-                ui, state, &path, drag_id, &node_name, icon, icon_color,
-                is_visible, is_selected, is_renaming,
+                ui,
+                state,
+                &path,
+                drag_id,
+                &node_name,
+                icon,
+                icon_color,
+                is_visible,
+                is_selected,
+                is_renaming,
             );
         }
     });
@@ -162,11 +197,8 @@ fn render_group_node(
     children_count: usize,
 ) {
     let coll_id = Id::new("group_collapsing").with(path);
-    let coll_state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        coll_id,
-        false,
-    );
+    let coll_state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), coll_id, false);
 
     let mut clicked = false;
     let mut double_clicked = false;
@@ -176,8 +208,15 @@ fn render_group_node(
             ui.horizontal(|ui| {
                 let drag_res = drag_source(ui, drag_id, path.to_vec(), |ui| {
                     render_row(
-                        ui, state, path, node_name, icon, icon_color,
-                        is_visible, is_selected, is_renaming,
+                        ui,
+                        state,
+                        path,
+                        node_name,
+                        icon,
+                        icon_color,
+                        is_visible,
+                        is_selected,
+                        is_renaming,
                     );
                 });
                 clicked = drag_res.response.clicked();
@@ -200,10 +239,8 @@ fn render_group_node(
             // Empty-group drop zone so items can still be dropped into it.
             if children_count == 0 {
                 let (_r, payload) = ui.dnd_drop_zone::<Vec<usize>>(Frame::none(), |ui| {
-                    let (rect, _) = ui.allocate_at_least(
-                        egui::vec2(ui.available_width(), 20.0),
-                        Sense::hover(),
-                    );
+                    let (rect, _) = ui
+                        .allocate_at_least(egui::vec2(ui.available_width(), 20.0), Sense::hover());
                     if ui.memory(|m| m.is_anything_being_dragged())
                         && ui.rect_contains_pointer(rect)
                     {
@@ -256,8 +293,15 @@ fn render_leaf_node(
     ui.horizontal(|ui| {
         let drag_res = drag_source(ui, drag_id, path.to_vec(), |ui| {
             render_row(
-                ui, state, path, node_name, icon, icon_color,
-                is_visible, is_selected, is_renaming,
+                ui,
+                state,
+                path,
+                node_name,
+                icon,
+                icon_color,
+                is_visible,
+                is_selected,
+                is_renaming,
             );
         });
 
@@ -295,19 +339,27 @@ fn render_row(
 
     // Visibility toggle.
     let vis_icon = if is_visible { "👁" } else { "🚫" };
-    let vis_color = if is_visible { Color32::WHITE } else { Color32::GRAY };
+    let vis_color = if is_visible {
+        Color32::WHITE
+    } else {
+        Color32::GRAY
+    };
     if ui
-        .add(
-            egui::Button::new(egui::RichText::new(vis_icon).small().color(vis_color))
-                .frame(false),
-        )
+        .add(egui::Button::new(egui::RichText::new(vis_icon).small().color(vis_color)).frame(false))
         .clicked()
     {
-        if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, path) {
-            shape.set_visible(!is_visible);
+        if let Some(elem) = state.scene.get_mut(path[0]) {
+            // toggle visibility by inserting a hold keyframe at spawn
+            let new_vis = !is_visible;
+            elem.visible.clear();
+            elem.visible.push(crate::shapes::element_store::Keyframe {
+                frame: elem.spawn_frame,
+                value: new_vis,
+                easing: crate::animations::easing::Easing::Linear,
+            });
         }
         state.dsl_code = dsl::generate_dsl(
-            &state.scene,
+            &crate::shapes::element_store::to_legacy_shapes(&state.scene),
             state.render_width,
             state.render_height,
             state.fps,
@@ -329,12 +381,12 @@ fn render_row(
             res.request_focus();
         }
         if res.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            if let Some(shape) = crate::scene::get_shape_mut(&mut state.scene, path) {
-                shape.set_name(state.rename_buffer.clone());
+            if let Some(elem) = state.scene.get_mut(path[0]) {
+                elem.name = state.rename_buffer.clone();
             }
             state.renaming_path = None;
             state.dsl_code = dsl::generate_dsl(
-                &state.scene,
+                &crate::shapes::element_store::to_legacy_shapes(&state.scene),
                 state.render_width,
                 state.render_height,
                 state.fps,
@@ -348,7 +400,11 @@ fn render_row(
             icon,
             0.0,
             egui::TextFormat {
-                color: if is_visible { icon_color } else { Color32::from_gray(80) },
+                color: if is_visible {
+                    icon_color
+                } else {
+                    Color32::from_gray(80)
+                },
                 ..Default::default()
             },
         );
@@ -366,26 +422,32 @@ fn render_row(
                 ..Default::default()
             },
         );
-        // append spawn/kill range (subtle) and ephemeral badge
-        if let Some(shape) = crate::scene::get_shape(&state.scene, path) {
-            if shape.is_ephemeral() {
+        // append spawn/kill range (subtle) and ephemeral badge — use ElementKeyframes
+        if let Some(elem) = state.scene.get(path[0]) {
+            if elem.ephemeral {
                 job.append(
                     " ⚡",
                     0.0,
-                    egui::TextFormat { color: Color32::from_rgb(220, 200, 80), ..Default::default() },
+                    egui::TextFormat {
+                        color: Color32::from_rgb(220, 200, 80),
+                        ..Default::default()
+                    },
                 );
             }
 
-            let sp = shape.spawn_time();
-            let range = if let Some(k) = shape.kill_time() {
-                format!("  ({:.2}–{:.2})", sp, k)
+            let sp = elem.spawn_frame as f32 / elem.fps as f32;
+            let range = if let Some(kf) = elem.kill_frame {
+                format!("  ({:.2}–{:.2})", sp, kf as f32 / elem.fps as f32)
             } else {
                 format!("  ({:.2}– )", sp)
             };
             job.append(
                 &range,
                 0.0,
-                egui::TextFormat { color: Color32::from_gray(120), ..Default::default() },
+                egui::TextFormat {
+                    color: Color32::from_gray(120),
+                    ..Default::default()
+                },
             );
         }
         let label_res = ui.add(egui::Label::new(job).selectable(false));
@@ -444,10 +506,17 @@ fn draw_drop_indicator(ui: &egui::Ui, zone_res: &egui::Response) {
     // Split at the top-row boundary (~20 px) so the indicator stays near the header
     // even when the zone wraps an expanded group body.
     let row_bottom = rect.top() + 20.0;
-    let line_y = if pointer.y < rect.top() + 10.0 { rect.top() } else { row_bottom };
+    let line_y = if pointer.y < rect.top() + 10.0 {
+        rect.top()
+    } else {
+        row_bottom
+    };
 
     ui.painter().line_segment(
-        [egui::pos2(rect.left(), line_y), egui::pos2(rect.right(), line_y)],
+        [
+            egui::pos2(rect.left(), line_y),
+            egui::pos2(rect.right(), line_y),
+        ],
         egui::Stroke::new(2.0, Color32::from_rgb(100, 180, 255)),
     );
 }
@@ -479,35 +548,66 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
 
             let mut added = false;
             if ui.button("📦  Group").clicked() {
-                state.scene.push(Shape::Group {
-                    name: format!("Group #{}", state.scene.len()),
-                    children: Vec::new(),
-                    visible: true,
+                let mut ek = ElementKeyframes::new(
+                    format!("Group #{}", state.scene.len()),
+                    "group".into(),
+                    state.fps,
+                );
+                ek.spawn_frame = 0;
+                ek.visible.push(crate::shapes::element_store::Keyframe {
+                    frame: 0,
+                    value: true,
+                    easing: crate::animations::easing::Easing::Linear,
                 });
+                state.scene.push(ek);
                 added = true;
             }
             if ui.button("⭕   Circle").clicked() {
-                state.scene.push(crate::shapes::circle::Circle::create_default(
-                    format!("Circle #{}", state.scene.len()),
+                let s = crate::shapes::circle::Circle::create_default(format!(
+                    "Circle #{}",
+                    state.scene.len()
                 ));
+                if let Some(ek) =
+                    crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
+                        &s, state.fps,
+                    )
+                {
+                    state.scene.push(ek);
+                }
                 added = true;
             }
             if ui.button("⬜  Rectangle").clicked() {
-                state.scene.push(crate::shapes::rect::Rect::create_default(
-                    format!("Rect #{}", state.scene.len()),
+                let s = crate::shapes::rect::Rect::create_default(format!(
+                    "Rect #{}",
+                    state.scene.len()
                 ));
+                if let Some(ek) =
+                    crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
+                        &s, state.fps,
+                    )
+                {
+                    state.scene.push(ek);
+                }
                 added = true;
             }
             if ui.button("🔤  Text").clicked() {
-                state.scene.push(crate::shapes::text::Text::create_default(
-                    format!("Text #{}", state.scene.len()),
+                let s = crate::shapes::text::Text::create_default(format!(
+                    "Text #{}",
+                    state.scene.len()
                 ));
+                if let Some(ek) =
+                    crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
+                        &s, state.fps,
+                    )
+                {
+                    state.scene.push(ek);
+                }
                 added = true;
             }
             if added {
-                state.position_cache = None;
+                // position cache removed — no-op
                 state.dsl_code = dsl::generate_dsl(
-                    &state.scene,
+                    &crate::shapes::element_store::to_legacy_shapes(&state.scene),
                     state.render_width,
                     state.render_height,
                     state.fps,
@@ -525,12 +625,13 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn shape_icon(shape: &Shape) -> (&'static str, Color32) {
-    match shape {
-        Shape::Group { .. } => ("📦", Color32::from_rgb(255, 200, 100)),
-        Shape::Circle(..) => ("⭕", Color32::from_rgb(100, 200, 255)),
-        Shape::Rect(..) => ("⬜", Color32::from_rgb(255, 100, 100)),
-        Shape::Text(..) => ("🔤", Color32::from_rgb(200, 255, 100)),
+fn element_icon(elem: &ElementKeyframes) -> (&'static str, Color32) {
+    match elem.kind.as_str() {
+        "group" => ("📦", Color32::from_rgb(255, 200, 100)),
+        "circle" => ("⭕", Color32::from_rgb(100, 200, 255)),
+        "rect" => ("⬜", Color32::from_rgb(255, 100, 100)),
+        "text" => ("🔤", Color32::from_rgb(200, 255, 100)),
+        _ => ("❓", Color32::from_gray(180)),
     }
 }
 

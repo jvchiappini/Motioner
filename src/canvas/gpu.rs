@@ -156,37 +156,9 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         callback_resources: &'a egui_wgpu::CallbackResources,
     ) {
         let resources: &GpuResources = callback_resources.get().unwrap();
-        render_pass.set_pipeline(&resources.pipeline);
-        render_pass.set_bind_group(0, &resources.bind_group, &[]);
-
-        // Set scissor rect to clip rendering to the paper area
-        // Scissor rect in wgpu is in absolute physical pixels of the framebuffer
-        let ppp = info.pixels_per_point;
-        let vp = info.viewport_in_pixels();
-
-        // paper_rect is in logical egui points; convert to absolute physical pixels
-        let px0 = (self.paper_rect.min.x * ppp).round() as u32;
-        let py0 = (self.paper_rect.min.y * ppp).round() as u32;
-        let px1 = (self.paper_rect.max.x * ppp).round() as u32;
-        let py1 = (self.paper_rect.max.y * ppp).round() as u32;
-
-        // Clamp to the viewport (also in absolute physical pixels)
-        let vx0 = vp.left_px as u32;
-        let vy0 = vp.top_px as u32;
-        let vx1 = vx0 + vp.width_px as u32;
-        let vy1 = vy0 + vp.height_px as u32;
-
-        let sx = px0.clamp(vx0, vx1);
-        let sy = py0.clamp(vy0, vy1);
-        let ex = px1.clamp(vx0, vx1);
-        let ey = py1.clamp(vy0, vy1);
-        let sw = ex.saturating_sub(sx);
-        let sh = ey.saturating_sub(sy);
-
-        if sw > 0 && sh > 0 {
-            render_pass.set_scissor_rect(sx, sy, sw, sh);
-            render_pass.draw(0..6, 0..self.shapes.len() as u32);
-        }
+        // Rendering disabled for preview — keep the render pass but don't issue
+        // any draw calls. This leaves the cleared background (white) intact.
+        // TODO: re-enable composition here when the new renderer is available.
     }
 }
 
@@ -487,15 +459,8 @@ pub fn render_frame_color_image_gpu_snapshot(
     snap: &crate::canvas::preview_worker::RenderSnapshot,
     time: f32,
 ) -> Result<egui::ColorImage, String> {
-    let mut working_scene = snap.scene.clone();
-    let frame_idx = (time * snap.preview_fps as f32).round() as u32;
-    apply_on_time_handlers(
-        &mut working_scene,
-        &snap.dsl_event_handlers,
-        time,
-        frame_idx,
-    );
-
+    // PREVIEW / EXPORT: rendering disabled — return a plain white image.
+    // TODO: re-implement GPU composition using ElementKeyframes.
     let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier)
         .round()
         .max(1.0) as u32;
@@ -518,251 +483,11 @@ pub fn render_frame_color_image_gpu_snapshot(
         preview_w = (preview_w as f32 * scale).round() as u32;
         preview_h = (preview_h as f32 * scale).round() as u32;
     }
-
-    let mut gpu_shapes: Vec<GpuShape> = Vec::new();
-
-    fn collect_prims(
-        shapes: &[crate::scene::Shape],
-        parent_spawn: f32,
-        out: &mut Vec<(crate::scene::Shape, f32)>,
-    ) {
-        for s in shapes {
-            let my_spawn = s.spawn_time().max(parent_spawn);
-            match s {
-                crate::scene::Shape::Group { children, .. } => {
-                    collect_prims(children, my_spawn, out)
-                }
-                _ => out.push((s.clone(), my_spawn)),
-            }
-        }
-    }
-
-    let mut all = Vec::new();
-    collect_prims(&working_scene, 0.0, &mut all);
-    // Reverse so that scene index 0 (top of scene graph) is drawn last = on top.
-    all.reverse();
-
-    for (shape, actual_spawn) in all.iter() {
-        if time < *actual_spawn {
-            continue;
-        }
-        // skip shapes that were explicitly killed before `time`
-        if let Some(k) = shape.kill_time() {
-            if time >= k {
-                continue;
-            }
-        }
-        match shape {
-            crate::scene::Shape::Circle(c) => {
-                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
-                    shape,
-                    time,
-                    snap.duration_secs,
-                );
-
-                let radius_px = c.radius * snap.render_width as f32;
-                let x_px = eval_x * snap.render_width as f32;
-                let y_px = eval_y * snap.render_height as f32;
-
-                gpu_shapes.push(GpuShape {
-                    pos: [x_px, y_px],
-                    size: [radius_px, radius_px],
-                    color: [
-                        srgb_to_linear(c.color[0]),
-                        srgb_to_linear(c.color[1]),
-                        srgb_to_linear(c.color[2]),
-                        c.color[3] as f32 / 255.0,
-                    ],
-                    shape_type: 0,
-                    spawn_time: *actual_spawn,
-                    p1: 0,
-                    p2: 0,
-                    uv0: [0.0, 0.0],
-                    uv1: [0.0, 0.0],
-                });
-            }
-            crate::scene::Shape::Rect(r) => {
-                let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
-                    shape,
-                    time,
-                    snap.duration_secs,
-                );
-
-                let w_px = r.w * snap.render_width as f32;
-                let h_px = r.h * snap.render_height as f32;
-                let x_px = eval_x * snap.render_width as f32;
-                let y_px = eval_y * snap.render_height as f32;
-
-                gpu_shapes.push(GpuShape {
-                    pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
-                    size: [w_px / 2.0, h_px / 2.0],
-                    color: [
-                        srgb_to_linear(r.color[0]),
-                        srgb_to_linear(r.color[1]),
-                        srgb_to_linear(r.color[2]),
-                        r.color[3] as f32 / 255.0,
-                    ],
-                    shape_type: 1,
-                    spawn_time: *actual_spawn,
-                    p1: 0,
-                    p2: 0,
-                    uv0: [0.0, 0.0],
-                    uv1: [0.0, 0.0],
-                });
-            }
-            _ => {}
-        }
-    }
-
-    let shape_data = bytemuck::cast_slice(&gpu_shapes);
-    if shape_data.len() > resources.shape_buffer.size() as usize {
-        resources.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("shape_buffer_worker"),
-            size: (shape_data.len() * 2 + 1024) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        resources.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("composition_bind_group_worker"),
-            layout: &resources.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: resources.shape_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: resources.uniform_buffer.as_entire_binding(),
-                },
-            ],
-        });
-    }
-
-    if !gpu_shapes.is_empty() {
-        queue.write_buffer(&resources.shape_buffer, 0, shape_data);
-    }
-
-    let uniforms = Uniforms {
-        resolution: [snap.render_width as f32, snap.render_height as f32],
-        preview_res: [preview_w as f32, preview_h as f32],
-        paper_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
-        viewport_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
-        count: gpu_shapes.len() as f32,
-        mag_x: 0.0,
-        mag_y: 0.0,
-        mag_active: 0.0,
-        time,
-        pixels_per_point: 1.0,
-        _padding: [0.0; 2],
-    };
-
-    queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview_offscreen"),
-        size: wgpu::Extent3d {
-            width: preview_w,
-            height: preview_h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: resources.target_format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("preview_encoder"),
-    });
-    {
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("preview_renderpass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            occlusion_query_set: None,
-            timestamp_writes: None,
-        });
-        rpass.set_pipeline(&resources.pipeline);
-        rpass.set_bind_group(0, &resources.bind_group, &[]);
-        // ¡MAGIA! Dibujamos todas las formas en una sola llamada instanciada
-        // 6 vértices por quad, 'shapes.len()' instancias.
-        if !gpu_shapes.is_empty() {
-            rpass.draw(0..6, 0..gpu_shapes.len() as u32);
-        }
-    }
-
-    // SI NO TENEMOS QUE BAJARLO A CPU, TERMINAMOS AQUÍ
-
-    let bytes_per_pixel = 4u32;
-    let bytes_per_row_unpadded = bytes_per_pixel * preview_w;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = bytes_per_row_unpadded.div_ceil(align) * align;
-    let output_buffer_size = padded_bytes_per_row as u64 * preview_h as u64;
-
-    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("preview_readback_buffer"),
-        size: output_buffer_size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::ImageCopyBuffer {
-            buffer: &output_buffer,
-            layout: wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(preview_h),
-            },
-        },
-        wgpu::Extent3d {
-            width: preview_w,
-            height: preview_h,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    queue.submit(Some(encoder.finish()));
-
-    let buffer_slice = output_buffer.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-        tx.send(result).unwrap();
-    });
-    device.poll(wgpu::Maintain::Wait);
-    rx.recv()
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-
-    let data = buffer_slice.get_mapped_range();
-    let mut pixels = Vec::with_capacity((preview_w * preview_h * 4) as usize);
-    for y in 0..preview_h {
-        let row_start = (y * padded_bytes_per_row) as usize;
-        let row_end = row_start + (preview_w * bytes_per_pixel) as usize;
-        pixels.extend_from_slice(&data[row_start..row_end]);
-    }
-
+    // Generate an all-white ColorImage and return it — rendering disabled.
+    let flat = vec![255u8; (preview_w * preview_h * 4) as usize];
     Ok(egui::ColorImage::from_rgba_unmultiplied(
         [preview_w as usize, preview_h as usize],
-        &pixels,
+        &flat,
     ))
 }
 
@@ -776,7 +501,7 @@ pub fn render_frame_native_texture(
     let preview_w = (snap.render_width as f32 * snap.preview_multiplier).round() as u32;
     let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round() as u32;
 
-    let mut gpu_shapes = Vec::new();
+    let mut gpu_shapes: Vec<GpuShape> = Vec::new();
     fn fill_recursive(
         shapes: &[crate::scene::Shape],
         out: &mut Vec<GpuShape>,
@@ -853,15 +578,9 @@ pub fn render_frame_native_texture(
             }
         }
     }
-    fill_recursive(
-        &snap.scene,
-        &mut gpu_shapes,
-        time,
-        0.0,
-        snap.duration_secs,
-        snap.render_width as f32,
-        snap.render_height as f32,
-    );
+    // Rendering disabled for preview/export — do NOT populate `gpu_shapes`.
+    // keep an empty `gpu_shapes` so the render pass just clears to white.
+    // TODO: populate `gpu_shapes` from ElementKeyframes when reimplementing.
 
     if !gpu_shapes.is_empty() {
         queue.write_buffer(

@@ -216,7 +216,7 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                     if let Ok(val) = state.duration_input_buffer.parse::<f32>() {
                         let clamped = val.clamp(0.1, 3600.0);
                         state.duration_secs = clamped;
-                        state.position_cache = None;
+                        // position cache removed — no-op
                     }
                 } else if !response.has_focus() {
                     // If not typing, keep the buffer in sync with the actual float value
@@ -255,14 +255,14 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                         .add(egui::DragValue::new(&mut state.render_width).prefix("W: "))
                         .changed()
                     {
-                        state.position_cache = None;
+                        // position cache removed — no-op
                     }
                     ui.label("x");
                     if ui
                         .add(egui::DragValue::new(&mut state.render_height).prefix("H: "))
                         .changed()
                     {
-                        state.position_cache = None;
+                        // position cache removed — no-op
                     }
                 });
                 ui.end_row();
@@ -294,7 +294,7 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                         if btn.clicked() {
                             state.render_width = w;
                             state.render_height = h;
-                            state.position_cache = None;
+                            // position cache removed — no-op
                         }
                     }
                 });
@@ -307,45 +307,12 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
 
     // 3. Caching & Performance
     section(ui, "Cache & Performance", &|ui, state| {
-        // Position Cache
+        // Position Prediction removed — legacy caching disabled.
         ui.label(
-            egui::RichText::new("Position Prediction")
-                .strong()
-                .color(egui::Color32::WHITE),
+            egui::RichText::new("Position Prediction — not available")
+                .italics()
+                .color(egui::Color32::YELLOW),
         );
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui
-                .button("Build Cache Now")
-                .on_hover_text("Pre-calculate object positions for smoother playback")
-                .clicked()
-                && !state.position_cache_build_in_progress
-            {
-                let (tx, rx) = std::sync::mpsc::channel::<crate::canvas::PositionCache>();
-                state.position_cache_build_in_progress = true;
-                state.position_cache_build_rx = Some(rx);
-                let scene = state.scene.clone();
-                let fps = state.fps;
-                let duration = state.duration_secs;
-                let handlers = state.dsl_event_handlers.clone();
-                std::thread::spawn(move || {
-                    if let Some(pc) =
-                        crate::canvas::build_position_cache_for(scene, fps, duration, &handlers)
-                    {
-                        let _ = tx.send(pc);
-                    }
-                });
-            }
-
-            if state.position_cache_build_in_progress {
-                ui.spinner();
-                ui.label("Building...");
-            } else if state.position_cache.is_some() {
-                ui.label(egui::RichText::new("✓ Ready").color(egui::Color32::GREEN));
-            } else {
-                ui.label(egui::RichText::new("Not built").color(egui::Color32::YELLOW));
-            }
-        });
 
         ui.add_space(12.0);
         ui.label(
@@ -370,13 +337,8 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 });
         });
 
-        // Memory usage warning
-        let _current_mem_mb = (
-            crate::canvas::position_cache_bytes(state)
-                + state.preview_frame_cache.len() * 4 * 100 * 100
-            // VERY Rough estimate if missing dimensions
-        ) / 1024
-            / 1024; // This logic was more complex in original, let's simplify for UI cleanliness but keep functionality if possible.
+        // Memory usage warning (approx.)
+        let _current_mem_mb = (state.preview_frame_cache.len() * 4 * 100 * 100) / 1024 / 1024;
 
         // Simplified Maintenance
         ui.add_space(8.0);
@@ -386,7 +348,6 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 state.preview_texture_cache.clear();
                 state.preview_compressed_cache.clear();
                 state.preview_texture = None;
-                state.position_cache = None;
             }
             ui.label(
                 egui::RichText::new("Fews cached frames")

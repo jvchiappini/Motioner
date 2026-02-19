@@ -53,7 +53,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
 
     let defined_names: std::collections::HashSet<String> =
-        state.scene.iter().map(|s| s.name().to_string()).collect();
+        state.scene.iter().map(|s| s.name.clone()).collect();
 
     // Clone handler metadata so the highlighter closure doesn't borrow `state`
     // (avoids borrow-checker conflicts with other mutable UI closures).

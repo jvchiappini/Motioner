@@ -34,7 +34,7 @@ pub enum PreviewResult {
 
 #[derive(Clone)]
 pub struct RenderSnapshot {
-    pub scene: Vec<crate::scene::Shape>,
+    pub scene: Vec<crate::shapes::element_store::ElementKeyframes>,
     pub dsl_event_handlers: Vec<crate::dsl::runtime::DslHandler>,
     pub render_width: u32,
     pub render_height: u32,
