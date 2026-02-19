@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::shapes::ShapeDescriptor;
+use serde::{Deserialize, Serialize};
 
 pub fn default_visible() -> bool {
     true
@@ -57,14 +57,20 @@ impl Shape {
     }
 
     pub fn to_dsl(&self, indent: &str) -> String {
-        // If indent is empty, we use our internal to_dsl_impl(0) logic
-        // but if it's not empty, we might want to respect it.
-        // For simplicity with existing code, let's just use to_dsl_impl.
-        self.to_dsl_impl(indent.len() / 4)
+        // If indent is empty, we use our internal to_dsl_impl(0) logic.
+        // When an indent string is provided, accept both tab-based
+        // indentation and legacy 4-space groups.
+        let indent_level = if indent.contains('\t') {
+            indent.chars().filter(|c| *c == '\t').count()
+        } else {
+            indent.len() / 4
+        };
+        self.to_dsl_impl(indent_level)
     }
 
     fn to_dsl_impl(&self, indent_level: usize) -> String {
-        let indent = "    ".repeat(indent_level);
+        // Use tabs for indentation in generated DSL (one tab == one level).
+        let indent = "\t".repeat(indent_level);
         match self {
             Shape::Circle(c) => {
                 let mut out = c.to_dsl(&indent);
@@ -74,7 +80,9 @@ impl Shape {
                 // here would duplicate them.
                 if indent_level > 0 {
                     for anim in &c.animations {
-                        if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                        if let Some(ma) =
+                            crate::animations::move_animation::MoveAnimation::from_scene(anim)
+                        {
                             out.push_str(&ma.to_dsl_block(None, &indent));
                             out.push('\n');
                         }
@@ -86,7 +94,9 @@ impl Shape {
                 let mut out = r.to_dsl(&indent);
                 if indent_level > 0 {
                     for anim in &r.animations {
-                        if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                        if let Some(ma) =
+                            crate::animations::move_animation::MoveAnimation::from_scene(anim)
+                        {
                             out.push_str(&ma.to_dsl_block(None, &indent));
                             out.push('\n');
                         }
@@ -98,7 +108,9 @@ impl Shape {
                 let mut out = t.to_dsl(&indent);
                 if indent_level > 0 {
                     for anim in &t.animations {
-                        if let Some(ma) = crate::animations::move_animation::MoveAnimation::from_scene(anim) {
+                        if let Some(ma) =
+                            crate::animations::move_animation::MoveAnimation::from_scene(anim)
+                        {
                             out.push_str(&ma.to_dsl_block(None, &indent));
                             out.push('\n');
                         }
@@ -170,6 +182,27 @@ impl Shape {
                     min_t
                 }
             }
+        }
+    }
+
+    /// Optional explicit kill time for the shape (None => no kill time)
+    pub fn kill_time(&self) -> Option<f32> {
+        match self {
+            Shape::Circle(c) => c.kill_time,
+            Shape::Rect(r) => r.kill_time,
+            Shape::Text(t) => t.kill_time,
+            Shape::Group { .. } => None,
+        }
+    }
+
+    /// Whether this shape was created at runtime (ephemeral) and should be
+    /// excluded from generated DSL output.
+    pub fn is_ephemeral(&self) -> bool {
+        match self {
+            Shape::Circle(c) => c.ephemeral,
+            Shape::Rect(r) => r.ephemeral,
+            Shape::Text(t) => t.ephemeral,
+            Shape::Group { .. } => false,
         }
     }
 

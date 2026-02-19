@@ -373,8 +373,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 // duration bar (spawn -> project end)
                 let spawn = shape.spawn_time();
                 let start_x = time_origin_x + (spawn * pixels_per_sec) - state.timeline_pan_x;
-                let end_x =
-                    time_origin_x + (state.duration_secs * pixels_per_sec) - state.timeline_pan_x;
+                let shape_end_time = shape.kill_time().unwrap_or(state.duration_secs);
+                let end_x = time_origin_x + (shape_end_time * pixels_per_sec) - state.timeline_pan_x;
 
                 if end_x > start_x
                     && start_x < track_area_rect.right()

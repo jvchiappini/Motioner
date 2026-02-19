@@ -1,6 +1,7 @@
 pub mod circle;
 pub mod rect;
 pub mod text;
+pub mod element_store;
 pub mod shapes_manager;
 pub mod utilities;
 pub mod fonts;

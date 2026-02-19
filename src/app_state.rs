@@ -502,6 +502,32 @@ impl AppState {
         );
         crate::events::element_properties_changed_event::on_element_properties_changed(self);
     }
+
+    /// Replace the current `scene` with `parsed_scene` (result of `dsl::parse_dsl`) but
+    /// preserve any runtime-created (ephemeral) shapes that were previously appended
+    /// to the live scene. Ephemeral shapes are appended to the parsed scene unless a
+    /// parsed shape already uses the same name (to avoid accidental duplicates).
+    pub fn apply_parsed_scene(&mut self, mut parsed_scene: Vec<crate::scene::Shape>) {
+        // collect existing ephemeral shapes from the current scene
+        let mut existing_ephemeral: Vec<crate::scene::Shape> = self
+            .scene
+            .iter()
+            .filter(|s| s.is_ephemeral())
+            .cloned()
+            .collect();
+
+        if !existing_ephemeral.is_empty() {
+            // append only those ephemerals whose name is not present in parsed_scene
+            for e in existing_ephemeral.drain(..) {
+                let name = e.name().to_string();
+                if !parsed_scene.iter().any(|p| p.name() == name) {
+                    parsed_scene.push(e);
+                }
+            }
+        }
+
+        self.scene = parsed_scene;
+    }
 }
 
 #[derive(Clone)]

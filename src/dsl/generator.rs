@@ -23,12 +23,18 @@ pub fn generate(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f3
 
     // Shape definitions (without inline animations)
     for shape in scene {
+        if shape.is_ephemeral() {
+            continue;
+        }
         out.push_str(&shape.to_dsl(""));
         out.push('\n');
     }
 
     // Top-level move blocks referencing elements by name
     for shape in scene {
+        if shape.is_ephemeral() {
+            continue;
+        }
         let name = shape.name();
         let animations = shape_animations(shape);
 
@@ -126,5 +132,59 @@ fn shape_animations(shape: &Shape) -> &[Animation] {
         Shape::Rect(r) => &r.animations,
         Shape::Text(t) => &t.animations,
         _ => &[],
+    }
+}
+
+/// Convert leading groups of 4 spaces into tab characters for every line.
+/// Only affects leading indentation — interior spaces are preserved.
+pub fn normalize_tabs(src: &str) -> String {
+    src.lines()
+        .map(|line| {
+            let mut i = 0usize;
+            let bytes = line.as_bytes();
+            let mut leading = String::new();
+            // consume existing tabs as-is
+            while i < bytes.len() {
+                let c = bytes[i] as char;
+                if c == '\t' {
+                    leading.push('\t');
+                    i += 1;
+                } else if c == ' ' {
+                    // count consecutive spaces
+                    let mut count = 0usize;
+                    while i + count < bytes.len() && bytes[i + count] == b' ' {
+                        count += 1;
+                    }
+                    // convert groups of 4 spaces into tabs, leave remainder spaces
+                    let tabs = count / 4;
+                    let rem = count % 4;
+                    for _ in 0..tabs {
+                        leading.push('\t');
+                    }
+                    for _ in 0..rem {
+                        leading.push(' ');
+                    }
+                    i += count;
+                } else {
+                    break;
+                }
+            }
+            format!("{}{}", leading, &line[i..])
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_tabs_converts_leading_spaces() {
+        let src = "circle \"C\" {\n    x = 0.5,\n        span\"a\"\n}\n";
+        let out = normalize_tabs(src);
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[1].starts_with("\tx ="));
+        assert!(lines[2].starts_with("\t\tspan"));
     }
 }

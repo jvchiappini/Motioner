@@ -164,6 +164,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     state.autosave_error = Some(diagnostics[0].message.clone());
                 }
 
+                // Apply the canonical DSL formatter (tabs for indentation).
+                // This normalizes leading 4-space groups into tabs so the
+                // editor always shows the formatted representation.
+                let normalized = crate::dsl::generator::normalize_tabs(&state.dsl_code);
+                if normalized != state.dsl_code {
+                    state.dsl_code = normalized;
+                }
+
                 // Parsing and scene/preview updates are still debounced and
                 // handled in `ui::update` (so preview updates don't happen on
                 // every keystroke).

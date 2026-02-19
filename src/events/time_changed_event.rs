@@ -16,8 +16,9 @@ impl TimeChangedEvent {
         state.last_time_changed = Some((seconds, frame));
         // Immediately dispatch any registered `on_time` DSL handlers so tests
         // and callers that directly call `on_time_changed` observe the
-        // side-effects on `state.scene` synchronously.
-        let _ = apply_on_time_handlers(&mut state.scene, &state.dsl_event_handlers, seconds, frame);
+        // side-effects on `state.scene` synchronously. Also collect any
+        // shapes spawned by handlers and append them to the live scene.
+        let _ = apply_on_time_handlers_collect_spawns(&mut state.scene, &state.dsl_event_handlers, seconds, frame);
     }
 }
 
@@ -42,6 +43,40 @@ pub fn apply_on_time_handlers(
             }
         }
     }
+    changed
+}
+
+/// Same as `apply_on_time_handlers` but collects any shapes queued by
+/// handler execution (via `spawn_*` actions) and appends them to the
+/// provided `scene_vec` (useful when `scene_vec` is the real application
+/// scene and new runtime-created elements must become visible in the UI).
+pub fn apply_on_time_handlers_collect_spawns(
+    scene_vec: &mut Vec<crate::scene::Shape>,
+    handlers: &[DslHandler],
+    seconds: f32,
+    frame: u32,
+) -> bool {
+    let mut changed = false;
+
+    let mut ctx = EvalContext::new().with_var("seconds", seconds).with_var("frame", frame as f32);
+
+    for handler in handlers {
+        if handler.name == "on_time" || handler.name == "time_changed" {
+            if runtime::run_handler(&mut scene_vec[..], handler, &mut ctx) {
+                changed = true;
+            }
+        }
+    }
+
+    // Append any spawned shapes requested by handlers.
+    let spawned = ctx.take_spawned_shapes();
+    if !spawned.is_empty() {
+        for s in spawned {
+            scene_vec.push(s);
+        }
+        changed = true;
+    }
+
     changed
 }
 
@@ -71,6 +106,32 @@ mod handler_tests {
             crate::scene::Shape::Circle(c) => {
                 assert!((c.x - 0.2).abs() < 1e-3);
                 assert!((c.y - 0.25).abs() < 1e-3);
+            }
+            _ => panic!("expected circle"),
+        }
+    }
+
+    #[test]
+    fn spawn_circle_via_handler_is_appended() {
+        let mut scene: Vec<crate::scene::Shape> = Vec::new();
+
+        let handlers = vec![DslHandler {
+            name: "on_time".to_string(),
+            body: "circle \"S1\" { x = seconds * 0.1, y = 0.25, radius = 0.05, fill = \"#78c8ff\", spawn = seconds, kill = seconds + 1.0 }".to_string(),
+            color: [0, 0, 0, 0],
+        }];
+
+        let changed = apply_on_time_handlers_collect_spawns(&mut scene, &handlers, 2.0, 0);
+        assert!(changed);
+        assert_eq!(scene.len(), 1);
+        match &scene[0] {
+            crate::scene::Shape::Circle(c) => {
+                assert_eq!(c.name, "S1");
+                assert!((c.x - 0.2).abs() < 1e-6);
+                assert!((c.y - 0.25).abs() < 1e-6);
+                assert!((c.radius - 0.05).abs() < 1e-6);
+                assert_eq!(c.ephemeral, true);
+                assert_eq!(c.kill_time, Some(3.0));
             }
             _ => panic!("expected circle"),
         }

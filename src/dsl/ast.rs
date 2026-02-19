@@ -129,6 +129,7 @@ pub struct CircleNode {
     pub radius: f32,
     pub fill: Option<Color>,
     pub spawn: f32,
+    pub kill: Option<f32>,
     pub z_index: i32,
     pub animations: Vec<MoveBlock>,
 }
@@ -143,6 +144,7 @@ pub struct RectNode {
     pub h: f32,
     pub fill: Option<Color>,
     pub spawn: f32,
+    pub kill: Option<f32>,
     pub z_index: i32,
     pub animations: Vec<MoveBlock>,
 }
@@ -158,6 +160,7 @@ pub struct TextNode {
     pub value: String,
     pub fill: Option<Color>,
     pub spawn: f32,
+    pub kill: Option<f32>,
     pub z_index: i32,
     pub spans: Vec<TextSpan>,
     pub animations: Vec<MoveBlock>,

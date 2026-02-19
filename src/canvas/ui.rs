@@ -168,6 +168,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             let frame_idx = (current_time * 60.0).round() as u32;
             for shape in shapes {
                 let my_spawn = shape.spawn_time().max(parent_spawn);
+                // honor explicit kill time if present
+                if let Some(k) = shape.kill_time() {
+                    if current_time >= k {
+                        *flat_idx += 1; // keep frame indexing in sync
+                        continue;
+                    }
+                }
                 match shape {
                     crate::scene::Shape::Circle(c) => {
                         let (eval_x, eval_y) = if let Some(frame) = cached {

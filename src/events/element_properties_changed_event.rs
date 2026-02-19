@@ -29,6 +29,18 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
     let dst = project_dir.join("code.motioner");
     fs::write(&dst, &state.dsl_code)?;
     state.last_export_path = Some(dst.clone());
+    // After successful save, normalise indentation to use tabs and persist
+    // the normalized version (silent autosave). Only overwrite if changes
+    // are produced and the normalized source still validates.
+    let normalized = crate::dsl::generator::normalize_tabs(&state.dsl_code);
+    if normalized != state.dsl_code {
+        // validate normalized before writing
+        let diags = crate::dsl::validate_dsl(&normalized);
+        if diags.is_empty() {
+            fs::write(&dst, &normalized)?;
+            state.dsl_code = normalized;
+        }
+    }
     // Clear diagnostics on successful save
     state.dsl_diagnostics.clear();
     if show_toast {
@@ -69,5 +81,26 @@ mod tests {
         // Ensure file was not written
         let dst = td.path().join("code.motioner");
         assert!(!dst.exists());
+    }
+
+    #[test]
+    fn write_dsl_converts_leading_spaces_to_tabs_on_success() {
+        let mut state = crate::app_state::AppState::default();
+        let td = tempdir().expect("tempdir");
+        state.project_path = Some(td.path().to_path_buf());
+
+        // valid DSL (includes header) but indented with spaces
+        state.dsl_code = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n\ncircle \"C\" {\n    x = 0.5,\n    y = 0.5,\n    radius = 0.1,\n    spawn = 0.0\n}\n".to_string();
+
+        let res = write_dsl_to_project(&mut state, false);
+        assert!(res.is_ok());
+
+        let dst = td.path().join("code.motioner");
+        let content = fs::read_to_string(&dst).expect("read written file");
+
+        // saved file should contain tabs for indentation
+        assert!(content.contains("\n\tx ="));
+        // state.dsl_code should be updated to normalized version
+        assert!(state.dsl_code.contains('\t'));
     }
 }

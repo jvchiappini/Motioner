@@ -11,6 +11,11 @@ pub struct Circle {
     pub radius: f32,
     pub color: [u8; 4],
     pub spawn_time: f32,
+    /// Optional explicit kill time (shape is invisible at time >= kill_time)
+    #[serde(default)]
+    pub kill_time: Option<f32>,
+    #[serde(default)]
+    pub ephemeral: bool,
     #[serde(default)]
     pub z_index: i32,
     #[serde(default)]
@@ -28,6 +33,8 @@ impl Default for Circle {
             radius: 0.1,
             color: [120, 200, 255, 255],
             spawn_time: 0.0,
+            kill_time: None,
+            ephemeral: false,
             z_index: 0,
             animations: Vec::new(),
             visible: true,
@@ -84,27 +91,65 @@ impl ShapeDescriptor for Circle {
                 .speed(0.1)
                 .prefix("Spawn: "),
         );
+        // Kill time (optional)
+        ui.horizontal(|ui| {
+            let mut k = self.kill_time.unwrap_or(f32::NAN);
+            let changed = ui
+                .add(egui::DragValue::new(&mut k).speed(0.1).prefix("Kill: "))
+                .changed();
+            if changed {
+                if k.is_nan() {
+                    self.kill_time = None;
+                } else {
+                    self.kill_time = Some(k);
+                }
+                state.request_dsl_update();
+            }
+        });
     }
 
     fn to_dsl(&self, indent: &str) -> String {
-        format!(
-            "{}circle \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    radius = {:.3},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2}\n{}}}\n",
-            indent,
-            self.name,
-            indent,
-            self.x,
-            indent,
-            self.y,
-            indent,
-            self.radius,
-            indent,
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            indent,
-            self.spawn_time,
-            indent
-        )
+        if let Some(k) = self.kill_time {
+            format!(
+                "{}circle \"{}\" {{\n{}\tx = {:.3},\n{}\ty = {:.3},\n{}\tradius = {:.3},\n{}\tfill = \"#{:02x}{:02x}{:02x}\",\n{}\tspawn = {:.2},\n{}\tkill = {:.2}\n{}}}\n",
+                indent,
+                self.name,
+                indent,
+                self.x,
+                indent,
+                self.y,
+                indent,
+                self.radius,
+                indent,
+                self.color[0],
+                self.color[1],
+                self.color[2],
+                indent,
+                self.spawn_time,
+                indent,
+                k,
+                indent
+            )
+        } else {
+            format!(
+                "{}circle \"{}\" {{\n{}\tx = {:.3},\n{}\ty = {:.3},\n{}\tradius = {:.3},\n{}\tfill = \"#{:02x}{:02x}{:02x}\",\n{}\tspawn = {:.2}\n{}}}\n",
+                indent,
+                self.name,
+                indent,
+                self.x,
+                indent,
+                self.y,
+                indent,
+                self.radius,
+                indent,
+                self.color[0],
+                self.color[1],
+                self.color[2],
+                indent,
+                self.spawn_time,
+                indent
+            )
+        }
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {

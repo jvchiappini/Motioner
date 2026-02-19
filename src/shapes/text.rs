@@ -23,9 +23,13 @@ pub struct Text {
     pub spans: Vec<TextSpan>,
     pub spawn_time: f32,
     #[serde(default)]
+    pub kill_time: Option<f32>,
+    #[serde(default)]
     pub z_index: i32,
     #[serde(default)]
     pub animations: Vec<crate::scene::Animation>,
+    #[serde(default)]
+    pub ephemeral: bool,
     #[serde(default = "super::shapes_manager::default_visible")]
     pub visible: bool,
 }
@@ -42,8 +46,10 @@ impl Default for Text {
             color: [255, 255, 255, 255],
             spans: Vec::new(),
             spawn_time: 0.0,
-            z_index: 0,
-            animations: Vec::new(),
+                kill_time: None, // Initialize kill_time
+                ephemeral: false, // Initialize ephemeral
+                z_index: 0,
+                animations: Vec::new(),
             visible: true,
         }
     }
@@ -153,6 +159,19 @@ impl ShapeDescriptor for Text {
             if ui.add(egui::DragValue::new(&mut self.spawn_time).speed(0.1).prefix("Spawn: ")).changed() {
                 changed = true;
             }
+            // optional kill time
+            ui.horizontal(|ui| {
+                let mut k = self.kill_time.unwrap_or(f32::NAN);
+                let ch = ui.add(egui::DragValue::new(&mut k).speed(0.1).prefix("Kill: ")).changed();
+                if ch {
+                    if k.is_nan() {
+                        self.kill_time = None;
+                    } else {
+                        self.kill_time = Some(k);
+                    }
+                    changed = true;
+                }
+            });
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -232,7 +251,7 @@ impl ShapeDescriptor for Text {
 
     fn to_dsl(&self, indent: &str) -> String {
         let mut out = format!(
-            "{}text \"{}\" {{\n{}    x = {:.3},\n{}    y = {:.3},\n{}    value = \"{}\",\n{}    font = \"{}\",\n{}    size = {:.4},\n{}    fill = \"#{:02x}{:02x}{:02x}\",\n{}    spawn = {:.2},\n",
+            "{}text \"{}\" {{\n{}\tx = {:.3},\n{}\ty = {:.3},\n{}\tvalue = \"{}\",\n{}\tfont = \"{}\",\n{}\tsize = {:.4},\n{}\tfill = \"#{:02x}{:02x}{:02x}\",\n{}\tspawn = {:.2},\n",
             indent,
             self.name,
             indent,
@@ -252,16 +271,18 @@ impl ShapeDescriptor for Text {
             indent,
             self.spawn_time
         );
-        
+        if let Some(k) = self.kill_time {
+            out.push_str(&format!("{}\tkill = {:.2},\n", indent, k));
+        }
         if !self.spans.is_empty() {
-            out.push_str(&format!("{}    spans = [\n", indent));
+            out.push_str(&format!("{}\tspans = [\n", indent));
             for span in &self.spans {
                 out.push_str(&format!(
-                    "{}        span(\"{}\", font=\"{}\", size={:.4}, fill=\"#{:02x}{:02x}{:02x}\"),\n",
+                    "{}\t\tspan(\"{}\", font=\"{}\", size={:.4}, fill=\"#{:02x}{:02x}{:02x}\"),\n",
                     indent, span.text.replace('"', "\\\""), span.font, span.size, span.color[0], span.color[1], span.color[2]
                 ));
             }
-            out.push_str(&format!("{}    ]\n", indent));
+            out.push_str(&format!("{}\t]\n", indent));
         }
         
         out.push_str(&format!("{}}}\n", indent));

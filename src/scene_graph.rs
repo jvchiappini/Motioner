@@ -366,6 +366,28 @@ fn render_row(
                 ..Default::default()
             },
         );
+        // append spawn/kill range (subtle) and ephemeral badge
+        if let Some(shape) = crate::scene::get_shape(&state.scene, path) {
+            if shape.is_ephemeral() {
+                job.append(
+                    " ⚡",
+                    0.0,
+                    egui::TextFormat { color: Color32::from_rgb(220, 200, 80), ..Default::default() },
+                );
+            }
+
+            let sp = shape.spawn_time();
+            let range = if let Some(k) = shape.kill_time() {
+                format!("  ({:.2}–{:.2})", sp, k)
+            } else {
+                format!("  ({:.2}– )", sp)
+            };
+            job.append(
+                &range,
+                0.0,
+                egui::TextFormat { color: Color32::from_gray(120), ..Default::default() },
+            );
+        }
         let label_res = ui.add(egui::Label::new(job).selectable(false));
         if is_selected {
             ui.painter().rect_filled(

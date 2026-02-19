@@ -47,6 +47,12 @@ pub fn sample_color_at(state: &AppState, paper_uv: egui::Pos2, time: f32) -> [u8
         if time < *actual_spawn {
             continue;
         }
+        // honor kill_time if present (don't rasterize after kill)
+        if let Some(k) = shape.kill_time() {
+            if time >= k {
+                continue;
+            }
+        }
         
         // Obtenemos la posición animada actual
         let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(shape, time, state.duration_secs);

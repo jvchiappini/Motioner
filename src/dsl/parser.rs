@@ -180,6 +180,7 @@ fn parse_circle(block: &[String]) -> Option<CircleNode> {
         radius: 0.05,
         fill: None,
         spawn: 0.0,
+        kill: None,
         z_index: 0,
         animations: Vec::new(),
     };
@@ -221,6 +222,7 @@ fn parse_rect(block: &[String]) -> Option<RectNode> {
         h: 0.1,
         fill: None,
         spawn: 0.0,
+        kill: None,
         z_index: 0,
         animations: Vec::new(),
     };
@@ -263,6 +265,7 @@ fn parse_text(block: &[String]) -> Option<TextNode> {
         value: String::new(),
         fill: None,
         spawn: 0.0,
+        kill: None,
         z_index: 0,
         spans: Vec::new(),
         animations: Vec::new(),
@@ -446,6 +449,7 @@ fn apply_circle_kv(node: &mut CircleNode, key: &str, val: &str) {
         "y" => node.y = val.parse().unwrap_or(node.y),
         "radius" => node.radius = val.parse().unwrap_or(node.radius),
         "spawn" => node.spawn = val.parse().unwrap_or(node.spawn),
+        "kill" => node.kill = val.parse().ok(),
         "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
         "fill" => node.fill = Color::from_hex(val),
         _ => {}
@@ -459,6 +463,7 @@ fn apply_rect_kv(node: &mut RectNode, key: &str, val: &str) {
         "width" | "w" => node.w = val.parse().unwrap_or(node.w),
         "height" | "h" => node.h = val.parse().unwrap_or(node.h),
         "spawn" => node.spawn = val.parse().unwrap_or(node.spawn),
+        "kill" => node.kill = val.parse().ok(),
         "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
         "fill" => node.fill = Color::from_hex(val),
         _ => {}
@@ -471,6 +476,7 @@ fn apply_text_kv(node: &mut TextNode, key: &str, val: &str) {
         "y" => node.y = val.parse().unwrap_or(node.y),
         "size" => node.size = val.parse().unwrap_or(node.size),
         "spawn" => node.spawn = val.parse().unwrap_or(node.spawn),
+        "kill" => node.kill = val.parse().ok(),
         "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
         "value" => node.value = val.trim_matches('"').to_string(),
         "font" => node.font = val.trim_matches('"').to_string(),

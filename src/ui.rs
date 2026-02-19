@@ -34,6 +34,7 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
                 crate::app_state::CompletionItem { label: "rect".into(), insert_text: "rect \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    width = 0.30,\n    height = 0.20,\n    fill = \"#c87878\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
                 crate::app_state::CompletionItem { label: "text".into(), insert_text: "text \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    value = \"Hello\",\n    font = \"System\",\n    size = 24.0,\n    fill = \"#ffffff\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
                 crate::app_state::CompletionItem { label: "move".into(), insert_text: "move {\n    element = \"Name\",\n    to = (0.50, 0.50),\n    during = 0.00 -> 1.00,\n    ease = linear\n}\n".into(), is_snippet: true },
+                // use full `circle "Name" { ... }` blocks inside `on_time {}` to spawn dynamically
             ];
 
             let filtered: Vec<_> = candidates
@@ -281,7 +282,15 @@ impl eframe::App for MyApp {
                     // rapid texture swaps that produce visible flicker on high-refresh monitors.
                     let parsed = crate::dsl::parse_dsl(&state.dsl_code);
                     if !parsed.is_empty() {
+                        // When the DSL source is edited we must *recreate* the
+                        // scene and the runtime logic from the parsed result.
+                        // Do NOT preserve previously runtime-spawned (ephemeral)
+                        // shapes here — keeping them caused runaway accumulation
+                        // when the editor re-parsed while playback was running.
                         state.scene = parsed;
+                        // Recompute any caches that depend on the scene.
+                        state.position_cache = None;
+                        state.position_cache_build_in_progress = false;
                         // collect DSL event handler blocks (e.g. `on_time { ... }`)
                         state.dsl_event_handlers =
                             crate::dsl::extract_event_handlers_structured(&state.dsl_code);

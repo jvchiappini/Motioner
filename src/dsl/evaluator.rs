@@ -18,12 +18,18 @@ pub enum Value {
 /// Variables available during expression evaluation (e.g. `seconds`, `frame`).
 pub struct EvalContext {
     pub variables: HashMap<String, Value>,
+    /// Shapes requested by runtime handlers (e.g. full `circle {}` /
+    /// `rect {}` blocks declared inside `on_time`), collected while a
+    /// handler runs. Caller should append them to the real scene after
+    /// the handler finishes.
+    pub spawned_shapes: Vec<crate::scene::Shape>,
 }
 
 impl EvalContext {
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
+            spawned_shapes: Vec::new(),
         }
     }
 
@@ -58,6 +64,16 @@ impl EvalContext {
             Some(Value::List(v)) => Some(v.as_slice()),
             _ => None,
         }
+    }
+
+    /// Add a spawned shape to the evaluation context (collected by caller).
+    pub fn push_spawned_shape(&mut self, s: crate::scene::Shape) {
+        self.spawned_shapes.push(s);
+    }
+
+    /// Drain and return spawned shapes collected during evaluation.
+    pub fn take_spawned_shapes(&mut self) -> Vec<crate::scene::Shape> {
+        std::mem::take(&mut self.spawned_shapes)
     }
 }
 

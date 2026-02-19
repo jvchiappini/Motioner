@@ -84,6 +84,7 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
                 c.y = n.y;
                 c.radius = n.radius;
                 c.spawn_time = n.spawn;
+                c.kill_time = n.kill;
                 c.z_index = n.z_index;
                 if let Some(col) = n.fill {
                     c.color = col.to_array();
@@ -101,6 +102,7 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
                 r.w = n.w;
                 r.h = n.h;
                 r.spawn_time = n.spawn;
+                r.kill_time = n.kill;
                 r.z_index = n.z_index;
                 if let Some(col) = n.fill {
                     r.color = col.to_array();
@@ -119,6 +121,7 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
                 t.font = n.font;
                 t.value = n.value;
                 t.spawn_time = n.spawn;
+                t.kill_time = n.kill;
                 t.z_index = n.z_index;
                 if let Some(col) = n.fill {
                     t.color = col.to_array();

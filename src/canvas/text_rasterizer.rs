@@ -67,6 +67,12 @@ pub fn rasterize_single_text(
     if current_time < actual_spawn {
         return None;
     }
+    // skip if shape has a kill time that already passed
+    if let Some(k) = text_shape.kill_time() {
+        if current_time >= k {
+            return None;
+        }
+    }
 
     // Posición animada
     let mut transient = text_shape.clone();

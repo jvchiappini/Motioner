@@ -546,6 +546,12 @@ pub fn render_frame_color_image_gpu_snapshot(
         if time < *actual_spawn {
             continue;
         }
+        // skip shapes that were explicitly killed before `time`
+        if let Some(k) = shape.kill_time() {
+            if time >= k {
+                continue;
+            }
+        }
         match shape {
             crate::scene::Shape::Circle(c) => {
                 let (eval_x, eval_y) = crate::animations::animations_manager::animated_xy_for(
