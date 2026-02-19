@@ -43,7 +43,9 @@ mod tests {
 
     #[test]
     fn move_element_updates_position() {
-        let mut shapes = vec![crate::shapes::circle::Circle::create_default("C".to_string())];
+        let mut c = crate::shapes::circle::Circle::default();
+        c.name = "C".to_string();
+        let mut shapes = vec![Shape::Circle(c)];
         assert!(move_element(&mut shapes, "C", 0.5, 0.25).is_ok());
         match &shapes[0] {
             Shape::Circle(c) => {

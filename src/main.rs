@@ -11,6 +11,7 @@ mod renderer;
 mod scene;
 mod scene_graph;
 mod shapes;
+mod logics;
 mod timeline;
 mod ui;
 mod welcome_modal; // Added this

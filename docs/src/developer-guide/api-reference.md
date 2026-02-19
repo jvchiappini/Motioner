@@ -235,6 +235,31 @@ This example moves the element named `Circle` every frame using the
 actions (e.g. `move_element`) and arithmetic expressions using `seconds`
 and `frame`.
 
+Additional DSL features (variables & control flow):
+
+```
+on_time {
+    // numeric and string variables
+    let speed = seconds * 0.1
+    let id = "Circle"
+
+    // lists
+    let steps = [0.0, 0.25, 0.5]
+
+    // for-loop over a numeric range
+    for i in 0..3 {
+        move_element(name = "Circle", x = i * speed, y = 0.2)
+    }
+
+    // iterate a list and conditional
+    for t in steps {
+        if t > 0.2 {
+            move_element(name = "Circle", x = t, y = 0.4)
+        }
+    }
+}
+```
+
 ```
 
 ## Error Handling

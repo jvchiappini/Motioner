@@ -233,8 +233,8 @@ pub(crate) fn highlight_code(
             }
 
             let color = match word {
-                // Primary Block Keywords
-                "circle" | "rect" | "move" | "size" | "timeline" => {
+                // Primary Block / control keywords
+                "circle" | "rect" | "move" | "size" | "timeline" | "let" | "set" | "for" | "if" | "not" | "in" => {
                     egui::Color32::from_rgb(86, 156, 214)
                 } // Blue (#569CD6)
 

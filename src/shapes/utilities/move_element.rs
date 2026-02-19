@@ -106,16 +106,12 @@ mod tests {
 
     #[test]
     fn evaluate_and_apply_works() {
-        let mut shapes = vec![Shape::Circle {
-            name: "C".to_string(),
-            x: 0.0,
-            y: 0.0,
-            radius: 1.0,
-            color: crate::shapes::circle::default_color(),
-            spawn_time: 0.0,
-            animations: Vec::new(),
-            visible: true,
-        }];
+        let mut c = crate::shapes::circle::Circle::default();
+        c.name = "C".to_string();
+        c.x = 0.0;
+        c.y = 0.0;
+        c.radius = 1.0;
+        let mut shapes = vec![Shape::Circle(c)];
 
         let act = MoveElement {
             name: "C".to_string(),
@@ -132,9 +128,9 @@ mod tests {
         );
         assert!(res.is_ok());
         match &shapes[0] {
-            Shape::Circle { x, y, .. } => {
-                assert!((*x - 0.2).abs() < 1e-6);
-                assert!((*y - 0.25).abs() < 1e-6);
+            Shape::Circle(c) => {
+                assert!((c.x - 0.2).abs() < 1e-6);
+                assert!((c.y - 0.25).abs() < 1e-6);
             }
             _ => panic!("expected circle"),
         }

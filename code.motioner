@@ -1,23 +1,44 @@
 size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
-text "Text" {
-    x = 0.500,
-    y = 0.500,
-    value = "Hello",
-    font = "System",
-    size = 0.0333,
-    fill = "#ffffff",
-    spawn = 0.00,
-    z = 1,
-}
-
 circle "Circle" {
-    x = 0.500,
-    y = 0.500,
-    radius = 0.100,
+    x = 0.100,
+    y = 0.250,
+    radius = 0.080,
     fill = "#78c8ff",
-    spawn = 0.00,
-    z = 0
+    spawn = 0.00
 }
 
+circle "Label" {
+    x = 0.100,
+    y = 0.800,
+    radius = 0.060,
+    fill = "#ffcc66",
+    spawn = 0.00
+}
+
+on_time {
+    // numeric + string variable -> used by move_element(name = id, ...)
+    let speed = seconds * 0.12
+    let id = "Circle"
+    move_element(name = id, x = 0.10 + speed, y = 0.25)
+
+    // list + for-loop + conditional
+    let steps = [0.10, 0.40, 0.70]
+    for t in steps {
+        if t > 0.40 {
+            move_element(name = "Label", x = t, y = 0.80)
+        }
+    }
+
+    // accumulator with `set` inside a for-loop (demonstrates mutation)
+    let sum = 0.0
+    for v in [0.2, 0.2, 0.2] {
+        set sum = sum + v
+    }
+
+    // `if not` example: runs when seconds == 0 (first tick)
+    if not seconds {
+        let started = "yes"
+    }
+}

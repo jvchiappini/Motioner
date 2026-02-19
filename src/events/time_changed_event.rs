@@ -30,14 +30,14 @@ pub fn apply_on_time_handlers(
 ) -> bool {
     let mut changed = false;
 
-    let ctx = EvalContext::new()
+    let mut ctx = EvalContext::new()
         .with_var("seconds", seconds)
         .with_var("frame", frame as f32);
 
     for handler in handlers {
         #[allow(clippy::collapsible_if)]
         if handler.name == "on_time" || handler.name == "time_changed" {
-            if runtime::run_handler(scene, handler, &ctx) {
+            if runtime::run_handler(scene, handler, &mut ctx) {
                 changed = true;
             }
         }
