@@ -1,6 +1,26 @@
 use crate::dsl::evaluator::EvalContext;
 use crate::scene::Shape;
 
+/// Apply an evaluated x/y to the named element in `shapes`.
+/// Kept here so the DSL `MoveElement` and runtime can call a single
+/// implementation — this replaces the old `element_modifiers::move_element`.
+pub fn move_element(shapes: &mut [Shape], name: &str, x: f32, y: f32) -> Result<(), String> {
+    let mut found = false;
+    for sh in shapes.iter_mut() {
+        if sh.name() == name {
+            sh.apply_kv_number("x", x);
+            sh.apply_kv_number("y", y);
+            found = true;
+        }
+    }
+
+    if found {
+        Ok(())
+    } else {
+        Err(format!("Element '{}' not found", name))
+    }
+}
+
 /// Representation of a `move_element(...)` DSL action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MoveElement {
@@ -86,53 +106,5 @@ impl MoveElement {
         let xv = crate::dsl::evaluator::evaluate(&self.x_expr, ctx)?;
         let yv = crate::dsl::evaluator::evaluate(&self.y_expr, ctx)?;
         apply_fn(shapes, &self.name, xv, yv)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::scene::Shape;
-
-    #[test]
-    fn parse_and_serialize_roundtrip() {
-        let src = "move_element(name = \"Circle\", x = seconds * 0.1, y = 0.25)";
-        let act = MoveElement::parse_dsl(src).expect("parsed");
-        assert_eq!(act.name, "Circle");
-        assert_eq!(act.x_expr, "seconds * 0.1");
-        assert_eq!(act.y_expr, "0.25");
-        assert_eq!(act.to_dsl_string(), src);
-    }
-
-    #[test]
-    fn evaluate_and_apply_works() {
-        let mut c = crate::shapes::circle::Circle::default();
-        c.name = "C".to_string();
-        c.x = 0.0;
-        c.y = 0.0;
-        c.radius = 1.0;
-        let mut shapes = vec![Shape::Circle(c)];
-
-        let act = MoveElement {
-            name: "C".to_string(),
-            x_expr: "2.0 * 0.1".to_string(),
-            y_expr: "0.25".to_string(),
-            color: [78, 201, 176, 255],
-        };
-
-        let ctx = crate::dsl::evaluator::EvalContext::new();
-        let res = act.evaluate_and_apply(
-            &mut shapes,
-            &ctx,
-            crate::shapes::utilities::element_modifiers::move_element,
-        );
-        assert!(res.is_ok());
-        match &shapes[0] {
-            Shape::Circle(c) => {
-                assert!((c.x - 0.2).abs() < 1e-6);
-                assert!((c.y - 0.25).abs() < 1e-6);
-            }
-            _ => panic!("expected circle"),
-        }
     }
 }

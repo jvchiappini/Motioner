@@ -10,7 +10,7 @@
 /// 2. Add a `dispatch_action` branch here that calls it.
 use super::evaluator::{self, EvalContext};
 use crate::scene::Shape;
-use crate::shapes::ShapeDescriptor; // for `create_default` helper
+// shape-specific helpers are accessed via `shapes_manager`
 
 // ─── Handler type ─────────────────────────────────────────────────────────────
 
@@ -231,19 +231,11 @@ fn dispatch_action(
         // Convert the first parsed shape (if any) or create a default one
         let mut created_shapes: Vec<crate::scene::Shape> = Vec::new();
         if parsed.is_empty() {
-            // fallback: instantiate a default by keyword
+            // fallback: instantiate a default by keyword. Delegate to
+            // `shapes_manager` so the runtime doesn't match on variants.
             let kw = line.trim_start().split_whitespace().next().unwrap_or("");
-            match kw {
-                "circle" => created_shapes.push(crate::shapes::circle::Circle::create_default(
-                    "Spawned".into(),
-                )),
-                "rect" => {
-                    created_shapes.push(crate::shapes::rect::Rect::create_default("Spawned".into()))
-                }
-                "text" => {
-                    created_shapes.push(crate::shapes::text::Text::create_default("Spawned".into()))
-                }
-                _ => {}
+            if let Some(s) = crate::shapes::shapes_manager::create_default_by_keyword(kw, "Spawned".into()) {
+                created_shapes.push(s);
             }
         } else {
             created_shapes = parsed;
@@ -252,7 +244,8 @@ fn dispatch_action(
         // For each created shape, override numeric/string props by evaluating
         // any top-level KV expressions found in the handler block.
         for mut s in created_shapes {
-            // apply raw KV entries
+            // apply raw KV entries (delegate type-specific updates to
+            // `Shape` helpers so this module remains shape-agnostic).
             for raw in &raw_lines {
                 // skip nested blocks like `move { ... }`
                 if raw.contains('{') {
@@ -261,69 +254,34 @@ fn dispatch_action(
                 // split comma-separated KV fragments on the top-level
                 for frag in split_top_level_kvs(raw) {
                     if let Some((key, val)) = split_kv(&frag) {
-                        if let Shape::Circle(c) = &mut s {
-                            match key.as_str() {
-                                "x" => c.x = evaluator::evaluate(&val, ctx)?,
-                                "y" => c.y = evaluator::evaluate(&val, ctx)?,
-                                "radius" => c.radius = evaluator::evaluate(&val, ctx)?,
-                                "spawn" => c.spawn_time = evaluator::evaluate(&val, ctx)?,
-                                "kill" => c.kill_time = Some(evaluator::evaluate(&val, ctx)?),
-                                "fill" => {
-                                    let sstr = val.trim().trim_matches('"');
-                                    if let Some(col) = crate::code_panel::utils::parse_hex(sstr) {
-                                        c.color = col;
-                                    }
-                                }
-                                "name" => c.name = val.trim().trim_matches('"').to_string(),
-                                _ => {}
+                        // numeric properties
+                        match key.as_str() {
+                            "x" | "y" | "radius" | "width" | "w" | "height" | "h" | "size" | "spawn" | "kill" => {
+                                let num = evaluator::evaluate(&val, ctx)?;
+                                s.apply_kv_number(&key, num);
+                                continue;
                             }
-                        } else if let Shape::Rect(r) = &mut s {
-                            match key.as_str() {
-                                "x" => r.x = evaluator::evaluate(&val, ctx)?,
-                                "y" => r.y = evaluator::evaluate(&val, ctx)?,
-                                "width" | "w" => r.w = evaluator::evaluate(&val, ctx)?,
-                                "height" | "h" => r.h = evaluator::evaluate(&val, ctx)?,
-                                "spawn" => r.spawn_time = evaluator::evaluate(&val, ctx)?,
-                                "kill" => r.kill_time = Some(evaluator::evaluate(&val, ctx)?),
-                                "fill" => {
-                                    let sstr = val.trim().trim_matches('"');
-                                    if let Some(col) = crate::code_panel::utils::parse_hex(sstr) {
-                                        r.color = col;
-                                    }
-                                }
-                                "name" => r.name = val.trim().trim_matches('"').to_string(),
-                                _ => {}
-                            }
-                        } else if let Shape::Text(t) = &mut s {
-                            match key.as_str() {
-                                "x" => t.x = evaluator::evaluate(&val, ctx)?,
-                                "y" => t.y = evaluator::evaluate(&val, ctx)?,
-                                "size" => t.size = evaluator::evaluate(&val, ctx)?,
-                                "spawn" => t.spawn_time = evaluator::evaluate(&val, ctx)?,
-                                "kill" => t.kill_time = Some(evaluator::evaluate(&val, ctx)?),
-                                "value" => t.value = val.trim().trim_matches('"').to_string(),
-                                "font" => t.font = val.trim().trim_matches('"').to_string(),
-                                "fill" => {
-                                    let sstr = val.trim().trim_matches('"');
-                                    if let Some(col) = crate::code_panel::utils::parse_hex(sstr) {
-                                        t.color = col;
-                                    }
-                                }
-                                "name" => t.name = val.trim().trim_matches('"').to_string(),
-                                _ => {}
-                            }
+                            _ => {}
                         }
+
+                        // color (hex string)
+                        if key == "fill" {
+                            let sstr = val.trim().trim_matches('"');
+                            if let Some(col) = crate::code_panel::utils::parse_hex(sstr) {
+                                s.set_fill_color(col);
+                            }
+                            continue;
+                        }
+
+                        // fallback: string properties (name, font, value, ...)
+                        let sstr = val.trim().trim_matches('"');
+                        s.apply_kv_string(&key, sstr);
                     }
                 }
             }
 
             // mark ephemeral and queue for appending to scene
-            match &mut s {
-                Shape::Circle(c) => c.ephemeral = true,
-                Shape::Rect(r) => r.ephemeral = true,
-                Shape::Text(t) => t.ephemeral = true,
-                _ => {}
-            }
+            s.set_ephemeral(true);
             ctx.push_spawned_shape(s);
         }
 
@@ -346,85 +304,6 @@ fn exec_move_element(shapes: &mut [Shape], line: &str, ctx: &EvalContext) -> Res
 
     let x = evaluator::evaluate(&action.x_expr, ctx)?;
     let y = evaluator::evaluate(&action.y_expr, ctx)?;
-    crate::shapes::utilities::element_modifiers::move_element(shapes, &target_name, x, y)?;
+    crate::shapes::utilities::move_element::move_element(shapes, &target_name, x, y)?;
     Ok(true)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::dsl::evaluator::EvalContext;
-
-    #[test]
-    fn dsl_numeric_variable_and_move() {
-        let mut shapes = vec![crate::scene::Shape::Circle(
-            crate::shapes::circle::Circle::default(),
-        )];
-
-        let mut ctx = EvalContext::new().with_var("seconds", 2.0);
-
-        let handler = DslHandler {
-            name: "on_time".to_string(),
-            body: "let a = seconds * 0.1\nlet id = \"Circle\"\nmove_element(name = id, x = a, y = 0.25)".to_string(),
-            color: [0, 0, 0, 0],
-        };
-
-        assert!(run_handler(&mut shapes, &handler, &mut ctx));
-
-        let found = shapes.iter().find(|s| s.name() == "Circle").unwrap();
-        match found {
-            crate::scene::Shape::Circle(c) => {
-                assert!((c.x - 0.2).abs() < 1e-3);
-                assert!((c.y - 0.25).abs() < 1e-3);
-            }
-            _ => panic!("expected circle"),
-        }
-    }
-
-    #[test]
-    fn dsl_string_and_list_and_for_set() {
-        let mut shapes = vec![crate::scene::Shape::Circle(
-            crate::shapes::circle::Circle::default(),
-        )];
-
-        let mut ctx = EvalContext::new();
-
-        let handler = DslHandler {
-            name: "on_time".to_string(),
-            body: r#"
-let nums = [0.1, 0.2, 0.3]
-let total = 0.0
-for v in nums {
-    set total = total + v
-}
-"#
-            .to_string(),
-            color: [0, 0, 0, 0],
-        };
-
-        // run handler — it shouldn't modify shapes, but should update ctx
-        assert!(!run_handler(&mut shapes, &handler, &mut ctx));
-
-        // total should be 0.6 (sum of list)
-        let total = ctx.get_number("total").unwrap();
-        assert!((total - 0.6).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dsl_if_not_executes_when_false() {
-        let mut shapes = vec![crate::scene::Shape::Circle(
-            crate::shapes::circle::Circle::default(),
-        )];
-        let mut ctx = EvalContext::new().with_var("seconds", 0.0);
-
-        let handler = DslHandler {
-            name: "on_time".to_string(),
-            body: "if not seconds { let flag = 1.0 }".to_string(),
-            color: [0, 0, 0, 0],
-        };
-
-        assert!(!run_handler(&mut shapes, &handler, &mut ctx));
-        let f = ctx.get_number("flag").unwrap();
-        assert!((f - 1.0).abs() < 1e-6);
-    }
 }

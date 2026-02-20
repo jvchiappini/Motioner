@@ -4,7 +4,6 @@
 //! style, etc.). Keeps mutation logic out of DSL/event layers so new
 //! modifiers can be added consistently.
 
-pub mod element_modifiers;
 pub mod move_element;
 
 // pub use move_element::MoveElement;  // removed: not exported/used currently

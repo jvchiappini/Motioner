@@ -5,6 +5,21 @@ pub fn default_visible() -> bool {
     true
 }
 
+// Combined WGSL shader source for the composition pipeline.
+// Add per-shape WGSL snippets here (one file per shape). When adding a
+// new Shape variant you should:
+//  1) add its Rust type/enum variant in this file, and
+//  2) create a `src/shapes/shaders/<name>.wgsl` file that implements
+//     `fn shape_<name>(in: VertexOutput, effective_uv: vec2<f32>) -> vec4<f32>`
+//  3) append an `include_str!` entry below so the snippet is compiled
+//     into the shader module (this keeps WGSL close to the Shape impl).
+pub const COMBINED_WGSL: &str = concat!(
+    include_str!("../composition.wgsl"),
+    include_str!("shaders/circle.wgsl"),
+    include_str!("shaders/rect.wgsl"),
+    include_str!("shaders/text.wgsl"),
+);
+
 /// Shape enum moved from `scene.rs` to `src/shapes/shapes_manager.rs`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {
@@ -163,6 +178,105 @@ impl Shape {
         }
     }
 
+    /// Mark or un-mark a shape as ephemeral (created at runtime).
+    pub fn set_ephemeral(&mut self, v: bool) {
+        match self {
+            Shape::Circle(c) => c.ephemeral = v,
+            Shape::Rect(r) => r.ephemeral = v,
+            Shape::Text(t) => t.ephemeral = v,
+            Shape::Group { .. } => {}
+        }
+    }
+
+    /// Apply a numeric KV to the shape (used by DSL/runtime). Unknown keys
+    /// are silently ignored so callers don't need to match on variants.
+    pub fn apply_kv_number(&mut self, key: &str, value: f32) {
+        // Delegate to the per-shape `ShapeDescriptor` implementation so
+        // concrete shape modules own the mapping of keys -> fields.
+        if let Some(desc) = self.descriptor_mut() {
+            desc.apply_kv_number(key, value);
+        }
+    }
+
+    /// Apply a string KV to the shape (name, font, value, etc.). Unknown
+    /// keys are ignored.
+    pub fn apply_kv_string(&mut self, key: &str, val: &str) {
+        if let Some(desc) = self.descriptor_mut() {
+            desc.apply_kv_string(key, val);
+        }
+    }
+
+    /// Set the fill/color for shapes that support it.
+    pub fn set_fill_color(&mut self, col: [u8; 4]) {
+        match self {
+            Shape::Circle(c) => c.color = col,
+            Shape::Rect(r) => r.color = col,
+            Shape::Text(t) => t.color = col,
+            Shape::Group { .. } => {}
+        }
+    }
+
+    /// Return the current X/Y position for the shape (normalized 0..1).
+    /// Returns (0.0, 0.0) for non-visual/group nodes.
+    pub fn xy(&self) -> (f32, f32) {
+        match self {
+            Shape::Circle(c) => (c.x, c.y),
+            Shape::Rect(r) => (r.x, r.y),
+            Shape::Text(t) => (t.x, t.y),
+            Shape::Group { .. } => (0.0, 0.0),
+        }
+    }
+
+    /// Compute a `FrameProps` containing only the fields that differ between
+    /// the current shape state and an optional `orig` sample. This extracts
+    /// the minimal set of properties that must be inserted as hold
+    /// keyframes when the shape was mutated at runtime.
+    pub fn changed_frame_props(
+        &self,
+        orig: Option<&crate::shapes::element_store::FrameProps>,
+    ) -> crate::shapes::element_store::FrameProps {
+        // Delegate to the per-shape `ShapeDescriptor` implementation when
+        // available so shape-specific logic lives with the concrete shape.
+        if let Some(desc) = self.descriptor() {
+            desc.changed_frame_props(orig)
+        } else {
+            crate::shapes::element_store::FrameProps {
+                x: None,
+                y: None,
+                radius: None,
+                w: None,
+                h: None,
+                size: None,
+                value: None,
+                color: None,
+                visible: None,
+                z_index: None,
+            }
+        }
+    }
+
+    /// Return a slice of animations attached to this shape (empty by default
+    /// for groups). This delegates to the per-shape `ShapeDescriptor` where
+    /// available so callers don't need to match on the enum.
+    pub fn animations(&self) -> &[crate::scene::Animation] {
+        self.descriptor().map_or(&[], |d| d.animations())
+    }
+
+    /// Append an animation to this shape in a shape-agnostic way.
+    ///
+    /// This avoids callers having to match on `Shape::Circle/Rect/Text` when
+    /// they only need to attach an animation to an existing shape.
+    pub fn push_animation(&mut self, anim: crate::scene::Animation) {
+        match self {
+            Shape::Circle(c) => c.animations.push(anim),
+            Shape::Rect(r) => r.animations.push(anim),
+            Shape::Text(t) => t.animations.push(anim),
+            Shape::Group { .. } => {
+                // Groups don't store animations directly — ignore.
+            }
+        }
+    }
+
     pub fn spawn_time(&self) -> f32 {
         match self {
             Shape::Circle(c) => c.spawn_time,
@@ -231,6 +345,48 @@ impl Shape {
     }
 }
 
+/// Helper: build a `Shape` from `ElementKeyframes` by delegating to the
+/// per-shape modules. This centralizes the single dispatch point so the
+/// shape-specific logic lives in the shape implementation files.
+pub fn from_element_keyframes(
+    ek: &crate::shapes::element_store::ElementKeyframes,
+    frame: crate::shapes::element_store::FrameIndex,
+    fps: u32,
+) -> Option<Shape> {
+    // Lookup in the registry populated by each shape module via `inventory`.
+    for factory in inventory::iter::<ElementKeyframesFactory> {
+        if factory.kind == ek.kind.as_str() {
+            return (factory.constructor)(ek, frame, fps);
+        }
+    }
+    None
+}
+
+/// Create a default `Shape` instance for a DSL keyword (used by the
+/// runtime when handler bodies spawn ephemeral shapes). Centralises the
+/// keyword -> concrete type mapping so callers don't need to match on
+/// variants.
+pub fn create_default_by_keyword(keyword: &str, name: String) -> Option<Shape> {
+    match keyword {
+        "circle" => Some(crate::shapes::circle::Circle::create_default(name)),
+        "rect" => Some(crate::shapes::rect::Rect::create_default(name)),
+        "text" => Some(crate::shapes::text::Text::create_default(name)),
+        _ => None,
+    }
+}
+
+/// Registry entry type for ElementKeyframes -> Shape constructors.
+pub struct ElementKeyframesFactory {
+    pub kind: &'static str,
+    pub constructor: fn(
+        &crate::shapes::element_store::ElementKeyframes,
+        crate::shapes::element_store::FrameIndex,
+        u32,
+    ) -> Option<Shape>,
+}
+
+inventory::collect!(ElementKeyframesFactory);
+
 pub type Scene = Vec<Shape>;
 
 pub fn get_shape_mut<'a>(scene: &'a mut [Shape], path: &[usize]) -> Option<&'a mut Shape> {
@@ -259,6 +415,121 @@ pub fn get_shape<'a>(scene: &'a [Shape], path: &[usize]) -> Option<&'a Shape> {
         };
     }
     Some(current)
+}
+
+/// Find a hit path in `shapes` for the given `pos` (painter's-algorithm order).
+/// Returns a path (Vec<usize>) from root -> hit node or `None` if nothing hit.
+pub fn find_hit_path(
+    shapes: &[Shape],
+    pos: eframe::egui::Pos2,
+    composition_rect: eframe::egui::Rect,
+    _zoom: f32,
+    current_time: f32,
+    parent_spawn: f32,
+    render_height: u32,
+) -> Option<Vec<usize>> {
+    for (i, shape) in shapes.iter().enumerate().rev() {
+        let actual_spawn = shape.spawn_time().max(parent_spawn);
+        if current_time < actual_spawn {
+            continue;
+        }
+
+        match shape {
+            Shape::Circle(c) => {
+                let center = composition_rect.left_top()
+                    + eframe::egui::vec2(
+                        c.x * composition_rect.width(),
+                        c.y * composition_rect.height(),
+                    );
+                if pos.distance(center) <= c.radius * composition_rect.width() {
+                    return Some(vec![i]);
+                }
+            }
+            Shape::Rect(r) => {
+                let min = composition_rect.left_top()
+                    + eframe::egui::vec2(
+                        r.x * composition_rect.width(),
+                        r.y * composition_rect.height(),
+                    );
+                let rect = eframe::egui::Rect::from_min_size(
+                    min,
+                    eframe::egui::vec2(r.w * composition_rect.width(), r.h * composition_rect.height()),
+                );
+                if rect.contains(pos) {
+                    return Some(vec![i]);
+                }
+            }
+            Shape::Text(t) => {
+                let min = composition_rect.left_top()
+                    + eframe::egui::vec2(t.x * composition_rect.width(), t.y * composition_rect.height());
+                let height_px = t.size * composition_rect.height();
+                let width_px = t.value.len() as f32 * height_px * 0.5; // approximate
+                let rect = eframe::egui::Rect::from_min_size(min, eframe::egui::vec2(width_px, height_px));
+                if rect.contains(pos) {
+                    return Some(vec![i]);
+                }
+            }
+            Shape::Group { children, .. } => {
+                if let Some(mut cp) = find_hit_path(children, pos, composition_rect, _zoom, current_time, actual_spawn, render_height) {
+                    let mut path = vec![i];
+                    path.append(&mut cp);
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Draw highlight rectangle/circle for a shape (recurses into groups).
+pub fn draw_highlight_recursive(
+    painter: &eframe::egui::Painter,
+    shape: &Shape,
+    composition_rect: eframe::egui::Rect,
+    stroke: eframe::egui::Stroke,
+    current_time: f32,
+    parent_spawn: f32,
+    render_height: u32,
+) {
+    let actual_spawn = shape.spawn_time().max(parent_spawn);
+    if current_time < actual_spawn {
+        return;
+    }
+    match shape {
+        Shape::Circle(c) => {
+            let center = composition_rect.left_top()
+                + eframe::egui::vec2(c.x * composition_rect.width(), c.y * composition_rect.height());
+            painter.circle_stroke(center, c.radius * composition_rect.width(), stroke);
+        }
+        Shape::Rect(r) => {
+            let min = composition_rect.left_top()
+                + eframe::egui::vec2(r.x * composition_rect.width(), r.y * composition_rect.height());
+            painter.rect_stroke(
+                eframe::egui::Rect::from_min_size(
+                    min,
+                    eframe::egui::vec2(r.w * composition_rect.width(), r.h * composition_rect.height()),
+                ),
+                0.0,
+                stroke,
+            );
+        }
+        Shape::Text(t) => {
+            let min = composition_rect.left_top()
+                + eframe::egui::vec2(t.x * composition_rect.width(), t.y * composition_rect.height());
+            let height_px = t.size * composition_rect.height();
+            let width_px = t.value.len() as f32 * height_px * 0.5;
+            painter.rect_stroke(
+                eframe::egui::Rect::from_min_size(min, eframe::egui::vec2(width_px, height_px)),
+                0.0,
+                stroke,
+            );
+        }
+        Shape::Group { children, .. } => {
+            for child in children {
+                draw_highlight_recursive(painter, child, composition_rect, stroke, current_time, actual_spawn, render_height);
+            }
+        }
+    }
 }
 
 pub fn move_node(

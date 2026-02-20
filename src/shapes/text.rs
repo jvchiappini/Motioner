@@ -359,4 +359,177 @@ impl ShapeDescriptor for Text {
         t.name = name;
         super::shapes_manager::Shape::Text(t)
     }
+
+    fn to_element_keyframes(&self, fps: u32) -> crate::shapes::element_store::ElementKeyframes {
+        use crate::shapes::element_store::{ElementKeyframes, Keyframe};
+        let mut ek = ElementKeyframes::new(self.name.clone(), "text".into());
+        let spawn = crate::shapes::element_store::seconds_to_frame(self.spawn_time, fps);
+        ek.spawn_frame = spawn;
+        ek.kill_frame = self.kill_time.map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
+        ek.x.push(Keyframe { frame: spawn, value: self.x, easing: crate::animations::easing::Easing::Linear });
+        ek.y.push(Keyframe { frame: spawn, value: self.y, easing: crate::animations::easing::Easing::Linear });
+        ek.size.push(Keyframe { frame: spawn, value: self.size, easing: crate::animations::easing::Easing::Linear });
+        ek.value.push(Keyframe { frame: spawn, value: self.value.clone(), easing: crate::animations::easing::Easing::Linear });
+        ek.color.push(Keyframe { frame: spawn, value: self.color, easing: crate::animations::easing::Easing::Linear });
+        ek.visible.push(Keyframe { frame: spawn, value: self.visible, easing: crate::animations::easing::Easing::Linear });
+        ek.z_index.push(Keyframe { frame: spawn, value: self.z_index, easing: crate::animations::easing::Easing::Linear });
+        ek.ephemeral = self.ephemeral;
+        ek.animations = self.animations.clone();
+        ek
+    }
+
+    fn changed_frame_props(
+        &self,
+        orig: Option<&crate::shapes::element_store::FrameProps>,
+    ) -> crate::shapes::element_store::FrameProps {
+        let mut new_props = crate::shapes::element_store::FrameProps {
+            x: None,
+            y: None,
+            radius: None,
+            w: None,
+            h: None,
+            size: None,
+            value: None,
+            color: None,
+            visible: None,
+            z_index: None,
+        };
+
+        if orig.and_then(|p| p.x).unwrap_or(f32::NAN) != self.x {
+            new_props.x = Some(self.x);
+        }
+        if orig.and_then(|p| p.y).unwrap_or(f32::NAN) != self.y {
+            new_props.y = Some(self.y);
+        }
+        if orig.and_then(|p| p.size).unwrap_or(f32::NAN) != self.size {
+            new_props.size = Some(self.size);
+        }
+        if orig.and_then(|p| p.value.clone()) != Some(self.value.clone()) {
+            new_props.value = Some(self.value.clone());
+        }
+        if orig.and_then(|p| p.color) != Some(self.color) {
+            new_props.color = Some(self.color);
+        }
+        if orig.and_then(|p| p.visible) != Some(self.visible) {
+            new_props.visible = Some(self.visible);
+        }
+
+        new_props
+    }
+
+    fn apply_kv_number(&mut self, key: &str, value: f32) {
+        match key {
+            "x" => self.x = value,
+            "y" => self.y = value,
+            "size" => self.size = value,
+            "spawn" => self.spawn_time = value,
+            "kill" => self.kill_time = Some(value),
+            _ => {}
+        }
+    }
+
+    fn apply_kv_string(&mut self, key: &str, val: &str) {
+        match key {
+            "name" => self.name = val.to_string(),
+            "value" => self.value = val.to_string(),
+            "font" => self.font = val.to_string(),
+            _ => {}
+        }
+    }
+
+    fn animations(&self) -> &[crate::scene::Animation] {
+        &self.animations
+    }
+
+    fn append_gpu_shapes(
+        &self,
+        scene_shape: &crate::scene::Shape,
+        out: &mut Vec<crate::canvas::gpu::GpuShape>,
+        current_time: f32,
+        duration: f32,
+        spawn: f32,
+        rw: f32,
+        rh: f32,
+    ) {
+        // Use sampled Shape values so animated text (position/size/color)
+        // is reflected in the GPU primitive. UVs will be populated by the
+        // text rasterizer later when composing the atlas.
+        if let crate::scene::Shape::Text(t) = scene_shape {
+            if !t.visible {
+                return;
+            }
+            let (x, y) = crate::animations::animations_manager::animated_xy_for(
+                scene_shape,
+                current_time,
+                duration,
+            );
+
+            let sz_px = t.size * rh; // size is fraction of render height
+            let x_px = x * rw;
+            let y_px = y * rh;
+
+            out.push(crate::canvas::gpu::GpuShape {
+                pos: [x_px, y_px],
+                size: [sz_px, sz_px],
+                color: [
+                    crate::canvas::gpu::srgb_to_linear(t.color[0]),
+                    crate::canvas::gpu::srgb_to_linear(t.color[1]),
+                    crate::canvas::gpu::srgb_to_linear(t.color[2]),
+                    t.color[3] as f32 / 255.0,
+                ],
+                shape_type: 2,
+                spawn_time: spawn,
+                p1: 0,
+                p2: 0,
+                uv0: [0.0, 0.0],
+                uv1: [0.0, 0.0],
+            });
+        }
+    }
+}
+
+/// Reconstruct a `Shape::Text` from `ElementKeyframes` sampled at `frame`.
+pub fn from_element_keyframes(
+    ek: &crate::shapes::element_store::ElementKeyframes,
+    frame: crate::shapes::element_store::FrameIndex,
+    fps: u32,
+) -> Option<super::shapes_manager::Shape> {
+    let props = ek.sample(frame)?;
+    let mut t = Text::default();
+    t.name = ek.name.clone();
+    if let Some(x) = props.x {
+        t.x = x;
+    }
+    if let Some(y) = props.y {
+        t.y = y;
+    }
+    if let Some(sz) = props.size {
+        t.size = sz;
+    }
+    if let Some(val) = props.value.clone() {
+        t.value = val;
+    }
+    if let Some(col) = props.color {
+        t.color = col;
+    }
+    if let Some(v) = props.visible {
+        t.visible = v;
+    }
+    if let Some(z) = props.z_index {
+        t.z_index = z;
+    }
+    t.spawn_time = frame as f32 / fps as f32;
+    if let Some(kf) = ek.kill_frame {
+        t.kill_time = Some(kf as f32 / fps as f32);
+    }
+    t.ephemeral = ek.ephemeral;
+    t.animations = ek.animations.clone();
+    Some(super::shapes_manager::Shape::Text(t))
+}
+
+inventory::submit! {
+    crate::shapes::shapes_manager::ElementKeyframesFactory {
+        kind: "text",
+        constructor: crate::shapes::text::from_element_keyframes,
+    }
 }
