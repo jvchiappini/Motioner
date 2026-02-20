@@ -47,10 +47,10 @@ pub struct GpuShape {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuKeyframe {
-    pub frame:  u32,
-    pub value:  f32,
+    pub frame: u32,
+    pub value: f32,
     pub easing: u32,
-    pub _pad:   u32,
+    pub _pad: u32,
 }
 
 /// Per-element descriptor sent to the compute shader.
@@ -58,25 +58,25 @@ pub struct GpuKeyframe {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuElementDesc {
-    pub x_offset:      u32,
-    pub x_len:         u32,
-    pub y_offset:      u32,
-    pub y_len:         u32,
+    pub x_offset: u32,
+    pub x_len: u32,
+    pub y_offset: u32,
+    pub y_len: u32,
     pub radius_offset: u32,
-    pub radius_len:    u32,
-    pub w_offset:      u32,
-    pub w_len:         u32,
-    pub h_offset:      u32,
-    pub h_len:         u32,
-    pub shape_type:    i32,
-    pub spawn_frame:   u32,
-    pub kill_frame:    u32,  // 0xFFFFFFFF = no kill
-    pub _pad0:         u32,
-    pub _pad1:         u32,
-    pub _pad2:         u32,
-    pub color:         [f32; 4],
-    pub base_size:     [f32; 2],
-    pub _pad3:         [f32; 2],
+    pub radius_len: u32,
+    pub w_offset: u32,
+    pub w_len: u32,
+    pub h_offset: u32,
+    pub h_len: u32,
+    pub shape_type: i32,
+    pub spawn_frame: u32,
+    pub kill_frame: u32, // 0xFFFFFFFF = no kill
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+    pub color: [f32; 4],
+    pub base_size: [f32; 2],
+    pub _pad3: [f32; 2],
 }
 
 /// Map a `crate::animations::easing::Easing` to the GPU easing constant used
@@ -84,15 +84,15 @@ pub struct GpuElementDesc {
 pub fn easing_to_gpu(e: &crate::animations::easing::Easing) -> u32 {
     use crate::animations::easing::Easing;
     match e {
-        Easing::Linear                  => 0,
-        Easing::EaseIn { .. }           => 1,
-        Easing::EaseOut { .. }          => 2,
-        Easing::EaseInOut { .. }        => 3,
-        Easing::Sine                    => 4,
-        Easing::Expo                    => 5,
-        Easing::Circ                    => 6,
+        Easing::Linear => 0,
+        Easing::EaseIn { .. } => 1,
+        Easing::EaseOut { .. } => 2,
+        Easing::EaseInOut { .. } => 3,
+        Easing::Sine => 4,
+        Easing::Expo => 5,
+        Easing::Circ => 6,
         // All other curves fall back to linear until GPU support is added.
-        _                               => 0,
+        _ => 0,
     }
 }
 
@@ -193,7 +193,6 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         uniforms[14] = m_pos.y;
         uniforms[15] = mag_active;
         uniforms[16] = self.time;
-        uniforms[16] = self.time;
         uniforms[17] = screen_descriptor.pixels_per_point;
 
         queue.write_buffer(
@@ -246,6 +245,16 @@ pub struct GpuResources {
     pub compute_uniform_buffer: wgpu::Buffer,
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
     pub compute_bind_group: wgpu::BindGroup,
+
+    // ── Readback cache (reused across frames to avoid per-frame allocs) ────────
+    /// Cached staging buffer for GPU→CPU readback. Recreated only when resolution changes.
+    pub readback_staging_buffer: Option<wgpu::Buffer>,
+    /// Cached render texture for off-screen rendering. Recreated only on resolution change.
+    pub readback_render_texture: Option<wgpu::Texture>,
+    /// Size of the cached readback buffers [width, height].
+    pub readback_size: [u32; 2],
+    /// Reusable pixel buffer for the de-padding step (avoids heap alloc every frame).
+    pub readback_pixel_buf: Vec<u8>,
 }
 
 #[cfg(feature = "wgpu")]
@@ -466,13 +475,12 @@ impl GpuResources {
                 push_constant_ranges: &[],
             });
 
-        let compute_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("compute_keyframes_pipeline"),
-                layout: Some(&compute_pipeline_layout),
-                module: &compute_shader,
-                entry_point: "cs_main",
-            });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("compute_keyframes_pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &compute_shader,
+            entry_point: "cs_main",
+        });
 
         // Initial stub buffers (1-element minimum so bind group is valid).
         let keyframe_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -498,10 +506,22 @@ impl GpuResources {
             label: Some("compute_keyframes_bg"),
             layout: &compute_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: compute_uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: keyframe_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: element_desc_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: shape_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: compute_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: keyframe_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: element_desc_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: shape_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -522,6 +542,10 @@ impl GpuResources {
             compute_uniform_buffer,
             compute_bind_group_layout: compute_bgl,
             compute_bind_group,
+            readback_staging_buffer: None,
+            readback_render_texture: None,
+            readback_size: [0, 0],
+            readback_pixel_buf: Vec::new(),
         }
     }
 
@@ -626,28 +650,40 @@ impl GpuResources {
         }
 
         // ── Build flat keyframe array + element descriptors ───────────────────
-        let mut all_keyframes: Vec<GpuKeyframe> = Vec::new();
-        let mut descs: Vec<GpuElementDesc> = Vec::new();
+        // Pre-allocate: each element has ≤5 tracks, each track averages ~4 keyframes.
+        let estimated_kf = scene.len() * 5 * 4;
+        let mut all_keyframes: Vec<GpuKeyframe> = Vec::with_capacity(estimated_kf);
+        let mut descs: Vec<GpuElementDesc> = Vec::with_capacity(scene.len());
 
         for ek in scene {
             let mut desc = GpuElementDesc {
-                x_offset: 0, x_len: 0,
-                y_offset: 0, y_len: 0,
-                radius_offset: 0, radius_len: 0,
-                w_offset: 0, w_len: 0,
-                h_offset: 0, h_len: 0,
+                x_offset: 0,
+                x_len: 0,
+                y_offset: 0,
+                y_len: 0,
+                radius_offset: 0,
+                radius_len: 0,
+                w_offset: 0,
+                w_len: 0,
+                h_offset: 0,
+                h_len: 0,
                 shape_type: match ek.kind.as_str() {
                     "circle" => 0,
-                    "rect"   => 1,
-                    "text"   => 2,
-                    _        => 0,
+                    "rect" => 1,
+                    "text" => 2,
+                    _ => 0,
                 },
                 spawn_frame: ek.spawn_frame as u32,
-                kill_frame:  ek.kill_frame.map(|f| f as u32).unwrap_or(0xFFFF_FFFF),
-                _pad0: 0, _pad1: 0, _pad2: 0,
+                kill_frame: ek.kill_frame.map(|f| f as u32).unwrap_or(0xFFFF_FFFF),
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
                 color: {
                     // Sample color at current frame, fall back to white.
-                    let c = ek.color.iter().rev()
+                    let c = ek
+                        .color
+                        .iter()
+                        .rev()
                         .find(|kf| kf.frame <= current_frame as usize)
                         .map(|kf| kf.value)
                         .unwrap_or([255, 255, 255, 255]);
@@ -663,27 +699,24 @@ impl GpuResources {
             };
 
             // Helper: append a f32 track to the flat array and record offset/len.
-            fn push_track(
-                all: &mut Vec<GpuKeyframe>,
-                track: &[Keyframe<f32>],
-            ) -> (u32, u32) {
+            fn push_track(all: &mut Vec<GpuKeyframe>, track: &[Keyframe<f32>]) -> (u32, u32) {
                 let offset = all.len() as u32;
                 for kf in track {
                     all.push(GpuKeyframe {
-                        frame:  kf.frame as u32,
-                        value:  kf.value,
+                        frame: kf.frame as u32,
+                        value: kf.value,
                         easing: easing_to_gpu(&kf.easing),
-                        _pad:   0,
+                        _pad: 0,
                     });
                 }
                 (offset, track.len() as u32)
             }
 
-            (desc.x_offset,      desc.x_len)      = push_track(&mut all_keyframes, &ek.x);
-            (desc.y_offset,      desc.y_len)       = push_track(&mut all_keyframes, &ek.y);
-            (desc.radius_offset, desc.radius_len)  = push_track(&mut all_keyframes, &ek.radius);
-            (desc.w_offset,      desc.w_len)       = push_track(&mut all_keyframes, &ek.w);
-            (desc.h_offset,      desc.h_len)       = push_track(&mut all_keyframes, &ek.h);
+            (desc.x_offset, desc.x_len) = push_track(&mut all_keyframes, &ek.x);
+            (desc.y_offset, desc.y_len) = push_track(&mut all_keyframes, &ek.y);
+            (desc.radius_offset, desc.radius_len) = push_track(&mut all_keyframes, &ek.radius);
+            (desc.w_offset, desc.w_len) = push_track(&mut all_keyframes, &ek.w);
+            (desc.h_offset, desc.h_len) = push_track(&mut all_keyframes, &ek.h);
 
             descs.push(desc);
         }
@@ -713,8 +746,7 @@ impl GpuResources {
         }
         queue.write_buffer(&self.element_desc_buffer, 0, desc_bytes);
 
-        let shape_bytes_needed =
-            (element_count as usize * std::mem::size_of::<GpuShape>()) as u64;
+        let shape_bytes_needed = (element_count as usize * std::mem::size_of::<GpuShape>()) as u64;
         if shape_bytes_needed > self.shape_buffer.size() {
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("shape_buffer"),
@@ -748,10 +780,22 @@ impl GpuResources {
             label: Some("compute_keyframes_bg"),
             layout: &self.compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.compute_uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.keyframe_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.element_desc_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.shape_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.compute_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.keyframe_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.element_desc_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.shape_buffer.as_entire_binding(),
+                },
             ],
         });
     }
@@ -761,10 +805,22 @@ impl GpuResources {
             label: Some("composition_bind_group"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.shape_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.text_atlas_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.text_sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.text_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
             ],
         });
     }
@@ -823,23 +879,38 @@ pub fn render_frame_color_image_gpu_snapshot(
 
     // Build GpuShape list from ElementKeyframes, same as render_frame_native_texture.
     let frame_idx = crate::shapes::element_store::seconds_to_frame(time, snap.preview_fps);
-    let mut gpu_shapes: Vec<GpuShape> = Vec::new();
+    let mut gpu_shapes: Vec<GpuShape> = Vec::with_capacity(snap.scene.len());
     for ek in &snap.scene {
-        if frame_idx < ek.spawn_frame { continue; }
-        if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
+        if frame_idx < ek.spawn_frame {
+            continue;
+        }
+        if let Some(kf) = ek.kill_frame {
+            if frame_idx >= kf {
+                continue;
+            }
+        }
         if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
             if let Some(desc) = shape.descriptor() {
                 let spawn_secs = ek.spawn_frame as f32 / snap.preview_fps as f32;
                 desc.append_gpu_shapes(
-                    &shape, &mut gpu_shapes, time, snap.duration_secs, spawn_secs,
-                    snap.render_width as f32, snap.render_height as f32,
+                    &shape,
+                    &mut gpu_shapes,
+                    time,
+                    snap.duration_secs,
+                    spawn_secs,
+                    snap.render_width as f32,
+                    snap.render_height as f32,
                 );
             }
         }
     }
 
     if !gpu_shapes.is_empty() {
-        queue.write_buffer(&resources.shape_buffer, 0, bytemuck::cast_slice(&gpu_shapes));
+        queue.write_buffer(
+            &resources.shape_buffer,
+            0,
+            bytemuck::cast_slice(&gpu_shapes),
+        );
     }
 
     // For the buffered preview we render into a full-resolution (render_w × render_h)
@@ -849,45 +920,66 @@ pub fn render_frame_color_image_gpu_snapshot(
     let render_h = snap.render_height;
 
     let uniforms = Uniforms {
-        resolution:   [render_w as f32, render_h as f32],
-        preview_res:  [preview_w as f32, preview_h as f32],
-        paper_rect:   [0.0, 0.0, render_w as f32, render_h as f32],
-        viewport_rect:[0.0, 0.0, render_w as f32, render_h as f32],
-        count:        gpu_shapes.len() as f32,
-        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        resolution: [render_w as f32, render_h as f32],
+        preview_res: [preview_w as f32, preview_h as f32],
+        paper_rect: [0.0, 0.0, render_w as f32, render_h as f32],
+        viewport_rect: [0.0, 0.0, render_w as f32, render_h as f32],
+        count: gpu_shapes.len() as f32,
+        mag_x: 0.0,
+        mag_y: 0.0,
+        mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
         _padding: [0.0; 2],
     };
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-    // Create a render texture with COPY_SRC so we can read the pixels back.
-    let render_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("preview_readback_texture"),
-        size: wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-    // Bytes-per-row must be a multiple of 256 (wgpu requirement).
+    // ── Reuse cached render texture + staging buffer (recreate only on resolution change) ──
     let bytes_per_pixel = 4u32;
     let unpadded_bpr = render_w * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded_bpr = (unpadded_bpr + align - 1) / align * align;
+    let staging_size = (padded_bpr * render_h) as u64;
 
-    let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("preview_staging_buffer"),
-        size: (padded_bpr * render_h) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    if resources.readback_size != [render_w, render_h] {
+        resources.readback_render_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("preview_readback_texture"),
+            size: wgpu::Extent3d {
+                width: render_w,
+                height: render_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        }));
+        resources.readback_staging_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("preview_staging_buffer"),
+            size: staging_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }));
+        resources.readback_size = [render_w, render_h];
+        // Pre-size the reusable pixel buffer
+        let pixel_buf_size = (render_w * render_h * 4) as usize;
+        resources.readback_pixel_buf = Vec::with_capacity(pixel_buf_size);
+    }
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let render_texture = resources
+        .readback_render_texture
+        .as_ref()
+        .ok_or_else(|| "readback_render_texture not initialized".to_string())?;
+    let staging_buffer = resources
+        .readback_staging_buffer
+        .as_ref()
+        .ok_or_else(|| "readback_staging_buffer not initialized".to_string())?;
+    let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -925,31 +1017,47 @@ pub fn render_frame_color_image_gpu_snapshot(
                 rows_per_image: Some(render_h),
             },
         },
-        wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: render_w,
+            height: render_h,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit(Some(encoder.finish()));
 
     // Map the staging buffer synchronously (preview worker thread — blocking is fine).
+    // Use thread::park/unpark instead of an mpsc channel to avoid a heap allocation per frame.
     let slice = staging_buffer.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-    device.poll(wgpu::Maintain::Wait);
-    rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    let caller_thread = std::thread::current();
+    slice.map_async(wgpu::MapMode::Read, move |_r| {
+        caller_thread.unpark();
+    });
+    device.poll(wgpu::Maintain::Poll);
+    // Park until the map callback fires (wgpu calls it before poll returns on most backends,
+    // but park is a no-op if unpark already ran).
+    std::thread::park_timeout(std::time::Duration::from_secs(5));
 
-    // De-pad rows and build the ColorImage.
-    let mapped = slice.get_mapped_range();
-    let mut pixels = Vec::with_capacity((render_w * render_h * 4) as usize);
-    for row in 0..render_h {
-        let start = (row * padded_bpr) as usize;
-        let end = start + unpadded_bpr as usize;
-        pixels.extend_from_slice(&mapped[start..end]);
+    // De-pad rows into the reusable pixel buffer.
+    {
+        let mapped = slice.get_mapped_range();
+        resources.readback_pixel_buf.clear();
+        resources
+            .readback_pixel_buf
+            .reserve((render_w * render_h * 4) as usize);
+        for row in 0..render_h {
+            let start = (row * padded_bpr) as usize;
+            let end = start + unpadded_bpr as usize;
+            resources
+                .readback_pixel_buf
+                .extend_from_slice(&mapped[start..end]);
+        }
+        drop(mapped);
     }
-    drop(mapped);
     staging_buffer.unmap();
 
     Ok(egui::ColorImage::from_rgba_unmultiplied(
         [render_w as usize, render_h as usize],
-        &pixels,
+        &resources.readback_pixel_buf,
     ))
 }
 
@@ -963,7 +1071,7 @@ pub fn render_frame_native_texture(
     let preview_w = (snap.render_width as f32 * snap.preview_multiplier).round() as u32;
     let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round() as u32;
 
-    let mut gpu_shapes: Vec<GpuShape> = Vec::new();
+    let mut gpu_shapes: Vec<GpuShape> = Vec::with_capacity(snap.scene.len());
 
     // Populate GPU instance data from the canonical ElementKeyframes store
     // by sampling each element at the current preview frame. This keeps the

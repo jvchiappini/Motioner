@@ -8,12 +8,20 @@ use eframe::egui;
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
     egui::Frame::canvas(ui.style()).show(ui, |ui| {
         // Materialize `ElementKeyframes` into temporary `Shape` instances
-        // sampled at the current playhead time. This lets the existing
-        // canvas rendering/pathfinding logic keep working while the
-        // canonical storage is `ElementKeyframes`.
-        let mut live_shapes: Vec<crate::scene::Shape> = Vec::new();
+        // sampled at the current playhead time. Pre-allocate to avoid realloc.
+        let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+        let mut live_shapes: Vec<crate::scene::Shape> = Vec::with_capacity(state.scene.len());
         for elem in &state.scene {
-            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+            // Skip elements that are not yet spawned or already killed to avoid
+            // materializing Shape instances we won't need (saves clone overhead).
+            if frame_idx < elem.spawn_frame {
+                continue;
+            }
+            if let Some(kill) = elem.kill_frame {
+                if frame_idx >= kill {
+                    continue;
+                }
+            }
             if let Some(s) = elem.to_shape_at_frame(frame_idx, state.fps) {
                 live_shapes.push(s);
             }
@@ -173,7 +181,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             handlers: &[crate::dsl::runtime::DslHandler],
             preview_fps: u32,
         ) {
-            let frame_idx = crate::shapes::element_store::seconds_to_frame(current_time, preview_fps);
+            let frame_idx =
+                crate::shapes::element_store::seconds_to_frame(current_time, preview_fps);
             for ek in elements {
                 // Respect spawn/kill ranges early
                 if frame_idx < ek.spawn_frame {

@@ -75,6 +75,7 @@ pub fn enforce_preview_cache_limits(state: &mut AppState, ctx: &egui::Context) {
             let db = (b.0 - now_time).abs();
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
+        let before = state.preview_frame_cache.len();
         while total > max_bytes && state.preview_frame_cache.len() > 1 {
             if let Some((_t, img)) = state.preview_frame_cache.pop() {
                 let [w, h] = img.size;
@@ -82,6 +83,9 @@ pub fn enforce_preview_cache_limits(state: &mut AppState, ctx: &egui::Context) {
             } else {
                 break;
             }
+        }
+        if state.preview_frame_cache.len() < before {
+            state.preview_frame_cache.shrink_to_fit();
         }
         state
             .preview_frame_cache
@@ -94,12 +98,16 @@ pub fn enforce_preview_cache_limits(state: &mut AppState, ctx: &egui::Context) {
             let db = (b.0 - now_time).abs();
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
+        let before = state.preview_compressed_cache.len();
         while total > max_bytes && state.preview_compressed_cache.len() > 1 {
             if let Some((_t, data, _)) = state.preview_compressed_cache.pop() {
                 total = total.saturating_sub(data.len());
             } else {
                 break;
             }
+        }
+        if state.preview_compressed_cache.len() < before {
+            state.preview_compressed_cache.shrink_to_fit();
         }
     }
 
@@ -109,12 +117,16 @@ pub fn enforce_preview_cache_limits(state: &mut AppState, ctx: &egui::Context) {
             let db = (b.0 - now_time).abs();
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
+        let before = state.preview_texture_cache.len();
         while total > max_bytes && state.preview_texture_cache.len() > 1 {
             if let Some((_t, _handle, size)) = state.preview_texture_cache.pop() {
                 total = total.saturating_sub(size);
             } else {
                 break;
             }
+        }
+        if state.preview_texture_cache.len() < before {
+            state.preview_texture_cache.shrink_to_fit();
         }
     }
 
