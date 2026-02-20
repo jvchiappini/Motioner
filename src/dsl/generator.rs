@@ -7,10 +7,60 @@
 use super::parser;
 use crate::animations::move_animation::MoveAnimation;
 use crate::scene::{Animation, Shape};
+use crate::shapes::element_store::ElementKeyframes;
 
 // ─── Public entry points ──────────────────────────────────────────────────────
 
+/// Generate DSL directly from `ElementKeyframes` — the canonical scene store.
+///
+/// This is the preferred code-gen path: no intermediate `Vec<Shape>` clone
+/// is needed.  Each element is materialized at its spawn frame only to obtain
+/// its DSL serialization, so allocations are minimal and proportional to the
+/// number of shapes, not the number of keyframes.
+pub fn generate_from_elements(
+    elements: &[ElementKeyframes],
+    width: u32,
+    height: u32,
+    fps: u32,
+    duration: f32,
+) -> String {
+    let mut out = String::new();
+
+    // Header
+    out.push_str(&format!(
+        "size({}, {})\ntimeline(fps = {}, duration = {:.2})\n\n",
+        width, height, fps, duration
+    ));
+
+    // Shape definitions — materialize each element at spawn frame just for DSL output.
+    for elem in elements {
+        if elem.ephemeral {
+            continue;
+        }
+        if let Some(shape) = elem.to_shape_at_frame(elem.spawn_frame, fps) {
+            out.push_str(&shape.to_dsl(""));
+            out.push('\n');
+        }
+    }
+
+    // Top-level move blocks referencing elements by name.
+    for elem in elements {
+        if elem.ephemeral {
+            continue;
+        }
+        for anim in &elem.animations {
+            if let Some(ma) = MoveAnimation::from_scene(anim) {
+                out.push_str(&ma.to_dsl_block(Some(&elem.name), ""));
+                out.push('\n');
+            }
+        }
+    }
+
+    out
+}
+
 /// Generate the full DSL string for the given scene configuration.
+/// Prefer [`generate_from_elements`] when the scene is stored as `ElementKeyframes`.
 pub fn generate(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
     let mut out = String::new();
 

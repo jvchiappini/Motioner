@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::collections::HashMap;
 
 /// Bounding box en coordenadas normalizadas (0..1) para cálculos de colisión y culling.

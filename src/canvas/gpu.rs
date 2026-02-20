@@ -1,5 +1,3 @@
-#[cfg(feature = "wgpu")]
-use crate::events::time_changed_event::apply_on_time_handlers;
 use eframe::egui;
 #[cfg(feature = "wgpu")]
 use eframe::egui_wgpu;

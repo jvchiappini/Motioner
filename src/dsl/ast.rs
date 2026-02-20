@@ -141,12 +141,18 @@ pub struct EventHandlerNode {
 // ─── Top-level statement ──────────────────────────────────────────────────────
 
 /// Every top-level item that can appear in a Motioner DSL file.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// # Adding a new shape
+/// Shape variants are **not** listed individually here. Instead, any parsed
+/// concrete shape is wrapped in `Statement::Shape`. This means adding a new
+/// shape type requires **zero changes** to the AST or the DSL pipeline — only
+/// the shape module itself needs to register a `ShapeParserFactory`.
+#[derive(Clone, Debug)]
 pub enum Statement {
     Header(HeaderConfig),
-    Circle(crate::shapes::circle::Circle),
-    Rect(crate::shapes::rect::Rect),
-    Text(crate::shapes::text::Text),
+    /// Any concrete visual shape (Circle, Rect, Text, …).
+    /// The variant is determined at parse time by the registered shape parsers.
+    Shape(crate::shapes::shapes_manager::Shape),
     /// A top-level `move {}` block that references an element by name.
     Move(MoveBlock),
     EventHandler(EventHandlerNode),

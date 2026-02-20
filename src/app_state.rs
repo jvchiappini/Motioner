@@ -484,8 +484,8 @@ impl AppState {
     }
 
     pub fn request_dsl_update(&mut self) {
-        self.dsl_code = crate::dsl::generate_dsl(
-            &crate::shapes::element_store::to_legacy_shapes(&self.scene, self.fps),
+        self.dsl_code = crate::dsl::generate_dsl_from_elements(
+            &self.scene,
             self.render_width,
             self.render_height,
             self.fps,
@@ -494,32 +494,6 @@ impl AppState {
         crate::events::element_properties_changed_event::on_element_properties_changed(self);
     }
 
-    /// Replace the current `scene` with `parsed_scene` (result of `dsl::parse_dsl`) but
-    /// preserve any runtime-created (ephemeral) shapes that were previously appended
-    /// to the live scene. Ephemeral shapes are appended to the parsed scene unless a
-    /// parsed shape already uses the same name (to avoid accidental duplicates).
-    pub fn apply_parsed_scene(&mut self, parsed_scene: Vec<crate::scene::Shape>) {
-        // preserve existing ephemeral ElementKeyframes
-        let mut existing_ephemeral: Vec<crate::shapes::element_store::ElementKeyframes> =
-            self.scene.iter().filter(|s| s.ephemeral).cloned().collect();
-
-        // convert parsed Scene (Vec<Shape>) into ElementKeyframes
-        let mut new_scene: Vec<crate::shapes::element_store::ElementKeyframes> = parsed_scene
-            .into_iter()
-            .filter_map(|s| {
-                crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(&s, self.fps)
-            })
-            .collect();
-
-        // append ephemerals that don't conflict by name
-        for ek in existing_ephemeral.drain(..) {
-            if !new_scene.iter().any(|p| p.name == ek.name) {
-                new_scene.push(ek);
-            }
-        }
-
-        self.scene = new_scene;
-    }
 }
 
 #[derive(Clone)]

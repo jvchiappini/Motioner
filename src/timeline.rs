@@ -1,5 +1,4 @@
 use crate::app_state::AppState;
-use crate::shapes::element_store::ElementKeyframes;
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {

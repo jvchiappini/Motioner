@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Rasterizador de texto CPU → buffer RGBA.
 /// Genera un buffer RGBA8 del tamaño render_width × render_height con todo
 /// el texto de la escena dibujado en sus posiciones animadas.

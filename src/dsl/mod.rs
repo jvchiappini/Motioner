@@ -24,7 +24,7 @@ pub mod validator;
 
 // --- Re-exports ---------------------------------------------------------------
 
-pub use generator::{extract_event_handlers, generate};
+pub use generator::{extract_event_handlers, generate, generate_from_elements};
 pub use parser::{method_color, parse_config};
 pub use runtime::DslHandler;
 pub use validator::{validate, Diagnostic};
@@ -34,10 +34,22 @@ pub use validator::{validate, Diagnostic};
 use crate::scene::Shape;
 
 /// Convenience wrapper: generate DSL from a scene.
-/// Prefer calling [`generate`] directly.
+/// Prefer calling [`generate_from_elements`] directly when the scene is stored as `ElementKeyframes`.
 #[inline]
 pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
     generate(scene, width, height, fps, duration)
+}
+
+/// Generate DSL directly from `ElementKeyframes` — no intermediate `Vec<Shape>` clone needed.
+#[inline]
+pub fn generate_dsl_from_elements(
+    elements: &[crate::shapes::element_store::ElementKeyframes],
+    width: u32,
+    height: u32,
+    fps: u32,
+    duration: f32,
+) -> String {
+    generate_from_elements(elements, width, height, fps, duration)
 }
 
 /// Convenience wrapper: validate DSL and return diagnostics.
@@ -75,7 +87,7 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
     let mut pending_moves: Vec<(String, ast::MoveBlock)> = Vec::new();
 
     for stmt in stmts {
-        if let Some(s) = crate::shapes::shapes_manager::from_dsl_statement(&stmt) {
+        if let Statement::Shape(s) = stmt {
             shapes.push(s);
             continue;
         }
@@ -88,8 +100,8 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
             }
             // Header and event handlers are not scene shapes.
             Statement::Header(_) | Statement::EventHandler(_) => {}
-            // Other shape cases were handled by `from_dsl_statement` above.
-            _ => {}
+            // All shape cases are handled by the Statement::Shape arm above.
+            Statement::Shape(_) => unreachable!(),
         }
     }
 

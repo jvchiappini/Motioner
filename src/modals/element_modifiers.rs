@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::shapes::element_store::{ElementKeyframes, FrameProps};
+use crate::shapes::element_store::FrameProps;
 use eframe::egui;
 
 pub mod easing_curve_editor;

@@ -360,6 +360,23 @@ impl ShapeDescriptor for Text {
         super::shapes_manager::Shape::Text(t)
     }
 
+    fn animations(&self) -> &[crate::scene::Animation] {
+        &self.animations
+    }
+
+    fn push_animation(&mut self, anim: crate::scene::Animation) {
+        self.animations.push(anim);
+    }
+
+    fn spawn_time(&self) -> f32 { self.spawn_time }
+    fn kill_time(&self) -> Option<f32> { self.kill_time }
+    fn is_ephemeral(&self) -> bool { self.ephemeral }
+    fn set_ephemeral(&mut self, v: bool) { self.ephemeral = v; }
+    fn xy(&self) -> (f32, f32) { (self.x, self.y) }
+    fn is_visible(&self) -> bool { self.visible }
+    fn set_visible(&mut self, v: bool) { self.visible = v; }
+    fn set_fill_color(&mut self, col: [u8; 4]) { self.color = col; }
+
     fn to_element_keyframes(&self, fps: u32) -> crate::shapes::element_store::ElementKeyframes {
         use crate::shapes::element_store::{ElementKeyframes, Keyframe};
         let mut ek = ElementKeyframes::new(self.name.clone(), "text".into());
@@ -435,10 +452,6 @@ impl ShapeDescriptor for Text {
             "font" => self.font = val.to_string(),
             _ => {}
         }
-    }
-
-    fn animations(&self) -> &[crate::scene::Animation] {
-        &self.animations
     }
 
     fn append_gpu_shapes(
@@ -631,5 +644,12 @@ inventory::submit! {
     crate::shapes::shapes_manager::ShapeParserFactory {
         kind: "text",
         parser: parse_text_wrapper,
+    }
+}
+
+inventory::submit! {
+    crate::shapes::shapes_manager::CreateDefaultFactory {
+        kind: "text",
+        constructor: |name| Text::create_default(name),
     }
 }

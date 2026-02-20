@@ -1,4 +1,3 @@
-use crate::shapes::ShapeDescriptor;
 use serde::{Deserialize, Serialize};
 
 pub fn default_visible() -> bool {
@@ -55,18 +54,21 @@ impl Shape {
     }
     pub fn is_visible(&self) -> bool {
         match self {
-            Shape::Circle(c) => c.visible,
-            Shape::Rect(r) => r.visible,
-            Shape::Text(t) => t.visible,
+            // Delegate to ShapeDescriptor for concrete shapes.
+            Shape::Circle(_) | Shape::Rect(_) | Shape::Text(_) => {
+                self.descriptor().map_or(true, |d| d.is_visible())
+            }
             Shape::Group { visible, .. } => *visible,
         }
     }
 
     pub fn set_visible(&mut self, v: bool) {
         match self {
-            Shape::Circle(c) => c.visible = v,
-            Shape::Rect(r) => r.visible = v,
-            Shape::Text(t) => t.visible = v,
+            Shape::Circle(_) | Shape::Rect(_) | Shape::Text(_) => {
+                if let Some(d) = self.descriptor_mut() {
+                    d.set_visible(v);
+                }
+            }
             Shape::Group { visible, .. } => *visible = v,
         }
     }
@@ -86,58 +88,34 @@ impl Shape {
     fn to_dsl_impl(&self, indent_level: usize) -> String {
         // Use tabs for indentation in generated DSL (one tab == one level).
         let indent = "\t".repeat(indent_level);
+
+        // For all concrete shapes we can delegate uniformly via `ShapeDescriptor`:
+        // 1. Generate the shape's own DSL block.
+        // 2. If nested (indent_level > 0), also append any move animation blocks.
+        //    Top-level animation blocks are emitted by `dsl::generate_dsl()`, so
+        //    we must not duplicate them here.
+        if let Some(desc) = self.descriptor() {
+            let mut out = desc.to_dsl(&indent);
+            if indent_level > 0 {
+                for anim in desc.animations() {
+                    if let Some(ma) =
+                        crate::animations::move_animation::MoveAnimation::from_scene(anim)
+                    {
+                        out.push_str(&ma.to_dsl_block(None, &indent));
+                        out.push('\n');
+                    }
+                }
+            }
+            return out;
+        }
+
+        // Group is the only variant without a descriptor.
         match self {
-            Shape::Circle(c) => {
-                let mut out = c.to_dsl(&indent);
-                // Only append nested animation blocks when this shape is not at
-                // the top-level (indent_level > 0). Top-level animation
-                // blocks are emitted by `dsl::generate_dsl()` so emitting them
-                // here would duplicate them.
-                if indent_level > 0 {
-                    for anim in &c.animations {
-                        if let Some(ma) =
-                            crate::animations::move_animation::MoveAnimation::from_scene(anim)
-                        {
-                            out.push_str(&ma.to_dsl_block(None, &indent));
-                            out.push('\n');
-                        }
-                    }
-                }
-                out
-            }
-            Shape::Rect(r) => {
-                let mut out = r.to_dsl(&indent);
-                if indent_level > 0 {
-                    for anim in &r.animations {
-                        if let Some(ma) =
-                            crate::animations::move_animation::MoveAnimation::from_scene(anim)
-                        {
-                            out.push_str(&ma.to_dsl_block(None, &indent));
-                            out.push('\n');
-                        }
-                    }
-                }
-                out
-            }
-            Shape::Text(t) => {
-                let mut out = t.to_dsl(&indent);
-                if indent_level > 0 {
-                    for anim in &t.animations {
-                        if let Some(ma) =
-                            crate::animations::move_animation::MoveAnimation::from_scene(anim)
-                        {
-                            out.push_str(&ma.to_dsl_block(None, &indent));
-                            out.push('\n');
-                        }
-                    }
-                }
-                out
-            }
             Shape::Group { name, children, .. } => {
-                let mut items: Vec<String> = Vec::new();
-                for c in children {
-                    items.push(c.to_dsl_impl(indent_level + 1));
-                }
+                let items: Vec<String> = children
+                    .iter()
+                    .map(|c| c.to_dsl_impl(indent_level + 1))
+                    .collect();
                 if items.is_empty() {
                     format!("{}group(name = \"{}\") {{}}", indent, name)
                 } else {
@@ -150,6 +128,7 @@ impl Shape {
                     )
                 }
             }
+            _ => String::new(), // unreachable: all concrete shapes have a descriptor
         }
     }
 
@@ -180,12 +159,10 @@ impl Shape {
 
     /// Mark or un-mark a shape as ephemeral (created at runtime).
     pub fn set_ephemeral(&mut self, v: bool) {
-        match self {
-            Shape::Circle(c) => c.ephemeral = v,
-            Shape::Rect(r) => r.ephemeral = v,
-            Shape::Text(t) => t.ephemeral = v,
-            Shape::Group { .. } => {}
+        if let Some(d) = self.descriptor_mut() {
+            d.set_ephemeral(v);
         }
+        // Groups are never ephemeral — no-op.
     }
 
     /// Apply a numeric KV to the shape (used by DSL/runtime). Unknown keys
@@ -208,23 +185,16 @@ impl Shape {
 
     /// Set the fill/color for shapes that support it.
     pub fn set_fill_color(&mut self, col: [u8; 4]) {
-        match self {
-            Shape::Circle(c) => c.color = col,
-            Shape::Rect(r) => r.color = col,
-            Shape::Text(t) => t.color = col,
-            Shape::Group { .. } => {}
+        if let Some(d) = self.descriptor_mut() {
+            d.set_fill_color(col);
         }
+        // Groups have no fill — no-op.
     }
 
     /// Return the current X/Y position for the shape (normalized 0..1).
-    /// Returns (0.0, 0.0) for non-visual/group nodes.
+    /// Returns `(0.0, 0.0)` for Group nodes.
     pub fn xy(&self) -> (f32, f32) {
-        match self {
-            Shape::Circle(c) => (c.x, c.y),
-            Shape::Rect(r) => (r.x, r.y),
-            Shape::Text(t) => (t.x, t.y),
-            Shape::Group { .. } => (0.0, 0.0),
-        }
+        self.descriptor().map_or((0.0, 0.0), |d| d.xy())
     }
 
     /// Compute a `FrameProps` containing only the fields that differ between
@@ -240,84 +210,52 @@ impl Shape {
         if let Some(desc) = self.descriptor() {
             desc.changed_frame_props(orig)
         } else {
-            crate::shapes::element_store::FrameProps {
-                x: None,
-                y: None,
-                radius: None,
-                w: None,
-                h: None,
-                size: None,
-                value: None,
-                color: None,
-                visible: None,
-                z_index: None,
-            }
+            crate::shapes::element_store::FrameProps::default()
         }
     }
 
-    /// Return a slice of animations attached to this shape (empty by default
-    /// for groups). This delegates to the per-shape `ShapeDescriptor` where
-    /// available so callers don't need to match on the enum.
+    /// Return a slice of animations attached to this shape (empty for groups).
+    /// Delegates to `ShapeDescriptor::animations()`.
     pub fn animations(&self) -> &[crate::scene::Animation] {
         self.descriptor().map_or(&[], |d| d.animations())
     }
 
     /// Append an animation to this shape in a shape-agnostic way.
-    ///
-    /// This avoids callers having to match on `Shape::Circle/Rect/Text` when
-    /// they only need to attach an animation to an existing shape.
+    /// Groups ignore this call (they carry no animations).
     pub fn push_animation(&mut self, anim: crate::scene::Animation) {
-        match self {
-            Shape::Circle(c) => c.animations.push(anim),
-            Shape::Rect(r) => r.animations.push(anim),
-            Shape::Text(t) => t.animations.push(anim),
-            Shape::Group { .. } => {
-                // Groups don't store animations directly — ignore.
-            }
+        if let Some(d) = self.descriptor_mut() {
+            d.push_animation(anim);
         }
     }
 
+    /// Time (seconds) at which this shape first becomes visible.
+    /// For groups, returns the minimum spawn time of their children (0.0 if empty).
     pub fn spawn_time(&self) -> f32 {
-        match self {
-            Shape::Circle(c) => c.spawn_time,
-            Shape::Rect(r) => r.spawn_time,
-            Shape::Text(t) => t.spawn_time,
-            Shape::Group { children, .. } => {
-                let mut min_t = f32::INFINITY;
-                for child in children {
-                    let child_t = child.spawn_time();
-                    if child_t < min_t {
-                        min_t = child_t;
-                    }
-                }
-                if min_t == f32::INFINITY {
-                    0.0
-                } else {
-                    min_t
-                }
-            }
+        if let Some(d) = self.descriptor() {
+            return d.spawn_time();
+        }
+        // Group: minimum spawn time of children.
+        if let Shape::Group { children, .. } = self {
+            let min = children
+                .iter()
+                .map(|c| c.spawn_time())
+                .fold(f32::INFINITY, f32::min);
+            if min.is_finite() { min } else { 0.0 }
+        } else {
+            0.0
         }
     }
 
-    /// Optional explicit kill time for the shape (None => no kill time)
+    /// Optional explicit kill time for the shape (`None` ⇒ lives forever).
     pub fn kill_time(&self) -> Option<f32> {
-        match self {
-            Shape::Circle(c) => c.kill_time,
-            Shape::Rect(r) => r.kill_time,
-            Shape::Text(t) => t.kill_time,
-            Shape::Group { .. } => None,
-        }
+        self.descriptor().and_then(|d| d.kill_time())
+        // Groups have no kill time.
     }
 
-    /// Whether this shape was created at runtime (ephemeral) and should be
-    /// excluded from generated DSL output.
+    /// Whether this shape was created at runtime and should be excluded from
+    /// generated DSL output.
     pub fn is_ephemeral(&self) -> bool {
-        match self {
-            Shape::Circle(c) => c.ephemeral,
-            Shape::Rect(r) => r.ephemeral,
-            Shape::Text(t) => t.ephemeral,
-            Shape::Group { .. } => false,
-        }
+        self.descriptor().map_or(false, |d| d.is_ephemeral())
     }
 
     /// Recursively flattens the scene graph into a list of visual primitives (Circles, Rects).
@@ -363,34 +301,30 @@ pub fn from_element_keyframes(
 }
 
 /// Create a default `Shape` instance for a DSL keyword (used by the
-/// runtime when handler bodies spawn ephemeral shapes). Centralises the
-/// keyword -> concrete type mapping so callers don't need to match on
-/// variants.
+/// runtime when handler bodies spawn ephemeral shapes).
+///
+/// Driven entirely by the `CreateDefaultFactory` registry — no hard-coded
+/// keyword list here. Adding a new shape only requires an
+/// `inventory::submit!` call in the shape module.
 pub fn create_default_by_keyword(keyword: &str, name: String) -> Option<Shape> {
-    match keyword {
-        "circle" => Some(crate::shapes::circle::Circle::create_default(name)),
-        "rect" => Some(crate::shapes::rect::Rect::create_default(name)),
-        "text" => Some(crate::shapes::text::Text::create_default(name)),
-        _ => None,
+    for factory in inventory::iter::<CreateDefaultFactory> {
+        if factory.kind == keyword {
+            return Some((factory.constructor)(name));
+        }
     }
+    None
 }
 
-/// Construct a `Shape` from a DSL `Statement` (returns `None` for
-/// non-shape statements). Centralises the AST -> scene conversion so the
-/// DSL layer doesn't need to match on concrete shape types.
-pub fn from_dsl_statement(stmt: &crate::dsl::ast::Statement) -> Option<Shape> {
-    use crate::dsl::ast::MoveBlock;
-
-    // (previously there was a local MoveBlock -> Animation converter here;
-    // parsing/animation conversion is now provided by `dsl::ast_move_to_scene`)
-
-    match stmt {
-        // Parser now produces concrete shape structs inside the AST
-        crate::dsl::ast::Statement::Circle(n) => Some(Shape::Circle(n.clone())),
-        crate::dsl::ast::Statement::Rect(n) => Some(Shape::Rect(n.clone())),
-        crate::dsl::ast::Statement::Text(n) => Some(Shape::Text(n.clone())),
-        _ => None,
-    }
+/// Return a slice of all DSL keywords registered by shape modules.
+///
+/// Used by the validator and runtime to enumerate known keywords without
+/// a hard-coded list. The slice is heap-allocated on every call (it is
+/// only called during validation, not on the hot path).
+pub fn registered_shape_keywords() -> Vec<&'static str> {
+    inventory::iter::<CreateDefaultFactory>
+        .into_iter()
+        .map(|f| f.kind)
+        .collect()
 }
 
 /// Registry entry type for ElementKeyframes -> Shape constructors.
@@ -416,6 +350,30 @@ pub struct ShapeParserFactory {
 }
 
 inventory::collect!(ShapeParserFactory);
+
+/// Registry entry type for creating a default `Shape` instance by keyword.
+///
+/// Shape modules should `inventory::submit!` a `CreateDefaultFactory` so
+/// `create_default_by_keyword` can delegate without a hard-coded match.
+///
+/// # Adding a new shape
+/// In your shape module add:
+/// ```ignore
+/// inventory::submit! {
+///     crate::shapes::shapes_manager::CreateDefaultFactory {
+///         kind: "myshape",
+///         constructor: |name| MyShape::create_default(name),
+///     }
+/// }
+/// ```
+pub struct CreateDefaultFactory {
+    /// DSL keyword, e.g. `"circle"`.
+    pub kind: &'static str,
+    /// Produce a default `Shape` with the given name.
+    pub constructor: fn(String) -> Shape,
+}
+
+inventory::collect!(CreateDefaultFactory);
 
 /// Try to parse a collected DSL `block` using the registered shape parsers.
 pub fn parse_shape_block(block: &[String]) -> Option<Shape> {

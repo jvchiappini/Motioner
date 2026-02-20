@@ -48,8 +48,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 state.scene.insert(insert_at, node);
                 state.selected_node_path = Some(vec![insert_at]);
                 // position cache removed — no-op
-                state.dsl_code = dsl::generate_dsl(
-                    &[], // generator currently expects Shape; leave empty for now
+                state.dsl_code = dsl::generate_dsl_from_elements(
+                    &state.scene,
                     state.render_width,
                     state.render_height,
                     state.fps,
@@ -358,8 +358,8 @@ fn render_row(
                 easing: crate::animations::easing::Easing::Linear,
             });
         }
-        state.dsl_code = dsl::generate_dsl(
-            &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
+        state.dsl_code = dsl::generate_dsl_from_elements(
+            &state.scene,
             state.render_width,
             state.render_height,
             state.fps,
@@ -385,8 +385,8 @@ fn render_row(
                 elem.name = state.rename_buffer.clone();
             }
             state.renaming_path = None;
-            state.dsl_code = dsl::generate_dsl(
-                &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
+            state.dsl_code = dsl::generate_dsl_from_elements(
+                &state.scene,
                 state.render_width,
                 state.render_height,
                 state.fps,
@@ -560,51 +560,50 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
                 added = true;
             }
             if ui.button("⭕   Circle").clicked() {
-                let s = crate::shapes::circle::Circle::create_default(format!(
-                    "Circle #{}",
-                    state.scene.len()
-                ));
-                if let Some(ek) =
+                if let Some(ek) = crate::shapes::shapes_manager::create_default_by_keyword(
+                    "circle",
+                    format!("Circle #{}", state.scene.len()),
+                )
+                .and_then(|s| {
                     crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
                         &s, state.fps,
                     )
-                {
+                }) {
                     state.scene.push(ek);
                 }
                 added = true;
             }
             if ui.button("⬜  Rectangle").clicked() {
-                let s = crate::shapes::rect::Rect::create_default(format!(
-                    "Rect #{}",
-                    state.scene.len()
-                ));
-                if let Some(ek) =
+                if let Some(ek) = crate::shapes::shapes_manager::create_default_by_keyword(
+                    "rect",
+                    format!("Rect #{}", state.scene.len()),
+                )
+                .and_then(|s| {
                     crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
                         &s, state.fps,
                     )
-                {
+                }) {
                     state.scene.push(ek);
                 }
                 added = true;
             }
             if ui.button("🔤  Text").clicked() {
-                let s = crate::shapes::text::Text::create_default(format!(
-                    "Text #{}",
-                    state.scene.len()
-                ));
-                if let Some(ek) =
+                if let Some(ek) = crate::shapes::shapes_manager::create_default_by_keyword(
+                    "text",
+                    format!("Text #{}", state.scene.len()),
+                )
+                .and_then(|s| {
                     crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
                         &s, state.fps,
                     )
-                {
+                }) {
                     state.scene.push(ek);
                 }
                 added = true;
             }
             if added {
-                // position cache removed — no-op
-                state.dsl_code = dsl::generate_dsl(
-                    &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
+                state.dsl_code = dsl::generate_dsl_from_elements(
+                    &state.scene,
                     state.render_width,
                     state.render_height,
                     state.fps,

@@ -164,6 +164,19 @@ impl ShapeDescriptor for Circle {
         &self.animations
     }
 
+    fn push_animation(&mut self, anim: crate::scene::Animation) {
+        self.animations.push(anim);
+    }
+
+    fn spawn_time(&self) -> f32 { self.spawn_time }
+    fn kill_time(&self) -> Option<f32> { self.kill_time }
+    fn is_ephemeral(&self) -> bool { self.ephemeral }
+    fn set_ephemeral(&mut self, v: bool) { self.ephemeral = v; }
+    fn xy(&self) -> (f32, f32) { (self.x, self.y) }
+    fn is_visible(&self) -> bool { self.visible }
+    fn set_visible(&mut self, v: bool) { self.visible = v; }
+    fn set_fill_color(&mut self, col: [u8; 4]) { self.color = col; }
+
     fn to_element_keyframes(&self, fps: u32) -> crate::shapes::element_store::ElementKeyframes {
         use crate::shapes::element_store::{ElementKeyframes, Keyframe};
         let mut ek = ElementKeyframes::new(self.name.clone(), "circle".into());
@@ -409,5 +422,12 @@ inventory::submit! {
     crate::shapes::shapes_manager::ShapeParserFactory {
         kind: "circle",
         parser: parse_circle_wrapper,
+    }
+}
+
+inventory::submit! {
+    crate::shapes::shapes_manager::CreateDefaultFactory {
+        kind: "circle",
+        constructor: |name| Circle::create_default(name),
     }
 }

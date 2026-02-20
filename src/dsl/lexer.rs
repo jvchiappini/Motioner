@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Lexer for the Motioner DSL.
 ///
 /// Converts raw source text into a flat sequence of [`Token`]s.

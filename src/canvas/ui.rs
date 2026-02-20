@@ -1,7 +1,6 @@
 #[cfg(feature = "wgpu")]
 use super::gpu::{CompositionCallback, GpuShape};
 use super::rasterizer::sample_color_at;
-use crate::animations::animations_manager::animated_xy_for;
 use crate::app_state::AppState;
 use eframe::egui;
 

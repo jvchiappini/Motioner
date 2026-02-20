@@ -5,13 +5,4 @@ pub use crate::animations::animations_manager::Animation;
 // backward-compatibility so existing `crate::scene::Easing` / `crate::scene::Shape`
 // references keep working.
 pub use crate::animations::easing::{BezierPoint, Easing};
-pub use crate::shapes::shapes_manager::Scene;
 pub use crate::shapes::shapes_manager::Shape;
-
-// Animation moved to `crate::animations::animations_manager::Animation`.
-
-// The `Shape` type and its helpers live in `src/shapes/shapes_manager.rs` now.
-
-// Re-export helpers implemented in `src/shapes/shapes_manager.rs` so external
-// users can keep calling `crate::scene::get_shape*` and `crate::scene::move_node`.
-pub use crate::shapes::shapes_manager::{get_shape, get_shape_mut, move_node};

@@ -137,9 +137,16 @@ fn check_header_config(src: &str, diags: &mut Vec<Diagnostic>) {
 }
 
 fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
-    const ALLOWED: &[&str] = &[
-        "circle", "rect", "text", "move", "group", "on_time", "size", "timeline",
-    ];
+    // Non-shape top-level keywords that are always allowed.
+    const ALWAYS_ALLOWED: &[&str] = &["move", "group", "on_time", "size", "timeline"];
+
+    // Shape keywords come from the live registry — no hard-coded list needed.
+    // Adding a new shape automatically makes it recognised here.
+    let shape_keywords = crate::shapes::shapes_manager::registered_shape_keywords();
+
+    let is_allowed = |tok: &str| {
+        ALWAYS_ALLOWED.contains(&tok) || shape_keywords.contains(&tok)
+    };
 
     let mut brace_depth: i32 = 0;
     let mut byte_offset: usize = 0;
@@ -170,7 +177,7 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
                         });
                     }
 
-                    if !ALLOWED.contains(&first_tok) {
+                    if !is_allowed(first_tok) {
                         let (ln, col) = byte_to_line_col(
                             src,
                             byte_offset + trimmed.find(first_tok).unwrap_or(0),
@@ -197,8 +204,7 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
                 }
             } else if trimmed.contains('=') {
                 // Stray top-level assignment
-                let allowed_starts = ALLOWED;
-                if !allowed_starts.iter().any(|k| trimmed.starts_with(k)) {
+                if !is_allowed(first_tok) {
                     let (ln, col) = byte_to_line_col(src, byte_offset);
                     diags.push(Diagnostic {
                         message: format!("Unexpected top-level content: '{}'", trimmed),

@@ -45,7 +45,7 @@ pub fn exec_block(shapes: &mut [Shape], body: &str, ctx: &mut EvalContext) -> Re
     let mut i = 0usize;
 
     while i < lines.len() {
-        let mut line = lines[i].trim();
+        let line = lines[i].trim();
         i += 1;
         if line.is_empty() || line.starts_with("//") {
             continue;
@@ -124,15 +124,19 @@ fn dispatch_action(
 
     // Allow handler bodies to declare full shape blocks (treated as
     // runtime-spawned/ephemeral shapes). Example: `circle "S" { ... }`.
-    if line.trim_start().starts_with("circle")
-        || line.trim_start().starts_with("rect")
-        || line.trim_start().starts_with("text")
+    // The check is driven by the registry — no hard-coded keyword list.
+    let first_word = line.trim_start().split_whitespace().next().unwrap_or("");
+    if crate::shapes::shapes_manager::create_default_by_keyword(first_word, String::new()).is_some()
+        || crate::shapes::shapes_manager::parse_shape_block(
+            &[line.split('{').next().unwrap_or("").trim().to_string()],
+        ).is_some()
+        || crate::shapes::shapes_manager::registered_shape_keywords().contains(&first_word)
     {
         // Parse the provided block into scene shapes (to obtain animations
         // and defaults), but also re-evaluate any KV expressions inside the
         // handler context (e.g. `x = seconds * 0.1`). This lets users write
         // `circle "C" { x = seconds * 0.1, ... }` inside `on_time`.
-        let mut parsed = crate::dsl::parse_dsl(line);
+        let parsed = crate::dsl::parse_dsl(line);
 
         // Helper: split top-level KV lines from the block body while
         // preserving nested blocks (like `move { ... }`).

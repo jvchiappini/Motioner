@@ -9,7 +9,9 @@
 /// - [`parse_config`] — header-only parse (used by quick-validation path)
 use std::collections::HashMap;
 
-use super::ast::{BezierPoint, EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Point2, Statement};
+use super::ast::{
+    BezierPoint, EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Point2, Statement,
+};
 use super::lexer::extract_balanced;
 
 // ─── Public entry points ──────────────────────────────────────────────────────
@@ -61,12 +63,7 @@ pub fn parse(src: &str) -> Vec<Statement> {
             if !first.is_empty() {
                 let block = collect_block(line, &mut lines);
                 if let Some(shape) = crate::shapes::shapes_manager::parse_shape_block(&block) {
-                    match shape {
-                        crate::shapes::shapes_manager::Shape::Circle(c) => stmts.push(Statement::Circle(c)),
-                        crate::shapes::shapes_manager::Shape::Rect(r) => stmts.push(Statement::Rect(r)),
-                        crate::shapes::shapes_manager::Shape::Text(t) => stmts.push(Statement::Text(t)),
-                        _ => {}
-                    }
+                    stmts.push(Statement::Shape(shape));
                     continue;
                 }
             }
@@ -336,7 +333,10 @@ where
 }
 
 /// Collect a nested sub-block from an already-collected body iterator.
-pub(crate) fn collect_sub_block<'a, I>(header: &str, iter: &mut std::iter::Peekable<I>) -> Vec<String>
+pub(crate) fn collect_sub_block<'a, I>(
+    header: &str,
+    iter: &mut std::iter::Peekable<I>,
+) -> Vec<String>
 where
     I: Iterator<Item = &'a String>,
 {

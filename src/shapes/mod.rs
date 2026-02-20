@@ -58,6 +58,44 @@ pub trait ShapeDescriptor {
         &[]
     }
 
+    /// Append an animation to this shape's internal list.
+    fn push_animation(&mut self, anim: crate::scene::Animation);
+
+    // ── Spawn / kill ──────────────────────────────────────────────────────
+
+    /// Time (seconds) at which this shape becomes visible.
+    fn spawn_time(&self) -> f32;
+
+    /// Optional explicit kill time (shape hidden at `t >= kill_time`).
+    fn kill_time(&self) -> Option<f32>;
+
+    /// Whether this shape was created at runtime and should be excluded from
+    /// generated DSL output.
+    fn is_ephemeral(&self) -> bool;
+
+    /// Mark or un-mark this shape as ephemeral.
+    fn set_ephemeral(&mut self, v: bool);
+
+    // ── Position ─────────────────────────────────────────────────────────
+
+    /// Normalised (0..1) canvas position.
+    fn xy(&self) -> (f32, f32);
+
+    // ── Visibility ───────────────────────────────────────────────────────
+
+    /// Whether this shape is currently visible.
+    fn is_visible(&self) -> bool;
+
+    /// Set visibility.
+    fn set_visible(&mut self, v: bool);
+
+    // ── Fill colour ───────────────────────────────────────────────────────
+
+    /// Override the fill / primary colour.  Default: no-op.
+    fn set_fill_color(&mut self, _col: [u8; 4]) {}
+
+    // ── Frame props ───────────────────────────────────────────────────────
+
     /// Compute which `FrameProps` fields differ between this concrete
     /// shape instance and an optional sampled `orig` props. This is used
     /// when runtime handlers mutate `Shape` instances so the system can
@@ -80,6 +118,8 @@ pub trait ShapeDescriptor {
             z_index: None,
         }
     }
+
+    // ── KV application ────────────────────────────────────────────────────
 
     /// Apply a numeric key/value directly to the concrete shape instance.
     /// Default implementation is a no-op; concrete shapes should override

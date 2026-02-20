@@ -99,27 +99,23 @@ impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
 
-        // Ensure fonts used in scene are loaded in egui
-        let mut used_fonts = std::collections::HashSet::new();
-        fn collect_fonts(
-            shapes: &[crate::scene::Shape],
-            fonts: &mut std::collections::HashSet<String>,
-        ) {
-            for s in shapes {
-                match s {
-                    crate::scene::Shape::Text(t) => {
-                        fonts.insert(t.font.clone());
-                        for span in &t.spans {
-                            fonts.insert(span.font.clone());
-                        }
-                    }
-                    crate::scene::Shape::Group { children, .. } => collect_fonts(children, fonts),
-                    _ => {}
+        // Ensure fonts used in scene are loaded in egui.
+        // Only text elements carry font names; materialize them at spawn frame
+        // rather than cloning the entire scene into legacy Shapes.
+        let mut used_fonts = std::collections::HashSet::<String>::new();
+        for elem in &state.scene {
+            if elem.kind != "text" {
+                continue;
+            }
+            if let Some(crate::scene::Shape::Text(t)) =
+                elem.to_shape_at_frame(elem.spawn_frame, state.fps)
+            {
+                used_fonts.insert(t.font.clone());
+                for span in &t.spans {
+                    used_fonts.insert(span.font.clone());
                 }
             }
         }
-        let legacy_shapes = crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps);
-        collect_fonts(&legacy_shapes, &mut used_fonts);
         let mut fonts_changed = false;
         for font_name in used_fonts {
             if font_name != "System" && !font_name.is_empty() {
@@ -199,8 +195,8 @@ impl eframe::App for MyApp {
         if state.active_tab == Some(PanelTab::Code)
             && state.last_synced_settings != current_settings
         {
-            state.dsl_code = dsl::generate_dsl(
-                &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
+            state.dsl_code = dsl::generate_dsl_from_elements(
+                &state.scene,
                 state.render_width,
                 state.render_height,
                 state.fps,
@@ -439,8 +435,8 @@ impl eframe::App for MyApp {
 
                         // Update DSL code always if switching TO code
                         if state.active_tab != Some(target) {
-                            state.dsl_code = dsl::generate_dsl(
-                                &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
+                            state.dsl_code = dsl::generate_dsl_from_elements(
+                                &state.scene,
                                 state.render_width,
                                 state.render_height,
                                 state.fps,

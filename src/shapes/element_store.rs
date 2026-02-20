@@ -13,7 +13,6 @@
 
 use crate::animations::easing::Easing;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 pub type FrameIndex = usize;
 
@@ -28,7 +27,7 @@ pub struct Keyframe<T> {
 /// Per-frame property snapshot (subset of properties common to visual shapes).
 /// This type is still used as a convenience for sampling / converting to
 /// legacy `Shape` instances — it is not the canonical storage format.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct FrameProps {
     pub x: Option<f32>,
     pub y: Option<f32>,

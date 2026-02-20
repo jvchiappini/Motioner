@@ -115,8 +115,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     easing: crate::scene::Easing::Linear,
                                 });
                                 // position cache removed — no-op
-                                state.dsl_code = crate::dsl::generate_dsl(
-                                    &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
+                                state.dsl_code = crate::dsl::generate_dsl_from_elements(
+                                    &state.scene,
                                     state.render_width,
                                     state.render_height,
                                     state.fps,
