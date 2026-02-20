@@ -1,5 +1,5 @@
 #[cfg(feature = "wgpu")]
-use super::gpu::{CompositionCallback, GpuShape};
+use super::gpu::CompositionCallback;
 use super::rasterizer::sample_color_at;
 use crate::app_state::AppState;
 use eframe::egui;
@@ -7,25 +7,8 @@ use eframe::egui;
 /// Renderiza y maneja las interacciones para el área del canvas central.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
     egui::Frame::canvas(ui.style()).show(ui, |ui| {
-        // Materialize `ElementKeyframes` into temporary `Shape` instances
-        // sampled at the current playhead time. Pre-allocate to avoid realloc.
-        let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
-        let mut live_shapes: Vec<crate::scene::Shape> = Vec::with_capacity(state.scene.len());
-        for elem in &state.scene {
-            // Skip elements that are not yet spawned or already killed to avoid
-            // materializing Shape instances we won't need (saves clone overhead).
-            if frame_idx < elem.spawn_frame {
-                continue;
-            }
-            if let Some(kill) = elem.kill_frame {
-                if frame_idx >= kill {
-                    continue;
-                }
-            }
-            if let Some(s) = elem.to_shape_at_frame(frame_idx, state.fps) {
-                live_shapes.push(s);
-            }
-        }
+        // live_shapes materialization removed from per-frame loop to save CPU.
+        // It is now only performed on-demand (e.g. for Hit Testing or Highlights).
 
         let (rect, response) = ui.allocate_exact_size(
             ui.available_size(),
@@ -149,165 +132,59 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             egui::Stroke::new(1.0, egui::Color32::BLACK),
         );
 
-        // PositionCache removed — always compute on-the-fly; no cached frame available.
 
-        let mut gpu_shapes = Vec::new();
-        // position cache removed => no cached per-frame positions available
-        let cached: Option<&Vec<(f32, f32)>> = None;
-        let mut flat_idx: usize = 0;
+        // --- TEXT PROCESSING (FOR GPU ATLAS) ---
+        // If we have a GPU renderer, we still need to rasterize text on the CPU
+        // to produce the atlas and UV overrides. We only do this for visible text.
+        let mut text_overrides: Vec<(usize, [f32; 4])> = Vec::new();
+        let mut text_pixels: Option<(Vec<u8>, u32, u32)> = None;
 
-        // Información de cada elemento Text encontrado en la escena durante fill_gpu_shapes.
-        // Guardamos el índice en gpu_shapes donde insertamos el placeholder y el shape clonado
-        // para rasterizarlo por separado después.
-        struct TextEntry {
-            gpu_idx: usize, // posición en gpu_shapes (antes del reverse)
-            shape: crate::scene::Shape,
-            parent_spawn: f32,
-        }
-        let mut text_entries: Vec<TextEntry> = Vec::new();
+        if state.wgpu_render_state.is_some() {
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.preview_fps);
+            let mut text_entries: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
 
-        #[allow(clippy::too_many_arguments)]
-        fn fill_gpu_shapes(
-            elements: &[crate::shapes::element_store::ElementKeyframes],
-            gpu_shapes: &mut Vec<GpuShape>,
-            text_entries: &mut Vec<TextEntry>,
-            render_width: f32,
-            render_height: f32,
-            parent_spawn: f32,
-            current_time: f32,
-            project_duration: f32,
-            cached: Option<&Vec<(f32, f32)>>,
-            flat_idx: &mut usize,
-            handlers: &[crate::dsl::runtime::DslHandler],
-            preview_fps: u32,
-        ) {
-            let frame_idx =
-                crate::shapes::element_store::seconds_to_frame(current_time, preview_fps);
-            for ek in elements {
-                // Respect spawn/kill ranges early
-                if frame_idx < ek.spawn_frame {
-                    continue;
-                }
-                if let Some(kf) = ek.kill_frame {
-                    if frame_idx >= kf {
-                        *flat_idx += 1;
-                        continue;
-                    }
-                }
+            for (scene_idx, ek) in state.scene.iter().enumerate() {
+                if frame_idx < ek.spawn_frame { continue; }
+                if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
 
-                // Materialize a temporary Shape from ElementKeyframes so we can
-                // reuse the existing animation/event handler infrastructure.
-                if let Some(shape) = ek.to_shape_at_frame(frame_idx, preview_fps) {
-                    let my_spawn = (ek.spawn_frame as f32 / preview_fps as f32).max(parent_spawn);
-
-                    // Apply event handlers to a transient copy so per-shape
-                    // descriptor implementations see the same runtime-modified
-                    // state that the rasterizer/preview worker would.
-                    *flat_idx += 1; // keep frame indexing consistent with previous behaviour
-                    let mut transient = shape.clone();
-                    crate::events::time_changed_event::apply_on_time_handlers(
-                        std::slice::from_mut(&mut transient),
-                        handlers,
-                        current_time,
-                        frame_idx.try_into().unwrap(),
-                    );
-
-                    let before = gpu_shapes.len();
-                    if let Some(desc) = transient.descriptor() {
-                        desc.append_gpu_shapes(
-                            &transient,
-                            gpu_shapes,
-                            current_time,
-                            project_duration,
-                            my_spawn,
-                            render_width,
-                            render_height,
+                if ek.kind == "text" {
+                    if let Some(mut shape) = ek.to_shape_at_frame(frame_idx, state.preview_fps) {
+                         // Apply event handlers for dynamic text content
+                        crate::events::time_changed_event::apply_on_time_handlers(
+                            std::slice::from_mut(&mut shape),
+                            &state.dsl_event_handlers,
+                            state.time,
+                            frame_idx as u32,
                         );
-
-                        // If this descriptor represents `text` we still need to
-                        // record a TextEntry for rasterization/UV population.
-                        if desc.dsl_keyword() == "text" {
-                            // descriptor should have appended one placeholder
-                            text_entries.push(TextEntry {
-                                gpu_idx: before,
-                                shape: transient.clone(),
-                                parent_spawn: my_spawn,
-                            });
-                        }
+                        let spawn_time = ek.spawn_frame as f32 / state.preview_fps as f32;
+                        text_entries.push((scene_idx, shape, spawn_time));
                     }
                 }
             }
-        }
 
-        // Use ElementKeyframes (canonical store) to populate GPU shapes.
-        fill_gpu_shapes(
-            &state.scene,
-            &mut gpu_shapes,
-            &mut text_entries,
-            state.render_width as f32,
-            state.render_height as f32,
-            0.0,
-            state.time,
-            state.duration_secs,
-            cached,
-            &mut flat_idx,
-            &state.dsl_event_handlers,
-            state.preview_fps,
-        );
+            if !text_entries.is_empty() {
+                let n_texts = text_entries.len();
+                let rw = state.render_width;
+                let rh = state.render_height;
+                let atlas_h = rh * n_texts as u32;
+                let mut atlas = vec![0u8; (rw * atlas_h * 4) as usize];
 
-        // Scene index 0 = top of scene graph = rendered last (on top).
-        // Reversing achieves painter's-algorithm ordering without z_index.
-        gpu_shapes.reverse();
+                for (tile_idx, (scene_idx, shape, parent_spawn)) in text_entries.iter().enumerate() {
+                    let uv0_y = tile_idx as f32 / n_texts as f32;
+                    let uv1_y = (tile_idx + 1) as f32 / n_texts as f32;
 
-        // --- Atlas de texto por elemento ---
-        // Rasterizamos cada Text por separado en una franja del atlas vertical.
-        // Atlas: ancho = render_width, alto = render_height * N (una fila por texto).
-        // GpuShape placeholder en gpu_shapes ya tiene shape_type=2; actualizamos sus UVs.
-        //
-        // NOTA: gpu_shapes fue invertido, así que el índice original `gpu_idx` ahora está
-        // en la posición `gpu_shapes.len() - 1 - gpu_idx` dentro del vec.
-        let n_texts = text_entries.len();
-        let text_pixels = if n_texts > 0 {
-            let rw = state.render_width;
-            let rh = state.render_height;
-            let atlas_h = rh * n_texts as u32;
-            let mut atlas = vec![0u8; (rw * atlas_h * 4) as usize];
-
-            for (tile_idx, entry) in text_entries.iter().enumerate() {
-                // UV de la franja de este tile en el atlas
-                let uv0_y = tile_idx as f32 / n_texts as f32;
-                let uv1_y = (tile_idx + 1) as f32 / n_texts as f32;
-
-                // Rasterizar este texto a su propio buffer rh×rw
-                if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
-                    &entry.shape,
-                    rw,
-                    rh,
-                    state.time,
-                    state.duration_secs,
-                    &mut state.font_arc_cache,
-                    &state.font_map,
-                    &state.dsl_event_handlers,
-                    entry.parent_spawn,
-                ) {
-                    // Copiar píxeles al atlas en la franja correcta
-                    let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
-                    let copy_len = (rw * rh * 4) as usize;
-                    atlas[row_offset..row_offset + copy_len].copy_from_slice(&result.pixels);
+                    if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
+                        shape, rw, rh, state.time, state.duration_secs,
+                        &mut state.font_arc_cache, &state.font_map, &state.dsl_event_handlers, *parent_spawn
+                    ) {
+                        let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
+                        atlas[row_offset..row_offset + (rw * rh * 4) as usize].copy_from_slice(&result.pixels);
+                    }
+                    text_overrides.push((*scene_idx, [0.0, uv0_y, 1.0, uv1_y]));
                 }
-
-                // Actualizar UVs del placeholder (que ahora está en posición invertida)
-                let reversed_idx = gpu_shapes.len() - 1 - entry.gpu_idx;
-                if let Some(s) = gpu_shapes.get_mut(reversed_idx) {
-                    s.uv0 = [0.0, uv0_y];
-                    s.uv1 = [1.0, uv1_y];
-                }
+                text_pixels = Some((atlas, rw, atlas_h));
             }
-
-            Some((atlas, rw, atlas_h))
-        } else {
-            None
-        };
+        }
 
         let magnifier_pos = if state.picker_active {
             ui.input(|i| i.pointer.hover_pos())
@@ -342,7 +219,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             let cb = eframe::egui_wgpu::Callback::new_paint_callback(
                 rect,
                 CompositionCallback {
-                    shapes: gpu_shapes,
                     render_width: state.render_width as f32,
                     render_height: state.render_height as f32,
                     preview_multiplier: state.preview_multiplier,
@@ -353,6 +229,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                     shared_device: None,
                     shared_queue: None,
                     text_pixels,
+                    // When a WGPU render state exists prefer the GPU compute
+                    // path so keyframe interpolation happens on the GPU.
+                    elements: state.wgpu_render_state.as_ref().map(|_| state.scene.clone()),
+                    current_frame: crate::shapes::element_store::seconds_to_frame(state.time, state.fps) as u32,
+                    fps: state.fps,
+                    scene_version: state.scene_version,
+                    text_overrides: if text_overrides.is_empty() {
+                        None
+                    } else {
+                        Some(text_overrides)
+                    },
                 },
             );
             painter.add(cb);
@@ -376,6 +263,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         state.toast_deadline = ui.input(|i| i.time) + 3.0;
                         state.picker_active = false;
                     } else {
+                        // Materialize shapes only when needed for Hit Testing
+                        let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+                        let mut live_shapes: Vec<crate::scene::Shape> = Vec::with_capacity(state.scene.len());
+                        for elem in &state.scene {
+                            if frame_idx >= elem.spawn_frame && elem.kill_frame.map_or(true, |k| frame_idx < k) {
+                                if let Some(s) = elem.to_shape_at_frame(frame_idx, state.fps) {
+                                    live_shapes.push(s);
+                                }
+                            }
+                        }
+
                         let hit_path = crate::shapes::shapes_manager::find_hit_path(
                             &live_shapes,
                             pos,
@@ -401,16 +299,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         if let Some(path) = &state.selected_node_path {
             let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0));
-            if let Some(node) = crate::shapes::shapes_manager::get_shape(&live_shapes, path) {
-                crate::shapes::shapes_manager::draw_highlight_recursive(
-                    &painter,
-                    node,
-                    composition_rect,
-                    stroke,
-                    state.time,
-                    0.0,
-                    state.render_height,
-                );
+            // Materialize the selected node only for high-light drawing
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+            if let Some(elem) = state.scene.get(path[0]) {
+                 if let Some(node) = elem.to_shape_at_frame(frame_idx, state.fps) {
+                    crate::shapes::shapes_manager::draw_highlight_recursive(
+                        &painter,
+                        &node,
+                        composition_rect,
+                        stroke,
+                        state.time,
+                        0.0,
+                        state.render_height,
+                    );
+                }
             }
         }
 

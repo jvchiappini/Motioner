@@ -289,6 +289,7 @@ impl eframe::App for MyApp {
                         // shapes here — keeping them caused runaway accumulation
                         // when the editor re-parsed while playback was running.
                         state.scene = parsed;
+                        state.scene_version += 1;
                         // Recompute any caches that depend on the scene.
                         // position cache removed — no-op
                         // collect DSL event handler blocks (e.g. `on_time { ... }`)

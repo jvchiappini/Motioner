@@ -2,14 +2,12 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-	x = 0.500,
-	y = 0.500,
+	x = 0.700,
+	y = 10.00,
 	radius = 0.100,
 	fill = "#78c8ff",
 	spawn = 0.00
 }
-
-move_
 
 text "Text" {
 	x = 0.500,

@@ -45,6 +45,7 @@ pub struct RenderSnapshot {
     pub preview_fps: u32,
     pub use_gpu: bool,
     pub font_arc_cache: std::collections::HashMap<String, ab_glyph::FontArc>,
+    pub scene_version: u32,
 }
 
 pub fn generate_preview_frames(state: &mut AppState, center_time: f32, ctx: &egui::Context) {
@@ -69,6 +70,7 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
             preview_fps: state.preview_fps,
             use_gpu: state.preview_worker_use_gpu,
             font_arc_cache: state.font_arc_cache.clone(),
+            scene_version: state.scene_version,
             #[cfg(feature = "wgpu")]
             wgpu_render_state: state.wgpu_render_state.clone(),
         };

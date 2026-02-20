@@ -23,6 +23,8 @@ struct ComputeUniforms {
     /// Total number of elements to process.
     element_count: u32,
     _pad: u32,
+    /// Render target resolution in pixels (x = width, y = height).
+    resolution: vec2<f32>,
 }
 
 /// A single keyframe for one property of one element.
@@ -197,18 +199,24 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Derive size from shape type.
     var size = vec2<f32>(0.0, 0.0);
     if desc.shape_type == 0 {
-        // Circle: size is diameter in normalised scene coords.
-        size = vec2<f32>(radius * 2.0, radius * 2.0);
+        // Circle: `radius` is stored in normalized scene coords; convert
+        // to pixels (use resolution.x for X scale) and store the
+        // half-extent (radius in pixels) to match CPU path.
+        size = vec2<f32>(radius * cu.resolution.x, radius * cu.resolution.x);
     } else {
-        // Rect / Text: explicit w,h.
-        size = vec2<f32>(w, h);
+        // Rect / Text: `w`/`h` are normalized (0..1). Convert to pixel
+        // half-extent to match CPU `append_gpu_shapes` behaviour.
+        size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
     }
 
     let spawn_time = f32(desc.spawn_frame) / f32(cu.fps);
 
     // Write output shape.
     var out: GpuShape;
-    out.pos        = vec2<f32>(x, y);
+    // Convert normalized positions to pixel coordinates so the render
+    // vertex shader (which expects pixel-space pos/size) receives the
+    // same units as the CPU path.
+    out.pos        = vec2<f32>(x * cu.resolution.x, y * cu.resolution.y);
     out.size       = size;
     out.color      = desc.color;
     out.shape_type = desc.shape_type;

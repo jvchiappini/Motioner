@@ -532,6 +532,7 @@ fn start_export(state: &mut AppState) {
     let dsl_handlers = state.dsl_event_handlers.clone();
     let font_arc_cache = state.font_arc_cache.clone();
     let font_map = state.font_map.clone();
+    let scene_version = state.scene_version;
 
     let (tx, rx) = std::sync::mpsc::channel::<FfmpegMsg>();
     state.export_ffmpeg_rx = Some(rx);
@@ -645,6 +646,7 @@ fn start_export(state: &mut AppState) {
             preview_fps: fps,
             use_gpu: false,
             font_arc_cache: font_arc_cache.clone(),
+            scene_version,
             #[cfg(feature = "wgpu")]
             wgpu_render_state: None,
         };

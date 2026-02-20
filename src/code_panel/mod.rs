@@ -141,7 +141,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 editor_response = Some(output.response);
             });
 
-            // retrieve the TextEdit response we captured from the horizontal layout
+            //retrieve the TextEdit response we captured from the horizontal layout
             let output = editor_response.expect("text edit response");
 
             // Autosave behavior: on any editor change, persist DSL silently.
@@ -182,6 +182,23 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
             output
         });
+
+    // --- Error Banner (Moved outside ScrollArea to stay fixed at bottom) ---
+    if !state.dsl_diagnostics.is_empty() {
+        let diag = &state.dsl_diagnostics[0];
+        egui::TopBottomPanel::bottom("code_error_banner")
+            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(80, 20, 20)).inner_margin(8.0))
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("❌").size(14.0));
+                    ui.label(
+                        egui::RichText::new(format!("Line {}: {}", diag.line, diag.message))
+                            .color(egui::Color32::from_rgb(255, 180, 180))
+                            .strong(),
+                    );
+                });
+            });
+    }
 
     if state.completion_popup_open {
         // Keep a minimal placeholder so re-paint can occur when the

@@ -244,7 +244,7 @@ impl ElementKeyframes {
         frame: FrameIndex,
         fps: u32,
     ) -> Option<crate::shapes::shapes_manager::Shape> {
-        let props = self.sample(frame)?;
+        let _ = self.sample(frame)?;
         // Delegate to shape-specific constructors in `shapes_manager` which
         // call into the per-shape modules. This keeps element_store free of
         // hardcoded shape field mappings.

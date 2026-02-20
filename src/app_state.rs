@@ -292,6 +292,12 @@ pub struct AppState {
     pub font_definitions: egui::FontDefinitions,
     #[serde(skip)]
     pub font_arc_cache: std::collections::HashMap<String, ab_glyph::FontArc>,
+    /// Incremented whenever the DSL is parsed into the scene.
+    #[serde(skip)]
+    pub scene_version: u32,
+    /// The version of the scene currently uploaded to the GPU buffers.
+    #[serde(skip)]
+    pub gpu_scene_version: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,6 +459,8 @@ impl Default for AppState {
                 .collect(),
             font_definitions: egui::FontDefinitions::default(),
             font_arc_cache: std::collections::HashMap::new(),
+            scene_version: 1,
+            gpu_scene_version: 0,
         }
     }
 }
