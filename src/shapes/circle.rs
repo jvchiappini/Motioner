@@ -315,6 +315,9 @@ impl ShapeDescriptor for Circle {
             let x_px = x * rw;
             let y_px = y * rh;
 
+            // `x`/`y` represent the circle's center; this matches the
+            // convention established for all other shapes.
+
             out.push(crate::canvas::gpu::GpuShape {
                 pos: [x_px, y_px],
                 size: [radius_px, radius_px],

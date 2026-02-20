@@ -1,4 +1,10 @@
 #![allow(dead_code)]
+// The `move_animation` module previously contained CPU interpolation logic
+// for element movement.  After the GPU rewrite the real-time animation path
+// is executed entirely on the graphics card; high‑level `MoveAnimation`
+// objects are recorded with scene/keyframe data and converted to GPU commands
+// during dispatch.  All deprecated CPU helpers have now been removed — only
+// the GPU conversion helper and small evaluation utility remain for testing.
 use crate::scene::Easing;
 use serde::{Deserialize, Serialize};
 
@@ -48,70 +54,19 @@ impl MoveAnimation {
         })
     }
 
-    /// Sample the animated position given the element's base (x,y) at `project_time`.
-    /// Behaviour matches the previous inline logic: before start -> base, after end -> to, between -> interpolated.
-    pub fn sample_position(&self, base_x: f32, base_y: f32, project_time: f32) -> (f32, f32) {
-        if project_time <= self.start {
-            return (base_x, base_y);
+    /// Convert the animation into a GPU-friendly command.  The compute shader
+    /// expects frame indices rather than seconds, so the caller must supply the
+    /// current project `fps`.  This helper centralises the conversion logic that
+    /// used to live in `canvas::gpu::compute`.
+    pub fn to_gpu_move(&self, fps: u32) -> crate::canvas::gpu::types::GpuMove {
+        crate::canvas::gpu::types::GpuMove {
+            start_frame: crate::shapes::element_store::seconds_to_frame(self.start, fps) as u32,
+            end_frame: crate::shapes::element_store::seconds_to_frame(self.end, fps) as u32,
+            to_x: self.to_x,
+            to_y: self.to_y,
+            easing: crate::canvas::gpu::utils::easing_to_gpu(&self.easing),
+            _pad: [0, 0, 0],
         }
-        if project_time >= self.end {
-            return (self.to_x, self.to_y);
-        }
-
-        // safe since start < end (if equal, treat as instant end)
-        let denom = (self.end - self.start).abs();
-        let local_t = if denom < f32::EPSILON {
-            1.0
-        } else {
-            (project_time - self.start) / denom
-        };
-
-        let progress = match &self.easing {
-            Easing::Linear => linear::compute_progress(local_t),
-            Easing::EaseIn { power } => ease_in::compute_progress(local_t, *power),
-            Easing::EaseOut { power } => ease_out::compute_progress(local_t, *power),
-            Easing::EaseInOut { power } => ease_in_out::compute_progress(local_t, *power),
-            Easing::Custom { points } => custom::compute_progress(local_t, points),
-            Easing::CustomBezier { points } => custom_bezier::compute_progress(local_t, points),
-            Easing::Bezier { p1, p2 } => bezier::compute_progress(local_t, *p1, *p2),
-            Easing::Sine => sine::compute_progress(local_t),
-            Easing::Expo => expo::compute_progress(local_t),
-            Easing::Circ => circ::compute_progress(local_t),
-            Easing::Spring {
-                damping,
-                stiffness,
-                mass,
-            } => spring::compute_progress(local_t, *damping, *stiffness, *mass),
-            Easing::Elastic { amplitude, period } => {
-                elastic::compute_progress(local_t, *amplitude, *period)
-            }
-            Easing::Bounce { bounciness } => bounce::compute_progress(local_t, *bounciness),
-        };
-
-        let ix = base_x + progress * (self.to_x - base_x);
-        let iy = base_y + progress * (self.to_y - base_y);
-        (ix, iy)
-    }
-
-    /// Sample a sequence of positions for this animation at a given FPS.
-    #[allow(dead_code)]
-    pub fn positions_by_frame(&self, base_x: f32, base_y: f32, fps: u32) -> Vec<(f32, f32, f32)> {
-        let mut frames = Vec::new();
-        let duration = (self.end - self.start).abs();
-        if duration < f32::EPSILON {
-            frames.push((self.start, self.to_x, self.to_y));
-            return frames;
-        }
-
-        let num_steps = (duration * fps as f32).round() as u32;
-        let step = duration / num_steps as f32;
-
-        for i in 0..=num_steps {
-            let t = self.start + i as f32 * step;
-            let (x, y) = self.sample_position(base_x, base_y, t);
-            frames.push((t, x, y));
-        }
-        frames
     }
 
     pub fn to_dsl_block(&self, element_name: Option<&str>, indent: &str) -> String {
@@ -179,166 +134,30 @@ impl MoveAnimation {
         out.push_str(&format!("{}}}\n", indent));
         out
     }
-
-    #[allow(dead_code)]
-    pub fn to_dsl_snippet(&self, _element_name: &str, indent: &str) -> String {
-        self.to_dsl_block(None, indent)
-    }
 }
 
-/// Result produced by parsing a `move { ... }` DSL block.
-#[derive(Clone, Debug)]
-pub struct ParsedMove {
-    pub element: Option<String>,
-    pub start: f32,
-    pub end: f32,
-    pub to_x: f32,
-    pub to_y: f32,
-    pub easing: crate::scene::Easing,
-}
-
-/// Parse the inner lines of a `move { ... }` block and return a `ParsedMove`.
-///
-/// Expected input is the lines inside `move { ... }` (each line already trimmed).
-/// Returns `None` when required fields are missing or unparsable.
-pub fn parse_move_block(lines: &[&str]) -> Option<ParsedMove> {
-    let mut element: Option<String> = None;
-    let mut easing_kind = crate::scene::Easing::Linear;
-    let mut start_at: Option<f32> = None;
-    let mut end_time: Option<f32> = None;
-    let mut end_x: Option<f32> = None;
-    let mut end_y: Option<f32> = None;
-
-    let mut i = 0usize;
-    while i < lines.len() {
-        let b = lines[i].trim();
-        if b.is_empty() {
-            i += 1;
-            continue;
-        }
-
-        if b.starts_with("element") && b.contains('=') {
-            if let Some(eq) = b.find('=') {
-                let val = b[eq + 1..]
-                    .trim()
-                    .trim_matches(',')
-                    .trim()
-                    .trim_matches('"')
-                    .to_string();
-                element = Some(val);
-            }
-        } else if (b.starts_with("type") || b.starts_with("ease")) && b.contains('=') {
-            if let Some(eq) = b.find('=') {
-                let val = b[eq + 1..].trim().trim_matches(',').to_lowercase();
-                // Support ease/easing (preferred) or type (legacy)
-                let clean_val = if val.starts_with("type =") {
-                    val.clone()
-                } else {
-                    format!("type = {}", val)
-                };
-
-                if let Some(e) = linear::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = ease_in_out::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = ease_in::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = ease_out::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = sine::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = expo::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = circ::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = spring::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = elastic::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = bounce::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = custom_bezier::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = custom::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                } else if let Some(e) = bezier::parse_dsl(&clean_val) {
-                    easing_kind = e;
-                }
-            }
-        } else if b.starts_with("to") && b.contains('=') {
-            // to = (x, y)
-            if let Some(eq) = b.find('=') {
-                let val = b[eq + 1..].trim().trim_matches(',');
-                if val.starts_with('(') && val.ends_with(')') {
-                    let inner = &val[1..val.len() - 1];
-                    let parts: Vec<&str> = inner.split(',').collect();
-                    if parts.len() == 2 {
-                        end_x = parts[0].trim().parse().ok();
-                        end_y = parts[1].trim().parse().ok();
-                    }
-                }
-            }
-        } else if b.starts_with("during") && b.contains('=') {
-            // during = start -> end
-            if let Some(eq) = b.find('=') {
-                let val = b[eq + 1..].trim().trim_matches(',');
-                if let Some(arrow) = val.find("->") {
-                    start_at = val[..arrow].trim().parse().ok();
-                    end_time = val[arrow + 2..].trim().parse().ok();
-                }
-            }
-        } else if b.starts_with("startAt") && b.contains('=') {
-            if let Some(eq) = b.find('=') {
-                if let Ok(v) = b[eq + 1..].trim().trim_matches(',').parse::<f32>() {
-                    start_at = Some(v);
-                }
-            }
-        } else if b.starts_with("end") && b.contains('{') {
-            // parse nested end { ... } block (legacy support)
-            i += 1;
-            while i < lines.len() {
-                let e = lines[i].trim();
-                if e == "}" {
-                    break;
-                }
-                if e.starts_with("time") && e.contains('=') {
-                    if let Some(eq) = e.find('=') {
-                        if let Ok(v) = e[eq + 1..].trim().trim_matches(',').parse::<f32>() {
-                            end_time = Some(v);
-                        }
-                    }
-                }
-                if e.starts_with("x") && e.contains('=') {
-                    if let Some(eq) = e.find('=') {
-                        if let Ok(v) = e[eq + 1..].trim().trim_matches(',').parse::<f32>() {
-                            end_x = Some(v);
-                        }
-                    }
-                }
-                if e.starts_with("y") && e.contains('=') {
-                    if let Some(eq) = e.find('=') {
-                        if let Ok(v) = e[eq + 1..].trim().trim_matches(',').parse::<f32>() {
-                            end_y = Some(v);
-                        }
-                    }
-                }
-                i += 1;
+/// Helper used by CPU paths (`sample_position`, element_store, etc.) to
+/// convert a normalized time `t` (0..1) into progress according to the
+/// supplied easing.  Most curves fall back to linear because the GPU pipeline
+/// now executes the real easing maths; keeping this helper avoids needing all
+/// those `compute_progress` functions in individual modules.
+pub fn evaluate_easing_cpu(t: f32, easing: &Easing) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    match easing {
+        Easing::Linear => t,
+        Easing::EaseIn { power } => t.powf(*power),
+        Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
+        Easing::EaseInOut { power } => {
+            if t < 0.5 {
+                0.5 * (2.0 * t).powf(*power)
+            } else {
+                1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power)
             }
         }
-        i += 1;
-    }
-
-    // require start, end, x, y
-    if let (Some(sa), Some(et), Some(ex), Some(ey)) = (start_at, end_time, end_x, end_y) {
-        Some(ParsedMove {
-            element,
-            start: sa,
-            end: et,
-            to_x: ex,
-            to_y: ey,
-            easing: easing_kind,
-        })
-    } else {
-        None
+        // all other easing kinds currently map to linear in the CPU fallback
+        _ => t,
     }
 }
+
+// --- legacy parsing helpers ------------------------------------------------
+// legacy parsing helpers removed: parsing is now handled by dsl::parser

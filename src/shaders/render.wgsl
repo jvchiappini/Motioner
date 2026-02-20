@@ -70,7 +70,14 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.tex_uv = mix(s.uv0, s.uv1, quad_uv01_flipped);
 
     // Transformación: De coordenadas normalizadas de escena (0..1) a coordenadas de clip (-1..1)
-    // El tamaño del quad depende del tamaño del objeto
+    // NOTE: `s.pos` is interpreted as the *center of mass* of the shape.  The
+    // GPU-side `size` still holds the radius for circles or the half-dim for
+    // rects, so multiplying by `quad_pos` (which runs from -1..1) produces an
+    // offset from the centre to the current quad vertex.  This restores the
+    // familiar behaviour where the DSL coordinates specify the centre of the
+    // element rather than its top-left corner.  Consumers should be aware that
+    // placing a shape at (0,0) will once again position it half off the paper
+    // if its size is non‑zero.
     let world_pos_px = s.pos + (quad_pos * s.size);
     let world_pos_norm = world_pos_px / uniforms.resolution;
     

@@ -480,6 +480,9 @@ impl ShapeDescriptor for Text {
             let x_px = x * rw;
             let y_px = y * rh;
 
+            // As with other primitives, `x`/`y` refer to the element's
+            // centre-of-mass.  No additional offset is required here.
+
             out.push(crate::canvas::gpu::GpuShape {
                 pos: [x_px, y_px],
                 size: [sz_px, sz_px],

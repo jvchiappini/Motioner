@@ -30,11 +30,10 @@ pub fn color_image_from_svg(svg_data: &str) -> Option<egui::ColorImage> {
     let (w, h) = dyn_img.dimensions();
     let pixels = dyn_img.into_raw();
 
-    Some(egui::ColorImage::from_rgba_unmultiplied([
-        w as usize,
-        h as usize,
-    ],
-    &pixels))
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        &pixels,
+    ))
 }
 
 /// Convert an SVG document into an `egui::IconData` which can be used for the app window.

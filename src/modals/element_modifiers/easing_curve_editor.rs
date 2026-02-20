@@ -181,66 +181,8 @@ pub fn render_easing_curve_editor(
     let mut curve_points = Vec::new();
     for i in 0..=100 {
         let t = i as f32 / 100.0;
-        let v = match easing {
-            Easing::Linear => t,
-            Easing::EaseIn { power } => t.powf(*power),
-            Easing::EaseOut { power } => 1.0 - (1.0 - t).powf(*power),
-            Easing::EaseInOut { power } => {
-                if t < 0.5 {
-                    0.5 * (2.0 * t).powf(*power)
-                } else {
-                    1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power)
-                }
-            }
-            Easing::Sine => crate::animations::move_animation::sine::compute_progress(t),
-            Easing::Expo => crate::animations::move_animation::expo::compute_progress(t),
-            Easing::Circ => crate::animations::move_animation::circ::compute_progress(t),
-            Easing::Spring {
-                damping,
-                stiffness,
-                mass,
-            } => crate::animations::move_animation::spring::compute_progress(
-                t, *damping, *stiffness, *mass,
-            ),
-            Easing::Elastic { amplitude, period } => {
-                crate::animations::move_animation::elastic::compute_progress(t, *amplitude, *period)
-            }
-            Easing::Bounce { bounciness } => {
-                crate::animations::move_animation::bounce::compute_progress(t, *bounciness)
-            }
-            Easing::Bezier { p1, p2 } => {
-                let u = 1.0 - t;
-                3.0 * u * u * t * p1.1 + 3.0 * u * t * t * p2.1 + t * t * t
-            }
-            Easing::CustomBezier { points } => {
-                crate::animations::move_animation::custom_bezier::compute_progress(t, points)
-            }
-            Easing::Custom { points } => {
-                if points.is_empty() {
-                    t
-                } else if points.len() == 1 {
-                    points[0].1
-                } else {
-                    let mut sorted = points.clone();
-                    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                    if t <= sorted[0].0 {
-                        sorted[0].1
-                    } else if t >= sorted[sorted.len() - 1].0 {
-                        sorted[sorted.len() - 1].1
-                    } else {
-                        let mut result = t;
-                        for i in 0..sorted.len() - 1 {
-                            if t >= sorted[i].0 && t <= sorted[i + 1].0 {
-                                let alpha = (t - sorted[i].0) / (sorted[i + 1].0 - sorted[i].0);
-                                result = sorted[i].1 + alpha * (sorted[i + 1].1 - sorted[i].1);
-                                break;
-                            }
-                        }
-                        result
-                    }
-                }
-            }
-        };
+        let v = crate::animations::move_animation::evaluate_easing_cpu(t, easing);
+        // note: custom curves are approximated linearly in the CPU preview.
         curve_points.push(to_screen(t, v));
     }
     painter.add(egui::Shape::line(

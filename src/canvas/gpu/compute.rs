@@ -1,10 +1,10 @@
+use super::resources::GpuResources;
+use super::types::*;
 /// Implementa la lógica de computación para interpolar keyframes directamente en la GPU.
 /// Esto evita el muestreo excesivo en la CPU y mejora el rendimiento drásticamente.
 
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;
-use super::types::*;
-use super::resources::GpuResources;
 
 /// El código WGSL del shader de computación para interpolar keyframes.
 pub const COMPUTE_WGSL: &str = include_str!("../../shaders/compute_keyframes.wgsl");
@@ -27,7 +27,9 @@ impl GpuResources {
         text_overrides: Option<&std::collections::HashMap<usize, [f32; 4]>>,
     ) {
         let element_count = scene.len() as u32;
-        if element_count == 0 { return; }
+        if element_count == 0 {
+            return;
+        }
 
         if upload_keyframes {
             let estimated_kf = scene.len() * 5 * 4;
@@ -38,9 +40,16 @@ impl GpuResources {
             // Construir descriptores en orden de dibujado (inverso)
             for (scene_idx, ek) in scene.iter().enumerate().rev() {
                 let mut desc = GpuElementDesc {
-                    x_offset: 0, x_len: 0, y_offset: 0, y_len: 0,
-                    radius_offset: 0, radius_len: 0, w_offset: 0, w_len: 0,
-                    h_offset: 0, h_len: 0,
+                    x_offset: 0,
+                    x_len: 0,
+                    y_offset: 0,
+                    y_len: 0,
+                    radius_offset: 0,
+                    radius_len: 0,
+                    w_offset: 0,
+                    w_len: 0,
+                    h_offset: 0,
+                    h_len: 0,
                     shape_type: match ek.kind.as_str() {
                         "circle" => 0,
                         "rect" => 1,
@@ -49,9 +58,16 @@ impl GpuResources {
                     },
                     spawn_frame: ek.spawn_frame as u32,
                     kill_frame: ek.kill_frame.map(|f| f as u32).unwrap_or(0xFFFF_FFFF),
-                    move_offset: 0, move_len: 0,
-                    r_offset: 0, g_offset: 0, b_offset: 0, a_offset: 0,
-                    r_len: 0, g_len: 0, b_len: 0, a_len: 0,
+                    move_offset: 0,
+                    move_len: 0,
+                    r_offset: 0,
+                    g_offset: 0,
+                    b_offset: 0,
+                    a_offset: 0,
+                    r_len: 0,
+                    g_len: 0,
+                    b_len: 0,
+                    a_len: 0,
                     _pad: 0,
                     base_size: [0.0, 0.0],
                     uv0: [0.0, 0.0],
@@ -65,30 +81,35 @@ impl GpuResources {
                     }
                 }
 
-                (desc.x_offset, desc.x_len) = self.push_track_helper(&mut all_keyframes, &ek.x, 1.0);
-                (desc.y_offset, desc.y_len) = self.push_track_helper(&mut all_keyframes, &ek.y, 1.0);
-                (desc.radius_offset, desc.radius_len) = self.push_track_helper(&mut all_keyframes, &ek.radius, 1.0);
-                (desc.w_offset, desc.w_len) = self.push_track_helper(&mut all_keyframes, &ek.w, 1.0);
-                (desc.h_offset, desc.h_len) = self.push_track_helper(&mut all_keyframes, &ek.h, 1.0);
+                (desc.x_offset, desc.x_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.x, 1.0);
+                (desc.y_offset, desc.y_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.y, 1.0);
+                (desc.radius_offset, desc.radius_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.radius, 1.0);
+                (desc.w_offset, desc.w_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.w, 1.0);
+                (desc.h_offset, desc.h_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.h, 1.0);
 
                 // Tracks de color (convertidos a lineal 0..1)
-                (desc.r_offset, desc.r_len) = self.push_color_track_helper(&mut all_keyframes, &ek.color, 0);
-                (desc.g_offset, desc.g_len) = self.push_color_track_helper(&mut all_keyframes, &ek.color, 1);
-                (desc.b_offset, desc.b_len) = self.push_color_track_helper(&mut all_keyframes, &ek.color, 2);
-                (desc.a_offset, desc.a_len) = self.push_color_track_helper(&mut all_keyframes, &ek.color, 3);
+                (desc.r_offset, desc.r_len) =
+                    self.push_color_track_helper(&mut all_keyframes, &ek.color, 0);
+                (desc.g_offset, desc.g_len) =
+                    self.push_color_track_helper(&mut all_keyframes, &ek.color, 1);
+                (desc.b_offset, desc.b_len) =
+                    self.push_color_track_helper(&mut all_keyframes, &ek.color, 2);
+                (desc.a_offset, desc.a_len) =
+                    self.push_color_track_helper(&mut all_keyframes, &ek.color, 3);
 
                 // Comandos de Movimiento (100% GPU)
                 desc.move_offset = all_moves.len() as u32;
                 desc.move_len = ek.move_commands.len() as u32;
                 for ma in &ek.move_commands {
-                    all_moves.push(GpuMove {
-                        start_frame: crate::shapes::element_store::seconds_to_frame(ma.start, fps) as u32,
-                        end_frame: crate::shapes::element_store::seconds_to_frame(ma.end, fps) as u32,
-                        to_x: ma.to_x,
-                        to_y: ma.to_y,
-                        easing: super::utils::easing_to_gpu(&ma.easing),
-                        _pad: [0, 0, 0],
-                    });
+                    // delegate conversion to the helper in `MoveAnimation` now that
+                    // the logic lives in the animations module.  keeps GPU code
+                    // simpler and avoids duplication.
+                    all_moves.push(ma.to_gpu_move(fps));
                 }
 
                 descs.push(desc);
@@ -140,7 +161,9 @@ impl GpuResources {
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("shape_buffer"),
                 size: shape_bytes_needed * 2 + 1024,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             self.rebuild_compute_bind_group(device);
@@ -151,7 +174,11 @@ impl GpuResources {
         let cu_u32: [u32; 4] = [current_frame, fps, element_count, 0];
         queue.write_buffer(&self.compute_uniform_buffer, 0, bytemuck::bytes_of(&cu_u32));
         let res_f32: [f32; 2] = [render_width as f32, render_height as f32];
-        queue.write_buffer(&self.compute_uniform_buffer, 16, bytemuck::bytes_of(&res_f32));
+        queue.write_buffer(
+            &self.compute_uniform_buffer,
+            16,
+            bytemuck::bytes_of(&res_f32),
+        );
 
         // Dispatch
         let workgroups = element_count.div_ceil(64);
@@ -170,7 +197,7 @@ impl GpuResources {
         &self,
         all: &mut Vec<GpuKeyframe>,
         track: &[crate::shapes::element_store::Keyframe<f32>],
-        scale: f32
+        scale: f32,
     ) -> (u32, u32) {
         let offset = all.len() as u32;
         for kf in track {

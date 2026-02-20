@@ -328,8 +328,14 @@ impl ShapeDescriptor for Rect {
             let x_px = x * rw;
             let y_px = y * rh;
 
+            // `x`/`y` are interpreted as the shape's centre-of-mass.  The
+            // previous implementation added half the width/height here to
+            // convert from a top-left coordinate; with the GLSL adjustment we
+            // made earlier this translation is no longer necessary.  Circles
+            // already followed the centre convention, so rectangles now do as
+            // well.
             out.push(crate::canvas::gpu::GpuShape {
-                pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
+                pos: [x_px, y_px],
                 size: [w_px / 2.0, h_px / 2.0],
                 color: [
                     crate::canvas::gpu::srgb_to_linear(r.color[0]),

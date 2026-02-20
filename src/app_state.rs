@@ -505,7 +505,6 @@ impl AppState {
         );
         crate::events::element_properties_changed_event::on_element_properties_changed(self);
     }
-
 }
 
 #[derive(Clone)]

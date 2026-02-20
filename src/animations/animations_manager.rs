@@ -56,8 +56,18 @@ pub fn animated_xy_for(shape: &Shape, project_time: f32, _project_duration: f32)
             continue;
         }
 
-        // project_time is within this animation — interpolate from curr_{x,y}
-        let (ix, iy) = ma.sample_position(curr_x, curr_y, project_time);
+        // project_time is within this animation — compute interpolation inline
+        // using the shared easing evaluator (CPU fallback).  This code path is
+        // unlikely to be hit in a GPU-enabled build but remains for completeness.
+        let denom = (ma.end - ma.start).abs();
+        let local_t = if denom < f32::EPSILON {
+            1.0
+        } else {
+            (project_time - ma.start) / denom
+        };
+        let progress = crate::animations::move_animation::evaluate_easing_cpu(local_t, &ma.easing);
+        let ix = curr_x + progress * (ma.to_x - curr_x);
+        let iy = curr_y + progress * (ma.to_y - curr_y);
         return (ix, iy);
     }
 

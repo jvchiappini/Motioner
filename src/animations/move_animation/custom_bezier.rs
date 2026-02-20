@@ -1,46 +1,6 @@
-use crate::scene::{BezierPoint, Easing};
-
-pub fn compute_progress(local_t: f32, points: &[BezierPoint]) -> f32 {
-    if points.is_empty() {
-        return local_t;
-    }
-    if points.len() == 1 {
-        return points[0].pos.1;
-    }
-
-    // Find the bounding points
-    let mut p_start = &points[0];
-    let mut p_end = &points[1];
-    let mut found = false;
-
-    for i in 0..points.len() - 1 {
-        if local_t >= points[i].pos.0 && local_t <= points[i + 1].pos.0 {
-            p_start = &points[i];
-            p_end = &points[i + 1];
-            found = true;
-            break;
-        }
-    }
-
-    if !found {
-        if local_t < points[0].pos.0 {
-            return points[0].pos.1;
-        } else {
-            return points.last().unwrap().pos.1;
-        }
-    }
-
-    let x0 = p_start.pos.0;
-    let y0 = p_start.pos.1;
-    let x1 = x0 + p_start.handle_right.0;
-    let y1 = y0 + p_start.handle_right.1;
-    let x2 = p_end.pos.0 + p_end.handle_left.0;
-    let y2 = p_end.pos.1 + p_end.handle_left.1;
-    let x3 = p_end.pos.0;
-    let y3 = p_end.pos.1;
-
-    solve_cubic_bezier(local_t, x0, y0, x1, y1, x2, y2, x3, y3)
-}
+use crate::scene::BezierPoint;
+// CPU/curve-editor easing; the GPU currently only implements a handful of
+// pre‑defined curves and ignores arbitrary custom bezier points.
 
 #[allow(clippy::too_many_arguments)]
 fn solve_cubic_bezier(
@@ -100,52 +60,3 @@ pub fn to_dsl_string(points: &[BezierPoint]) -> String {
     format!("custom_bezier(points = [{}])", pts_str)
 }
 
-pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val.trim();
-    if s.starts_with("custom_bezier") {
-        let mut points = Vec::new();
-        if let Some(open_bracket) = s.find('[') {
-            if let Some(close_bracket) = s.rfind(']') {
-                let inner = &s[open_bracket + 1..close_bracket];
-                // format: ((x,y), (hlx,hly), (hrx,hry))
-                let mut current = inner;
-                while let Some(start_tuple) = current.find("((") {
-                    if let Some(end_tuple) = current[start_tuple..].find("))") {
-                        let inner_tuple = &current[start_tuple + 1..start_tuple + end_tuple + 1];
-                        // inner_tuple: (x,y), (hlx,hly), (hrx,hry)
-                        let parts: Vec<&str> = inner_tuple.split("),").collect();
-                        if parts.len() == 3 {
-                            let parse_coord = |c: &str| -> (f32, f32) {
-                                let c = c.trim().trim_matches('(').trim_matches(')');
-                                let p: Vec<&str> = c.split(',').collect();
-                                if p.len() == 2 {
-                                    (
-                                        p[0].trim().parse().unwrap_or(0.0),
-                                        p[1].trim().parse().unwrap_or(0.0),
-                                    )
-                                } else {
-                                    (0.0, 0.0)
-                                }
-                            };
-                            let pos = parse_coord(parts[0]);
-                            let hl = parse_coord(parts[1]);
-                            let hr = parse_coord(parts[2]);
-                            points.push(BezierPoint {
-                                pos,
-                                handle_left: hl,
-                                handle_right: hr,
-                            });
-                        }
-                        current = &current[start_tuple + end_tuple + 2..];
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-        if !points.is_empty() {
-            return Some(Easing::CustomBezier { points });
-        }
-    }
-    None
-}

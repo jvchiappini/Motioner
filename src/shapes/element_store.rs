@@ -349,20 +349,6 @@ pub fn seconds_to_frame(seconds: f32, fps: u32) -> FrameIndex {
 }
 
 fn apply_easing_cpu(t: f32, easing: &Easing) -> f32 {
-    use crate::animations::move_animation::*;
-    match easing {
-        Easing::Linear => linear::compute_progress(t),
-        Easing::EaseIn { power } => ease_in::compute_progress(t, *power),
-        Easing::EaseOut { power } => ease_out::compute_progress(t, *power),
-        Easing::EaseInOut { power } => ease_in_out::compute_progress(t, *power),
-        Easing::Custom { points } => custom::compute_progress(t, points),
-        Easing::CustomBezier { points } => custom_bezier::compute_progress(t, points),
-        Easing::Bezier { p1, p2 } => bezier::compute_progress(t, *p1, *p2),
-        Easing::Sine => sine::compute_progress(t),
-        Easing::Expo => expo::compute_progress(t),
-        Easing::Circ => circ::compute_progress(t),
-        Easing::Spring { damping, stiffness, mass } => spring::compute_progress(t, *damping, *stiffness, *mass),
-        Easing::Elastic { amplitude, period } => elastic::compute_progress(t, *amplitude, *period),
-        Easing::Bounce { bounciness } => bounce::compute_progress(t, *bounciness),
-    }
+    // delegate to the centralized evaluator in the animations module
+    crate::animations::move_animation::evaluate_easing_cpu(t, easing)
 }

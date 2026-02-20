@@ -1,8 +1,7 @@
-use crate::scene::Easing;
-
-pub fn compute_progress(local_t: f32, p1: (f32, f32), p2: (f32, f32)) -> f32 {
-    solve_cubic_bezier(local_t, p1.0, p1.1, p2.0, p2.1)
-}
+// CPU-only easing calculations; GPU pipeline uses hardcoded formulas or
+// ignores unsupported variants.
+// CPU-only easing calculations; GPU pipeline uses hardcoded formulas or
+// ignores unsupported variants.
 
 #[allow(dead_code)]
 pub fn to_dsl_string(p1: (f32, f32), p2: (f32, f32)) -> String {
@@ -12,53 +11,6 @@ pub fn to_dsl_string(p1: (f32, f32), p2: (f32, f32)) -> String {
     )
 }
 
-pub fn parse_dsl(val: &str) -> Option<Easing> {
-    let s = val
-        .trim()
-        .trim_start_matches("type")
-        .trim()
-        .trim_start_matches('=')
-        .trim();
-    if s.starts_with("bezier") {
-        let mut p1 = (0.0, 0.0);
-        let mut p2 = (1.0, 1.0);
-        if let Some(open) = s.find('(') {
-            if let Some(close) = s.rfind(')') {
-                let inner = &s[open + 1..close];
-                // basic comma split for p1=(...), p2=(...)
-                let parts: Vec<&str> = inner.split("p2").collect();
-                if parts.len() == 2 {
-                    // Part 1 should contain p1 = (...)
-                    if let Some(p1_eq) = parts[0].find('=') {
-                        let p1_val = parts[0][p1_eq + 1..].trim().trim_matches(',');
-                        if p1_val.starts_with('(') && p1_val.contains(')') {
-                            let p1_inner = &p1_val[1..p1_val.find(')').unwrap()];
-                            let coords: Vec<&str> = p1_inner.split(',').collect();
-                            if coords.len() == 2 {
-                                p1.0 = coords[0].trim().parse().unwrap_or(0.0);
-                                p1.1 = coords[1].trim().parse().unwrap_or(0.0);
-                            }
-                        }
-                    }
-                    // Part 2 should contain = (...)
-                    if let Some(p2_eq) = parts[1].find('=') {
-                        let p2_val = parts[1][p2_eq + 1..].trim().trim_matches(',');
-                        if p2_val.starts_with('(') && p2_val.contains(')') {
-                            let p2_inner = &p2_val[1..p2_val.find(')').unwrap()];
-                            let coords: Vec<&str> = p2_inner.split(',').collect();
-                            if coords.len() == 2 {
-                                p2.0 = coords[0].trim().parse().unwrap_or(1.0);
-                                p2.1 = coords[1].trim().parse().unwrap_or(1.0);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return Some(Easing::Bezier { p1, p2 });
-    }
-    None
-}
 
 /// Helper to solve cubic bezier y for a given x (time).
 fn solve_cubic_bezier(x_target: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
