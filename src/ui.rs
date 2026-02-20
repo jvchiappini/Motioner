@@ -67,6 +67,23 @@ pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
         println!("[motioner] No wgpu adapter, using fallback VRAM estimate: 512 MB");
     }
 
+    // Load the SVG logo from the assets directory and create an egui texture.
+    // We do this once during application creation and store the handle in the
+    // AppState so it can be drawn later (e.g. in the welcome modal). Using
+    // `include_str!` embeds the file in the binary for simplicity.
+    {
+        let svg_data = include_str!("../assets/logo.svg");
+        if let Some(img) = crate::logo::color_image_from_svg(svg_data) {
+            let handle = _cc
+                .egui_ctx
+                .load_texture("app_logo", img, egui::TextureOptions::NEAREST);
+            state.logo_texture = Some(handle);
+        } else {
+            // Fallback: just ignore if rasterization fails
+            eprintln!("warning: could not render logo.svg");
+        }
+    }
+
     // OPTIMIZACIÓN RAM: Limpiar caches al inicio para reducir uso de memoria
     state.preview_frame_cache.clear();
     state.preview_frame_cache.shrink_to_fit();

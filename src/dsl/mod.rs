@@ -159,18 +159,23 @@ pub fn parse_dsl_into_elements(
         .iter()
         .filter_map(|stmt| {
             if let Statement::Shape(shape) = stmt {
-                ElementKeyframes::from_shape_at_spawn(shape, fps)
+                let mut ek = ElementKeyframes::from_shape_at_spawn(shape, fps)?;
+                
+                // Process inline animations already attached to the shape
+                for anim in shape.animations() {
+                    if let Some(ma) = MoveAnimation::from_scene(anim) {
+                        apply_move_to_ek(&mut ek, &ma, fps);
+                    }
+                }
+                
+                Some(ek)
             } else {
                 None
             }
         })
         .collect();
 
-    // ── Pass 2: move blocks → boundary keyframes on x/y tracks ───────────────
-    //
-    // We store ONLY the two endpoints. The easing field on the start keyframe
-    // tells the GPU compute shader which curve to apply between start→end.
-    // No intermediate frames are created here — the GPU does that on the fly.
+    // ── Pass 2: top-level move blocks ────────────────────────────────────────
     for stmt in &stmts {
         let Statement::Move(mv) = stmt else { continue };
         let Some(target_name) = mv.element.as_deref() else { continue };
@@ -178,48 +183,22 @@ pub fn parse_dsl_into_elements(
             continue;
         };
 
-        // Use MoveAnimation as the single source of truth for easing conversion.
         let scene_anim = ast_move_to_scene(mv);
-        let Some(move_anim) = MoveAnimation::from_scene(&scene_anim) else { continue };
-
-        let start_frame = seconds_to_frame(move_anim.start, fps);
-        let end_frame   = seconds_to_frame(move_anim.end, fps);
-
-        // The easing on the *start* keyframe defines the curve from start→end.
-        let kf_easing = ast_easing_to_scene(&mv.easing);
-
-        // Resolve the from-position: latest keyframe <= start_frame, or spawn.
-        let from_x = elem.x.iter().rev()
-            .find(|kf| kf.frame <= start_frame)
-            .map(|kf| kf.value)
-            .unwrap_or(0.5);
-        let from_y = elem.y.iter().rev()
-            .find(|kf| kf.frame <= start_frame)
-            .map(|kf| kf.value)
-            .unwrap_or(0.5);
-
-        // Insert start keyframe (holds the from-position, carries the easing).
-        if !elem.x.iter().any(|kf| kf.frame == start_frame) {
-            elem.x.push(Keyframe { frame: start_frame, value: from_x, easing: kf_easing.clone() });
-            elem.x.sort_by_key(|kf| kf.frame);
-        }
-        if !elem.y.iter().any(|kf| kf.frame == start_frame) {
-            elem.y.push(Keyframe { frame: start_frame, value: from_y, easing: kf_easing.clone() });
-            elem.y.sort_by_key(|kf| kf.frame);
-        }
-
-        // Insert end keyframe (the target position; easing field unused here).
-        if !elem.x.iter().any(|kf| kf.frame == end_frame) {
-            elem.x.push(Keyframe { frame: end_frame, value: move_anim.to_x, easing: kf_easing.clone() });
-            elem.x.sort_by_key(|kf| kf.frame);
-        }
-        if !elem.y.iter().any(|kf| kf.frame == end_frame) {
-            elem.y.push(Keyframe { frame: end_frame, value: move_anim.to_y, easing: kf_easing });
-            elem.y.sort_by_key(|kf| kf.frame);
+        if let Some(ma) = MoveAnimation::from_scene(&scene_anim) {
+            apply_move_to_ek(elem, &ma, fps);
         }
     }
 
     elements
+}
+
+/// Helper to apply a MoveAnimation into ElementKeyframes as a high-level command.
+fn apply_move_to_ek(ek: &mut crate::shapes::element_store::ElementKeyframes, ma: &crate::animations::move_animation::MoveAnimation, _fps: u32) {
+    // Instead of baking into keyframes, we store the high-level MoveAnimation.
+    // The GPU compute shader will interpolate this on-the-fly.
+    ek.move_commands.push(ma.clone());
+    // Sort by start frame to ensure correct superposition in the shader
+    ek.move_commands.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
 }
 
 

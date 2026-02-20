@@ -32,6 +32,7 @@ impl GpuResources {
         if upload_keyframes {
             let estimated_kf = scene.len() * 5 * 4;
             let mut all_keyframes: Vec<GpuKeyframe> = Vec::with_capacity(estimated_kf);
+            let mut all_moves: Vec<GpuMove> = Vec::new();
             let mut descs: Vec<GpuElementDesc> = Vec::with_capacity(scene.len());
 
             // Construir descriptores en orden de dibujado (inverso)
@@ -48,9 +49,10 @@ impl GpuResources {
                     },
                     spawn_frame: ek.spawn_frame as u32,
                     kill_frame: ek.kill_frame.map(|f| f as u32).unwrap_or(0xFFFF_FFFF),
-                    r_offset: 0, r_len: 0, g_offset: 0, g_len: 0,
-                    b_offset: 0, b_len: 0, a_offset: 0, a_len: 0,
-                    _pad_color: 0,
+                    move_offset: 0, move_len: 0,
+                    r_offset: 0, g_offset: 0, b_offset: 0, a_offset: 0,
+                    r_len: 0, g_len: 0, b_len: 0, a_len: 0,
+                    _pad: 0,
                     base_size: [0.0, 0.0],
                     uv0: [0.0, 0.0],
                     uv1: [0.0, 0.0],
@@ -75,6 +77,20 @@ impl GpuResources {
                 (desc.b_offset, desc.b_len) = self.push_color_track_helper(&mut all_keyframes, &ek.color, 2);
                 (desc.a_offset, desc.a_len) = self.push_color_track_helper(&mut all_keyframes, &ek.color, 3);
 
+                // Comandos de Movimiento (100% GPU)
+                desc.move_offset = all_moves.len() as u32;
+                desc.move_len = ek.move_commands.len() as u32;
+                for ma in &ek.move_commands {
+                    all_moves.push(GpuMove {
+                        start_frame: crate::shapes::element_store::seconds_to_frame(ma.start, fps) as u32,
+                        end_frame: crate::shapes::element_store::seconds_to_frame(ma.end, fps) as u32,
+                        to_x: ma.to_x,
+                        to_y: ma.to_y,
+                        easing: super::utils::easing_to_gpu(&ma.easing),
+                        _pad: [0, 0, 0],
+                    });
+                }
+
                 descs.push(desc);
             }
 
@@ -90,6 +106,19 @@ impl GpuResources {
                 self.rebuild_compute_bind_group(device);
             }
             queue.write_buffer(&self.keyframe_buffer, 0, kf_bytes);
+
+            // Subida de movimientos
+            let move_bytes = bytemuck::cast_slice::<GpuMove, u8>(&all_moves);
+            if move_bytes.len() as u64 > self.move_buffer.size() {
+                self.move_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("move_buffer"),
+                    size: (move_bytes.len() * 2 + 64) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.rebuild_compute_bind_group(device);
+            }
+            queue.write_buffer(&self.move_buffer, 0, move_bytes);
 
             // Subida de descriptores
             let desc_bytes = bytemuck::cast_slice::<GpuElementDesc, u8>(&descs);

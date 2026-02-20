@@ -2,7 +2,7 @@
 name = "motioner_ui"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <you@example.com>"]
+authors = ["jvchiappini <jvchiappini@gmail.com>"]
 
 [dependencies]
 eframe = { version = "0.26", features = ["wgpu"] }
@@ -23,6 +23,11 @@ rayon = "1.8"
 splines = "5.0.0"
 ab_glyph = "0.2"
 inventory = "0.1"
+
+# dependencies needed for rasterizing SVG assets at runtime
+usvg = "0.36"
+resvg = "0.36"
+tiny-skia = "0.10"
 
 [features]
 default = ["wgpu"]

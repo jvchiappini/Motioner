@@ -38,6 +38,9 @@ pub struct AppState {
 
     #[serde(skip)]
     pub preview_texture: Option<egui::TextureHandle>,
+    /// Texture handle containing the application logo (loaded from SVG asset).
+    #[serde(skip)]
+    pub logo_texture: Option<egui::TextureHandle>,
     #[serde(skip)]
     pub preview_native_texture_id: Option<egui::TextureId>,
     #[serde(skip)]
@@ -331,6 +334,7 @@ impl Default for AppState {
             #[cfg(feature = "wgpu")]
             wgpu_render_state: None,
             preview_texture: None,
+            logo_texture: None,
             preview_native_texture_id: None,
             #[cfg(feature = "wgpu")]
             preview_native_texture_resource: None,

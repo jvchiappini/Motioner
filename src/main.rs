@@ -15,6 +15,7 @@ mod shapes;
 mod timeline;
 mod ui;
 mod welcome_modal; // Added this
+mod logo;
 
 use anyhow::Result;
 use display_info::DisplayInfo;
@@ -63,9 +64,12 @@ fn main() -> Result<()> {
         }
     }
 
+    let mut viewport = egui::ViewportBuilder::default().with_inner_size(egui::vec2(win_w, win_h));
+    if let Some(icon) = logo::icon_data_from_svg(include_str!("../assets/logo.svg")) {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
+
     if set_viewport {
-        let mut viewport =
-            egui::ViewportBuilder::default().with_inner_size(egui::vec2(win_w, win_h));
         if let Some(p) = pos {
             viewport = viewport.with_position(p);
         }
@@ -75,11 +79,11 @@ fn main() -> Result<()> {
             win_w, win_h, pos
         );
     } else {
+        native_options.viewport = viewport;
         println!(
             "[motioner] explicit viewport NOT applied - using OS placement (size={}x{} pos={:?})",
             win_w, win_h, pos
         );
-        // leave native_options.viewport unset — let the OS place the window
     }
 
     // Run the native eframe app. If initialization fails (wgpu/device/etc.)

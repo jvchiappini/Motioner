@@ -354,7 +354,7 @@ pub fn from_element_keyframes(
     frame: crate::shapes::element_store::FrameIndex,
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
-    let props = ek.sample(frame)?;
+    let props = ek.sample(frame, fps)?;
     let mut r = Rect::default();
     r.name = ek.name.clone();
     if let Some(x) = props.x {

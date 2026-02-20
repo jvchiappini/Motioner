@@ -381,7 +381,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                         // prefer sampling the element's color at spawn_frame; fall
                         // back to a kind-based default when missing
                         let fill_color = elem
-                            .sample(elem.spawn_frame)
+                            .sample(elem.spawn_frame, state.fps)
                             .and_then(|p| p.color)
                             .map(|c| egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], c[3]))
                             .unwrap_or_else(|| match elem.kind.as_str() {

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use crate::scene::Easing;
+use serde::{Deserialize, Serialize};
 
 pub mod bezier;
 pub mod bounce;
@@ -18,7 +19,7 @@ pub mod spring;
 // ─── MoveAnimation ───────────────────────────────────────────────────────────
 
 /// Concrete implementation for a linear "move" animation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MoveAnimation {
     pub to_x: f32,
     pub to_y: f32,

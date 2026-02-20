@@ -115,7 +115,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Position X:");
                                     let mut val_x = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.x)
                                         .unwrap_or(0.5)
                                         * 100.0;
@@ -148,7 +148,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Position Y:");
                                     let mut val_y = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.y)
                                         .unwrap_or(0.5)
                                         * 100.0;
@@ -181,7 +181,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Radius:");
                                     let mut val_r = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.radius)
                                         .unwrap_or(0.1)
                                         * 100.0;
@@ -214,7 +214,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Color:");
                                     let mut color = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.color)
                                         .unwrap_or([120, 200, 255, 255]);
                                     if ui
@@ -306,7 +306,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Position X:");
                                     let mut val_x = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.x)
                                         .unwrap_or(0.5)
                                         * 100.0;
@@ -339,7 +339,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Position Y:");
                                     let mut val_y = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.y)
                                         .unwrap_or(0.5)
                                         * 100.0;
@@ -372,7 +372,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Width:");
                                     let mut val_w = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.w)
                                         .unwrap_or(0.3)
                                         * 100.0;
@@ -405,7 +405,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Height:");
                                     let mut val_h = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.h)
                                         .unwrap_or(0.2)
                                         * 100.0;
@@ -438,7 +438,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Color:");
                                     let mut color = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.color)
                                         .unwrap_or([255, 100, 100, 255]);
                                     if ui
@@ -525,7 +525,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 ui.horizontal(|ui| {
                                     ui.label("X");
                                     let mut x = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.x)
                                         .unwrap_or(0.5);
                                     if ui
@@ -556,7 +556,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     ui.add_space(8.0);
                                     ui.label("Y");
                                     let mut y = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.y)
                                         .unwrap_or(0.5);
                                     if ui
@@ -618,7 +618,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 .show(ui, |ui| {
                                     ui.label("Text:");
                                     let mut val = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.value)
                                         .unwrap_or_else(|| "".to_string());
                                     if ui.text_edit_singleline(&mut val).changed() {
@@ -643,7 +643,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Base Size:");
                                     let mut size_pct = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.size)
                                         .unwrap_or(24.0)
                                         * 100.0;
@@ -677,7 +677,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                                     ui.label("Base Color:");
                                     let mut color = elem
-                                        .sample(elem.spawn_frame)
+                                        .sample(elem.spawn_frame, state.fps)
                                         .and_then(|p| p.color)
                                         .unwrap_or([200, 255, 100, 255]);
                                     if ui
@@ -708,11 +708,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                         // --- SECTION: ANIMATIONS ---
                         let base_x = elem
-                            .sample(elem.spawn_frame)
+                            .sample(elem.spawn_frame, state.fps)
                             .and_then(|p| p.x)
                             .unwrap_or(0.5);
                         let base_y = elem
-                            .sample(elem.spawn_frame)
+                            .sample(elem.spawn_frame, state.fps)
                             .and_then(|p| p.y)
                             .unwrap_or(0.5);
                         ui.label("Animations editing disabled — migrating to per-track storage");

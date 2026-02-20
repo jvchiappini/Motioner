@@ -44,6 +44,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                         .show(ui, |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(5.0);
+                                // draw logo if available. we give it a fixed width so the
+                                // SVG scales nicely; height will be computed to preserve
+                                // aspect ratio.
+                                if let Some(handle) = &state.logo_texture {
+                                    // show roughly 96x96 px logo, adjust as desired
+                                    ui.image((handle.id(), egui::vec2(96.0, 96.0)));
+                                    ui.add_space(8.0);
+                                }
                                 ui.heading(
                                     egui::RichText::new("Motioner")
                                         .size(32.0)

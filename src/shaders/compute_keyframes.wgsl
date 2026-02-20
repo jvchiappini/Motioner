@@ -47,7 +47,6 @@ struct GpuKeyframe {
 /// Per-element descriptor: where each property track starts in `keyframe_buffer`
 /// and how many keyframes it contains, plus static base data.
 struct GpuElementDesc {
-    // Track offsets into keyframe_buffer (u32 index).
     x_offset:      u32,
     x_len:         u32,
     y_offset:      u32,
@@ -58,23 +57,25 @@ struct GpuElementDesc {
     w_len:         u32,
     h_offset:      u32,
     h_len:         u32,
-    // Static fields (don't animate yet).
-    shape_type: i32,   // 0 = circle, 1 = rect, 2 = text
-    spawn_frame: u32,
-    kill_frame:  u32,  // 0xFFFFFFFF means no kill
-    r_offset: u32,
-    r_len:    u32,
-    g_offset: u32,
-    g_len:    u32,
-    b_offset: u32,
-    b_len:    u32,
-    a_offset: u32,
-    a_len:    u32,
-    // Size for rect (w,h) — sourced from w/h tracks.
-    // For circle: size.x == size.y == radius * 2 * resolution.
-    base_size: vec2<f32>,
-    uv0      : vec2<f32>,
-    uv1      : vec2<f32>,
+    shape_type:    i32,
+    spawn_frame:   u32,
+    kill_frame:    u32,
+    move_offset:   u32,
+    move_len:      u32,
+    
+    r_offset:      u32,
+    g_offset:      u32,
+    b_offset:      u32,
+    a_offset:      u32,
+    
+    r_len:         u32,
+    g_len:         u32,
+    b_len:         u32,
+    a_len:         u32,
+
+    base_size:     vec2<f32>,
+    uv0:           vec2<f32>,
+    uv1:           vec2<f32>,
 }
 
 /// Output written to the render pass shape buffer.
@@ -91,12 +92,24 @@ struct GpuShape {
     uv1:        vec2<f32>,
 }
 
+struct GpuMove {
+    start_frame: u32,
+    end_frame:   u32,
+    to_x:        f32,
+    to_y:        f32,
+    easing:      u32,
+    _pad0:       u32,
+    _pad1:       u32,
+    _pad2:       u32,
+}
+
 // ─── Bindings ─────────────────────────────────────────────────────────────────
 
 @group(0) @binding(0) var<uniform>            cu:             ComputeUniforms;
 @group(0) @binding(1) var<storage, read>      keyframes:      array<GpuKeyframe>;
 @group(0) @binding(2) var<storage, read>      element_descs:  array<GpuElementDesc>;
 @group(0) @binding(3) var<storage, read_write> output_shapes: array<GpuShape>;
+@group(0) @binding(4) var<storage, read>      move_commands:  array<GpuMove>;
 
 // ─── Easing functions ─────────────────────────────────────────────────────────
 
@@ -194,26 +207,46 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if desc.kill_frame != 0xFFFFFFFFu && cu.current_frame >= desc.kill_frame { return; }
 
     // Sample animated tracks.
-    let x      = sample_track(desc.x_offset,      desc.x_len,      cu.current_frame);
-    let y      = sample_track(desc.y_offset,       desc.y_len,      cu.current_frame);
+    var x      = sample_track(desc.x_offset,      desc.x_len,      cu.current_frame);
+    var y      = sample_track(desc.y_offset,       desc.y_len,      cu.current_frame);
     let radius = sample_track(desc.radius_offset,  desc.radius_len, cu.current_frame);
     let w      = sample_track(desc.w_offset,       desc.w_len,      cu.current_frame);
     let h      = sample_track(desc.h_offset,       desc.h_len,      cu.current_frame);
-
-    // Sample color tracks (normalized 0..1 in keyframes).
-    let r = sample_track(desc.r_offset, desc.r_len, cu.current_frame);
-    let g = sample_track(desc.g_offset, desc.g_len, cu.current_frame);
-    let b = sample_track(desc.b_offset, desc.b_len, cu.current_frame);
-    let a = sample_track(desc.a_offset, desc.a_len, cu.current_frame);
+    
+    let r      = sample_track(desc.r_offset,       desc.r_len,      cu.current_frame);
+    let g      = sample_track(desc.g_offset,       desc.g_len,      cu.current_frame);
+    let b      = sample_track(desc.b_offset,       desc.b_len,      cu.current_frame);
+    let a      = sample_track(desc.a_offset,       desc.a_len,      cu.current_frame);
 
     // Derive size from shape type.
     var size = vec2<f32>(0.0, 0.0);
     if desc.shape_type == 0 {
-        // Circle: radius * resolution
         size = vec2<f32>(radius * cu.resolution.x, radius * cu.resolution.x);
     } else {
-        // Rect / Text: relative w/h * resolution * 0.5
         size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
+    }
+    
+    // Apply move commands iteratively to x and y
+    for (var i: u32 = 0u; i < desc.move_len; i = i + 1u) {
+        let mv = move_commands[desc.move_offset + i];
+        
+        // If current frame is before the move, no effect
+        if cu.current_frame <= mv.start_frame {
+            continue;
+        }
+        
+        let frame_range = f32(mv.end_frame - mv.start_frame);
+        let current_offset = f32(cu.current_frame - mv.start_frame);
+        
+        var t = 1.0;
+        if frame_range > 0.0 && current_offset < frame_range {
+            t = current_offset / frame_range;
+        }
+        
+        let eased_t = apply_easing(clamp(t, 0.0, 1.0), mv.easing);
+        
+        x = x + (mv.to_x - x) * eased_t;
+        y = y + (mv.to_y - y) * eased_t;
     }
 
     let spawn_time = f32(desc.spawn_frame) / f32(cu.fps);

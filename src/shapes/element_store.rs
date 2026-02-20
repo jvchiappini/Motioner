@@ -102,6 +102,7 @@ pub struct ElementKeyframes {
     pub color: Vec<Keyframe<[u8; 4]>>,
     pub visible: Vec<Keyframe<bool>>,
     pub z_index: Vec<Keyframe<i32>>,
+    pub move_commands: Vec<crate::animations::move_animation::MoveAnimation>,
 
     /// Ephemeral flag (shapes created at runtime / not serialized into DSL)
     pub ephemeral: bool,
@@ -127,6 +128,7 @@ impl ElementKeyframes {
             color: Vec::new(),
             visible: Vec::new(),
             z_index: Vec::new(),
+            move_commands: Vec::new(),
             ephemeral: false,
             spawn_frame: 0,
             kill_frame: None,
@@ -178,20 +180,46 @@ impl ElementKeyframes {
         }
     }
 
-    /// Sample the effective properties at `frame` by returning the latest
-    /// keyframe <= `frame` (classic keyframe hold behaviour).
-    fn latest_from_track<T: Clone>(track: &Vec<Keyframe<T>>, frame: FrameIndex) -> Option<T> {
-        for kf in track.iter().rev() {
+    /// Sample a numeric track at `frame` with interpolation.
+    fn sample_f32_track(track: &Vec<Keyframe<f32>>, frame: FrameIndex) -> Option<f32> {
+        if track.is_empty() { return None; }
+        
+        // Find the last keyframe <= frame
+        let mut prev_idx: i32 = -1;
+        for (i, kf) in track.iter().enumerate() {
             if kf.frame <= frame {
-                return Some(kf.value.clone());
+                prev_idx = i as i32;
+            } else {
+                break;
             }
         }
-        None
+
+        // Before first keyframe: hold first value
+        if prev_idx < 0 {
+            return Some(track[0].value);
+        }
+
+        let prev = &track[prev_idx as usize];
+        let next_idx = (prev_idx + 1) as usize;
+
+        // At or after last keyframe: hold last value
+        if next_idx >= track.len() {
+            return Some(prev.value);
+        }
+
+        let next = &track[next_idx];
+        let range = (next.frame - prev.frame) as f32;
+        if range <= 0.0 { return Some(next.value); }
+
+        let t = (frame - prev.frame) as f32 / range;
+        let eased_t = apply_easing_cpu(t, &prev.easing);
+        
+        Some(prev.value + (next.value - prev.value) * eased_t)
     }
 
-    /// Sample the effective properties at `frame` by returning the latest
-    /// keyframe <= `frame` for every property that has one.
-    pub fn sample(&self, frame: FrameIndex) -> Option<FrameProps> {
+    /// Sample the effective properties at `frame` with interpolation for continuous types.
+    /// `fps` is required to convert move animation seconds to frames.
+    pub fn sample(&self, frame: FrameIndex, fps: u32) -> Option<FrameProps> {
         let any = !self.x.is_empty()
             || !self.y.is_empty()
             || !self.radius.is_empty()
@@ -201,24 +229,73 @@ impl ElementKeyframes {
             || !self.value.is_empty()
             || !self.color.is_empty()
             || !self.visible.is_empty()
-            || !self.z_index.is_empty();
+            || !self.z_index.is_empty()
+            || !self.move_commands.is_empty();
 
         if !any {
             return None;
         }
 
+        let mut x = Self::sample_f32_track(&self.x, frame).unwrap_or(0.5);
+        let mut y = Self::sample_f32_track(&self.y, frame).unwrap_or(0.5);
+
+        // Move commands are now applied exclusively in GPU shaders.
+        // We do not interpolate them on CPU to match user request.
+
         Some(FrameProps {
-            x: Self::latest_from_track(&self.x, frame),
-            y: Self::latest_from_track(&self.y, frame),
-            radius: Self::latest_from_track(&self.radius, frame),
-            w: Self::latest_from_track(&self.w, frame),
-            h: Self::latest_from_track(&self.h, frame),
-            size: Self::latest_from_track(&self.size, frame),
+            x: Some(x),
+            y: Some(y),
+            radius: Self::sample_f32_track(&self.radius, frame),
+            w: Self::sample_f32_track(&self.w, frame),
+            h: Self::sample_f32_track(&self.h, frame),
+            size: Self::sample_f32_track(&self.size, frame),
             value: Self::latest_from_track(&self.value, frame),
-            color: Self::latest_from_track(&self.color, frame),
+            color: Self::sample_color_track(&self.color, frame),
             visible: Self::latest_from_track(&self.visible, frame),
             z_index: Self::latest_from_track(&self.z_index, frame),
         })
+    }
+
+    fn sample_color_track(track: &Vec<Keyframe<[u8; 4]>>, frame: FrameIndex) -> Option<[u8; 4]> {
+        if track.is_empty() { return None; }
+        
+        let mut prev_idx: i32 = -1;
+        for (i, kf) in track.iter().enumerate() {
+            if kf.frame <= frame {
+                prev_idx = i as i32;
+            } else {
+                break;
+            }
+        }
+
+        if prev_idx < 0 { return Some(track[0].value); }
+        let prev = &track[prev_idx as usize];
+        let next_idx = (prev_idx + 1) as usize;
+        if next_idx >= track.len() { return Some(prev.value); }
+
+        let next = &track[next_idx];
+        let range = (next.frame - prev.frame) as f32;
+        if range <= 0.0 { return Some(next.value); }
+
+        let t = (frame - prev.frame) as f32 / range;
+        let eased_t = apply_easing_cpu(t, &prev.easing);
+        
+        let mut out = [0u8; 4];
+        for i in 0..4 {
+            let v0 = prev.value[i] as f32;
+            let v1 = next.value[i] as f32;
+            out[i] = (v0 + (v1 - v0) * eased_t).round().clamp(0.0, 255.0) as u8;
+        }
+        Some(out)
+    }
+
+    fn latest_from_track<T: Clone>(track: &Vec<Keyframe<T>>, frame: FrameIndex) -> Option<T> {
+        for kf in track.iter().rev() {
+            if kf.frame <= frame {
+                return Some(kf.value.clone());
+            }
+        }
+        None
     }
 
     /// Convert an existing `Shape` into a single-keyframe ElementKeyframes
@@ -244,7 +321,7 @@ impl ElementKeyframes {
         frame: FrameIndex,
         fps: u32,
     ) -> Option<crate::shapes::shapes_manager::Shape> {
-        let _ = self.sample(frame)?;
+        let _ = self.sample(frame, fps)?;
         // Delegate to shape-specific constructors in `shapes_manager` which
         // call into the per-shape modules. This keeps element_store free of
         // hardcoded shape field mappings.
@@ -269,4 +346,23 @@ pub fn to_legacy_shapes(elements: &[ElementKeyframes], fps: u32) -> Vec<crate::s
 /// integer which makes `0.0s -> frame 0` and `1/fps -> frame 1` as expected.
 pub fn seconds_to_frame(seconds: f32, fps: u32) -> FrameIndex {
     ((seconds * fps as f32).round() as isize).max(0) as FrameIndex
+}
+
+fn apply_easing_cpu(t: f32, easing: &Easing) -> f32 {
+    use crate::animations::move_animation::*;
+    match easing {
+        Easing::Linear => linear::compute_progress(t),
+        Easing::EaseIn { power } => ease_in::compute_progress(t, *power),
+        Easing::EaseOut { power } => ease_out::compute_progress(t, *power),
+        Easing::EaseInOut { power } => ease_in_out::compute_progress(t, *power),
+        Easing::Custom { points } => custom::compute_progress(t, points),
+        Easing::CustomBezier { points } => custom_bezier::compute_progress(t, points),
+        Easing::Bezier { p1, p2 } => bezier::compute_progress(t, *p1, *p2),
+        Easing::Sine => sine::compute_progress(t),
+        Easing::Expo => expo::compute_progress(t),
+        Easing::Circ => circ::compute_progress(t),
+        Easing::Spring { damping, stiffness, mass } => spring::compute_progress(t, *damping, *stiffness, *mass),
+        Easing::Elastic { amplitude, period } => elastic::compute_progress(t, *amplitude, *period),
+        Easing::Bounce { bounciness } => bounce::compute_progress(t, *bounciness),
+    }
 }

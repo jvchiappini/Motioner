@@ -55,6 +55,16 @@ pub fn parse(src: &str) -> Vec<Statement> {
             continue;
         }
 
+        if line.starts_with("move") && line.contains('{') {
+            let block = collect_block(line, &mut lines);
+            if let Some(mv) = parse_move_block_lines(&block) {
+                if mv.element.is_some() {
+                    pending_moves.push(mv);
+                }
+            }
+            continue;
+        }
+
         // For any identified top-level block try delegating to the
         // registered shape parsers (kept in `shapes_manager`). This lets
         // each shape module own its parsing logic.
@@ -67,16 +77,6 @@ pub fn parse(src: &str) -> Vec<Statement> {
                     continue;
                 }
             }
-        }
-
-        if line.starts_with("move") && line.contains('{') {
-            let block = collect_block(line, &mut lines);
-            if let Some(mv) = parse_move_block_lines(&block) {
-                if mv.element.is_some() {
-                    pending_moves.push(mv);
-                }
-            }
-            continue;
         }
 
         // Event handlers: `on_time { ... }`

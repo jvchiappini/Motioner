@@ -56,7 +56,7 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
     let mut shapes: Vec<crate::scene::Shape> = Vec::new();
     for elem in elements_vec.iter() {
         let frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, fps);
-        originals.push(elem.sample(frame_idx));
+        originals.push(elem.sample(frame_idx, fps));
         if let Some(s) = elem.to_shape_at_frame(frame_idx, fps) {
             shapes.push(s);
         }
