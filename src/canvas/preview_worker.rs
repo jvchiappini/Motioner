@@ -1,3 +1,6 @@
+/// Gestiona hilos de trabajo en segundo plano para generar previsualizaciones.
+/// Se encarga de la generación de snapshots (CPU o GPU) sin bloquear el hilo principal.
+
 use super::cache_management::{
     compress_color_image_to_png, enforce_preview_cache_limits, preview_cache_vram_bytes,
 };

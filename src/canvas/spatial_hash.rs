@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+/// Proporciona una estructura de datos de hash espacial para optimizar colisiones y renderizado.
+/// Divide el espacio en celdas para realizar búsquedas rápidas de objetos cercanos.
+
+#[allow(dead_code)]
 use std::collections::HashMap;
 
 /// Bounding box en coordenadas normalizadas (0..1) para cálculos de colisión y culling.

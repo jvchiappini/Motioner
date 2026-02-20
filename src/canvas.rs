@@ -16,7 +16,8 @@ pub mod ui;
 // Re-exportar funciones clave para facilidad de uso
 // `position_cache` removed — caching logic simplified; keep canvas submodules here.
 pub use preview_worker::{
-    generate_preview_frames, poll_preview_results, request_preview_frames, PreviewJob, PreviewMode,
+    // generate_preview_frames,
+    poll_preview_results, request_preview_frames, PreviewJob, PreviewMode,
     PreviewResult,
 };
 pub use ui::show;

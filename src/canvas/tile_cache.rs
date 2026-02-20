@@ -1,3 +1,6 @@
+/// Implementa un sistema de almacenamiento en caché por cuadrículas (tiles).
+/// Permite reutilizar porciones de la imagen renderizada si la escena no ha cambiado en esa zona.
+
 use std::collections::HashMap;
 
 /// Cache de tiles renderizados para evitar re-renderizar tiles sin cambios.

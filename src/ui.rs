@@ -784,12 +784,8 @@ impl eframe::App for MyApp {
                 state.set_time(next);
             }
 
-            // Request single-frame preview generation for the new playhead time (non-blocking)
-            crate::canvas::request_preview_frames(
-                state,
-                state.time,
-                crate::canvas::PreviewMode::Single,
-            );
+            // NOTA: Hemos eliminado request_preview_frames aquí porque el CompositionCallback
+            // ya renderiza en vivo usando la GPU al 100%. Esto evita trabajo redundante.
 
             // Ensure maximum fluidity during playback
             ctx.request_repaint();

@@ -1,0 +1,108 @@
+/// Este módulo orquestra la interfaz de usuario del canvas central.
+/// Divide la lógica en interacción, cuadrícula, barra de herramientas y procesamiento de texto.
+
+use eframe::egui;
+use crate::app_state::AppState;
+
+mod interaction;
+mod grid;
+mod toolbar;
+mod text_atlas;
+
+#[cfg(feature = "wgpu")]
+use super::gpu::CompositionCallback;
+
+/// Punto de entrada principal para renderizar el área del canvas.
+pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
+    egui::Frame::canvas(ui.style()).show(ui, |ui| {
+        let (rect, response) = ui.allocate_exact_size(
+            ui.available_size(),
+            egui::Sense::drag().union(egui::Sense::click()),
+        );
+
+        // 1. Manejar Pan y Zoom
+        if main_ui_enabled {
+            interaction::handle_pan_zoom(ui, state, rect, &response);
+        }
+
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(60, 60, 60));
+
+        let zoom = state.canvas_zoom;
+        let pan = egui::vec2(state.canvas_pan_x, state.canvas_pan_y);
+
+        // 2. Dibujar Cuadrícula
+        grid::draw_grid(&painter, rect, zoom, pan);
+
+        // 3. Calcular Rect de Composición
+        let comp_size = egui::vec2(state.render_width as f32, state.render_height as f32) * zoom;
+        let comp_origin = rect.center() + pan - comp_size / 2.0;
+        let composition_rect = egui::Rect::from_min_size(comp_origin, comp_size);
+        state.last_composition_rect = Some(composition_rect);
+
+        // Sombra y fondo del papel
+        painter.rect_filled(composition_rect.expand(4.0 * zoom), 0.0, egui::Color32::from_black_alpha(100));
+        painter.rect_filled(composition_rect, 0.0, egui::Color32::WHITE);
+        painter.rect_stroke(composition_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+
+        // 4. Procesar Texto (Solo si WGPU está activo)
+        let (text_pixels, text_overrides) = if state.wgpu_render_state.is_some() {
+            text_atlas::prepare_text_atlas(state)
+        } else {
+            (None, None)
+        };
+
+        let magnifier_pos = if state.picker_active { ui.input(|i| i.pointer.hover_pos()) } else { None };
+        
+        // 5. Renderizado 100% GPU
+        // Hemos eliminado el uso de caché de texturas (egui::Image) para el área de composición.
+        // Esto garantiza fidelidad absoluta y elimina problemas de espacios de color entre texturas y renderizado directo.
+        
+        let cb = eframe::egui_wgpu::Callback::new_paint_callback(
+                rect,
+                CompositionCallback {
+                    render_width: state.render_width as f32,
+                    render_height: state.render_height as f32,
+                    preview_multiplier: state.preview_multiplier,
+                    paper_rect: composition_rect,
+                    viewport_rect: rect,
+                    magnifier_pos,
+                    time: state.time,
+                    shared_device: None,
+                    shared_queue: None,
+                    text_pixels,
+                    elements: state.wgpu_render_state.as_ref().map(|_| state.scene.clone()),
+                    current_frame: crate::shapes::element_store::seconds_to_frame(state.time, state.fps) as u32,
+                    fps: state.fps,
+                    scene_version: state.scene_version,
+                    text_overrides,
+                },
+            );
+            painter.add(cb);
+        // The closing brace for the `egui::Frame::canvas(...).show` closure was misplaced here.
+        // It is now removed, allowing the following code to be part of the closure.
+
+        // 7. Manejar Clics y Selección
+        if main_ui_enabled && response.clicked() {
+            interaction::handle_canvas_clicks(ui, state, &response, composition_rect, zoom);
+        }
+
+        // 8. Dibujar Highlight de selección
+        if let Some(path) = &state.selected_node_path {
+            let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0));
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+            if let Some(elem) = state.scene.get(path[0]) {
+                 if let Some(node) = elem.to_shape_at_frame(frame_idx, state.fps) {
+                    crate::shapes::shapes_manager::draw_highlight_recursive(
+                        &painter, &node, composition_rect, stroke, state.time, 0.0, state.render_height,
+                    );
+                }
+            }
+        }
+
+        // 9. Mostrar Barra de Herramientas
+        if main_ui_enabled && !state.code_fullscreen {
+            toolbar::show_toolbar(ui, state, composition_rect);
+        }
+    });
+}

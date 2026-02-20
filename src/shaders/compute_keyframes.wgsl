@@ -62,15 +62,19 @@ struct GpuElementDesc {
     shape_type: i32,   // 0 = circle, 1 = rect, 2 = text
     spawn_frame: u32,
     kill_frame:  u32,  // 0xFFFFFFFF means no kill
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-    // Color (rgba f32) — static for now, will become a track later.
-    color: vec4<f32>,
+    r_offset: u32,
+    r_len:    u32,
+    g_offset: u32,
+    g_len:    u32,
+    b_offset: u32,
+    b_len:    u32,
+    a_offset: u32,
+    a_len:    u32,
     // Size for rect (w,h) — sourced from w/h tracks.
     // For circle: size.x == size.y == radius * 2 * resolution.
     base_size: vec2<f32>,
-    _pad3: vec2<f32>,
+    uv0      : vec2<f32>,
+    uv1      : vec2<f32>,
 }
 
 /// Output written to the render pass shape buffer.
@@ -196,16 +200,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w      = sample_track(desc.w_offset,       desc.w_len,      cu.current_frame);
     let h      = sample_track(desc.h_offset,       desc.h_len,      cu.current_frame);
 
+    // Sample color tracks (normalized 0..1 in keyframes).
+    let r = sample_track(desc.r_offset, desc.r_len, cu.current_frame);
+    let g = sample_track(desc.g_offset, desc.g_len, cu.current_frame);
+    let b = sample_track(desc.b_offset, desc.b_len, cu.current_frame);
+    let a = sample_track(desc.a_offset, desc.a_len, cu.current_frame);
+
     // Derive size from shape type.
     var size = vec2<f32>(0.0, 0.0);
     if desc.shape_type == 0 {
-        // Circle: `radius` is stored in normalized scene coords; convert
-        // to pixels (use resolution.x for X scale) and store the
-        // half-extent (radius in pixels) to match CPU path.
+        // Circle: radius * resolution
         size = vec2<f32>(radius * cu.resolution.x, radius * cu.resolution.x);
     } else {
-        // Rect / Text: `w`/`h` are normalized (0..1). Convert to pixel
-        // half-extent to match CPU `append_gpu_shapes` behaviour.
+        // Rect / Text: relative w/h * resolution * 0.5
         size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
     }
 
@@ -213,18 +220,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Write output shape.
     var out: GpuShape;
-    // Convert normalized positions to pixel coordinates so the render
-    // vertex shader (which expects pixel-space pos/size) receives the
-    // same units as the CPU path.
     out.pos        = vec2<f32>(x * cu.resolution.x, y * cu.resolution.y);
     out.size       = size;
-    out.color      = desc.color;
+    out.color      = vec4<f32>(r, g, b, a);
     out.shape_type = desc.shape_type;
     out.spawn_time = spawn_time;
     out.p1         = 0;
     out.p2         = 0;
-    out.uv0        = vec2<f32>(0.0, 0.0);
-    out.uv1        = vec2<f32>(0.0, 0.0);
+    out.uv0        = desc.uv0;
+    out.uv1        = desc.uv1;
 
     output_shapes[idx] = out;
 }

@@ -1,3 +1,6 @@
+/// Gestiona el rasterizado de formas en el canvas.
+/// Actualmente sirve como punto de entrada para el muestreo de color.
+
 use crate::app_state::AppState;
 use eframe::egui;
 
