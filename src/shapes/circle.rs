@@ -3,7 +3,7 @@ use crate::shapes::ShapeDescriptor;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Circle {
     pub name: String,
     pub x: f32,
@@ -41,6 +41,8 @@ impl Default for Circle {
         }
     }
 }
+
+// (conversion from removed AST node types was moved into the parser)
 
 impl ShapeDescriptor for Circle {
     fn dsl_keyword(&self) -> &'static str {
@@ -167,13 +169,39 @@ impl ShapeDescriptor for Circle {
         let mut ek = ElementKeyframes::new(self.name.clone(), "circle".into());
         let spawn = crate::shapes::element_store::seconds_to_frame(self.spawn_time, fps);
         ek.spawn_frame = spawn;
-        ek.kill_frame = self.kill_time.map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
-        ek.x.push(Keyframe { frame: spawn, value: self.x, easing: crate::animations::easing::Easing::Linear });
-        ek.y.push(Keyframe { frame: spawn, value: self.y, easing: crate::animations::easing::Easing::Linear });
-        ek.radius.push(Keyframe { frame: spawn, value: self.radius, easing: crate::animations::easing::Easing::Linear });
-        ek.color.push(Keyframe { frame: spawn, value: self.color, easing: crate::animations::easing::Easing::Linear });
-        ek.visible.push(Keyframe { frame: spawn, value: self.visible, easing: crate::animations::easing::Easing::Linear });
-        ek.z_index.push(Keyframe { frame: spawn, value: self.z_index, easing: crate::animations::easing::Easing::Linear });
+        ek.kill_frame = self
+            .kill_time
+            .map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
+        ek.x.push(Keyframe {
+            frame: spawn,
+            value: self.x,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.y.push(Keyframe {
+            frame: spawn,
+            value: self.y,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.radius.push(Keyframe {
+            frame: spawn,
+            value: self.radius,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.color.push(Keyframe {
+            frame: spawn,
+            value: self.color,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.visible.push(Keyframe {
+            frame: spawn,
+            value: self.visible,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.z_index.push(Keyframe {
+            frame: spawn,
+            value: self.z_index,
+            easing: crate::animations::easing::Easing::Linear,
+        });
         ek.ephemeral = self.ephemeral;
         ek.animations = self.animations.clone();
         ek
@@ -321,5 +349,65 @@ inventory::submit! {
     crate::shapes::shapes_manager::ElementKeyframesFactory {
         kind: "circle",
         constructor: crate::shapes::circle::from_element_keyframes,
+    }
+}
+
+// === DSL block parser for `circle { ... }` ----------------------------------
+/// Parse a collected DSL block (lines including header + body) into a
+/// `Circle`. This keeps DSL-specific parsing for circles next to the
+/// `Circle` type.
+pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Circle> {
+    let header = block.first()?;
+    let name = crate::dsl::parser::extract_name(header)
+        .unwrap_or_else(|| format!("Circle_{}", crate::dsl::parser::fastrand_usize()));
+
+    let mut node = Circle::default();
+    node.name = name;
+
+    let body = crate::dsl::parser::body_lines(block);
+    let mut iter = body.iter().peekable();
+    while let Some(line) = iter.next() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+
+        if line.starts_with("move") && line.contains('{') {
+            let sub = crate::dsl::parser::collect_sub_block(line, &mut iter);
+            if let Some(mv) = crate::dsl::parser::parse_move_block_lines(&sub) {
+                node.animations.push(crate::dsl::ast_move_to_scene(&mv));
+            }
+            continue;
+        }
+
+        if let Some((key, val)) = crate::dsl::parser::split_kv(line) {
+            match key.as_str() {
+                "x" => node.x = val.parse().unwrap_or(node.x),
+                "y" => node.y = val.parse().unwrap_or(node.y),
+                "radius" => node.radius = val.parse().unwrap_or(node.radius),
+                "spawn" => node.spawn_time = val.parse().unwrap_or(node.spawn_time),
+                "kill" => node.kill_time = val.parse().ok(),
+                "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
+                "fill" => {
+                    if let Some(c) = crate::dsl::ast::Color::from_hex(&val) {
+                        node.color = c.to_array();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(node)
+}
+
+fn parse_circle_wrapper(block: &[String]) -> Option<crate::shapes::shapes_manager::Shape> {
+    parse_dsl_block(block).map(|c| crate::shapes::shapes_manager::Shape::Circle(c))
+}
+
+inventory::submit! {
+    crate::shapes::shapes_manager::ShapeParserFactory {
+        kind: "circle",
+        parser: parse_circle_wrapper,
     }
 }

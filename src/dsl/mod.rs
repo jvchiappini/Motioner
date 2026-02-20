@@ -67,8 +67,7 @@ pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
 /// constructs are silently skipped so the editor can show a partial scene while
 /// the user is still typing.
 pub fn parse_dsl(src: &str) -> Vec<Shape> {
-    use crate::shapes::text::TextSpan as SceneTextSpan;
-    use crate::shapes::{circle::Circle, rect::Rect, text::Text};
+    // conversion delegated to `shapes_manager::from_dsl_statement`
     use ast::Statement;
 
     let stmts = parser::parse(src);
@@ -76,71 +75,12 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
     let mut pending_moves: Vec<(String, ast::MoveBlock)> = Vec::new();
 
     for stmt in stmts {
+        if let Some(s) = crate::shapes::shapes_manager::from_dsl_statement(&stmt) {
+            shapes.push(s);
+            continue;
+        }
+
         match stmt {
-            Statement::Circle(n) => {
-                let mut c = Circle::default();
-                c.name = n.name;
-                c.x = n.x;
-                c.y = n.y;
-                c.radius = n.radius;
-                c.spawn_time = n.spawn;
-                c.kill_time = n.kill;
-                c.z_index = n.z_index;
-                if let Some(col) = n.fill {
-                    c.color = col.to_array();
-                }
-                for mv in n.animations {
-                    c.animations.push(ast_move_to_scene(&mv));
-                }
-                shapes.push(Shape::Circle(c));
-            }
-            Statement::Rect(n) => {
-                let mut r = Rect::default();
-                r.name = n.name;
-                r.x = n.x;
-                r.y = n.y;
-                r.w = n.w;
-                r.h = n.h;
-                r.spawn_time = n.spawn;
-                r.kill_time = n.kill;
-                r.z_index = n.z_index;
-                if let Some(col) = n.fill {
-                    r.color = col.to_array();
-                }
-                for mv in n.animations {
-                    r.animations.push(ast_move_to_scene(&mv));
-                }
-                shapes.push(Shape::Rect(r));
-            }
-            Statement::Text(n) => {
-                let mut t = Text::default();
-                t.name = n.name;
-                t.x = n.x;
-                t.y = n.y;
-                t.size = n.size;
-                t.font = n.font;
-                t.value = n.value;
-                t.spawn_time = n.spawn;
-                t.kill_time = n.kill;
-                t.z_index = n.z_index;
-                if let Some(col) = n.fill {
-                    t.color = col.to_array();
-                }
-                t.spans = n
-                    .spans
-                    .into_iter()
-                    .map(|sp| SceneTextSpan {
-                        text: sp.text,
-                        font: sp.font,
-                        size: sp.size,
-                        color: sp.color.to_array(),
-                    })
-                    .collect();
-                for mv in n.animations {
-                    t.animations.push(ast_move_to_scene(&mv));
-                }
-                shapes.push(Shape::Text(t));
-            }
             Statement::Move(mv) => {
                 if let Some(el) = mv.element.clone() {
                     pending_moves.push((el, mv));
@@ -148,6 +88,8 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
             }
             // Header and event handlers are not scene shapes.
             Statement::Header(_) | Statement::EventHandler(_) => {}
+            // Other shape cases were handled by `from_dsl_statement` above.
+            _ => {}
         }
     }
 
@@ -166,7 +108,7 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
 
 // ─── AST → scene conversion helpers ─────────────────────────────────────────
 
-fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
+pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
     use crate::scene::Animation;
 
     let easing = ast_easing_to_scene(&mv.easing);

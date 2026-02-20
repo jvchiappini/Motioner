@@ -375,6 +375,24 @@ pub fn create_default_by_keyword(keyword: &str, name: String) -> Option<Shape> {
     }
 }
 
+/// Construct a `Shape` from a DSL `Statement` (returns `None` for
+/// non-shape statements). Centralises the AST -> scene conversion so the
+/// DSL layer doesn't need to match on concrete shape types.
+pub fn from_dsl_statement(stmt: &crate::dsl::ast::Statement) -> Option<Shape> {
+    use crate::dsl::ast::MoveBlock;
+
+    // (previously there was a local MoveBlock -> Animation converter here;
+    // parsing/animation conversion is now provided by `dsl::ast_move_to_scene`)
+
+    match stmt {
+        // Parser now produces concrete shape structs inside the AST
+        crate::dsl::ast::Statement::Circle(n) => Some(Shape::Circle(n.clone())),
+        crate::dsl::ast::Statement::Rect(n) => Some(Shape::Rect(n.clone())),
+        crate::dsl::ast::Statement::Text(n) => Some(Shape::Text(n.clone())),
+        _ => None,
+    }
+}
+
 /// Registry entry type for ElementKeyframes -> Shape constructors.
 pub struct ElementKeyframesFactory {
     pub kind: &'static str,
@@ -386,6 +404,39 @@ pub struct ElementKeyframesFactory {
 }
 
 inventory::collect!(ElementKeyframesFactory);
+
+/// Registry entry type for parsing a DSL `block` into a concrete `Shape`.
+///
+/// Shape modules should `inventory::submit!` a `ShapeParserFactory` so the
+/// central DSL parser can delegate block parsing to the corresponding shape
+/// implementation (keeps shape-specific parsing logic next to the shape).
+pub struct ShapeParserFactory {
+    pub kind: &'static str,
+    pub parser: fn(block: &[String]) -> Option<Shape>,
+}
+
+inventory::collect!(ShapeParserFactory);
+
+/// Try to parse a collected DSL `block` using the registered shape parsers.
+pub fn parse_shape_block(block: &[String]) -> Option<Shape> {
+    let header = block.first()?;
+    // first identifier in the header is the keyword (e.g. "circle")
+    let mut ident = String::new();
+    for ch in header.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            ident.push(ch);
+        } else {
+            break;
+        }
+    }
+
+    for factory in inventory::iter::<ShapeParserFactory> {
+        if factory.kind == ident.as_str() {
+            return (factory.parser)(block);
+        }
+    }
+    None
+}
 
 pub type Scene = Vec<Shape>;
 
@@ -453,7 +504,10 @@ pub fn find_hit_path(
                     );
                 let rect = eframe::egui::Rect::from_min_size(
                     min,
-                    eframe::egui::vec2(r.w * composition_rect.width(), r.h * composition_rect.height()),
+                    eframe::egui::vec2(
+                        r.w * composition_rect.width(),
+                        r.h * composition_rect.height(),
+                    ),
                 );
                 if rect.contains(pos) {
                     return Some(vec![i]);
@@ -461,16 +515,28 @@ pub fn find_hit_path(
             }
             Shape::Text(t) => {
                 let min = composition_rect.left_top()
-                    + eframe::egui::vec2(t.x * composition_rect.width(), t.y * composition_rect.height());
+                    + eframe::egui::vec2(
+                        t.x * composition_rect.width(),
+                        t.y * composition_rect.height(),
+                    );
                 let height_px = t.size * composition_rect.height();
                 let width_px = t.value.len() as f32 * height_px * 0.5; // approximate
-                let rect = eframe::egui::Rect::from_min_size(min, eframe::egui::vec2(width_px, height_px));
+                let rect =
+                    eframe::egui::Rect::from_min_size(min, eframe::egui::vec2(width_px, height_px));
                 if rect.contains(pos) {
                     return Some(vec![i]);
                 }
             }
             Shape::Group { children, .. } => {
-                if let Some(mut cp) = find_hit_path(children, pos, composition_rect, _zoom, current_time, actual_spawn, render_height) {
+                if let Some(mut cp) = find_hit_path(
+                    children,
+                    pos,
+                    composition_rect,
+                    _zoom,
+                    current_time,
+                    actual_spawn,
+                    render_height,
+                ) {
                     let mut path = vec![i];
                     path.append(&mut cp);
                     return Some(path);
@@ -498,16 +564,25 @@ pub fn draw_highlight_recursive(
     match shape {
         Shape::Circle(c) => {
             let center = composition_rect.left_top()
-                + eframe::egui::vec2(c.x * composition_rect.width(), c.y * composition_rect.height());
+                + eframe::egui::vec2(
+                    c.x * composition_rect.width(),
+                    c.y * composition_rect.height(),
+                );
             painter.circle_stroke(center, c.radius * composition_rect.width(), stroke);
         }
         Shape::Rect(r) => {
             let min = composition_rect.left_top()
-                + eframe::egui::vec2(r.x * composition_rect.width(), r.y * composition_rect.height());
+                + eframe::egui::vec2(
+                    r.x * composition_rect.width(),
+                    r.y * composition_rect.height(),
+                );
             painter.rect_stroke(
                 eframe::egui::Rect::from_min_size(
                     min,
-                    eframe::egui::vec2(r.w * composition_rect.width(), r.h * composition_rect.height()),
+                    eframe::egui::vec2(
+                        r.w * composition_rect.width(),
+                        r.h * composition_rect.height(),
+                    ),
                 ),
                 0.0,
                 stroke,
@@ -515,7 +590,10 @@ pub fn draw_highlight_recursive(
         }
         Shape::Text(t) => {
             let min = composition_rect.left_top()
-                + eframe::egui::vec2(t.x * composition_rect.width(), t.y * composition_rect.height());
+                + eframe::egui::vec2(
+                    t.x * composition_rect.width(),
+                    t.y * composition_rect.height(),
+                );
             let height_px = t.size * composition_rect.height();
             let width_px = t.value.len() as f32 * height_px * 0.5;
             painter.rect_stroke(
@@ -526,7 +604,15 @@ pub fn draw_highlight_recursive(
         }
         Shape::Group { children, .. } => {
             for child in children {
-                draw_highlight_recursive(painter, child, composition_rect, stroke, current_time, actual_spawn, render_height);
+                draw_highlight_recursive(
+                    painter,
+                    child,
+                    composition_rect,
+                    stroke,
+                    current_time,
+                    actual_spawn,
+                    render_height,
+                );
             }
         }
     }

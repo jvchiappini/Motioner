@@ -3,7 +3,7 @@ use crate::shapes::ShapeDescriptor;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Rect {
     pub name: String,
     pub x: f32,
@@ -333,5 +333,62 @@ inventory::submit! {
     crate::shapes::shapes_manager::ElementKeyframesFactory {
         kind: "rect",
         constructor: crate::shapes::rect::from_element_keyframes,
+    }
+}
+
+pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Rect> {
+    let header = block.first()?;
+    let name = crate::dsl::parser::extract_name(header)
+        .unwrap_or_else(|| format!("Rect_{}", crate::dsl::parser::fastrand_usize()));
+
+    let mut node = Rect::default();
+    node.name = name;
+
+    let body = crate::dsl::parser::body_lines(block);
+    let mut iter = body.iter().peekable();
+    while let Some(line) = iter.next() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+
+        if line.starts_with("move") && line.contains('{') {
+            let sub = crate::dsl::parser::collect_sub_block(line, &mut iter);
+            if let Some(mv) = crate::dsl::parser::parse_move_block_lines(&sub) {
+                node.animations.push(crate::dsl::ast_move_to_scene(&mv));
+            }
+            continue;
+        }
+
+        if let Some((key, val)) = crate::dsl::parser::split_kv(line) {
+            match key.as_str() {
+                "x" => node.x = val.parse().unwrap_or(node.x),
+                "y" => node.y = val.parse().unwrap_or(node.y),
+                "width" | "w" => node.w = val.parse().unwrap_or(node.w),
+                "height" | "h" => node.h = val.parse().unwrap_or(node.h),
+                "spawn" => node.spawn_time = val.parse().unwrap_or(node.spawn_time),
+                "kill" => node.kill_time = val.parse().ok(),
+                "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
+                "fill" => {
+                    if let Some(c) = crate::dsl::ast::Color::from_hex(&val) {
+                        node.color = c.to_array();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(node)
+}
+
+fn parse_rect_wrapper(block: &[String]) -> Option<crate::shapes::shapes_manager::Shape> {
+    parse_dsl_block(block).map(|r| crate::shapes::shapes_manager::Shape::Rect(r))
+}
+
+inventory::submit! {
+    crate::shapes::shapes_manager::ShapeParserFactory {
+        kind: "rect",
+        parser: parse_rect_wrapper,
     }
 }

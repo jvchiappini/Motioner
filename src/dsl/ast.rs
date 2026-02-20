@@ -95,14 +95,9 @@ pub struct BezierPoint {
 
 // ─── Text ─────────────────────────────────────────────────────────────────────
 
-/// One styled run of text inside a `text {}` element.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TextSpan {
-    pub text: String,
-    pub font: String,
-    pub size: f32,
-    pub color: Color,
-}
+// `TextSpan` moved to `src/shapes/text.rs`; the parser now constructs
+// `shapes::text::TextSpan` directly so the AST no longer defines a
+// duplicate `TextSpan` type.
 
 // ─── Animations ───────────────────────────────────────────────────────────────
 
@@ -119,52 +114,6 @@ pub struct MoveBlock {
 }
 
 // ─── Shape elements ───────────────────────────────────────────────────────────
-
-/// Properties that can appear inside `circle {}`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CircleNode {
-    pub name: String,
-    pub x: f32,
-    pub y: f32,
-    pub radius: f32,
-    pub fill: Option<Color>,
-    pub spawn: f32,
-    pub kill: Option<f32>,
-    pub z_index: i32,
-    pub animations: Vec<MoveBlock>,
-}
-
-/// Properties that can appear inside `rect {}`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RectNode {
-    pub name: String,
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-    pub fill: Option<Color>,
-    pub spawn: f32,
-    pub kill: Option<f32>,
-    pub z_index: i32,
-    pub animations: Vec<MoveBlock>,
-}
-
-/// Properties that can appear inside `text {}`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TextNode {
-    pub name: String,
-    pub x: f32,
-    pub y: f32,
-    pub size: f32,
-    pub font: String,
-    pub value: String,
-    pub fill: Option<Color>,
-    pub spawn: f32,
-    pub kill: Option<f32>,
-    pub z_index: i32,
-    pub spans: Vec<TextSpan>,
-    pub animations: Vec<MoveBlock>,
-}
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
@@ -195,9 +144,9 @@ pub struct EventHandlerNode {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Statement {
     Header(HeaderConfig),
-    Circle(CircleNode),
-    Rect(RectNode),
-    Text(TextNode),
+    Circle(crate::shapes::circle::Circle),
+    Rect(crate::shapes::rect::Rect),
+    Text(crate::shapes::text::Text),
     /// A top-level `move {}` block that references an element by name.
     Move(MoveBlock),
     EventHandler(EventHandlerNode),

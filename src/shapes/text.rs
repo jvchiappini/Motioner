@@ -3,7 +3,7 @@ use crate::shapes::ShapeDescriptor;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TextSpan {
     pub text: String,
     pub font: String,
@@ -11,7 +11,7 @@ pub struct TextSpan {
     pub color: [u8; 4],
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Text {
     pub name: String,
     pub x: f32,
@@ -531,5 +531,105 @@ inventory::submit! {
     crate::shapes::shapes_manager::ElementKeyframesFactory {
         kind: "text",
         constructor: crate::shapes::text::from_element_keyframes,
+    }
+}
+
+fn parse_spans_block(lines: &[String]) -> Vec<TextSpan> {
+    lines
+        .iter()
+        .filter_map(|l| {
+            let l = l.trim();
+            if !l.starts_with("span(") {
+                return None;
+            }
+            let inner = l
+                .trim_start_matches("span(")
+                .trim_end_matches(')')
+                .trim_end_matches(',');
+            let kv = crate::dsl::parser::parse_kv_map(inner);
+            let text = kv
+                .get("text")
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_default();
+            let font = kv.get("font").cloned().unwrap_or_else(|| "System".to_string());
+            let size = kv.get("size").and_then(|s| s.parse().ok()).unwrap_or(0.033_f32);
+            let color = kv
+                .get("fill")
+                .and_then(|s| crate::dsl::ast::Color::from_hex(s))
+                .map(|c| c.to_array())
+                .unwrap_or([255, 255, 255, 255]);
+            Some(TextSpan { text, font, size, color })
+        })
+        .collect()
+}
+
+pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Text> {
+    let header = block.first()?;
+    let name = crate::dsl::parser::extract_name(header)
+        .unwrap_or_else(|| format!("Text_{}", crate::dsl::parser::fastrand_usize()));
+
+    let mut node = Text::default();
+    node.name = name;
+
+    let body = crate::dsl::parser::body_lines(block);
+    let mut iter = body.iter().peekable();
+    while let Some(line) = iter.next() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+
+        if line.starts_with("move") && line.contains('{') {
+            let sub = crate::dsl::parser::collect_sub_block(line, &mut iter);
+            if let Some(mv) = crate::dsl::parser::parse_move_block_lines(&sub) {
+                node.animations.push(crate::dsl::ast_move_to_scene(&mv));
+            }
+            continue;
+        }
+
+        if line.starts_with("spans") && line.contains('[') {
+            let mut span_lines = Vec::new();
+            for sl in iter.by_ref() {
+                let s = sl.trim();
+                if s.starts_with(']') {
+                    break;
+                }
+                span_lines.push(s.to_string());
+            }
+            node.spans = parse_spans_block(&span_lines);
+            continue;
+        }
+
+        if let Some((key, val)) = crate::dsl::parser::split_kv(line) {
+            match key.as_str() {
+                "x" => node.x = val.parse().unwrap_or(node.x),
+                "y" => node.y = val.parse().unwrap_or(node.y),
+                "size" => node.size = val.parse().unwrap_or(node.size),
+                "spawn" => node.spawn_time = val.parse().unwrap_or(node.spawn_time),
+                "kill" => node.kill_time = val.parse().ok(),
+                "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
+                "value" => node.value = val.trim_matches('"').to_string(),
+                "font" => node.font = val.trim_matches('"').to_string(),
+                "fill" => {
+                    if let Some(c) = crate::dsl::ast::Color::from_hex(&val) {
+                        node.color = c.to_array();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Some(node)
+}
+
+fn parse_text_wrapper(block: &[String]) -> Option<crate::shapes::shapes_manager::Shape> {
+    parse_dsl_block(block).map(|t| crate::shapes::shapes_manager::Shape::Text(t))
+}
+
+inventory::submit! {
+    crate::shapes::shapes_manager::ShapeParserFactory {
+        kind: "text",
+        parser: parse_text_wrapper,
     }
 }

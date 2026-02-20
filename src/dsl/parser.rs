@@ -9,10 +9,7 @@
 /// - [`parse_config`] — header-only parse (used by quick-validation path)
 use std::collections::HashMap;
 
-use super::ast::{
-    BezierPoint, CircleNode, Color, EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Point2,
-    RectNode, Statement, TextNode, TextSpan,
-};
+use super::ast::{BezierPoint, EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Point2, Statement};
 use super::lexer::extract_balanced;
 
 // ─── Public entry points ──────────────────────────────────────────────────────
@@ -56,28 +53,23 @@ pub fn parse(src: &str) -> Vec<Statement> {
             continue;
         }
 
-        if line.starts_with("circle") {
-            let block = collect_block(line, &mut lines);
-            if let Some(node) = parse_circle(&block) {
-                stmts.push(Statement::Circle(node));
+        // For any identified top-level block try delegating to the
+        // registered shape parsers (kept in `shapes_manager`). This lets
+        // each shape module own its parsing logic.
+        if line.contains('{') {
+            let first = first_ident(line);
+            if !first.is_empty() {
+                let block = collect_block(line, &mut lines);
+                if let Some(shape) = crate::shapes::shapes_manager::parse_shape_block(&block) {
+                    match shape {
+                        crate::shapes::shapes_manager::Shape::Circle(c) => stmts.push(Statement::Circle(c)),
+                        crate::shapes::shapes_manager::Shape::Rect(r) => stmts.push(Statement::Rect(r)),
+                        crate::shapes::shapes_manager::Shape::Text(t) => stmts.push(Statement::Text(t)),
+                        _ => {}
+                    }
+                    continue;
+                }
             }
-            continue;
-        }
-
-        if line.starts_with("rect") {
-            let block = collect_block(line, &mut lines);
-            if let Some(node) = parse_rect(&block) {
-                stmts.push(Statement::Rect(node));
-            }
-            continue;
-        }
-
-        if line.starts_with("text") {
-            let block = collect_block(line, &mut lines);
-            if let Some(node) = parse_text(&block) {
-                stmts.push(Statement::Text(node));
-            }
-            continue;
         }
 
         if line.starts_with("move") && line.contains('{') {
@@ -167,148 +159,8 @@ pub fn parse_config(src: &str) -> Result<HeaderConfig, String> {
     }
 }
 
-// ─── Shape parsers ────────────────────────────────────────────────────────────
-
-fn parse_circle(block: &[String]) -> Option<CircleNode> {
-    let header = block.first()?;
-    let name = extract_name(header).unwrap_or_else(|| format!("Circle_{}", fastrand_usize()));
-
-    let mut node = CircleNode {
-        name,
-        x: 0.5,
-        y: 0.5,
-        radius: 0.05,
-        fill: None,
-        spawn: 0.0,
-        kill: None,
-        z_index: 0,
-        animations: Vec::new(),
-    };
-
-    let body_lines = body_lines(block);
-    let mut iter = body_lines.iter().peekable();
-
-    while let Some(line) = iter.next() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("//") {
-            continue;
-        }
-
-        if line.starts_with("move") && line.contains('{') {
-            let sub: Vec<String> = collect_sub_block(line, &mut iter);
-            if let Some(mv) = parse_move_block_lines(&sub) {
-                node.animations.push(mv);
-            }
-            continue;
-        }
-
-        if let Some((key, val)) = split_kv(line) {
-            apply_circle_kv(&mut node, &key, &val);
-        }
-    }
-
-    Some(node)
-}
-
-fn parse_rect(block: &[String]) -> Option<RectNode> {
-    let header = block.first()?;
-    let name = extract_name(header).unwrap_or_else(|| format!("Rect_{}", fastrand_usize()));
-
-    let mut node = RectNode {
-        name,
-        x: 0.5,
-        y: 0.5,
-        w: 0.1,
-        h: 0.1,
-        fill: None,
-        spawn: 0.0,
-        kill: None,
-        z_index: 0,
-        animations: Vec::new(),
-    };
-
-    let body_lines = body_lines(block);
-    let mut iter = body_lines.iter().peekable();
-
-    while let Some(line) = iter.next() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("//") {
-            continue;
-        }
-
-        if line.starts_with("move") && line.contains('{') {
-            let sub = collect_sub_block(line, &mut iter);
-            if let Some(mv) = parse_move_block_lines(&sub) {
-                node.animations.push(mv);
-            }
-            continue;
-        }
-
-        if let Some((key, val)) = split_kv(line) {
-            apply_rect_kv(&mut node, &key, &val);
-        }
-    }
-
-    Some(node)
-}
-
-fn parse_text(block: &[String]) -> Option<TextNode> {
-    let header = block.first()?;
-    let name = extract_name(header).unwrap_or_else(|| format!("Text_{}", fastrand_usize()));
-
-    let mut node = TextNode {
-        name,
-        x: 0.5,
-        y: 0.5,
-        size: 0.05,
-        font: "System".to_string(),
-        value: String::new(),
-        fill: None,
-        spawn: 0.0,
-        kill: None,
-        z_index: 0,
-        spans: Vec::new(),
-        animations: Vec::new(),
-    };
-
-    let body_lines = body_lines(block);
-    let mut iter = body_lines.iter().peekable();
-
-    while let Some(line) = iter.next() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("//") {
-            continue;
-        }
-
-        if line.starts_with("move") && line.contains('{') {
-            let sub = collect_sub_block(line, &mut iter);
-            if let Some(mv) = parse_move_block_lines(&sub) {
-                node.animations.push(mv);
-            }
-            continue;
-        }
-
-        if line.starts_with("spans") && line.contains('[') {
-            // Collect span list: lines until the closing `]`.
-            let mut span_lines = Vec::new();
-            for sl in iter.by_ref() {
-                let s = sl.trim();
-                if s.starts_with(']') {
-                    break;
-                }
-                span_lines.push(s.to_string());
-            }
-            node.spans = parse_spans(&span_lines);
-            continue;
-        }
-
-        if let Some((key, val)) = split_kv(line) {
-            apply_text_kv(&mut node, &key, &val);
-        }
-    }
-
-    Some(node)
-}
+// per-shape parsing has been moved into each shape module and is invoked
+// via the `ShapeParserFactory` registry in `shapes_manager`.
 
 // ─── Move block parser ────────────────────────────────────────────────────────
 
@@ -443,93 +295,11 @@ pub fn parse_easing(s: &str) -> EasingKind {
 
 // ─── KV applicators ───────────────────────────────────────────────────────────
 
-fn apply_circle_kv(node: &mut CircleNode, key: &str, val: &str) {
-    match key {
-        "x" => node.x = val.parse().unwrap_or(node.x),
-        "y" => node.y = val.parse().unwrap_or(node.y),
-        "radius" => node.radius = val.parse().unwrap_or(node.radius),
-        "spawn" => node.spawn = val.parse().unwrap_or(node.spawn),
-        "kill" => node.kill = val.parse().ok(),
-        "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
-        "fill" => node.fill = Color::from_hex(val),
-        _ => {}
-    }
-}
-
-fn apply_rect_kv(node: &mut RectNode, key: &str, val: &str) {
-    match key {
-        "x" => node.x = val.parse().unwrap_or(node.x),
-        "y" => node.y = val.parse().unwrap_or(node.y),
-        "width" | "w" => node.w = val.parse().unwrap_or(node.w),
-        "height" | "h" => node.h = val.parse().unwrap_or(node.h),
-        "spawn" => node.spawn = val.parse().unwrap_or(node.spawn),
-        "kill" => node.kill = val.parse().ok(),
-        "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
-        "fill" => node.fill = Color::from_hex(val),
-        _ => {}
-    }
-}
-
-fn apply_text_kv(node: &mut TextNode, key: &str, val: &str) {
-    match key {
-        "x" => node.x = val.parse().unwrap_or(node.x),
-        "y" => node.y = val.parse().unwrap_or(node.y),
-        "size" => node.size = val.parse().unwrap_or(node.size),
-        "spawn" => node.spawn = val.parse().unwrap_or(node.spawn),
-        "kill" => node.kill = val.parse().ok(),
-        "z" | "z_index" => node.z_index = val.parse().unwrap_or(node.z_index),
-        "value" => node.value = val.trim_matches('"').to_string(),
-        "font" => node.font = val.trim_matches('"').to_string(),
-        "fill" => node.fill = Color::from_hex(val),
-        _ => {}
-    }
-}
+// shape-specific KV applicators are implemented inside each shape module now.
 
 // ─── Span parser ──────────────────────────────────────────────────────────────
 
-fn parse_spans(lines: &[String]) -> Vec<TextSpan> {
-    lines
-        .iter()
-        .filter_map(|l| {
-            let l = l.trim();
-            if !l.starts_with("span(") {
-                return None;
-            }
-            let inner = l
-                .trim_start_matches("span(")
-                .trim_end_matches(')')
-                .trim_end_matches(',');
-            let kv = parse_kv_map(inner);
-            let text = kv
-                .get("text")
-                .map(|s| s.trim_matches('"').to_string())
-                .unwrap_or_default();
-            let font = kv
-                .get("font")
-                .cloned()
-                .unwrap_or_else(|| "System".to_string());
-            let size = kv
-                .get("size")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.033_f32);
-            let color = kv
-                .get("fill")
-                .and_then(|s| Color::from_hex(s))
-                .unwrap_or(Color {
-                    r: 255,
-                    g: 255,
-                    b: 255,
-                    a: 255,
-                });
-            Some(TextSpan {
-                text,
-                font,
-                size,
-                color,
-            })
-        })
-        .collect()
-}
+// span parsing lives in `src/shapes/text.rs` now.
 
 // ─── Small utilities ─────────────────────────────────────────────────────────
 
@@ -566,7 +336,7 @@ where
 }
 
 /// Collect a nested sub-block from an already-collected body iterator.
-fn collect_sub_block<'a, I>(header: &str, iter: &mut std::iter::Peekable<I>) -> Vec<String>
+pub(crate) fn collect_sub_block<'a, I>(header: &str, iter: &mut std::iter::Peekable<I>) -> Vec<String>
 where
     I: Iterator<Item = &'a String>,
 {
@@ -587,7 +357,7 @@ where
 }
 
 /// Return the body lines of a collected block (everything between `{` and `}`).
-fn body_lines(block: &[String]) -> Vec<String> {
+pub(crate) fn body_lines(block: &[String]) -> Vec<String> {
     let mut in_body = false;
     let mut depth = 0i32;
     let mut result = Vec::new();
@@ -617,6 +387,8 @@ fn body_lines(block: &[String]) -> Vec<String> {
     result
 }
 
+// (removed wrapper) use `body_lines` directly
+
 /// Return the raw body string from a collected block (for event handlers).
 fn block_body_str(block: &[String]) -> String {
     body_lines(block).join("\n")
@@ -624,7 +396,7 @@ fn block_body_str(block: &[String]) -> String {
 
 /// Extract the quoted name from a shape header line.
 /// e.g. `circle "MyCircle" {` → `Some("MyCircle")`
-fn extract_name(header: &str) -> Option<String> {
+pub(crate) fn extract_name(header: &str) -> Option<String> {
     let start = header.find('"')?;
     let rest = &header[start + 1..];
     let end = rest.find('"')?;
@@ -639,7 +411,7 @@ fn first_ident(s: &str) -> String {
 }
 
 /// Split `key = value` (strips trailing commas from the value).
-fn split_kv(s: &str) -> Option<(String, String)> {
+pub(crate) fn split_kv(s: &str) -> Option<(String, String)> {
     let eq = s.find('=')?;
     let key = s[..eq].trim().to_string();
     let val = s[eq + 1..].trim().trim_end_matches(',').trim().to_string();
@@ -661,7 +433,7 @@ fn parse_named_value<'a>(s: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Parse `(x, y)` → `Point2`.
-fn parse_point(s: &str) -> Option<Point2> {
+pub(crate) fn parse_point(s: &str) -> Option<Point2> {
     let s = s.trim();
     if s.starts_with('(') && s.ends_with(')') {
         let inner = &s[1..s.len() - 1];
@@ -676,7 +448,7 @@ fn parse_point(s: &str) -> Option<Point2> {
 }
 
 /// Parse all `key = value` pairs from a comma-separated string.
-fn parse_kv_map(s: &str) -> HashMap<String, String> {
+pub(crate) fn parse_kv_map(s: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for part in s.split(',') {
         let p = part.trim();
@@ -818,7 +590,7 @@ pub fn method_color(name: &str) -> Option<[u8; 4]> {
 // ─── Tiny helpers ─────────────────────────────────────────────────────────────
 
 /// Deterministic "random" u32 for default names (avoids importing rand).
-fn fastrand_usize() -> usize {
+pub(crate) fn fastrand_usize() -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static CTR: AtomicUsize = AtomicUsize::new(0);
     CTR.fetch_add(1, Ordering::Relaxed)
