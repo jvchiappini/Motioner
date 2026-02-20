@@ -76,7 +76,8 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
             mag_x: m_pos.x, mag_y: m_pos.y, mag_active,
             time: self.time,
             pixels_per_point: screen_descriptor.pixels_per_point,
-            _padding: [0.0; 2],
+            gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") { 0.0 } else { 1.0 },
+            _pad: 0.0,
         };
 
         queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -182,7 +183,8 @@ pub fn render_frame_color_image_gpu_snapshot(
         mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
-        _padding: [0.0; 2],
+        gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") { 0.0 } else { 1.0 },
+        _pad: 0.0,
     };
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -331,7 +333,8 @@ pub fn render_frame_native_texture(
         mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
-        _padding: [0.0; 2],
+        gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") { 0.0 } else { 1.0 },
+        _pad: 0.0,
     };
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 

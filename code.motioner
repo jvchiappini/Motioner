@@ -5,9 +5,11 @@ circle "Circle" {
 	x = 0.500,
 	y = 0.500,
 	radius = 0.100,
-	fill = "#84008c",
+	fill = "#27baff",
 	spawn = 0.00
 }
+
+move
 
 text "Text" {
 	x = 0.500,

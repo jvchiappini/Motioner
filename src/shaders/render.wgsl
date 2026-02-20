@@ -35,6 +35,8 @@ struct Uniforms {
     mag_active: f32,
     time: f32,
     pixels_per_point: f32,
+    gamma_correction: f32,
+    _pad: f32,
 }
 
 @group(0) @binding(0) var<storage, read> shapes: array<Shape>;
@@ -132,7 +134,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Delegate actual per-shape rendering to shape-specific helpers.
     // Per-shape helpers are provided from separate WGSL snippets (one file per shape)
     // and are concatenated at compile time by the Rust side.
-    return eval_shape(in, effective_uv);
+    let final_color = eval_shape(in, effective_uv);
+    if (uniforms.gamma_correction > 0.5) {
+        return vec4<f32>(pow(final_color.rgb, vec3<f32>(1.0/2.2)), final_color.a);
+    }
+    return final_color;
 }
 
 // Dispatcher: call the per-shape helper function according to `shape_type`.

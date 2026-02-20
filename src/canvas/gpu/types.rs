@@ -14,7 +14,8 @@ pub struct Uniforms {
     pub mag_active: f32,
     pub time: f32,
     pub pixels_per_point: f32,
-    pub _padding: [f32; 2],
+    pub gamma_correction: f32, // 1.0 if we need to apply manual sRGB gamma, 0.0 otherwise
+    pub _pad: f32,
 }
 
 #[repr(C)]
