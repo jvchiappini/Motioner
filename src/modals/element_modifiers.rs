@@ -42,7 +42,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             };
             ui.add_space(4.0);
 
-            let earliest_spawn = elem.spawn_frame as f32 / elem.fps as f32;
+            let earliest_spawn = elem.spawn_frame as f32 / state.fps as f32;
 
             // Stable identifier for this element's modifier UI (used as id_source
             // for collapsing headers so they don't reset when labels change).
@@ -94,7 +94,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     ui.end_row();
 
                                     ui.label("Spawn Time:");
-                                    let mut spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                                    let mut spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
                                     if ui
                                         .add(
                                             egui::Slider::new(
@@ -107,7 +107,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     {
                                         elem.spawn_frame =
                                             crate::shapes::element_store::seconds_to_frame(
-                                                spawn_secs, elem.fps,
+                                                spawn_secs, state.fps,
                                             );
                                         changed = true;
                                     }
@@ -255,7 +255,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 ui,
                                 ctx,
                                 &mut elem.animations,
-                                elem.spawn_frame as f32 / elem.fps as f32,
+                                elem.spawn_frame as f32 / state.fps as f32,
                                 state.duration_secs,
                                 base_x,
                                 base_y,
@@ -303,7 +303,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     ui.end_row();
 
                                     ui.label("Spawn Time:");
-                                    let mut spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                                    let mut spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
                                     if ui
                                         .add(
                                             egui::Slider::new(
@@ -316,7 +316,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     {
                                         elem.spawn_frame =
                                             crate::shapes::element_store::seconds_to_frame(
-                                                spawn_secs, elem.fps,
+                                                spawn_secs, state.fps,
                                             );
                                         changed = true;
                                     }
@@ -497,7 +497,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 ui,
                                 ctx,
                                 &mut elem.animations,
-                                elem.spawn_frame as f32 / elem.fps as f32,
+                                elem.spawn_frame as f32 / state.fps as f32,
                                 state.duration_secs,
                                 base_x,
                                 base_y,
@@ -625,7 +625,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 ui.end_row();
 
                                 ui.label("Spawn Time:");
-                                let mut spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                                    let mut spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
                                 if ui
                                     .add(
                                         egui::Slider::new(
@@ -638,7 +638,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 {
                                     elem.spawn_frame =
                                         crate::shapes::element_store::seconds_to_frame(
-                                            spawn_secs, elem.fps,
+                                                spawn_secs, state.fps,
                                         );
                                     changed = true;
                                 }
@@ -756,7 +756,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                             ui,
                             ctx,
                             &mut elem.animations,
-                            elem.spawn_frame as f32 / elem.fps as f32,
+                                elem.spawn_frame as f32 / state.fps as f32,
                             state.duration_secs,
                             base_x,
                             base_y,

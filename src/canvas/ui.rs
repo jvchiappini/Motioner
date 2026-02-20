@@ -14,8 +14,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         // canonical storage is `ElementKeyframes`.
         let mut live_shapes: Vec<crate::scene::Shape> = Vec::new();
         for elem in &state.scene {
-            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, elem.fps);
-            if let Some(s) = elem.to_shape_at_frame(frame_idx) {
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+            if let Some(s) = elem.to_shape_at_frame(frame_idx, state.fps) {
                 live_shapes.push(s);
             }
         }
@@ -161,7 +161,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         #[allow(clippy::too_many_arguments)]
         fn fill_gpu_shapes(
-            shapes: &[crate::scene::Shape],
+            elements: &[crate::shapes::element_store::ElementKeyframes],
             gpu_shapes: &mut Vec<GpuShape>,
             text_entries: &mut Vec<TextEntry>,
             render_width: f32,
@@ -172,142 +172,68 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             cached: Option<&Vec<(f32, f32)>>,
             flat_idx: &mut usize,
             handlers: &[crate::dsl::runtime::DslHandler],
+            preview_fps: u32,
         ) {
-            let frame_idx = (current_time * 60.0).round() as u32;
-            for shape in shapes {
-                let my_spawn = shape.spawn_time().max(parent_spawn);
-                // honor explicit kill time if present
-                if let Some(k) = shape.kill_time() {
-                    if current_time >= k {
-                        *flat_idx += 1; // keep frame indexing in sync
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(current_time, preview_fps);
+            for ek in elements {
+                // Respect spawn/kill ranges early
+                if frame_idx < ek.spawn_frame {
+                    continue;
+                }
+                if let Some(kf) = ek.kill_frame {
+                    if frame_idx >= kf {
+                        *flat_idx += 1;
                         continue;
                     }
                 }
-                match shape {
-                    crate::scene::Shape::Circle(c) => {
-                        let (eval_x, eval_y) = if let Some(frame) = cached {
-                            let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
-                            *flat_idx += 1;
-                            p
-                        } else {
-                            *flat_idx += 1;
-                            let mut transient = shape.clone();
-                            crate::events::time_changed_event::apply_on_time_handlers(
-                                std::slice::from_mut(&mut transient),
-                                handlers,
-                                current_time,
-                                frame_idx,
-                            );
-                            animated_xy_for(&transient, current_time, project_duration)
-                        };
 
-                        // Scale to pixels
-                        // Radius is relative to Width (as per egui drawer)
-                        let radius_px = c.radius * render_width;
-                        let x_px = eval_x * render_width;
-                        let y_px = eval_y * render_height;
+                // Materialize a temporary Shape from ElementKeyframes so we can
+                // reuse the existing animation/event handler infrastructure.
+                if let Some(shape) = ek.to_shape_at_frame(frame_idx, preview_fps) {
+                    let my_spawn = (ek.spawn_frame as f32 / preview_fps as f32).max(parent_spawn);
 
-                        gpu_shapes.push(GpuShape {
-                            pos: [x_px, y_px],
-                            size: [radius_px, radius_px],
-                            color: [
-                                c.color[0] as f32 / 255.0,
-                                c.color[1] as f32 / 255.0,
-                                c.color[2] as f32 / 255.0,
-                                c.color[3] as f32 / 255.0,
-                            ],
-                            shape_type: 0,
-                            spawn_time: my_spawn,
-                            p1: 0,
-                            p2: 0,
-                            uv0: [0.0, 0.0],
-                            uv1: [0.0, 0.0],
-                        });
-                    }
-                    crate::scene::Shape::Rect(r) => {
-                        let (eval_x, eval_y) = if let Some(frame) = cached {
-                            let p = frame.get(*flat_idx).copied().unwrap_or((0.0, 0.0));
-                            *flat_idx += 1;
-                            p
-                        } else {
-                            *flat_idx += 1;
-                            let mut transient = shape.clone();
-                            crate::events::time_changed_event::apply_on_time_handlers(
-                                std::slice::from_mut(&mut transient),
-                                handlers,
-                                current_time,
-                                frame_idx,
-                            );
-                            animated_xy_for(&transient, current_time, project_duration)
-                        };
+                    // Apply event handlers to a transient copy so per-shape
+                    // descriptor implementations see the same runtime-modified
+                    // state that the rasterizer/preview worker would.
+                    *flat_idx += 1; // keep frame indexing consistent with previous behaviour
+                    let mut transient = shape.clone();
+                    crate::events::time_changed_event::apply_on_time_handlers(
+                        std::slice::from_mut(&mut transient),
+                        handlers,
+                        current_time,
+                        frame_idx.try_into().unwrap(),
+                    );
 
-                        // Scale to pixels
-                        let w_px = r.w * render_width;
-                        let h_px = r.h * render_height;
-                        let x_px = eval_x * render_width;
-                        let y_px = eval_y * render_height;
-
-                        gpu_shapes.push(GpuShape {
-                            pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
-                            size: [w_px / 2.0, h_px / 2.0],
-                            color: [
-                                r.color[0] as f32 / 255.0,
-                                r.color[1] as f32 / 255.0,
-                                r.color[2] as f32 / 255.0,
-                                r.color[3] as f32 / 255.0,
-                            ],
-                            shape_type: 1,
-                            spawn_time: my_spawn,
-                            p1: 0,
-                            p2: 0,
-                            uv0: [0.0, 0.0],
-                            uv1: [0.0, 0.0],
-                        });
-                    }
-                    crate::scene::Shape::Text(..) => {
-                        // Insertar placeholder; las UVs se rellenan después de rasterizar.
-                        let gpu_idx = gpu_shapes.len();
-                        let rw = render_width;
-                        let rh = render_height;
-                        gpu_shapes.push(GpuShape {
-                            pos: [rw / 2.0, rh / 2.0],
-                            size: [rw / 2.0, rh / 2.0],
-                            color: [1.0, 1.0, 1.0, 1.0],
-                            shape_type: 2,
-                            spawn_time: my_spawn,
-                            p1: 0,
-                            p2: 0,
-                            uv0: [0.0, 0.0], // se rellena más abajo
-                            uv1: [1.0, 1.0], // se rellena más abajo
-                        });
-                        text_entries.push(TextEntry {
-                            gpu_idx,
-                            shape: shape.clone(),
-                            parent_spawn: my_spawn,
-                        });
-                        *flat_idx += 1;
-                    }
-                    crate::scene::Shape::Group { children, .. } => {
-                        fill_gpu_shapes(
-                            children,
+                    let before = gpu_shapes.len();
+                    if let Some(desc) = transient.descriptor() {
+                        desc.append_gpu_shapes(
+                            &transient,
                             gpu_shapes,
-                            text_entries,
-                            render_width,
-                            render_height,
-                            my_spawn,
                             current_time,
                             project_duration,
-                            cached,
-                            flat_idx,
-                            handlers,
+                            my_spawn,
+                            render_width,
+                            render_height,
                         );
+
+                        // If this descriptor represents `text` we still need to
+                        // record a TextEntry for rasterization/UV population.
+                        if desc.dsl_keyword() == "text" {
+                            // descriptor should have appended one placeholder
+                            text_entries.push(TextEntry {
+                                gpu_idx: before,
+                                shape: transient.clone(),
+                                parent_spawn: my_spawn,
+                            });
+                        }
                     }
                 }
             }
         }
 
+        // Use ElementKeyframes (canonical store) to populate GPU shapes.
         fill_gpu_shapes(
-            &live_shapes,
+            &state.scene,
             &mut gpu_shapes,
             &mut text_entries,
             state.render_width as f32,
@@ -318,6 +244,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             cached,
             &mut flat_idx,
             &state.dsl_event_handlers,
+            state.preview_fps,
         );
 
         // Scene index 0 = top of scene graph = rendered last (on top).
@@ -441,95 +368,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         state.toast_deadline = ui.input(|i| i.time) + 3.0;
                         state.picker_active = false;
                     } else {
-                        fn find_hit_path(
-                            shapes: &[crate::scene::Shape],
-                            pos: egui::Pos2,
-                            composition_rect: egui::Rect,
-                            _zoom: f32,
-                            current_path: Vec<usize>,
-                            current_time: f32,
-                            parent_spawn: f32,
-                            render_height: u32,
-                        ) -> Option<Vec<usize>> {
-                            for (i, shape) in shapes.iter().enumerate().rev() {
-                                let actual_spawn = shape.spawn_time().max(parent_spawn);
-                                if current_time < actual_spawn {
-                                    continue;
-                                }
-                                let mut path = current_path.clone();
-                                path.push(i);
-                                match shape {
-                                    crate::scene::Shape::Circle(c) => {
-                                        let center = composition_rect.left_top()
-                                            + egui::vec2(
-                                                c.x * composition_rect.width(),
-                                                c.y * composition_rect.height(),
-                                            );
-                                        if pos.distance(center)
-                                            <= c.radius * composition_rect.width()
-                                        {
-                                            return Some(path);
-                                        }
-                                    }
-                                    crate::scene::Shape::Rect(r) => {
-                                        let min = composition_rect.left_top()
-                                            + egui::vec2(
-                                                r.x * composition_rect.width(),
-                                                r.y * composition_rect.height(),
-                                            );
-                                        let rect = egui::Rect::from_min_size(
-                                            min,
-                                            egui::vec2(
-                                                r.w * composition_rect.width(),
-                                                r.h * composition_rect.height(),
-                                            ),
-                                        );
-                                        if rect.contains(pos) {
-                                            return Some(path);
-                                        }
-                                    }
-                                    crate::scene::Shape::Text(t) => {
-                                        let min = composition_rect.left_top()
-                                            + egui::vec2(
-                                                t.x * composition_rect.width(),
-                                                t.y * composition_rect.height(),
-                                            );
-
-                                        let height_px = t.size * composition_rect.height();
-                                        let width_px = t.value.len() as f32 * height_px * 0.5; // Very rough
-                                        let rect = egui::Rect::from_min_size(
-                                            min,
-                                            egui::vec2(width_px, height_px),
-                                        );
-                                        if rect.contains(pos) {
-                                            return Some(path);
-                                        }
-                                    }
-                                    crate::scene::Shape::Group { children, .. } => {
-                                        if let Some(cp) = find_hit_path(
-                                            children,
-                                            pos,
-                                            composition_rect,
-                                            _zoom,
-                                            path,
-                                            current_time,
-                                            actual_spawn,
-                                            render_height,
-                                        ) {
-                                            return Some(cp);
-                                        }
-                                    }
-                                }
-                            }
-                            None
-                        }
-
-                        let hit_path = find_hit_path(
+                        let hit_path = crate::shapes::shapes_manager::find_hit_path(
                             &live_shapes,
                             pos,
                             composition_rect,
                             zoom,
-                            Vec::new(),
                             state.time,
                             0.0,
                             state.render_height,
@@ -550,84 +393,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
         if let Some(path) = &state.selected_node_path {
             let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0));
-            fn draw_highlight_recursive(
-                painter: &egui::Painter,
-                shape: &crate::scene::Shape,
-                composition_rect: egui::Rect,
-                stroke: egui::Stroke,
-                current_time: f32,
-                parent_spawn: f32,
-                render_height: u32,
-            ) {
-                let actual_spawn = shape.spawn_time().max(parent_spawn);
-                if current_time < actual_spawn {
-                    return;
-                }
-                match shape {
-                    crate::scene::Shape::Circle(c) => {
-                        let center = composition_rect.left_top()
-                            + egui::vec2(
-                                c.x * composition_rect.width(),
-                                c.y * composition_rect.height(),
-                            );
-                        painter.circle_stroke(center, c.radius * composition_rect.width(), stroke);
-                    }
-                    crate::scene::Shape::Rect(r) => {
-                        let min = composition_rect.left_top()
-                            + egui::vec2(
-                                r.x * composition_rect.width(),
-                                r.y * composition_rect.height(),
-                            );
-                        painter.rect_stroke(
-                            egui::Rect::from_min_size(
-                                min,
-                                egui::vec2(
-                                    r.w * composition_rect.width(),
-                                    r.h * composition_rect.height(),
-                                ),
-                            ),
-                            0.0,
-                            stroke,
-                        );
-                    }
-                    crate::scene::Shape::Text(t) => {
-                        let min = composition_rect.left_top()
-                            + egui::vec2(
-                                t.x * composition_rect.width(),
-                                t.y * composition_rect.height(),
-                            );
-                        let height_px = t.size * composition_rect.height();
-                        let width_px = t.value.len() as f32 * height_px * 0.5;
-                        painter.rect_stroke(
-                            egui::Rect::from_min_size(min, egui::vec2(width_px, height_px)),
-                            0.0,
-                            stroke,
-                        );
-                    }
-                    crate::scene::Shape::Group { children, .. } => {
-                        for child in children {
-                            draw_highlight_recursive(
-                                painter,
-                                child,
-                                composition_rect,
-                                stroke,
-                                current_time,
-                                actual_spawn,
-                                render_height,
-                            );
-                        }
-                    }
-                }
-            }
-            let mut current_node = live_shapes.get(path[0]);
-            for &idx in &path[1..] {
-                current_node = match current_node {
-                    Some(crate::scene::Shape::Group { children, .. }) => children.get(idx),
-                    _ => None,
-                };
-            }
-            if let Some(node) = current_node {
-                draw_highlight_recursive(
+            if let Some(node) = crate::shapes::shapes_manager::get_shape(&live_shapes, path) {
+                crate::shapes::shapes_manager::draw_highlight_recursive(
                     &painter,
                     node,
                     composition_rect,

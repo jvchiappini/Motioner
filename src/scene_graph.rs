@@ -359,7 +359,7 @@ fn render_row(
             });
         }
         state.dsl_code = dsl::generate_dsl(
-            &crate::shapes::element_store::to_legacy_shapes(&state.scene),
+            &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
             state.render_width,
             state.render_height,
             state.fps,
@@ -386,7 +386,7 @@ fn render_row(
             }
             state.renaming_path = None;
             state.dsl_code = dsl::generate_dsl(
-                &crate::shapes::element_store::to_legacy_shapes(&state.scene),
+                &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
                 state.render_width,
                 state.render_height,
                 state.fps,
@@ -435,9 +435,9 @@ fn render_row(
                 );
             }
 
-            let sp = elem.spawn_frame as f32 / elem.fps as f32;
+            let sp = elem.spawn_frame as f32 / state.fps as f32;
             let range = if let Some(kf) = elem.kill_frame {
-                format!("  ({:.2}–{:.2})", sp, kf as f32 / elem.fps as f32)
+                format!("  ({:.2}–{:.2})", sp, kf as f32 / state.fps as f32)
             } else {
                 format!("  ({:.2}– )", sp)
             };
@@ -548,11 +548,8 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
 
             let mut added = false;
             if ui.button("📦  Group").clicked() {
-                let mut ek = ElementKeyframes::new(
-                    format!("Group #{}", state.scene.len()),
-                    "group".into(),
-                    state.fps,
-                );
+                let mut ek =
+                    ElementKeyframes::new(format!("Group #{}", state.scene.len()), "group".into());
                 ek.spawn_frame = 0;
                 ek.visible.push(crate::shapes::element_store::Keyframe {
                     frame: 0,
@@ -607,7 +604,7 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
             if added {
                 // position cache removed — no-op
                 state.dsl_code = dsl::generate_dsl(
-                    &crate::shapes::element_store::to_legacy_shapes(&state.scene),
+                    &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
                     state.render_width,
                     state.render_height,
                     state.fps,

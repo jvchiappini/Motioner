@@ -356,11 +356,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 }
 
                 // duration bar (spawn -> project end)
-                let spawn = elem.spawn_frame as f32 / elem.fps as f32;
+                let spawn = elem.spawn_frame as f32 / state.fps as f32;
                 let start_x = time_origin_x + (spawn * pixels_per_sec) - state.timeline_pan_x;
                 let shape_end_time = elem
                     .kill_frame
-                    .map(|kf| kf as f32 / elem.fps as f32)
+                    .map(|kf| kf as f32 / state.fps as f32)
                     .unwrap_or(state.duration_secs);
                 let end_x =
                     time_origin_x + (shape_end_time * pixels_per_sec) - state.timeline_pan_x;

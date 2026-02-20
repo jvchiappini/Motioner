@@ -485,7 +485,7 @@ impl AppState {
 
     pub fn request_dsl_update(&mut self) {
         self.dsl_code = crate::dsl::generate_dsl(
-            &crate::shapes::element_store::to_legacy_shapes(&self.scene),
+            &crate::shapes::element_store::to_legacy_shapes(&self.scene, self.fps),
             self.render_width,
             self.render_height,
             self.fps,

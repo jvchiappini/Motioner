@@ -180,11 +180,13 @@ pub struct GpuResources {
 #[cfg(feature = "wgpu")]
 impl GpuResources {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        // Use the combined WGSL provided by shapes_manager so each shape can
+        // supply its own WGSL snippet (one file per shape).
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("composition_shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "../composition.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                crate::shapes::shapes_manager::COMBINED_WGSL,
+            )),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -442,7 +444,7 @@ pub fn detect_vram_size(adapter_info: &wgpu::AdapterInfo) -> usize {
     estimated_vram
 }
 
-fn srgb_to_linear(u: u8) -> f32 {
+pub(crate) fn srgb_to_linear(u: u8) -> f32 {
     let x = u as f32 / 255.0;
     if x <= 0.04045 {
         x / 12.92
@@ -502,85 +504,37 @@ pub fn render_frame_native_texture(
     let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round() as u32;
 
     let mut gpu_shapes: Vec<GpuShape> = Vec::new();
-    fn fill_recursive(
-        shapes: &[crate::scene::Shape],
-        out: &mut Vec<GpuShape>,
-        current_time: f32,
-        parent_spawn: f32,
-        duration: f32,
-        rw: f32,
-        rh: f32,
-    ) {
-        for s in shapes {
-            let spawn = s.spawn_time().max(parent_spawn);
-            match s {
-                crate::scene::Shape::Group { children, .. } => {
-                    fill_recursive(children, out, current_time, spawn, duration, rw, rh)
-                }
-                crate::scene::Shape::Circle(c) => {
-                    let (x, y) = crate::animations::animations_manager::animated_xy_for(
-                        s,
-                        current_time,
-                        duration,
-                    );
 
-                    let radius_px = c.radius * rw;
-                    let x_px = x * rw;
-                    let y_px = y * rh;
+    // Populate GPU instance data from the canonical ElementKeyframes store
+    // by sampling each element at the current preview frame. This keeps the
+    // GPU composition in sync with the ElementKeyframes-driven runtime.
+    let frame_idx = crate::shapes::element_store::seconds_to_frame(time, snap.preview_fps);
+    for ek in &snap.scene {
+        // skip elements not yet spawned / already killed
+        if frame_idx < ek.spawn_frame {
+            continue;
+        }
+        if let Some(kf) = ek.kill_frame {
+            if frame_idx >= kf {
+                continue;
+            }
+        }
 
-                    out.push(GpuShape {
-                        pos: [x_px, y_px],
-                        size: [radius_px, radius_px],
-                        color: [
-                            srgb_to_linear(c.color[0]),
-                            srgb_to_linear(c.color[1]),
-                            srgb_to_linear(c.color[2]),
-                            c.color[3] as f32 / 255.0,
-                        ],
-                        shape_type: 0,
-                        spawn_time: spawn,
-                        p1: 0,
-                        p2: 0,
-                        uv0: [0.0, 0.0],
-                        uv1: [0.0, 0.0],
-                    });
-                }
-                crate::scene::Shape::Rect(r) => {
-                    let (x, y) = crate::animations::animations_manager::animated_xy_for(
-                        s,
-                        current_time,
-                        duration,
-                    );
-
-                    let w_px = r.w * rw;
-                    let h_px = r.h * rh;
-                    let x_px = x * rw;
-                    let y_px = y * rh;
-
-                    out.push(GpuShape {
-                        pos: [x_px + w_px / 2.0, y_px + h_px / 2.0],
-                        size: [w_px / 2.0, h_px / 2.0],
-                        color: [
-                            srgb_to_linear(r.color[0]),
-                            srgb_to_linear(r.color[1]),
-                            srgb_to_linear(r.color[2]),
-                            r.color[3] as f32 / 255.0,
-                        ],
-                        shape_type: 1,
-                        spawn_time: spawn,
-                        p1: 0,
-                        p2: 0,
-                        uv0: [0.0, 0.0],
-                        uv1: [0.0, 0.0],
-                    });
-                }
-                _ => {}
+        if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
+            if let Some(desc) = shape.descriptor() {
+                let spawn_secs = ek.spawn_frame as f32 / snap.preview_fps as f32;
+                desc.append_gpu_shapes(
+                    &shape,
+                    &mut gpu_shapes,
+                    time,
+                    snap.duration_secs,
+                    spawn_secs,
+                    snap.render_width as f32,
+                    snap.render_height as f32,
+                );
             }
         }
     }
-    // Rendering disabled for preview/export — do NOT populate `gpu_shapes`.
-    // keep an empty `gpu_shapes` so the render pass just clears to white.
-    // TODO: populate `gpu_shapes` from ElementKeyframes when reimplementing.
 
     if !gpu_shapes.is_empty() {
         queue.write_buffer(

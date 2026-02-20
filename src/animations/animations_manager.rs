@@ -20,12 +20,10 @@ pub enum Animation {
 /// Public interface used by the UI/renderer to resolve an element's animated position.
 /// This replaces the previous `animated_xy_for` implementation that lived in `canvas.rs`.
 pub fn animated_xy_for(shape: &Shape, project_time: f32, _project_duration: f32) -> (f32, f32) {
-    let (mut curr_x, mut curr_y, animations) = match shape {
-        crate::scene::Shape::Circle(c) => (c.x, c.y, &c.animations),
-        crate::scene::Shape::Rect(r) => (r.x, r.y, &r.animations),
-        crate::scene::Shape::Text(t) => (t.x, t.y, &t.animations),
-        _ => return (0.0, 0.0),
-    };
+    // Use Shape helpers so this function doesn't need to pattern-match on
+    // every Shape variant — keeps the animation runtime shape-agnostic.
+    let (mut curr_x, mut curr_y) = shape.xy();
+    let animations = shape.animations();
 
     // Compute position by applying move animations in chronological order so
     // multiple sequential animations chain correctly. For each Move animation:

@@ -82,9 +82,8 @@ pub struct ElementKeyframes {
     pub name: String,
     /// Keyword / kind: "circle" | "rect" | "text"
     pub kind: String,
-    /// Frames-per-second used when converting seconds -> frames
-    pub fps: u32,
-
+    /// NOTE: `fps` removed from element storage — frame/second conversions
+    /// must be performed by callers (use global `AppState.fps` or pass fps).
     /* per-property tracks (sorted by frame) */
     pub x: Vec<Keyframe<f32>>,
     pub y: Vec<Keyframe<f32>>,
@@ -117,11 +116,10 @@ pub struct ElementKeyframes {
 }
 
 impl ElementKeyframes {
-    pub fn new(name: String, kind: String, fps: u32) -> Self {
+    pub fn new(name: String, kind: String) -> Self {
         ElementKeyframes {
             name,
             kind,
-            fps,
             x: Vec::new(),
             y: Vec::new(),
             radius: Vec::new(),
@@ -230,256 +228,41 @@ impl ElementKeyframes {
     /// Convert an existing `Shape` into a single-keyframe ElementKeyframes
     /// anchored at its `spawn_time`. Returns None for non-visual groups.
     pub fn from_shape_at_spawn(s: &crate::shapes::shapes_manager::Shape, fps: u32) -> Option<Self> {
-        use crate::shapes::shapes_manager::Shape;
-
-        match s {
-            Shape::Circle(c) => {
-                let mut ek = ElementKeyframes::new(c.name.clone(), "circle".into(), fps);
-                let spawn = seconds_to_frame(c.spawn_time, fps);
-                ek.spawn_frame = spawn;
-                ek.kill_frame = c.kill_time.map(|k| seconds_to_frame(k, fps));
-                // populate initial keyframes (single hold keyframe at spawn)
-                ek.x.push(Keyframe {
-                    frame: spawn,
-                    value: c.x,
-                    easing: Easing::Linear,
-                });
-                ek.y.push(Keyframe {
-                    frame: spawn,
-                    value: c.y,
-                    easing: Easing::Linear,
-                });
-                ek.radius.push(Keyframe {
-                    frame: spawn,
-                    value: c.radius,
-                    easing: Easing::Linear,
-                });
-                ek.color.push(Keyframe {
-                    frame: spawn,
-                    value: c.color,
-                    easing: Easing::Linear,
-                });
-                ek.visible.push(Keyframe {
-                    frame: spawn,
-                    value: c.visible,
-                    easing: Easing::Linear,
-                });
-                ek.z_index.push(Keyframe {
-                    frame: spawn,
-                    value: c.z_index,
-                    easing: Easing::Linear,
-                });
-                ek.ephemeral = c.ephemeral;
-                ek.animations = c.animations.clone();
-                Some(ek)
-            }
-            Shape::Rect(r) => {
-                let mut ek = ElementKeyframes::new(r.name.clone(), "rect".into(), fps);
-                let spawn = seconds_to_frame(r.spawn_time, fps);
-                ek.spawn_frame = spawn;
-                ek.kill_frame = r.kill_time.map(|k| seconds_to_frame(k, fps));
-                ek.x.push(Keyframe {
-                    frame: spawn,
-                    value: r.x,
-                    easing: Easing::Linear,
-                });
-                ek.y.push(Keyframe {
-                    frame: spawn,
-                    value: r.y,
-                    easing: Easing::Linear,
-                });
-                ek.w.push(Keyframe {
-                    frame: spawn,
-                    value: r.w,
-                    easing: Easing::Linear,
-                });
-                ek.h.push(Keyframe {
-                    frame: spawn,
-                    value: r.h,
-                    easing: Easing::Linear,
-                });
-                ek.color.push(Keyframe {
-                    frame: spawn,
-                    value: r.color,
-                    easing: Easing::Linear,
-                });
-                ek.visible.push(Keyframe {
-                    frame: spawn,
-                    value: r.visible,
-                    easing: Easing::Linear,
-                });
-                ek.z_index.push(Keyframe {
-                    frame: spawn,
-                    value: r.z_index,
-                    easing: Easing::Linear,
-                });
-                ek.ephemeral = r.ephemeral;
-                ek.animations = r.animations.clone();
-                Some(ek)
-            }
-            Shape::Text(t) => {
-                let mut ek = ElementKeyframes::new(t.name.clone(), "text".into(), fps);
-                let spawn = seconds_to_frame(t.spawn_time, fps);
-                ek.spawn_frame = spawn;
-                ek.kill_frame = t.kill_time.map(|k| seconds_to_frame(k, fps));
-                ek.x.push(Keyframe {
-                    frame: spawn,
-                    value: t.x,
-                    easing: Easing::Linear,
-                });
-                ek.y.push(Keyframe {
-                    frame: spawn,
-                    value: t.y,
-                    easing: Easing::Linear,
-                });
-                ek.size.push(Keyframe {
-                    frame: spawn,
-                    value: t.size,
-                    easing: Easing::Linear,
-                });
-                ek.value.push(Keyframe {
-                    frame: spawn,
-                    value: t.value.clone(),
-                    easing: Easing::Linear,
-                });
-                ek.color.push(Keyframe {
-                    frame: spawn,
-                    value: t.color,
-                    easing: Easing::Linear,
-                });
-                ek.visible.push(Keyframe {
-                    frame: spawn,
-                    value: t.visible,
-                    easing: Easing::Linear,
-                });
-                ek.z_index.push(Keyframe {
-                    frame: spawn,
-                    value: t.z_index,
-                    easing: Easing::Linear,
-                });
-                ek.ephemeral = t.ephemeral;
-                ek.animations = t.animations.clone();
-                Some(ek)
-            }
-            Shape::Group { .. } => None,
+        // Delegate conversion to the concrete Shape implementation via the
+        // ShapeDescriptor trait. This keeps per-shape mapping logic inside
+        // the shape's module and makes adding a new Shape much easier.
+        if let Some(desc) = s.descriptor() {
+            Some(desc.to_element_keyframes(fps))
+        } else {
+            None
         }
     }
 
     /// Reconstruct a `Shape` representing this element at the given `frame`.
     /// Useful for preview/render code that needs a temporary Shape instance
     /// without changing the canonical `state.scene` storage.
+    /// Reconstruct a `Shape` representing this element at the given `frame`.
+    /// `fps` must be provided by the caller (not stored on the element).
     pub fn to_shape_at_frame(
         &self,
         frame: FrameIndex,
+        fps: u32,
     ) -> Option<crate::shapes::shapes_manager::Shape> {
         let props = self.sample(frame)?;
-        match self.kind.as_str() {
-            "circle" => {
-                let mut c = crate::shapes::circle::Circle::default();
-                c.name = self.name.clone();
-                if let Some(x) = props.x {
-                    c.x = x;
-                }
-                if let Some(y) = props.y {
-                    c.y = y;
-                }
-                if let Some(radius) = props.radius {
-                    c.radius = radius;
-                }
-                if let Some(col) = props.color {
-                    c.color = col;
-                }
-                if let Some(v) = props.visible {
-                    c.visible = v;
-                }
-                if let Some(z) = props.z_index {
-                    c.z_index = z;
-                }
-                // set spawn_time to expressed frame
-                c.spawn_time = frame as f32 / self.fps as f32;
-                if let Some(kf) = self.kill_frame {
-                    c.kill_time = Some(kf as f32 / self.fps as f32);
-                }
-                c.ephemeral = self.ephemeral;
-                c.animations = self.animations.clone();
-                Some(crate::shapes::shapes_manager::Shape::Circle(c))
-            }
-            "rect" => {
-                let mut r = crate::shapes::rect::Rect::default();
-                r.name = self.name.clone();
-                if let Some(x) = props.x {
-                    r.x = x;
-                }
-                if let Some(y) = props.y {
-                    r.y = y;
-                }
-                if let Some(w) = props.w {
-                    r.w = w;
-                }
-                if let Some(h) = props.h {
-                    r.h = h;
-                }
-                if let Some(col) = props.color {
-                    r.color = col;
-                }
-                if let Some(v) = props.visible {
-                    r.visible = v;
-                }
-                if let Some(z) = props.z_index {
-                    r.z_index = z;
-                }
-                r.spawn_time = frame as f32 / self.fps as f32;
-                if let Some(kf) = self.kill_frame {
-                    r.kill_time = Some(kf as f32 / self.fps as f32);
-                }
-                r.ephemeral = self.ephemeral;
-                r.animations = self.animations.clone();
-                Some(crate::shapes::shapes_manager::Shape::Rect(r))
-            }
-            "text" => {
-                let mut t = crate::shapes::text::Text::default();
-                t.name = self.name.clone();
-                if let Some(x) = props.x {
-                    t.x = x;
-                }
-                if let Some(y) = props.y {
-                    t.y = y;
-                }
-                if let Some(sz) = props.size {
-                    t.size = sz;
-                }
-                if let Some(val) = props.value.clone() {
-                    t.value = val;
-                }
-                if let Some(col) = props.color {
-                    t.color = col;
-                }
-                if let Some(v) = props.visible {
-                    t.visible = v;
-                }
-                if let Some(z) = props.z_index {
-                    t.z_index = z;
-                }
-                t.spawn_time = frame as f32 / self.fps as f32;
-                if let Some(kf) = self.kill_frame {
-                    t.kill_time = Some(kf as f32 / self.fps as f32);
-                }
-                t.ephemeral = self.ephemeral;
-                t.animations = self.animations.clone();
-                Some(crate::shapes::shapes_manager::Shape::Text(t))
-            }
-            _ => None,
-        }
+        // Delegate to shape-specific constructors in `shapes_manager` which
+        // call into the per-shape modules. This keeps element_store free of
+        // hardcoded shape field mappings.
+        crate::shapes::shapes_manager::from_element_keyframes(self, frame, fps)
     }
 }
 
 /// Convert a slice of ElementKeyframes into legacy `Shape` instances by
 /// materializing each element at its spawn frame. Used as a compatibility
 /// shim for DSL generation and other code that still expects `Vec<Shape>`.
-pub fn to_legacy_shapes(elements: &[ElementKeyframes]) -> Vec<crate::scene::Shape> {
+pub fn to_legacy_shapes(elements: &[ElementKeyframes], fps: u32) -> Vec<crate::scene::Shape> {
     let mut out: Vec<crate::scene::Shape> = Vec::new();
     for e in elements {
-        if let Some(s) = e.to_shape_at_frame(e.spawn_frame) {
+        if let Some(s) = e.to_shape_at_frame(e.spawn_frame, fps) {
             out.push(s);
         }
     }

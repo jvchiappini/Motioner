@@ -118,7 +118,7 @@ impl eframe::App for MyApp {
                 }
             }
         }
-        let legacy_shapes = crate::shapes::element_store::to_legacy_shapes(&state.scene);
+        let legacy_shapes = crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps);
         collect_fonts(&legacy_shapes, &mut used_fonts);
         let mut fonts_changed = false;
         for font_name in used_fonts {
@@ -200,7 +200,7 @@ impl eframe::App for MyApp {
             && state.last_synced_settings != current_settings
         {
             state.dsl_code = dsl::generate_dsl(
-                &crate::shapes::element_store::to_legacy_shapes(&state.scene),
+                &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
                 state.render_width,
                 state.render_height,
                 state.fps,
@@ -440,7 +440,7 @@ impl eframe::App for MyApp {
                         // Update DSL code always if switching TO code
                         if state.active_tab != Some(target) {
                             state.dsl_code = dsl::generate_dsl(
-                                &crate::shapes::element_store::to_legacy_shapes(&state.scene),
+                                &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
                                 state.render_width,
                                 state.render_height,
                                 state.fps,

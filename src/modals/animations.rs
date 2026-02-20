@@ -93,7 +93,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                         if let Some(elem) = state.scene.get_mut(path[0]) {
                             let start = 0.0f32;
                             let end = state.duration_secs;
-                            let spawn_secs = elem.spawn_frame as f32 / elem.fps as f32;
+                            let spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
 
                             if start < spawn_secs {
                                 state.toast_message = Some(format!(
@@ -116,7 +116,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 });
                                 // position cache removed — no-op
                                 state.dsl_code = crate::dsl::generate_dsl(
-                                    &crate::shapes::element_store::to_legacy_shapes(&state.scene),
+                                    &crate::shapes::element_store::to_legacy_shapes(&state.scene, state.fps),
                                     state.render_width,
                                     state.render_height,
                                     state.fps,

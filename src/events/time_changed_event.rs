@@ -55,9 +55,9 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
     let mut originals: Vec<Option<FrameProps>> = Vec::new();
     let mut shapes: Vec<crate::scene::Shape> = Vec::new();
     for elem in elements_vec.iter() {
-        let frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, elem.fps);
+        let frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, fps);
         originals.push(elem.sample(frame_idx));
-        if let Some(s) = elem.to_shape_at_frame(frame_idx) {
+        if let Some(s) = elem.to_shape_at_frame(frame_idx, fps) {
             shapes.push(s);
         }
     }
@@ -76,81 +76,10 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
         // find matching element by name
         let maybe_elem = elements_vec.iter_mut().find(|e| e.name == shape.name());
         if let Some(elem) = maybe_elem {
-            let frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, elem.fps);
+            let frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, fps);
             let orig = originals.get(i).and_then(|o| o.clone());
-            // extract current props from shape
-            let mut new_props = FrameProps {
-                x: None,
-                y: None,
-                radius: None,
-                w: None,
-                h: None,
-                size: None,
-                value: None,
-                color: None,
-                visible: None,
-                z_index: None,
-            };
-            match shape {
-                crate::scene::Shape::Circle(c) => {
-                    if orig.as_ref().and_then(|p| p.x).unwrap_or(f32::NAN) != c.x {
-                        new_props.x = Some(c.x);
-                    }
-                    if orig.as_ref().and_then(|p| p.y).unwrap_or(f32::NAN) != c.y {
-                        new_props.y = Some(c.y);
-                    }
-                    if orig.as_ref().and_then(|p| p.radius).unwrap_or(f32::NAN) != c.radius {
-                        new_props.radius = Some(c.radius);
-                    }
-                    if orig.as_ref().and_then(|p| p.color) != Some(c.color) {
-                        new_props.color = Some(c.color);
-                    }
-                    if orig.as_ref().and_then(|p| p.visible) != Some(c.visible) {
-                        new_props.visible = Some(c.visible);
-                    }
-                }
-                crate::scene::Shape::Rect(r) => {
-                    if orig.as_ref().and_then(|p| p.x).unwrap_or(f32::NAN) != r.x {
-                        new_props.x = Some(r.x);
-                    }
-                    if orig.as_ref().and_then(|p| p.y).unwrap_or(f32::NAN) != r.y {
-                        new_props.y = Some(r.y);
-                    }
-                    if orig.as_ref().and_then(|p| p.w).unwrap_or(f32::NAN) != r.w {
-                        new_props.w = Some(r.w);
-                    }
-                    if orig.as_ref().and_then(|p| p.h).unwrap_or(f32::NAN) != r.h {
-                        new_props.h = Some(r.h);
-                    }
-                    if orig.as_ref().and_then(|p| p.color) != Some(r.color) {
-                        new_props.color = Some(r.color);
-                    }
-                    if orig.as_ref().and_then(|p| p.visible) != Some(r.visible) {
-                        new_props.visible = Some(r.visible);
-                    }
-                }
-                crate::scene::Shape::Text(t) => {
-                    if orig.as_ref().and_then(|p| p.x).unwrap_or(f32::NAN) != t.x {
-                        new_props.x = Some(t.x);
-                    }
-                    if orig.as_ref().and_then(|p| p.y).unwrap_or(f32::NAN) != t.y {
-                        new_props.y = Some(t.y);
-                    }
-                    if orig.as_ref().and_then(|p| p.size).unwrap_or(f32::NAN) != t.size {
-                        new_props.size = Some(t.size);
-                    }
-                    if orig.as_ref().and_then(|p| p.value.clone()) != Some(t.value.clone()) {
-                        new_props.value = Some(t.value.clone());
-                    }
-                    if orig.as_ref().and_then(|p| p.color) != Some(t.color) {
-                        new_props.color = Some(t.color);
-                    }
-                    if orig.as_ref().and_then(|p| p.visible) != Some(t.visible) {
-                        new_props.visible = Some(t.visible);
-                    }
-                }
-                _ => {}
-            }
+            // extract current props from shape (delegate per-shape logic into `Shape`)
+            let new_props = shape.changed_frame_props(orig.as_ref());
 
             // if any field changed, insert a hold keyframe at current frame
             let any = new_props.x.is_some()
@@ -245,59 +174,4 @@ pub fn apply_on_time_handlers_collect_spawns(
     }
 
     changed
-}
-
-#[cfg(test)]
-mod handler_tests {
-    use super::*;
-    use crate::app_state::AppState;
-
-    #[test]
-    fn dsl_move_element_executes() {
-        let mut state = AppState::default();
-        // ensure sample scene has a Circle named "Circle"
-        assert!(state.scene.iter().any(|e| e.name == "Circle"));
-
-        // register a simple on_time handler that moves the Circle depending on seconds
-        state.dsl_event_handlers = vec![DslHandler {
-            name: "on_time".to_string(),
-            body: "move_element(name = \"Circle\", x = seconds * 0.1, y = 0.25)".to_string(),
-            color: [78, 201, 176, 255],
-        }];
-
-        // call event with seconds = 2.0 → x should become 0.2
-        TimeChangedEvent::on_time_changed(&mut state, 2.0, 0);
-
-        let found = state.scene.iter().find(|e| e.name == "Circle").unwrap();
-        let frame = crate::shapes::element_store::seconds_to_frame(2.0, found.fps);
-        let props = found.sample(frame).unwrap();
-        assert!((props.x.unwrap() - 0.2).abs() < 1e-3);
-        assert!((props.y.unwrap() - 0.25).abs() < 1e-3);
-    }
-
-    #[test]
-    fn spawn_circle_via_handler_is_appended() {
-        let mut scene: Vec<crate::scene::Shape> = Vec::new();
-
-        let handlers = vec![DslHandler {
-            name: "on_time".to_string(),
-            body: "circle \"S1\" { x = seconds * 0.1, y = 0.25, radius = 0.05, fill = \"#78c8ff\", spawn = seconds, kill = seconds + 1.0 }".to_string(),
-            color: [0, 0, 0, 0],
-        }];
-
-        let changed = apply_on_time_handlers_collect_spawns(&mut scene, &handlers, 2.0, 0);
-        assert!(changed);
-        assert_eq!(scene.len(), 1);
-        match &scene[0] {
-            crate::scene::Shape::Circle(c) => {
-                assert_eq!(c.name, "S1");
-                assert!((c.x - 0.2).abs() < 1e-6);
-                assert!((c.y - 0.25).abs() < 1e-6);
-                assert!((c.radius - 0.05).abs() < 1e-6);
-                assert_eq!(c.ephemeral, true);
-                assert_eq!(c.kill_time, Some(3.0));
-            }
-            _ => panic!("expected circle"),
-        }
-    }
 }

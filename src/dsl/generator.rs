@@ -130,12 +130,9 @@ pub fn extract_event_handlers(src: &str) -> Vec<crate::dsl::runtime::DslHandler>
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn shape_animations(shape: &Shape) -> &[Animation] {
-    match shape {
-        Shape::Circle(c) => &c.animations,
-        Shape::Rect(r) => &r.animations,
-        Shape::Text(t) => &t.animations,
-        _ => &[],
-    }
+    shape
+        .descriptor()
+        .map_or(&[], |d| d.animations())
 }
 
 /// Convert leading groups of 4 spaces into tab characters for every line.

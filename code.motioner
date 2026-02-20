@@ -8,22 +8,3 @@ circle "Circle" {
 	fill = "#78c8ff",
 	spawn = 0.00
 }
-
-text "Text" {
-	x = 0.500,
-	y = 0.500,
-	value = "Hello",
-	font = "System",
-	size = 0.0333,
-	fill = "#ffffff",
-	spawn = 0.00,
-}
-
-rect "Rect #2" {
-	x = 0.400,
-	y = 0.400,
-	width = 0.200,
-	height = 0.200,
-	fill = "#c87878",
-	spawn = 0.00
-}

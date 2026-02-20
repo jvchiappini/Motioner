@@ -129,21 +129,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     let effective_uv = in.local_uv + vec2<f32>(du, dv);
 
-    // -- SDF Evaluation --
-    var alpha = 1.0;
-    
-    if (in.shape_type == 0) { // Circle
-        let d = length(effective_uv) - 1.0;
-        // Hard edge for pixelated look
-        if (d > 0.0) { alpha = 0.0; } else { alpha = 1.0; }
-    } else if (in.shape_type == 1) { // Rect
-        // Rect implicitly from -1 to 1. Check if snapped UV is outside.
-        let d = max(abs(effective_uv.x), abs(effective_uv.y)) - 1.0;
-        if (d > 0.0) { alpha = 0.0; } else { alpha = 1.0; }
-    } else if (in.shape_type == 2) { // Texto: muestra la tira del atlas asignada a este elemento.
-        // tex_uv ya está interpolado en el rango [uv0, uv1] del atlas vertical.
-        return textureSample(text_atlas, text_sampler, in.tex_uv);
-    }
+    // Delegate actual per-shape rendering to shape-specific helpers.
+    // Per-shape helpers are provided from separate WGSL snippets (one file per shape)
+    // and are concatenated at compile time by the Rust side.
+    return eval_shape(in, effective_uv);
+}
 
-    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+// Dispatcher: call the per-shape helper function according to `shape_type`.
+// When adding a new shape: implement `shape_<name>` in a WGSL file and
+// add the Rust-side include so it becomes part of the shader module.
+fn eval_shape(in: VertexOutput, effective_uv: vec2<f32>) -> vec4<f32> {
+    if (in.shape_type == 0) {
+        return shape_circle(in, effective_uv);
+    } else if (in.shape_type == 1) {
+        return shape_rect(in, effective_uv);
+    } else if (in.shape_type == 2) {
+        return shape_text(in, effective_uv);
+    }
+    // fallback: opaque solid color
+    return vec4<f32>(in.color.rgb, in.color.a);
 }

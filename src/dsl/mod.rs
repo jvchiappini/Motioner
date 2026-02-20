@@ -151,16 +151,13 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
         }
     }
 
-    // Attach top-level move blocks to their target shapes.
+    // Attach top-level move blocks to their target shapes. Use the
+    // `Shape::push_animation` helper so this module doesn't need to match on
+    // concrete shape variants.
     for (target, mv) in pending_moves {
         if let Some(shape) = shapes.iter_mut().find(|s| s.name() == target) {
             let anim = ast_move_to_scene(&mv);
-            match shape {
-                Shape::Circle(c) => c.animations.push(anim),
-                Shape::Rect(r) => r.animations.push(anim),
-                Shape::Text(t) => t.animations.push(anim),
-                _ => {}
-            }
+            shape.push_animation(anim);
         }
     }
 

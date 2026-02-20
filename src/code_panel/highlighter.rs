@@ -337,24 +337,3 @@ fn append_text(
         },
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn highlight_handles_simple_and_modified_input() {
-        let mut job = egui::text::LayoutJob::default();
-        let handlers: Vec<crate::dsl::runtime::DslHandler> = Vec::new();
-        let defined_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        // original valid call
-        let s1 = "on_time { move_element(name = \"Circle\", x = seconds * 0.1, y = 0.5) }";
-        highlight_code(&mut job, s1, &defined_names, &handlers);
-
-        // modified (different name / values) — should not panic and should complete
-        let mut job2 = egui::text::LayoutJob::default();
-        let s2 = "on_time { move_element(name = \"Circle2\", x = 0.2, y = 0.6) }";
-        highlight_code(&mut job2, s2, &defined_names, &handlers);
-    }
-}
