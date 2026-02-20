@@ -277,22 +277,18 @@ impl eframe::App for MyApp {
                     // Try to parse DSL into scene; only update scene on successful parse.
                     // We throttle preview requests when the Code editor is active to avoid
                     // rapid texture swaps that produce visible flicker on high-refresh monitors.
-                    let parsed = crate::dsl::parse_dsl(&state.dsl_code);
+                    //
+                    // Use `parse_dsl_into_elements` (new primary path) so that top-level
+                    // `move {}` blocks are resolved into boundary keyframes on x/y tracks.
+                    // The GPU compute shader interpolates intermediate frames on the fly.
+                    let parsed = crate::dsl::parse_dsl_into_elements(&state.dsl_code, state.fps);
                     if !parsed.is_empty() {
                         // When the DSL source is edited we must *recreate* the
                         // scene and the runtime logic from the parsed result.
                         // Do NOT preserve previously runtime-spawned (ephemeral)
                         // shapes here — keeping them caused runaway accumulation
                         // when the editor re-parsed while playback was running.
-                        // Convert parsed `Shape`s into `ElementKeyframes` for the runtime
-                        state.scene = parsed
-                            .into_iter()
-                            .filter_map(|s| {
-                                crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
-                                    &s, state.fps,
-                                )
-                            })
-                            .collect();
+                        state.scene = parsed;
                         // Recompute any caches that depend on the scene.
                         // position cache removed — no-op
                         // collect DSL event handler blocks (e.g. `on_time { ... }`)

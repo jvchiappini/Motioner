@@ -173,30 +173,75 @@ impl ShapeDescriptor for Rect {
         self.animations.push(anim);
     }
 
-    fn spawn_time(&self) -> f32 { self.spawn_time }
-    fn kill_time(&self) -> Option<f32> { self.kill_time }
-    fn is_ephemeral(&self) -> bool { self.ephemeral }
-    fn set_ephemeral(&mut self, v: bool) { self.ephemeral = v; }
-    fn xy(&self) -> (f32, f32) { (self.x, self.y) }
-    fn is_visible(&self) -> bool { self.visible }
-    fn set_visible(&mut self, v: bool) { self.visible = v; }
-    fn set_fill_color(&mut self, col: [u8; 4]) { self.color = col; }
+    fn spawn_time(&self) -> f32 {
+        self.spawn_time
+    }
+    fn kill_time(&self) -> Option<f32> {
+        self.kill_time
+    }
+    fn is_ephemeral(&self) -> bool {
+        self.ephemeral
+    }
+    fn set_ephemeral(&mut self, v: bool) {
+        self.ephemeral = v;
+    }
+    fn xy(&self) -> (f32, f32) {
+        (self.x, self.y)
+    }
+    fn is_visible(&self) -> bool {
+        self.visible
+    }
+    fn set_visible(&mut self, v: bool) {
+        self.visible = v;
+    }
+    fn set_fill_color(&mut self, col: [u8; 4]) {
+        self.color = col;
+    }
 
     fn to_element_keyframes(&self, fps: u32) -> crate::shapes::element_store::ElementKeyframes {
         use crate::shapes::element_store::{ElementKeyframes, Keyframe};
         let mut ek = ElementKeyframes::new(self.name.clone(), "rect".into());
         let spawn = crate::shapes::element_store::seconds_to_frame(self.spawn_time, fps);
         ek.spawn_frame = spawn;
-        ek.kill_frame = self.kill_time.map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
-        ek.x.push(Keyframe { frame: spawn, value: self.x, easing: crate::animations::easing::Easing::Linear });
-        ek.y.push(Keyframe { frame: spawn, value: self.y, easing: crate::animations::easing::Easing::Linear });
-        ek.w.push(Keyframe { frame: spawn, value: self.w, easing: crate::animations::easing::Easing::Linear });
-        ek.h.push(Keyframe { frame: spawn, value: self.h, easing: crate::animations::easing::Easing::Linear });
-        ek.color.push(Keyframe { frame: spawn, value: self.color, easing: crate::animations::easing::Easing::Linear });
-        ek.visible.push(Keyframe { frame: spawn, value: self.visible, easing: crate::animations::easing::Easing::Linear });
-        ek.z_index.push(Keyframe { frame: spawn, value: self.z_index, easing: crate::animations::easing::Easing::Linear });
+        ek.kill_frame = self
+            .kill_time
+            .map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
+        ek.x.push(Keyframe {
+            frame: spawn,
+            value: self.x,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.y.push(Keyframe {
+            frame: spawn,
+            value: self.y,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.w.push(Keyframe {
+            frame: spawn,
+            value: self.w,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.h.push(Keyframe {
+            frame: spawn,
+            value: self.h,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.color.push(Keyframe {
+            frame: spawn,
+            value: self.color,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.visible.push(Keyframe {
+            frame: spawn,
+            value: self.visible,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.z_index.push(Keyframe {
+            frame: spawn,
+            value: self.z_index,
+            easing: crate::animations::easing::Easing::Linear,
+        });
         ek.ephemeral = self.ephemeral;
-        ek.animations = self.animations.clone();
         ek
     }
 
@@ -338,7 +383,6 @@ pub fn from_element_keyframes(
         r.kill_time = Some(kf as f32 / fps as f32);
     }
     r.ephemeral = ek.ephemeral;
-    r.animations = ek.animations.clone();
     Some(super::shapes_manager::Shape::Rect(r))
 }
 

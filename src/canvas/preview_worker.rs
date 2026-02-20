@@ -340,7 +340,7 @@ pub fn ensure_preview_worker(state: &mut AppState) {
                             3i32
                         };
                         let frame_step = 1.0 / (snapshot.preview_fps as f32);
-                        let mut frames = Vec::with_capacity((frames_each_side * 2 + 1) as usize);
+                        let mut frames: Vec<(f32, egui::ColorImage)> = Vec::with_capacity((frames_each_side * 2 + 1) as usize);
 
                         #[cfg(feature = "wgpu")]
                         {

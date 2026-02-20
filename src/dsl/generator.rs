@@ -43,18 +43,9 @@ pub fn generate_from_elements(
         }
     }
 
-    // Top-level move blocks referencing elements by name.
-    for elem in elements {
-        if elem.ephemeral {
-            continue;
-        }
-        for anim in &elem.animations {
-            if let Some(ma) = MoveAnimation::from_scene(anim) {
-                out.push_str(&ma.to_dsl_block(Some(&elem.name), ""));
-                out.push('\n');
-            }
-        }
-    }
+    // NOTE: `ElementKeyframes` no longer carries top-level `Animation` lists.
+    // Generating top-level animation blocks is handled when producing DSL
+    // from `Shape` values (see `generate`) or from a future per-track store.
 
     out
 }

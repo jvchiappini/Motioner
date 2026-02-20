@@ -242,26 +242,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 });
 
                             ui.add_space(4.0);
-                            // Render Move animations using dedicated module
-                            let base_x = elem
-                                .sample(elem.spawn_frame)
-                                .and_then(|p| p.x)
-                                .unwrap_or(0.5);
-                            let base_y = elem
-                                .sample(elem.spawn_frame)
-                                .and_then(|p| p.y)
-                                .unwrap_or(0.5);
-                            move_animation_element_modifiers::render_move_animation_modifiers(
-                                ui,
-                                ctx,
-                                &mut elem.animations,
-                                elem.spawn_frame as f32 / state.fps as f32,
-                                state.duration_secs,
-                                base_x,
-                                base_y,
-                                &path_id,
-                                &mut changed,
-                            );
+                            // Animations are no longer stored on `ElementKeyframes`.
+                            ui.label("Animations editing disabled — migrating to per-track storage");
                         });
                     });
                 }
@@ -484,26 +466,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 });
 
                             ui.add_space(4.0);
-                            // Render Move animations using dedicated module
-                            let base_x = elem
-                                .sample(elem.spawn_frame)
-                                .and_then(|p| p.x)
-                                .unwrap_or(0.5);
-                            let base_y = elem
-                                .sample(elem.spawn_frame)
-                                .and_then(|p| p.y)
-                                .unwrap_or(0.5);
-                            move_animation_element_modifiers::render_move_animation_modifiers(
-                                ui,
-                                ctx,
-                                &mut elem.animations,
-                                elem.spawn_frame as f32 / state.fps as f32,
-                                state.duration_secs,
-                                base_x,
-                                base_y,
-                                &path_id,
-                                &mut changed,
-                            );
+                            ui.label("Animations editing disabled — migrating to per-track storage");
                         });
                     });
                 }
@@ -752,17 +715,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                             .sample(elem.spawn_frame)
                             .and_then(|p| p.y)
                             .unwrap_or(0.5);
-                        move_animation_element_modifiers::render_move_animation_modifiers(
-                            ui,
-                            ctx,
-                            &mut elem.animations,
-                                elem.spawn_frame as f32 / state.fps as f32,
-                            state.duration_secs,
-                            base_x,
-                            base_y,
-                            &path_id,
-                            &mut changed,
-                        );
+                        ui.label("Animations editing disabled — migrating to per-track storage");
                     });
                 }
                 "group" => {

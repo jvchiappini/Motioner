@@ -15,6 +15,8 @@ pub mod linear;
 pub mod sine;
 pub mod spring;
 
+// ─── MoveAnimation ───────────────────────────────────────────────────────────
+
 /// Concrete implementation for a linear "move" animation.
 #[derive(Clone, Debug)]
 pub struct MoveAnimation {

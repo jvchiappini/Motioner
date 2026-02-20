@@ -4,7 +4,7 @@ pub fn default_visible() -> bool {
     true
 }
 
-// Combined WGSL shader source for the composition pipeline.
+// Combined WGSL shader source for the render pipeline.
 // Add per-shape WGSL snippets here (one file per shape). When adding a
 // new Shape variant you should:
 //  1) add its Rust type/enum variant in this file, and
@@ -13,7 +13,7 @@ pub fn default_visible() -> bool {
 //  3) append an `include_str!` entry below so the snippet is compiled
 //     into the shader module (this keeps WGSL close to the Shape impl).
 pub const COMBINED_WGSL: &str = concat!(
-    include_str!("../composition.wgsl"),
+    include_str!("../shaders/render.wgsl"),
     include_str!("shaders/circle.wgsl"),
     include_str!("shaders/rect.wgsl"),
     include_str!("shaders/text.wgsl"),

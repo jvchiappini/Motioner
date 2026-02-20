@@ -90,46 +90,16 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             {
                 if let Some(path) = target_path.clone() {
                     if path.len() == 1 {
-                        if let Some(elem) = state.scene.get_mut(path[0]) {
-                            let start = 0.0f32;
-                            let end = state.duration_secs;
-                            let spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
-
-                            if start < spawn_secs {
-                                state.toast_message = Some(format!(
-                                    "Cannot add animation: starts at {:.2}s before element spawn at {:.2}s",
-                                    start, spawn_secs
-                                ));
-                                state.toast_type = crate::app_state::ToastType::Error;
-                                state.toast_deadline = ui.input(|i| i.time) + 3.0;
-                            } else {
-                                let base_x = elem.sample(elem.spawn_frame).and_then(|p| p.x).unwrap_or(0.5);
-                                let base_y = elem.sample(elem.spawn_frame).and_then(|p| p.y).unwrap_or(0.5);
-                                let to_x = (base_x + 0.20).min(1.0);
-
-                                elem.animations.push(crate::scene::Animation::Move {
-                                    to_x,
-                                    to_y: base_y,
-                                    start,
-                                    end,
-                                    easing: crate::scene::Easing::Linear,
-                                });
-                                // position cache removed — no-op
-                                state.dsl_code = crate::dsl::generate_dsl_from_elements(
-                                    &state.scene,
-                                    state.render_width,
-                                    state.render_height,
-                                    state.fps,
-                                    state.duration_secs,
-                                );
-                                crate::events::element_properties_changed_event::on_element_properties_changed(state);
-                                crate::canvas::generate_preview_frames(state, state.time, ctx);
-
-                                state.show_animations_modal = false;
-                                state.toast_message = Some("Animation added".to_string());
-                                state.toast_type = crate::app_state::ToastType::Success;
-                                state.toast_deadline = ui.input(|i| i.time) + 2.0;
-                            }
+                                if let Some(_elem) = state.scene.get(path[0]) {
+                            // Animations are no longer stored on `ElementKeyframes`.
+                            // Editing animations is temporarily disabled until the
+                            // per-track animation model is implemented.
+                            state.toast_message = Some(
+                                "Adding animations is disabled (migrating storage).".to_string(),
+                            );
+                            state.toast_type = crate::app_state::ToastType::Info;
+                            state.toast_deadline = ui.input(|i| i.time) + 3.0;
+                            state.show_animations_modal = false;
                         }
                     } else {
                         state.toast_message = Some("Nested element selection not supported yet".into());

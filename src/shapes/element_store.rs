@@ -105,8 +105,6 @@ pub struct ElementKeyframes {
 
     /// Ephemeral flag (shapes created at runtime / not serialized into DSL)
     pub ephemeral: bool,
-    /// Animations attached to this element (kept for compatibility with existing UI/runtime)
-    pub animations: Vec<crate::scene::Animation>,
 
     /// Spawn frame (computed from shape.spawn_time)
     pub spawn_frame: FrameIndex,
@@ -130,7 +128,6 @@ impl ElementKeyframes {
             visible: Vec::new(),
             z_index: Vec::new(),
             ephemeral: false,
-            animations: Vec::new(),
             spawn_frame: 0,
             kill_frame: None,
         }

@@ -391,7 +391,6 @@ impl ShapeDescriptor for Text {
         ek.visible.push(Keyframe { frame: spawn, value: self.visible, easing: crate::animations::easing::Easing::Linear });
         ek.z_index.push(Keyframe { frame: spawn, value: self.z_index, easing: crate::animations::easing::Easing::Linear });
         ek.ephemeral = self.ephemeral;
-        ek.animations = self.animations.clone();
         ek
     }
 
@@ -536,7 +535,6 @@ pub fn from_element_keyframes(
         t.kill_time = Some(kf as f32 / fps as f32);
     }
     t.ephemeral = ek.ephemeral;
-    t.animations = ek.animations.clone();
     Some(super::shapes_manager::Shape::Text(t))
 }
 
