@@ -155,32 +155,16 @@ where
             // arbitrary garbage). Full parsing/scene update remains debounced
             // in `ui::update`.
             if output.changed() {
+                // On every keystroke we no longer run validation/normalization
+                // immediately.  Doing so caused diagnostics to flash while the
+                // user was typing and contributed to the perceived lag.
+                //
+                // Instead we simply mark the buffer dirty and allow the
+                // debounced autosave logic to perform validation (and
+                // normalization) once the user has been idle for the cooldown
+                // period.  See `AppState::autosave_tick` for the implementation.
                 let now = ui.ctx().input(|i| i.time);
-
-                // Quick immediate validation and normalization: any diagnostics
-                // produced will be returned and the code string will be rewritten
-                // with tab indentation if it was valid.  The helper lives in
-                // `dsl::utils` to keep UI logic minimal.
-                let diagnostics = crate::dsl::utils::validate_and_normalize(&mut state.dsl_code);
-
-                // update DSL diagnostics vector regardless of validation result
-                if diagnostics.is_empty() {
-                    state.dsl_diagnostics.clear();
-                } else {
-                    state.dsl_diagnostics = diagnostics.clone();
-                }
-
-                // let autosave state manage the pending/error flags for us
-                state.autosave.on_change(now, Some(&diagnostics));
-
-                // The helper above already normalizes the text to use tabs.  we
-                // used to duplicate that call here, but the logic has since been
-                // folded into `validate_and_normalize` (which now runs
-                // unconditionally), so this extra block is unnecessary.
-
-                // Parsing and scene/preview updates are still debounced and
-                // handled in `ui::update` (so preview updates don't happen on
-                // every keystroke).
+                state.autosave.on_change(now, None);
             }
 
             output

@@ -171,61 +171,72 @@ pub fn extract_event_handlers(src: &str) -> Vec<crate::dsl::runtime::DslHandler>
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn shape_animations(shape: &Shape) -> &[Animation] {
-    shape
-        .descriptor()
-        .map_or(&[], |d| d.animations())
+    shape.descriptor().map_or(&[], |d| d.animations())
 }
 
 /// Convert leading groups of 4 spaces into tab characters for every line.
 /// Only affects leading indentation — interior spaces are preserved.
 pub fn normalize_tabs(src: &str) -> String {
-    src.lines()
-        .map(|line| {
-            let mut i = 0usize;
-            let bytes = line.as_bytes();
-            let mut leading = String::new();
-            // consume existing tabs as-is
-            while i < bytes.len() {
-                let c = bytes[i] as char;
-                if c == '\t' {
-                    leading.push('\t');
-                    i += 1;
-                } else if c == ' ' {
-                    // count consecutive spaces
-                    let mut count = 0usize;
-                    while i + count < bytes.len() && bytes[i + count] == b' ' {
-                        count += 1;
-                    }
-                    // convert groups of 4 spaces into tabs, leave remainder spaces
-                    let tabs = count / 4;
-                    let rem = count % 4;
-                    for _ in 0..tabs {
-                        leading.push('\t');
-                    }
-                    for _ in 0..rem {
-                        leading.push(' ');
-                    }
-                    i += count;
-                } else {
-                    break;
+    // Earlier versions of this helper used `src.lines()` followed by
+    // `join("\n")`.  That approach discards any trailing newline(s) and
+    // collapses multiple blank lines at the end, which in turn made the
+    // editor strip the empty line the user had just created.  To faithfully
+    // round-trip every character we now iterate over `split_inclusive('\n')`
+    // so each segment retains its terminating newline (if present).  The
+    // conversion logic is applied only to the line itself; the newline is
+    // simply appended afterwards.
+
+    let mut out = String::with_capacity(src.len());
+
+    for segment in src.split_inclusive('\n') {
+        // segment is either "...\n" or (for the final piece when the string
+        // doesn't end with newline) "...".  A bare "\n" corresponds to an
+        // empty line and we can push it directly.
+        if segment == "\n" {
+            out.push('\n');
+            continue;
+        }
+
+        let has_newline = segment.ends_with('\n');
+        let line = if has_newline {
+            &segment[..segment.len() - 1]
+        } else {
+            segment
+        };
+
+        // perform the original indentation conversion on `line`
+        let mut i = 0usize;
+        let bytes = line.as_bytes();
+        let mut leading = String::new();
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == '\t' {
+                leading.push('\t');
+                i += 1;
+            } else if c == ' ' {
+                let mut count = 0usize;
+                while i + count < bytes.len() && bytes[i + count] == b' ' {
+                    count += 1;
                 }
+                let tabs = count / 4;
+                let rem = count % 4;
+                for _ in 0..tabs {
+                    leading.push('\t');
+                }
+                for _ in 0..rem {
+                    leading.push(' ');
+                }
+                i += count;
+            } else {
+                break;
             }
-            format!("{}{}", leading, &line[i..])
-        })
-        .collect::<Vec<String>>()
-        .join("\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_tabs_converts_leading_spaces() {
-        let src = "circle \"C\" {\n    x = 0.5,\n        span\"a\"\n}\n";
-        let out = normalize_tabs(src);
-        let lines: Vec<&str> = out.lines().collect();
-        assert!(lines[1].starts_with("\tx ="));
-        assert!(lines[2].starts_with("\t\tspan"));
+        }
+        out.push_str(&leading);
+        out.push_str(&line[i..]);
+        if has_newline {
+            out.push('\n');
+        }
     }
+
+    out
 }

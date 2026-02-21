@@ -144,9 +144,7 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
     // Adding a new shape automatically makes it recognised here.
     let shape_keywords = crate::shapes::shapes_manager::registered_shape_keywords();
 
-    let is_allowed = |tok: &str| {
-        ALWAYS_ALLOWED.contains(&tok) || shape_keywords.contains(&tok)
-    };
+    let is_allowed = |tok: &str| ALWAYS_ALLOWED.contains(&tok) || shape_keywords.contains(&tok);
 
     let mut brace_depth: i32 = 0;
     let mut byte_offset: usize = 0;
@@ -160,6 +158,13 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
                 .next()
                 .unwrap_or("");
 
+            // Decide which kind of top-level content we're looking at.  The
+            // previous implementation only handled blocks (with `{`) and
+            // assignments (`=`); any other text was silently ignored.  That
+            // allowed stray words such as `asdf` to slip through without
+            // diagnostics even though they are not valid DSL.  We now treat
+            // bare tokens as unexpected content too, which makes the editor
+            // flag the line and prevents confusion.
             if trimmed.contains('{') {
                 let open_pos = byte_offset + line.find('{').unwrap();
                 if let Some(block_end) = find_matching_brace(src, open_pos) {
@@ -204,6 +209,16 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
                 }
             } else if trimmed.contains('=') {
                 // Stray top-level assignment
+                if !is_allowed(first_tok) {
+                    let (ln, col) = byte_to_line_col(src, byte_offset);
+                    diags.push(Diagnostic {
+                        message: format!("Unexpected top-level content: '{}'", trimmed),
+                        line: ln,
+                        column: col,
+                    });
+                }
+            } else {
+                // No braces and no assignment -- e.g. a lone word or text.
                 if !is_allowed(first_tok) {
                     let (ln, col) = byte_to_line_col(src, byte_offset);
                     diags.push(Diagnostic {
@@ -299,4 +314,68 @@ pub fn find_matching_brace(s: &str, open_pos: usize) -> Option<usize> {
         }
     }
     None
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run `validate` on `src`, returning just the diagnostic messages.
+    ///
+    /// Most of our unit tests are concerned with top-level content and not
+    /// the mandatory header configuration, so we prepend a minimal header
+    /// to the source before validating.  This avoids diagnostics such as
+    /// "Missing 'size(width, height)' configuration" or missing timeline
+    /// entries that the validator always emits when the header is absent.
+    fn diag_msgs(src: &str) -> Vec<String> {
+        let header = "size(1,1)\ntimeline(fps = 30, duration = 1.0)\n";
+        let prefixed = format!("{}{}", header, src);
+        validate(&prefixed).into_iter().map(|d| d.message).collect()
+    }
+
+    #[test]
+    fn bare_unknown_word_produces_error() {
+        let src = "asdf";
+        let msgs = diag_msgs(src);
+        assert_eq!(
+            msgs,
+            vec!["Unexpected top-level content: 'asdf'".to_string()]
+        );
+    }
+
+    #[test]
+    fn comment_alone_is_ok() {
+        let src = "// just a comment";
+        assert!(diag_msgs(src).is_empty());
+    }
+
+    #[test]
+    fn known_keyword_without_block_is_ok() {
+        let src = "size";
+        // 'size' alone isn't particularly useful, but it's a recognised token
+        // so the validator doesn't complain.  Existing behaviour preserved.
+        assert!(diag_msgs(src).is_empty());
+    }
+
+    #[test]
+    fn stray_assignment_with_unknown_key_errors() {
+        let src = "foo = 123";
+        let msgs = diag_msgs(src);
+        assert_eq!(
+            msgs,
+            vec!["Unexpected top-level content: 'foo = 123'".to_string()]
+        );
+    }
+
+    #[test]
+    fn unknown_block_with_braces_errors() {
+        let src = "foobar {\n}\n";
+        let msgs = diag_msgs(src);
+        // we expect at least the unknown-block diagnostic; an empty-block
+        // warning may also be produced, which is harmless, so just verify the
+        // presence of the primary message.
+        assert!(msgs.contains(&"Unknown top-level block 'foobar'".to_string()));
+    }
 }

@@ -467,7 +467,11 @@ impl Default for AppState {
             completion_snippet_index: None,
             last_completion_query: None,
             last_completion_query_time: 0.0,
-            autosave_cooldown_secs: 0.5,
+            // choose a slightly longer debounce so validation doesn't kick in
+            // while the user is still typing.  This mirrors the value used in
+            // the autosave timer elsewhere (previously 0.5s, now 0.8s per
+            // user request).
+            autosave_cooldown_secs: 0.8,
             autosave: AutosaveState::default(),
             last_scene_parse_time: 0.0,
             preview_pending_from_code: false,
@@ -725,9 +729,15 @@ impl AppState {
         // validation and the write helper.
         if let Some(last_edit) = self.autosave.last_edit_time {
             if now - last_edit > self.autosave_cooldown_secs as f64 {
-                let diags = crate::dsl::validate_dsl(&self.dsl_code);
-                if !diags.is_empty() {
-                    self.set_diagnostics(diags);
+                // perform the same validation/normalization that used to run
+                // immediately in the editor.  Deferring it here means the UI
+                // only spends time validating once the user has been idle for
+                // the cooldown period, which eliminates the realtime error
+                // flashes and reduces typing lag.  Normalization is also
+                // applied here so the file gets written consistently.
+                let diagnostics = crate::dsl::utils::validate_and_normalize(&mut self.dsl_code);
+                if !diagnostics.is_empty() {
+                    self.set_diagnostics(diagnostics);
                 } else {
                     // attempt write
                     match crate::events::element_properties_changed_event::write_dsl_to_project(
@@ -762,16 +772,12 @@ impl AppState {
         if let Some(last_edit) = self.autosave.last_edit_time {
             if now - last_edit > parse_debounce && now - self.last_scene_parse_time > parse_debounce
             {
-                let diagnostics = crate::dsl::validate_dsl(&self.dsl_code);
-                if !diagnostics.is_empty() {
-                    // show diagnostics and block further work
-                    self.set_diagnostics(diagnostics);
-                    self.last_scene_parse_time = now;
-                    return false;
-                }
-
-                // clear any previous diagnostics
-                self.set_diagnostics(Vec::new());
+                // diagnostics are managed by `autosave_tick` alone; the
+                // parsing step should not interfere with them.  We used to
+                // clear diagnostics here when a parse occurred, which caused
+                // the gutter/banner to flash as the user typed.  Let the
+                // previous errors remain visible until new results are
+                // produced by the autosave timer.
 
                 // parse configuration (non-fatal)
                 if let Ok(config) = crate::dsl::parse_config(&self.dsl_code) {

@@ -19,11 +19,3 @@ text "Text" {
 	spawn = 0.00,
 }
 
-rect "Name" {
-	x = 0.50,
-	y = 0.50,
-	width = 0.30,
-	height = 0.20,
-	fill = "#c87878",
-	spawn = 0.00
-}
