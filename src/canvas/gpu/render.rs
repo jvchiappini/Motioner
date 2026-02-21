@@ -149,7 +149,7 @@ pub fn render_frame_color_image_gpu_snapshot(
             if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
                 shape, rw, rh, time, snap.duration_secs,
                 &mut snap.font_arc_cache.clone(), &std::collections::HashMap::new(),
-                &snap.dsl_event_handlers, *parent_spawn,
+                &snap.dsl.event_handlers, *parent_spawn,
             ) {
                 let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
                 atlas_buf[row_offset..row_offset + (rw * rh * 4) as usize].copy_from_slice(&result.pixels);
@@ -302,7 +302,7 @@ pub fn render_frame_native_texture(
             if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
                 shape, rw, rh, time, snap.duration_secs,
                 &mut snap.font_arc_cache.clone(), &std::collections::HashMap::new(),
-                &snap.dsl_event_handlers, *parent_spawn,
+                &snap.dsl.event_handlers, *parent_spawn,
             ) {
                 let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
                 atlas[row_offset..row_offset + (rw * rh * 4) as usize].copy_from_slice(&result.pixels);

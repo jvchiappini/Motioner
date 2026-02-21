@@ -39,7 +39,7 @@ pub enum PreviewResult {
 #[derive(Clone)]
 pub struct RenderSnapshot {
     pub scene: Vec<crate::shapes::element_store::ElementKeyframes>,
-    pub dsl_event_handlers: Vec<crate::dsl::runtime::DslHandler>,
+    pub dsl: crate::states::dslstate::DslState,
     pub render_width: u32,
     pub render_height: u32,
     pub preview_multiplier: f32,
@@ -66,7 +66,7 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
     if let Some(tx) = &state.preview_worker_tx {
         let snap = RenderSnapshot {
             scene: state.scene.clone(),
-            dsl_event_handlers: state.dsl_event_handlers.clone(),
+            dsl: state.dsl.clone(),
             render_width: state.render_width,
             render_height: state.render_height,
             preview_multiplier: state.preview_multiplier,

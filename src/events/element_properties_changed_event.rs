@@ -14,7 +14,7 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
     // We also normalize the source text to use tabs while we're at it.
     let diags = crate::dsl::utils::validate_and_normalize(&mut state.dsl_code);
     if !diags.is_empty() {
-        state.dsl_diagnostics = diags.clone();
+        state.dsl.diagnostics = diags.clone();
         if show_toast {
             state.toast_message = Some(format!("Save failed: DSL errors"));
             state.toast_type = crate::app_state::ToastType::Error;
@@ -43,7 +43,7 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
         }
     }
     // Clear diagnostics on successful save
-    state.dsl_diagnostics.clear();
+    state.dsl.diagnostics.clear();
     if show_toast {
         state.toast_message = Some(format!(
             "Saved {}",
@@ -77,7 +77,7 @@ mod tests {
 
         let res = write_dsl_to_project(&mut state, false);
         assert!(res.is_err());
-        assert!(!state.dsl_diagnostics.is_empty());
+        assert!(!state.dsl.diagnostics.is_empty());
 
         // Ensure file was not written
         let dst = td.path().join("code.motioner");

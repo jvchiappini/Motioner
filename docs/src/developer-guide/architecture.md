@@ -157,9 +157,9 @@ State changes are detected via `TextEditOutput::changed()` inside the
 * `state.autosave.last_code_edit_time` is set to the current frame time (obtained from
   `ui.ctx().input(|i| i.time)`).
 * Quick validation is run using `crate::dsl::validate_dsl(&state.dsl_code)`.
-  - Results are funneled through `state.set_diagnostics`, which stores the
-    diagnostics, clears the autosave flag on error and otherwise prepares the
-    state for a pending save.
+  - Results are funneled through `states::autosave::apply_diagnostics` (via
+    `state.tick`), which stores the diagnostics, clears the autosave flag on
+    error and otherwise prepares the state for a pending save.
 * The DSL is normalized with `dsl::generator::normalize_tabs` (tabs instead of
   spaces).
 
@@ -170,29 +170,33 @@ No parsing or scene updates happen at this point; those are handled in
 
 The editor itself only calls the DSL layer for validation and formatting as
 noted above. Much of the remaining bookkeeping – autosave debounce, repeated
-validation and diagnostics handling – has been moved into `AppState` methods
-(`set_diagnostics`, `autosave_tick`) to reduce clutter in `ui::update`.  The
-`ui` loop still orchestrates when those helpers run.  After each frame,
+validation and diagnostics handling – lives in `states::autosave` now.  The
+public API is a pair of helpers (`apply_diagnostics` and `tick`) that operate
+on an `AppState` reference; `state.set_diagnostics` and
+`state.autosave_tick` were thin wrappers that have since been removed.  The
+`ui` loop still orchestrates when the helpers run. After each frame,
 `ui::update` checks `state.autosave.last_code_edit_time` and, if enough wall‑clock time
 has passed (120 ms by default), it will:
 
 * Run `dsl::validate_dsl`; any resulting diagnostics are pushed through
-  `state.set_diagnostics` which also inhibits autosave.
+  `states::autosave::apply_diagnostics` (called indirectly via `state.tick`) which also inhibits autosave.
 * Optionally parse configuration via `dsl::parse_config` to update FPS,
   duration, width/height in `AppState`.
 * Parse the full DSL into elements with
   `dsl::parse_dsl_into_elements(&state.dsl_code, state.fps)`. On success it
   replaces `state.scene`, bumps `state.scene_version`, and recomputes
-  `state.dsl_event_handlers` via `dsl::extract_event_handlers_structured`.
+  `state.dsl.event_handlers` via `dsl::extract_event_handlers_structured`.
 * When the code panel is active, preview requests are throttled to avoid
   frequent GPU texture swaps; a pending flag is set and cleared after a
   longer idle interval (≈450 ms).
 
 These deferred operations implement the debounce discussed in the mission and
 ensure that the DSL pipeline is only invoked when the user has paused typing.
-The implementation now resides in `AppState::debounced_parse`, keeping the
-UI code focused on layout and letting the state object manage the parsing
-details.
+The implementation now resides in `AppState::debounced_parse` (and is
+conveniently wrapped by [`AppState::tick`]), keeping the UI code focused on
+layout and letting the state object manage the parsing details.  As a result
+`ui::update` no longer contains any of the timing logic; it simply calls
+`state.tick(now)` once per frame.
 
 ### Async / channels
 
@@ -321,7 +325,7 @@ Serialises a scene back into DSL text.  There are two flavours:
 
 Both functions write the mandatory header and respect the `ephemeral` flag.
 `extract_event_handlers` walks raw source manually to pull out handlers and is
-used by `ui::update` when recomputing `state.dsl_event_handlers`.
+used by `ui::update` when recomputing `state.dsl.event_handlers`.
 `normalize_tabs` is a small helper used by the editor to convert leading
 spaces to tabs for consistent formatting.
 
@@ -394,10 +398,10 @@ as VRAM detection, cache clearing and texture loading.  Additional helpers
 include `clear_preview_caches` and `load_scene_fonts`, both of which are
 described later in this file alongside the fields they operate on.
 
-Two other frequently-used helpers live on `AppState`: `set_diagnostics`
-records and surfaces validation errors (and flips the autosave flag), while
-`autosave_tick` implements the idle validation / save cycle invoked every
-frame from `ui::update`.
+Two other frequently‑used helpers used to live on `AppState`: `set_diagnostics`
+and `autosave_tick`.  After refactoring they have been consolidated in the
+`states::autosave` module; callers now drive both via the single
+`state.tick(now)` helper instead of invoking them directly.
 
 
 ### Core configuration
@@ -440,7 +444,7 @@ CPU memory or as GPU textures (depending on `prefer_vram_cache` and
 * `dsl_code` – the text buffer edited in `code_panel`.  It is kept in sync by
   `AppState::request_dsl_update`, which regenerates the code from
   `scene` and emits an `element_properties_changed` event.
-* `dsl_diagnostics` and `dsl_event_handlers` mirror the results of
+* `dsl.diagnostics` and `dsl.event_handlers` mirror the results of
   `dsl::validate_dsl` and `dsl::extract_event_handlers_structured` and are
   recomputed during the debounce path in `ui::update`.
 
@@ -497,7 +501,7 @@ them with sane defaults and a sample scene produced by
 * `ensure_completion_worker(&mut self)` – spawn the autocomplete helper thread
   and stash the tx/rx handles; safe to call repeatedly.
 * `debounced_parse(&mut self, now)` – run the delayed DSL parse/validation
-  cycle and update `scene`/`dsl_event_handlers`; returns whether the parse
+  cycle and update `scene`/`dsl.event_handlers`; returns whether the parse
   produced a non-empty scene.
 
 ### Concurrency model
@@ -1058,7 +1062,7 @@ heavy lifting is done on the GPU, previews remain smooth even with hundreds of
 elements and complex animations.
 
 Integration with the rest of the system is primarily via `RenderSnapshot` (in
-`preview_worker.rs`), which captures the current `scene`, `dsl_event_handlers`,
+`preview_worker.rs`), which captures the current `scene`, `dsl.event_handlers`,
 render dimensions, preview parameters and font cache.  The worker thread passes
 this snapshot to the GPU functions along with the requested time; the GPU
 functions mutate `GpuResources` and return either an image or a native texture

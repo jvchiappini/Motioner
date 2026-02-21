@@ -17,6 +17,61 @@ pub struct AutosaveState {
     pub last_success_time: Option<f64>,
     /// Error message from the last failed autosave, if any.
     pub error: Option<String>,
+    /// Debounce period (seconds) before attempting validation/write.
+    pub cooldown_secs: f32,
+}
+
+/// Update state diagnostics and autosave flags based on the provided DSL
+/// diagnostics.  This helper operates on the entire `AppState` to avoid
+/// borrowing conflicts between the `autosave` field and other state members.
+pub fn apply_diagnostics(
+    state: &mut crate::app_state::AppState,
+    diags: Vec<crate::dsl::Diagnostic>,
+) {
+    // borrow autosave separately to satisfy the borrow checker
+    let autosave = &mut state.autosave;
+    if diags.is_empty() {
+        state.dsl.diagnostics.clear();
+        autosave.error = None;
+        // leave pending flag untouched; callers may adjust it separately
+    } else {
+            state.dsl.diagnostics = diags.clone();
+        autosave.pending = false;
+        autosave.error = Some(diags[0].message.clone());
+    }
+}
+
+/// Drive the autosave debounce/validation/write sequence that used to be
+/// implemented directly on `AppState`.  This helper mutates both the
+/// autosave fields and other portions of the app state (`dsl_code`,
+/// `dsl_diagnostics`, etc.) and is intended to be called once per frame with
+/// the current wall‑clock time.
+pub fn tick(state: &mut crate::app_state::AppState, now: f64) {
+    if let Some(last_edit) = state.autosave.last_edit_time {
+        if now - last_edit > state.autosave.cooldown_secs as f64 {
+            let diagnostics = crate::dsl::utils::validate_and_normalize(&mut state.dsl_code);
+            if !diagnostics.is_empty() {
+                apply_diagnostics(state, diagnostics);
+            } else {
+                // attempt write
+                match crate::events::element_properties_changed_event::write_dsl_to_project(
+                    state,
+                    false,
+                ) {
+                    Ok(_) => {
+                        state.autosave.pending = false;
+                        state.autosave.last_success_time = Some(now);
+                        state.autosave.error = None;
+                        state.dsl.diagnostics.clear();
+                    }
+                    Err(e) => {
+                        state.autosave.pending = false;
+                        state.autosave.error = Some(e.to_string());
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl AutosaveState {

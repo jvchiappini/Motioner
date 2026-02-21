@@ -1,6 +1,7 @@
 use crate::shapes::element_store::ElementKeyframes;
 // Separate module to encapsulate autosave-related flags/timestamps.
 use crate::states::autosave::AutosaveState;
+use crate::states::dslstate::DslState;
 use eframe::egui; // bring Pos2/Rect etc into scope for resize helpers
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -100,10 +101,8 @@ pub struct AppState {
     /// Raw DSL event handler blocks parsed from `dsl_code` (e.g. `on_time { ... }`).
     /// These are runtime-only and not serialized.
     #[serde(skip)]
-    pub dsl_event_handlers: Vec<crate::dsl::runtime::DslHandler>,
-    /// Diagnostics produced by DSL validation (shown inline in editor).
-    #[serde(skip)]
-    pub dsl_diagnostics: Vec<crate::dsl::Diagnostic>,
+    /// Transient information derived from the current DSL source.
+    pub dsl: DslState,
     pub export_in_progress: bool,
     #[serde(skip, default = "default_progress")]
     #[allow(dead_code)]
@@ -196,8 +195,6 @@ pub struct AppState {
     pub last_completion_query_time: f64,
 
     // Autosave / Editor state ------------------------------------------------
-    #[serde(skip)]
-    pub autosave_cooldown_secs: f32, // debounce interval for autosave
     #[serde(skip)]
     pub autosave: AutosaveState,
     /// Time when we last parsed `dsl_code` into `scene` (debounced)
@@ -413,8 +410,7 @@ impl Default for AppState {
             playing: false,
             time: 0.0,
             last_time_changed: None,
-            dsl_event_handlers: Vec::new(),
-            dsl_diagnostics: Vec::new(),
+            dsl: DslState::default(),
             export_in_progress: false,
             export_progress: Arc::new(AtomicUsize::new(0)),
             last_export_path: None,
@@ -471,8 +467,10 @@ impl Default for AppState {
             // while the user is still typing.  This mirrors the value used in
             // the autosave timer elsewhere (previously 0.5s, now 0.8s per
             // user request).
-            autosave_cooldown_secs: 0.8,
-            autosave: AutosaveState::default(),
+            autosave: AutosaveState {
+                cooldown_secs: 0.8,
+                ..Default::default()
+            },
             last_scene_parse_time: 0.0,
             preview_pending_from_code: false,
             project_path: None,
@@ -702,62 +700,10 @@ impl AppState {
         }
     }
 
-    /// Record a new set of DSL diagnostics and update autosave state.
-    ///
-    /// The semantics mimic the ad-hoc sequence previously peppered through
-    /// `ui::update`: diagnostics are stored in `self.dsl_diagnostics`; if any
-    /// exist we clear the pending autosave flag and surface the first message
-    /// via `autosave_error`.  An empty vector clears both fields.
-    pub fn set_diagnostics(&mut self, diags: Vec<crate::dsl::Diagnostic>) {
-        if diags.is_empty() {
-            self.dsl_diagnostics.clear();
-            self.autosave.error = None;
-            // leave pending flag untouched; callers may adjust it separately
-        } else {
-            self.dsl_diagnostics = diags.clone();
-            self.autosave.pending = false;
-            self.autosave.error = Some(diags[0].message.clone());
-        }
-    }
-
-    /// Convenience helper invoked periodically from `ui::update` that
-    /// handles the autosave debounce/cooldown logic.
-    pub fn autosave_tick(&mut self, now: f64) {
-        // run the same debounce/validation/write sequence that used to live
-        // inline in `ui::update`.  Most of the flags are stored on
-        // `self.autosave` but we still need access to the outer state for
-        // validation and the write helper.
-        if let Some(last_edit) = self.autosave.last_edit_time {
-            if now - last_edit > self.autosave_cooldown_secs as f64 {
-                // perform the same validation/normalization that used to run
-                // immediately in the editor.  Deferring it here means the UI
-                // only spends time validating once the user has been idle for
-                // the cooldown period, which eliminates the realtime error
-                // flashes and reduces typing lag.  Normalization is also
-                // applied here so the file gets written consistently.
-                let diagnostics = crate::dsl::utils::validate_and_normalize(&mut self.dsl_code);
-                if !diagnostics.is_empty() {
-                    self.set_diagnostics(diagnostics);
-                } else {
-                    // attempt write
-                    match crate::events::element_properties_changed_event::write_dsl_to_project(
-                        self, false,
-                    ) {
-                        Ok(_) => {
-                            self.autosave.pending = false;
-                            self.autosave.last_success_time = Some(now);
-                            self.autosave.error = None;
-                            self.dsl_diagnostics.clear();
-                        }
-                        Err(e) => {
-                            self.autosave.pending = false;
-                            self.autosave.error = Some(e.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // NOTE: the diagnostics/auto‑save helpers previously defined here have
+    // been moved to `states::autosave`.  We no longer expose public methods on
+    // `AppState` for them because there are no external callers; the UI loop
+    // uses `AppState::tick` to drive everything.
 
     /// Perform a debounced parse of the current DSL text and update the in-
     /// memory scene if successful.  This mirrors the logic that used to live
@@ -772,7 +718,8 @@ impl AppState {
         if let Some(last_edit) = self.autosave.last_edit_time {
             if now - last_edit > parse_debounce && now - self.last_scene_parse_time > parse_debounce
             {
-                // diagnostics are managed by `autosave_tick` alone; the
+                // diagnostics are managed by the autosave helper (now
+                // `states::autosave::tick`/`AppState::tick`) alone; the
                 // parsing step should not interfere with them.  We used to
                 // clear diagnostics here when a parse occurred, which caused
                 // the gutter/banner to flash as the user typed.  Let the
@@ -792,7 +739,7 @@ impl AppState {
                 if !parsed.is_empty() {
                     self.scene = parsed;
                     self.scene_version += 1;
-                    self.dsl_event_handlers =
+                    self.dsl.event_handlers =
                         crate::dsl::extract_event_handlers_structured(&self.dsl_code);
 
                     // preview throttle logic is UI-specific but we keep a small
@@ -828,6 +775,17 @@ impl AppState {
             }
         }
         false
+    }
+
+    /// Drive periodic state updates that were previously called from
+    /// `ui::update`.  This keeps UI code thin and allows tests to tick the
+    /// application state without pulling in egui.  The method returns `true`
+    /// if the scene buffer was replaced by a successful parse.
+    #[inline]
+    pub fn tick(&mut self, now: f64) -> bool {
+        // drive autosave/validation; implementation lives in states/autosave
+        crate::states::autosave::tick(self, now);
+        self.debounced_parse(now)
     }
 }
 

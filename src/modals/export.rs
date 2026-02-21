@@ -529,7 +529,7 @@ fn start_export(state: &mut AppState) {
     let use_gpu_encoder = state.export_use_gpu_encoder;
     // clone ElementKeyframes for export worker
     let ek_scene = state.scene.clone();
-    let dsl_handlers = state.dsl_event_handlers.clone();
+    let dsl_handlers = state.dsl.event_handlers.clone();
     let font_arc_cache = state.font_arc_cache.clone();
     let font_map = state.font_map.clone();
     let scene_version = state.scene_version;
@@ -638,7 +638,7 @@ fn start_export(state: &mut AppState) {
         // ── Snapshot base used by both CPU & GPU renderers ─────────────────
         let snap_base = crate::canvas::preview_worker::RenderSnapshot {
             scene: ek_scene.clone(),
-            dsl_event_handlers: dsl_handlers.clone(),
+            dsl: crate::states::dslstate::DslState { event_handlers: dsl_handlers.clone(), diagnostics: Vec::new() },
             render_width: render_w,
             render_height: render_h,
             preview_multiplier: 1.0,

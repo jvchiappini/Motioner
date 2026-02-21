@@ -2,9 +2,9 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-	x = 0.500,
-	y = 0.500,
-	radius = 0.100,
+	x = 0.336,
+	y = 0.434,
+	radius = 0.161,
 	fill = "#78c8ff",
 	spawn = 0.00
 }
@@ -18,4 +18,13 @@ text "Text" {
 	fill = "#ffffff",
 	spawn = 0.00,
 }
+
+circle "sg" {
+	x = 0.50,
+	y = 0.50,
+	radius = 0.10,
+	fill = "#78c8ff",
+	spawn = 0.00
+}
+
 

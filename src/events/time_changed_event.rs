@@ -20,7 +20,7 @@ impl TimeChangedEvent {
         // shapes spawned by handlers and append them to the live scene.
         let _ = apply_on_time_handlers_collect_spawns_elements(
             &mut state.scene,
-            &state.dsl_event_handlers,
+            &state.dsl.event_handlers,
             seconds,
             frame,
             state.fps,

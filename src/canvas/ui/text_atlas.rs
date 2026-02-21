@@ -16,7 +16,7 @@ pub fn prepare_text_atlas(state: &mut AppState) -> (Option<(Vec<u8>, u32, u32)>,
                 // Aplicar handlers de eventos para contenido de texto dinámico
                 crate::events::time_changed_event::apply_on_time_handlers(
                     std::slice::from_mut(&mut shape),
-                    &state.dsl_event_handlers,
+                    &state.dsl.event_handlers,
                     state.time,
                     frame_idx as u32,
                 );
@@ -43,7 +43,7 @@ pub fn prepare_text_atlas(state: &mut AppState) -> (Option<(Vec<u8>, u32, u32)>,
 
         if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
             shape, rw, rh, state.time, state.duration_secs,
-            &mut state.font_arc_cache, &state.font_map, &state.dsl_event_handlers, *parent_spawn
+            &mut state.font_arc_cache, &state.font_map, &state.dsl.event_handlers, *parent_spawn
         ) {
             let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
             let len = (rw * rh * 4) as usize;

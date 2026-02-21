@@ -111,10 +111,14 @@ impl eframe::App for MyApp {
             state.last_synced_settings = current_settings;
         }
 
-        // compute current time once and drive debounce helpers
+        // compute current time once and drive state updates.  Previously the
+        // autosave/parse calls lived directly in `ui::update`, but that made
+        // the UI module responsible for non-UI business logic.  We now expose
+        // a single helper on `AppState` so the rendering code can remain
+        // lightweight and a caller in tests can tick the state without
+        // depending on egui.
         let now = ctx.input(|i| i.time);
-        state.autosave_tick(now);
-        let _ = state.debounced_parse(now);
+        let _ = state.tick(now);
 
         // If a preview request was deferred while editing code, trigger it once
         // the editor has been idle long enough. This keeps immediate UI feedback
@@ -519,7 +523,7 @@ impl eframe::App for MyApp {
                         // When starting playback, ensure DSL handlers are
                         // registered immediately (don't rely on debounce).
                         if state.playing {
-                            state.dsl_event_handlers =
+                            state.dsl.event_handlers =
                                 crate::dsl::extract_event_handlers_structured(&state.dsl_code);
                             // dispatch initial time event for the current playhead
                             state.set_time(state.time);

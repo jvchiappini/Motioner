@@ -138,7 +138,7 @@ where
                     &text_output,
                     text_edit_id,
                     &state.dsl_code,
-                    &state.dsl_diagnostics,
+                    &state.dsl.diagnostics,
                     gutter_width,
                 );
 
@@ -162,7 +162,8 @@ where
                 // Instead we simply mark the buffer dirty and allow the
                 // debounced autosave logic to perform validation (and
                 // normalization) once the user has been idle for the cooldown
-                // period.  See `AppState::autosave_tick` for the implementation.
+                // period.  The helper now lives in `states::autosave::tick` and
+                // is driven indirectly via `AppState::tick`.
                 let now = ui.ctx().input(|i| i.time);
                 state.autosave.on_change(now, None);
             }
@@ -178,11 +179,11 @@ where
 /// another 40 lines from the main function and makes the layout intent more
 /// apparent.
 fn render_error_banner(ui: &mut egui::Ui, state: &mut AppState) {
-    if state.dsl_diagnostics.is_empty() {
+    if state.dsl.diagnostics.is_empty() {
         return;
     }
 
-    let diag = &state.dsl_diagnostics[0];
+    let diag = &state.dsl.diagnostics[0];
     egui::TopBottomPanel::bottom("code_error_banner")
         .frame(
             egui::Frame::none()
@@ -212,8 +213,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let scene_ptr = state.scene.as_ptr();
     let scene_len = state.scene.len();
 
-    let handlers_ptr = state.dsl_event_handlers.as_ptr();
-    let handlers_len = state.dsl_event_handlers.len();
+    let handlers_ptr = state.dsl.event_handlers.as_ptr();
+    let handlers_len = state.dsl.event_handlers.len();
 
     // Custom layouter that applies the DSL syntax highlighter to the editor's
     // layout job. Kept short and local so it can capture `defined_names` /
