@@ -63,6 +63,12 @@ impl ShapeDescriptor for Text {
         "📝"
     }
 
+    fn dsl_color(&self) -> egui::Color32 {
+        // text elements will be highlighted in a soft lavender so they
+        // differ from geometry-like shapes.
+        egui::Color32::from_rgb(180, 150, 240)
+    }
+
     fn draw_modifiers(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         let mut changed = false;
 

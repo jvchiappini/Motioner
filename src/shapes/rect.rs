@@ -52,6 +52,11 @@ impl ShapeDescriptor for Rect {
         "⬛"
     }
 
+    fn dsl_color(&self) -> egui::Color32 {
+        // use a warm coral colour by default
+        egui::Color32::from_rgb(200, 120, 120)
+    }
+
     fn draw_modifiers(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             ui.label("Name:");

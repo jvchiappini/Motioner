@@ -379,6 +379,26 @@ pub struct CreateDefaultFactory {
 
 inventory::collect!(CreateDefaultFactory);
 
+/// Return the editor highlight colour for a DSL keyword, if it corresponds to
+/// a registered shape.  This looks up the `CreateDefaultFactory` registry,
+/// constructs a temporary instance and queries its `ShapeDescriptor` for
+/// `dsl_color()`.  The result is cached by callers in the highlighter; this
+/// helper keeps the lookup logic centralized.
+pub fn keyword_color(keyword: &str) -> Option<egui::Color32> {
+    for factory in inventory::iter::<CreateDefaultFactory> {
+        if factory.kind == keyword {
+            // create a dummy shape (name doesn't matter) and ask for its
+            // descriptor.  `descriptor()` will never return `None` for concrete
+            // shapes.
+            let shape = (factory.constructor)(String::new());
+            if let Some(desc) = shape.descriptor() {
+                return Some(desc.dsl_color());
+            }
+        }
+    }
+    None
+}
+
 /// Try to parse a collected DSL `block` using the registered shape parsers.
 pub fn parse_shape_block(block: &[String]) -> Option<Shape> {
     let header = block.first()?;

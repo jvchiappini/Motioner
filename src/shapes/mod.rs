@@ -101,6 +101,20 @@ pub trait ShapeDescriptor {
     /// when runtime handlers mutate `Shape` instances so the system can
     /// insert hold keyframes for changed properties. Default
     /// implementation returns an empty `FrameProps` (no changes).
+    // ── DSL editor colour ───────────────────────────────────────────────
+
+    /// Colour that should be used when highlighting this shape's keyword in
+    /// the code editor.  The default implementation returns the same blue
+    /// that was previously hard‑coded in `highlighter.rs` for `circle`/`rect`.
+    ///
+    /// Concrete shapes can override this if they want a different colour; the
+    /// highlighter will look up the descriptor for a given keyword and call
+    /// this method.  Providing a central location here avoids the need for
+    /// another ad‑hoc registry and makes adding new shapes much easier.
+    fn dsl_color(&self) -> egui::Color32 {
+        // originally: egui::Color32::from_rgb(86, 156, 214)
+        egui::Color32::from_rgb(86, 156, 214)
+    }
     fn changed_frame_props(
         &self,
         _orig: Option<&crate::shapes::element_store::FrameProps>,

@@ -237,10 +237,21 @@ pub(crate) fn highlight_code<F>(
                 continue;
             }
 
+            // --- shape keywords ------------------------------------------------
+            // instead of hard-coding "circle"/"rect" here, consult the shape
+            // manager registry which already knows about every shape type.  each
+            // `ShapeDescriptor` can specify its own DSL colour via `dsl_color()`.
+            if let Some(col) = crate::shapes::shapes_manager::keyword_color(word) {
+                append_text(job, word, &font_id, col);
+                last_idx = end;
+                continue;
+            }
+
             let color = match word {
-                // Primary Block / control keywords
-                "circle" | "rect" | "move" | "size" | "timeline" | "let" | "set" | "for" | "if"
-                | "not" | "in" => egui::Color32::from_rgb(86, 156, 214), // Blue (#569CD6)
+                // Primary Block / control keywords (non‑shape)
+                "move" | "size" | "timeline" | "let" | "set" | "for" | "if" | "not" | "in" => {
+                    egui::Color32::from_rgb(86, 156, 214)
+                } // Blue (#569CD6)
 
                 // Parameters / Properties
                 "name" | "x" | "y" | "radius" | "w" | "h" | "width" | "height" | "fill"

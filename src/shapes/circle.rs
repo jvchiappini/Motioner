@@ -52,6 +52,11 @@ impl ShapeDescriptor for Circle {
         "⭕"
     }
 
+    fn dsl_color(&self) -> egui::Color32 {
+        // use a pale cyan similar to the default fill so circles stand out
+        egui::Color32::from_rgb(120, 200, 255)
+    }
+
     fn draw_modifiers(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             ui.label("Name:");
