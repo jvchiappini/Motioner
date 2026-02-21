@@ -240,7 +240,11 @@ impl Shape {
                 .iter()
                 .map(|c| c.spawn_time())
                 .fold(f32::INFINITY, f32::min);
-            if min.is_finite() { min } else { 0.0 }
+            if min.is_finite() {
+                min
+            } else {
+                0.0
+            }
         } else {
             0.0
         }
@@ -455,32 +459,36 @@ pub fn find_hit_path(
                 }
             }
             Shape::Rect(r) => {
-                let min = composition_rect.left_top()
+                // GPU rendering treats the rectangle's `x`/`y` as the centre
+                // of mass (see `shapes/rect.rs::append_gpu_shapes`).  Hit
+                // testing must use the same convention, otherwise the clicked
+                // area will be offset from what the user sees on screen.
+                let centre = composition_rect.left_top()
                     + eframe::egui::vec2(
                         r.x * composition_rect.width(),
                         r.y * composition_rect.height(),
                     );
-                let rect = eframe::egui::Rect::from_min_size(
-                    min,
-                    eframe::egui::vec2(
-                        r.w * composition_rect.width(),
-                        r.h * composition_rect.height(),
-                    ),
-                );
+                let w_px = r.w * composition_rect.width();
+                let h_px = r.h * composition_rect.height();
+                let rect =
+                    eframe::egui::Rect::from_center_size(centre, eframe::egui::vec2(w_px, h_px));
                 if rect.contains(pos) {
                     return Some(vec![i]);
                 }
             }
             Shape::Text(t) => {
-                let min = composition_rect.left_top()
+                // text also uses centre-of-mass coordinates when rendered.
+                let centre = composition_rect.left_top()
                     + eframe::egui::vec2(
                         t.x * composition_rect.width(),
                         t.y * composition_rect.height(),
                     );
                 let height_px = t.size * composition_rect.height();
                 let width_px = t.value.len() as f32 * height_px * 0.5; // approximate
-                let rect =
-                    eframe::egui::Rect::from_min_size(min, eframe::egui::vec2(width_px, height_px));
+                let rect = eframe::egui::Rect::from_center_size(
+                    centre,
+                    eframe::egui::vec2(width_px, height_px),
+                );
                 if rect.contains(pos) {
                     return Some(vec![i]);
                 }
@@ -529,25 +537,24 @@ pub fn draw_highlight_recursive(
             painter.circle_stroke(center, c.radius * composition_rect.width(), stroke);
         }
         Shape::Rect(r) => {
-            let min = composition_rect.left_top()
+            // rectangle coordinates are centred, so compute centre and draw
+            // highlight around it rather than treating `x`/`y` as top-left.
+            let centre = composition_rect.left_top()
                 + eframe::egui::vec2(
                     r.x * composition_rect.width(),
                     r.y * composition_rect.height(),
                 );
+            let w_px = r.w * composition_rect.width();
+            let h_px = r.h * composition_rect.height();
             painter.rect_stroke(
-                eframe::egui::Rect::from_min_size(
-                    min,
-                    eframe::egui::vec2(
-                        r.w * composition_rect.width(),
-                        r.h * composition_rect.height(),
-                    ),
-                ),
+                eframe::egui::Rect::from_center_size(centre, eframe::egui::vec2(w_px, h_px)),
                 0.0,
                 stroke,
             );
         }
         Shape::Text(t) => {
-            let min = composition_rect.left_top()
+            // text uses a central anchor as well; highlight around centre.
+            let centre = composition_rect.left_top()
                 + eframe::egui::vec2(
                     t.x * composition_rect.width(),
                     t.y * composition_rect.height(),
@@ -555,7 +562,10 @@ pub fn draw_highlight_recursive(
             let height_px = t.size * composition_rect.height();
             let width_px = t.value.len() as f32 * height_px * 0.5;
             painter.rect_stroke(
-                eframe::egui::Rect::from_min_size(min, eframe::egui::vec2(width_px, height_px)),
+                eframe::egui::Rect::from_center_size(
+                    centre,
+                    eframe::egui::vec2(width_px, height_px),
+                ),
                 0.0,
                 stroke,
             );

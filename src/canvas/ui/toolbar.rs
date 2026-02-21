@@ -32,6 +32,11 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState, composition_rect: e
                         ui.painter().rect_filled(r.shrink(2.0), 2.0, egui::Color32::from_rgb(state.picker_color[0], state.picker_color[1], state.picker_color[2]));
                         ui.painter().rect_stroke(r.shrink(2.0), 2.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
 
+                        // Toggle resize mode directly on the mini toolbar
+                        ui.separator();
+                        ui.checkbox(&mut state.resize_mode, "Resize")
+                            .on_hover_text("Drag edges of an element to resize instead of selecting");
+
                         ui.separator();
 
                         // Multiplicador de Previsualización

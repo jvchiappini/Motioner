@@ -1,4 +1,5 @@
 use crate::shapes::element_store::ElementKeyframes;
+use eframe::egui; // bring Pos2/Rect etc into scope for resize helpers
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -216,6 +217,15 @@ pub struct AppState {
     pub picker_active: bool,
     pub picker_color: [u8; 4],
 
+    /// When true, dragging an element in the canvas will resize it instead of
+    /// just selecting.  The toggle is exposed next to the global color picker.
+    pub resize_mode: bool,
+    /// Temporary state for an active resize drag operation.  Stored so we can
+    /// compute the element centre once when the drag begins and then adjust
+    /// width/height/radius each frame as the pointer moves.
+    #[serde(skip)]
+    pub resize_info: Option<ResizeInfo>,
+
     // Drag-and-drop state
     pub drag_start_time: Option<f64>,
     pub potential_drag_path: Option<Vec<usize>>,
@@ -301,6 +311,28 @@ pub struct AppState {
     /// The version of the scene currently uploaded to the GPU buffers.
     #[serde(skip)]
     pub gpu_scene_version: u32,
+}
+
+/// Information persisted for the duration of an ongoing canvas resize drag.
+#[derive(Clone)]
+pub struct ResizeInfo {
+    pub path: Vec<usize>,
+    /// Centre of the element (in screen coordinates) at the start of the drag.
+    pub centre: egui::Pos2,
+    /// Whether the horizontal dimension should change (left or right edge).
+    pub horiz: bool,
+    /// Whether the vertical dimension should change (top or bottom edge).
+    pub vert: bool,
+    /// Original width fraction (for rects) at drag start.
+    pub orig_w: Option<f32>,
+    /// Original height fraction (for rects) at drag start.
+    pub orig_h: Option<f32>,
+    /// Which horizontal edge(s) were hit.
+    pub left: bool,
+    pub right: bool,
+    /// Which vertical edge(s) were hit.
+    pub top: bool,
+    pub bottom: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,6 +454,8 @@ impl Default for AppState {
             show_welcome: true,
             picker_active: false,
             picker_color: [255, 255, 255, 255],
+            resize_mode: false,
+            resize_info: None,
             drag_start_time: None,
             potential_drag_path: None,
             renaming_path: None,

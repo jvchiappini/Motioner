@@ -82,8 +82,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         // The closing brace for the `egui::Frame::canvas(...).show` closure was misplaced here.
         // It is now removed, allowing the following code to be part of the closure.
 
-        // 7. Manejar Clics y Selección
-        if main_ui_enabled && response.clicked() {
+        // 7. Manejar Clics, selección y redimensionado
+        // If resize mode is enabled we want to update the cursor even when
+        // the user is merely hovering near a shape, not only when they click.
+        // Thus we invoke the interaction handler whenever the canvas is
+        // hovered in resize mode, or on a click/drag as before.
+        if main_ui_enabled
+            && (response.clicked()
+                || (state.resize_mode && (response.hovered() || response.dragged_by(egui::PointerButton::Primary))))
+        {
             interaction::handle_canvas_clicks(ui, state, &response, composition_rect, zoom);
         }
 

@@ -9,21 +9,11 @@ circle "Circle" {
 	spawn = 0.00
 }
 
-text "Text" {
-	x = 0.500,
-	y = 0.500,
-	value = "Hello",
-	font = "System",
-	size = 0.0333,
-	fill = "#ffffff",
-	spawn = 0.00,
-}
-
 rect "Rect #2" {
-	x = 0.000,
-	y = 0.000,
-	width = 0.200,
-	height = 0.200,
-	fill = "#d26262",
+	x = 0.341,
+	y = 0.358,
+	width = 0.142,
+	height = 0.164,
+	fill = "#c87878",
 	spawn = 0.00
 }
