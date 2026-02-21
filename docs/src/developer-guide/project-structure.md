@@ -28,7 +28,8 @@ Motioner/
 │   ├── renderer.rs      # Rendering engine
 │   ├── project_settings.rs
 │   ├── welcome_modal.rs
-│   ├── autocomplete.rs
+│   ├── code_panel/
+│   │   ├── autocomplete.rs   # moved inside editor submodule
 │   ├── code_panel.rs
 │   ├── dsl.rs
 │   └── composition.wgsl # GPU shaders
@@ -73,7 +74,7 @@ Motioner/
 |------|---------|
 | `project_settings.rs` | Project configuration |
 | `welcome_modal.rs` | Welcome screen UI |
-| `autocomplete.rs` | Autocomplete functionality |
+| `code_panel/autocomplete.rs` | Autocomplete functionality (part of editor module) |
 | `code_panel.rs` | Code editor panel |
 | `dsl.rs` | Domain-specific language |
 

@@ -1,11 +1,11 @@
 mod animations;
 mod app_state;
-mod autocomplete; // Added this
 mod canvas;
 mod code_panel;
 mod dsl;
 mod events;
 mod logics;
+mod logo;
 mod modals;
 mod project_settings;
 mod renderer;
@@ -15,7 +15,6 @@ mod shapes;
 mod timeline;
 mod ui;
 mod welcome_modal; // Added this
-mod logo;
 
 use anyhow::Result;
 use display_info::DisplayInfo;

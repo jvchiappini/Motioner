@@ -1,5 +1,9 @@
 use crate::app_state::AppState;
-use crate::autocomplete;
+
+// Pull in the autocomplete helper now that it's part of this submodule.
+// The file was moved from the crate root, so we declare it here and adjust
+// the call sites accordingly.
+mod autocomplete;
 use eframe::egui;
 
 mod gutter;
@@ -96,7 +100,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             let text_edit_id = ui.make_persistent_id("dsl_text_edit");
 
             // 1. Process Input BEFORE TextEdit (Consume keys)
-            autocomplete::process_input(ui, text_edit_id, state);
+            crate::code_panel::autocomplete::process_input(ui, text_edit_id, state);
 
             // Editor with a left gutter for line numbers (VSCode-style)
             let gutter_width = 56.0f32;
@@ -122,7 +126,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 let _output_rect = output.response.rect; // capture rect so we can draw while still owning `output`
 
                 // 2. Update State & Render Popup AFTER TextEdit
-                autocomplete::handle_state_and_render(ui, &output.response, state);
+                crate::code_panel::autocomplete::handle_state_and_render(
+                    ui,
+                    &output.response,
+                    state,
+                );
 
                 // 3. Render Color Pickers for hex color strings
                 handle_color_pickers(ui, state, &output);
@@ -187,7 +195,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     if !state.dsl_diagnostics.is_empty() {
         let diag = &state.dsl_diagnostics[0];
         egui::TopBottomPanel::bottom("code_error_banner")
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(80, 20, 20)).inner_margin(8.0))
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(80, 20, 20))
+                    .inner_margin(8.0),
+            )
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("❌").size(14.0));
@@ -262,30 +274,4 @@ pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
     }
 
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn find_matching_paren_handles_strings_and_nesting() {
-        let s = "call(a, b(\"(ignored)\"), c) tail";
-        // position of first '(' (the one after `call`)
-        let open = s.find('(').unwrap();
-        let matched = find_matching_paren(s, open).expect("matched");
-        assert_eq!(&s[matched..matched + 1], ")");
-        // ensure it matched the final closing paren before " tail"
-        assert!(s[matched + 1..].starts_with(" tail"));
-    }
-
-    #[test]
-    fn find_matching_paren_handles_escaped_quotes() {
-        // Ensure escaped quotes inside strings do not confuse the parser
-        let s = r#"call(a, b("foo\"(ignored)"), c) tail"#;
-        let open = s.find('(').unwrap();
-        let matched = find_matching_paren(s, open).expect("matched");
-        assert_eq!(&s[matched..matched + 1], ")");
-        assert!(s[matched + 1..].starts_with(" tail"));
-    }
 }

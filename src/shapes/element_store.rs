@@ -186,8 +186,10 @@ impl ElementKeyframes {
 
     /// Sample a numeric track at `frame` with interpolation.
     fn sample_f32_track(track: &Vec<Keyframe<f32>>, frame: FrameIndex) -> Option<f32> {
-        if track.is_empty() { return None; }
-        
+        if track.is_empty() {
+            return None;
+        }
+
         // Find the last keyframe <= frame
         let mut prev_idx: i32 = -1;
         for (i, kf) in track.iter().enumerate() {
@@ -213,11 +215,13 @@ impl ElementKeyframes {
 
         let next = &track[next_idx];
         let range = (next.frame - prev.frame) as f32;
-        if range <= 0.0 { return Some(next.value); }
+        if range <= 0.0 {
+            return Some(next.value);
+        }
 
         let t = (frame - prev.frame) as f32 / range;
         let eased_t = apply_easing_cpu(t, &prev.easing);
-        
+
         Some(prev.value + (next.value - prev.value) * eased_t)
     }
 
@@ -261,8 +265,10 @@ impl ElementKeyframes {
     }
 
     fn sample_color_track(track: &Vec<Keyframe<[u8; 4]>>, frame: FrameIndex) -> Option<[u8; 4]> {
-        if track.is_empty() { return None; }
-        
+        if track.is_empty() {
+            return None;
+        }
+
         let mut prev_idx: i32 = -1;
         for (i, kf) in track.iter().enumerate() {
             if kf.frame <= frame {
@@ -272,18 +278,24 @@ impl ElementKeyframes {
             }
         }
 
-        if prev_idx < 0 { return Some(track[0].value); }
+        if prev_idx < 0 {
+            return Some(track[0].value);
+        }
         let prev = &track[prev_idx as usize];
         let next_idx = (prev_idx + 1) as usize;
-        if next_idx >= track.len() { return Some(prev.value); }
+        if next_idx >= track.len() {
+            return Some(prev.value);
+        }
 
         let next = &track[next_idx];
         let range = (next.frame - prev.frame) as f32;
-        if range <= 0.0 { return Some(next.value); }
+        if range <= 0.0 {
+            return Some(next.value);
+        }
 
         let t = (frame - prev.frame) as f32 / range;
         let eased_t = apply_easing_cpu(t, &prev.easing);
-        
+
         let mut out = [0u8; 4];
         for i in 0..4 {
             let v0 = prev.value[i] as f32;

@@ -371,42 +371,61 @@ pub fn handle_canvas_clicks(
                                             if is_shift {
                                                 // Symmetrical (mirror) resize from center
                                                 if info.horiz {
-                                                    let new_w_px = (cur_pos.x - info.centre.x).abs() * 2.0;
+                                                    let new_w_px =
+                                                        (cur_pos.x - info.centre.x).abs() * 2.0;
                                                     w_frac = Some(new_w_px / comp_w);
                                                 }
                                                 if info.vert {
-                                                    let new_h_px = (cur_pos.y - info.centre.y).abs() * 2.0;
+                                                    let new_h_px =
+                                                        (cur_pos.y - info.centre.y).abs() * 2.0;
                                                     h_frac = Some(new_h_px / comp_h);
                                                 }
                                             } else {
                                                 // Asymmetrical resize (anchors the opposite edge)
-                                                if let (Some(orig_x), Some(orig_w)) = (info.orig_x, info.orig_w) {
+                                                if let (Some(orig_x), Some(orig_w)) =
+                                                    (info.orig_x, info.orig_w)
+                                                {
                                                     if info.right {
                                                         let left_edge_frac = orig_x - orig_w / 2.0;
-                                                        let cur_r_frac = (cur_pos.x - composition_rect.left()) / comp_w;
-                                                        let w = (cur_r_frac - left_edge_frac).max(0.001);
+                                                        let cur_r_frac = (cur_pos.x
+                                                            - composition_rect.left())
+                                                            / comp_w;
+                                                        let w = (cur_r_frac - left_edge_frac)
+                                                            .max(0.001);
                                                         w_frac = Some(w);
                                                         x_frac = Some(left_edge_frac + w / 2.0);
                                                     } else if info.left {
                                                         let right_edge_frac = orig_x + orig_w / 2.0;
-                                                        let cur_l_frac = (cur_pos.x - composition_rect.left()) / comp_w;
-                                                        let w = (right_edge_frac - cur_l_frac).max(0.001);
+                                                        let cur_l_frac = (cur_pos.x
+                                                            - composition_rect.left())
+                                                            / comp_w;
+                                                        let w = (right_edge_frac - cur_l_frac)
+                                                            .max(0.001);
                                                         w_frac = Some(w);
                                                         x_frac = Some(right_edge_frac - w / 2.0);
                                                     }
                                                 }
 
-                                                if let (Some(orig_y), Some(orig_h)) = (info.orig_y, info.orig_h) {
+                                                if let (Some(orig_y), Some(orig_h)) =
+                                                    (info.orig_y, info.orig_h)
+                                                {
                                                     if info.bottom {
                                                         let top_edge_frac = orig_y - orig_h / 2.0;
-                                                        let cur_b_frac = (cur_pos.y - composition_rect.top()) / comp_h;
-                                                        let h = (cur_b_frac - top_edge_frac).max(0.001);
+                                                        let cur_b_frac = (cur_pos.y
+                                                            - composition_rect.top())
+                                                            / comp_h;
+                                                        let h =
+                                                            (cur_b_frac - top_edge_frac).max(0.001);
                                                         h_frac = Some(h);
                                                         y_frac = Some(top_edge_frac + h / 2.0);
                                                     } else if info.top {
-                                                        let bottom_edge_frac = orig_y + orig_h / 2.0;
-                                                        let cur_t_frac = (cur_pos.y - composition_rect.top()) / comp_h;
-                                                        let h = (bottom_edge_frac - cur_t_frac).max(0.001);
+                                                        let bottom_edge_frac =
+                                                            orig_y + orig_h / 2.0;
+                                                        let cur_t_frac = (cur_pos.y
+                                                            - composition_rect.top())
+                                                            / comp_h;
+                                                        let h = (bottom_edge_frac - cur_t_frac)
+                                                            .max(0.001);
                                                         h_frac = Some(h);
                                                         y_frac = Some(bottom_edge_frac - h / 2.0);
                                                     }
@@ -432,16 +451,36 @@ pub fn handle_canvas_clicks(
                                             let elem_name = elem.name.clone();
                                             // Update DSL chain with only the properties that changed
                                             if let Some(w) = w_frac {
-                                                patch_dsl_property(&mut state.dsl_code, &elem_name, "width", w);
+                                                patch_dsl_property(
+                                                    &mut state.dsl_code,
+                                                    &elem_name,
+                                                    "width",
+                                                    w,
+                                                );
                                             }
                                             if let Some(h) = h_frac {
-                                                patch_dsl_property(&mut state.dsl_code, &elem_name, "height", h);
+                                                patch_dsl_property(
+                                                    &mut state.dsl_code,
+                                                    &elem_name,
+                                                    "height",
+                                                    h,
+                                                );
                                             }
                                             if let Some(x) = x_frac {
-                                                patch_dsl_property(&mut state.dsl_code, &elem_name, "x", x);
+                                                patch_dsl_property(
+                                                    &mut state.dsl_code,
+                                                    &elem_name,
+                                                    "x",
+                                                    x,
+                                                );
                                             }
                                             if let Some(y) = y_frac {
-                                                patch_dsl_property(&mut state.dsl_code, &elem_name, "y", y);
+                                                patch_dsl_property(
+                                                    &mut state.dsl_code,
+                                                    &elem_name,
+                                                    "y",
+                                                    y,
+                                                );
                                             }
 
                                             state.autosave_pending = true;
@@ -582,12 +621,12 @@ pub fn handle_canvas_clicks(
                                     // Rectángulo de la flecha X (Eje horizontal)
                                     let x_arrow_rect = egui::Rect::from_min_max(
                                         egui::pos2(c.x, c.y - 12.0),
-                                        egui::pos2(c.x + arrow_len, c.y + 12.0)
+                                        egui::pos2(c.x + arrow_len, c.y + 12.0),
                                     );
                                     // Rectángulo de la flecha Y (Eje vertical)
                                     let y_arrow_rect = egui::Rect::from_min_max(
                                         egui::pos2(c.x - 12.0, c.y),
-                                        egui::pos2(c.x + 12.0, c.y + arrow_len)
+                                        egui::pos2(c.x + 12.0, c.y + arrow_len),
                                     );
 
                                     let hit_x = x_arrow_rect.contains(pos);
@@ -608,8 +647,16 @@ pub fn handle_canvas_clicks(
 
                 if let Some(info) = state.move_info.clone() {
                     if ui.input(|i| i.pointer.primary_down()) {
-                        let dx = if info.axis_x { pos.x - info.start_pos.x } else { 0.0 };
-                        let dy = if info.axis_y { pos.y - info.start_pos.y } else { 0.0 };
+                        let dx = if info.axis_x {
+                            pos.x - info.start_pos.x
+                        } else {
+                            0.0
+                        };
+                        let dy = if info.axis_y {
+                            pos.y - info.start_pos.y
+                        } else {
+                            0.0
+                        };
                         let comp_w = composition_rect.width();
                         let comp_h = composition_rect.height();
 
