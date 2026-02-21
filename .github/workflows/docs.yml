@@ -31,6 +31,13 @@ jobs:
         with:
           mdbook-version: 'latest'
 
+      # install the mermaid preprocessor so code blocks render correctly
+      - name: Install mdbook-mermaid
+        run: |
+          cargo install mdbook-mermaid
+        env:
+          CARGO_HOME: ${{ runner.tool_cache }}/cargo
+
       - name: Build documentation
         run: |
           cd docs

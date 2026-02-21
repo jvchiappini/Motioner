@@ -17,6 +17,7 @@ edit-url-template = "https://github.com/jvchiappini/Motioner/edit/main/docs/{pat
 
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
+optional = true
 
 # NOTE: this requires installing the `mdbook-mermaid` binary (via
 # `cargo install mdbook-mermaid` or your platform's package manager) and
