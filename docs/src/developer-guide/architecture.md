@@ -4,6 +4,8 @@ Each section will be filled out as we progress through the pipeline described
 in the mission notes. Do not generate the entire file at once.
 -->
 # Motioner Architecture
+
+## 1. System Overview
 ```mermaid
 flowchart TB
     %% Global Styles
@@ -118,9 +120,6 @@ flowchart TB
     Runtime -- "Eval Context" --> AppState
 ```
 
-## 1. System Overview
-
-*(to be populated as we complete the layers)*
 
 ## 2. Code Editor Architecture
 
