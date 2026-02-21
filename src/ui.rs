@@ -76,8 +76,9 @@ impl eframe::App for MyApp {
                 // Safety check: ensure range is still valid (text might have changed)
                 if data.range.end <= state.dsl_code.len() {
                     state.dsl_code.replace_range(data.range.clone(), &new_hex);
-                    state.last_code_edit_time = Some(ctx.input(|i| i.time));
-                    state.autosave_pending = true;
+                    // update autosave state
+                    let now_time = ctx.input(|i| i.time);
+                    state.autosave.mark_dirty(now_time);
                     // Update range length if it changed
                     data.range.end = data.range.start + new_hex.len();
                     state.color_picker_data = Some(data);
@@ -119,7 +120,7 @@ impl eframe::App for MyApp {
         // the editor has been idle long enough. This keeps immediate UI feedback
         // via live composition while avoiding frequent texture swaps.
         if state.preview_pending_from_code {
-            if let Some(last_edit) = state.last_code_edit_time {
+            if let Some(last_edit) = state.autosave.last_edit_time {
                 const CODE_PREVIEW_IDLE_SECS: f64 = 0.45;
                 if now - last_edit > CODE_PREVIEW_IDLE_SECS {
                     crate::canvas::request_preview_frames(

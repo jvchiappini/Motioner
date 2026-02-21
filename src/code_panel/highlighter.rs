@@ -1,11 +1,16 @@
 use eframe::egui;
 
-pub(crate) fn highlight_code(
+pub(crate) fn highlight_code<F>(
     job: &mut egui::text::LayoutJob,
     code: &str,
-    defined_names: &std::collections::HashSet<String>,
+    // predicate which returns `true` if the given identifier should be
+    // highlighted as a defined object name. taking a predicate allows the
+    // caller to avoid allocating or cloning a collection for every frame.
+    is_defined: F,
     handlers: &[crate::dsl::runtime::DslHandler],
-) {
+) where
+    F: Fn(&str) -> bool,
+{
     let font_id = egui::FontId::monospace(14.0);
 
     // Simple tokenizer based on characters
@@ -202,7 +207,7 @@ pub(crate) fn highlight_code(
                 let rest = &code[end..];
                 if let Some(open_paren_pos) = rest.find('(') {
                     if let Some(close_paren_pos) =
-                        crate::code_panel::find_matching_paren(rest, open_paren_pos)
+                        crate::code_panel::utils::find_matching_paren(rest, open_paren_pos)
                     {
                         if let Some(call_end) = end.checked_add(close_paren_pos + 1) {
                             if call_end <= code.len() {
@@ -250,7 +255,7 @@ pub(crate) fn highlight_code(
 
                 _ => {
                     // Check if this is a defined object name
-                    if defined_names.contains(word) {
+                    if is_defined(word) {
                         egui::Color32::from_rgb(78, 201, 176) // Teal (#4EC9B0) for Objects
                     } else {
                         egui::Color32::LIGHT_GRAY

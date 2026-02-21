@@ -483,8 +483,7 @@ pub fn handle_canvas_clicks(
                                                 );
                                             }
 
-                                            state.autosave_pending = true;
-                                            state.last_code_edit_time = Some(ui.input(|i| i.time));
+                                            state.autosave.mark_dirty(ui.input(|i| i.time));
                                         }
                                         crate::scene::Shape::Circle(_) => {
                                             let dx = cur_pos.x - info.centre.x;
@@ -514,8 +513,7 @@ pub fn handle_canvas_clicks(
                                                 "radius",
                                                 r_frac,
                                             );
-                                            state.autosave_pending = true;
-                                            state.last_code_edit_time = Some(ui.input(|i| i.time));
+                                            state.autosave.mark_dirty(ui.input(|i| i.time));
                                         }
                                         crate::scene::Shape::Text(_) => {
                                             let size_frac = (cur_pos.y - info.centre.y).abs()
@@ -542,8 +540,7 @@ pub fn handle_canvas_clicks(
                                                 "size",
                                                 size_frac,
                                             );
-                                            state.autosave_pending = true;
-                                            state.last_code_edit_time = Some(ui.input(|i| i.time));
+                                            state.autosave.mark_dirty(ui.input(|i| i.time));
                                         }
                                         _ => {}
                                     }
@@ -553,7 +550,8 @@ pub fn handle_canvas_clicks(
                     } else {
                         // Mouse release - Forzamos guardado final
                         state.request_dsl_update();
-                        state.last_code_edit_time = Some(0.0);
+                        // force immediate write
+                        state.autosave.last_edit_time = Some(0.0);
                         state.resize_info = None;
                     }
                 }
@@ -683,13 +681,12 @@ pub fn handle_canvas_clicks(
                             let elem_name = elem.name.clone();
                             patch_dsl_property(&mut state.dsl_code, &elem_name, "x", x_frac);
                             patch_dsl_property(&mut state.dsl_code, &elem_name, "y", y_frac);
-                            state.autosave_pending = true;
-                            state.last_code_edit_time = Some(ui.input(|i| i.time));
+                            state.autosave.mark_dirty(ui.input(|i| i.time));
                         }
                     } else {
                         // Mouse release - Forzamos guardado final
                         state.request_dsl_update();
-                        state.last_code_edit_time = Some(0.0);
+                        state.autosave.last_edit_time = Some(0.0);
                         state.move_info = None;
                     }
                 }

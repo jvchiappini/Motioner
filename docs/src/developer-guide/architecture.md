@@ -154,7 +154,7 @@ and move the cursor on clicks.
 State changes are detected via `TextEditOutput::changed()` inside the
 `ScrollArea` closure. When a change occurs:
 
-* `state.last_code_edit_time` is set to the current frame time (obtained from
+* `state.autosave.last_code_edit_time` is set to the current frame time (obtained from
   `ui.ctx().input(|i| i.time)`).
 * Quick validation is run using `crate::dsl::validate_dsl(&state.dsl_code)`.
   - Results are funneled through `state.set_diagnostics`, which stores the
@@ -173,7 +173,7 @@ noted above. Much of the remaining bookkeeping – autosave debounce, repeated
 validation and diagnostics handling – has been moved into `AppState` methods
 (`set_diagnostics`, `autosave_tick`) to reduce clutter in `ui::update`.  The
 `ui` loop still orchestrates when those helpers run.  After each frame,
-`ui::update` checks `state.last_code_edit_time` and, if enough wall‑clock time
+`ui::update` checks `state.autosave.last_code_edit_time` and, if enough wall‑clock time
 has passed (120 ms by default), it will:
 
 * Run `dsl::validate_dsl`; any resulting diagnostics are pushed through

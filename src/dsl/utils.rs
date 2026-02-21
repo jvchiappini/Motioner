@@ -218,6 +218,29 @@ pub fn split_top_level_kvs(s: &str) -> Vec<String> {
     out
 }
 
+/// Perform a quick validation of DSL source and, if the text is syntactically
+/// valid, apply the canonical tab normalization in‑place.
+///
+/// The return value is the list of diagnostics produced by the validator.  The
+/// caller is responsible for handling the case where the vector is non‑empty
+/// (typically by blocking autosave or showing an error).  When the diagnostics
+/// list is empty we update `src` directly with the normalized text (which may
+/// be a no‑op if the input already used tabs).  This helper encapsulates the
+/// exact combination of `validate_dsl` and `generator::normalize_tabs` that
+/// was previously duplicated in several places.
+pub fn validate_and_normalize(src: &mut String) -> Vec<super::validator::Diagnostic> {
+    // Note: use the public facade functions so callers don't need to import
+    // inner modules.
+    let mut diags = super::validate_dsl(src);
+    if diags.is_empty() {
+        let normalized = super::generator::normalize_tabs(src);
+        if normalized != *src {
+            *src = normalized;
+        }
+    }
+    diags
+}
+
 /// Return the top-level lines of a block body string (ignoring nested braces).
 pub fn top_level_lines(body: &str) -> Vec<String> {
     let mut out = Vec::new();

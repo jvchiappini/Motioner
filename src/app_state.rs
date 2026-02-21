@@ -1,4 +1,6 @@
 use crate::shapes::element_store::ElementKeyframes;
+// Separate module to encapsulate autosave-related flags/timestamps.
+use crate::states::autosave::AutosaveState;
 use eframe::egui; // bring Pos2/Rect etc into scope for resize helpers
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -193,19 +195,13 @@ pub struct AppState {
     #[serde(skip)]
     pub last_completion_query_time: f64,
 
-    // Autosave / Editor state
+    // Autosave / Editor state ------------------------------------------------
     #[serde(skip)]
     pub autosave_cooldown_secs: f32, // debounce interval for autosave
     #[serde(skip)]
-    pub last_code_edit_time: Option<f64>,
+    pub autosave: AutosaveState,
     /// Time when we last parsed `dsl_code` into `scene` (debounced)
     pub last_scene_parse_time: f64,
-    #[serde(skip)]
-    pub autosave_pending: bool,
-    #[serde(skip)]
-    pub autosave_last_success_time: Option<f64>,
-    #[serde(skip)]
-    pub autosave_error: Option<String>,
 
     // Project State
     pub project_path: Option<PathBuf>,
@@ -472,12 +468,9 @@ impl Default for AppState {
             last_completion_query: None,
             last_completion_query_time: 0.0,
             autosave_cooldown_secs: 0.5,
-            last_code_edit_time: None,
+            autosave: AutosaveState::default(),
             last_scene_parse_time: 0.0,
             preview_pending_from_code: false,
-            autosave_pending: false,
-            autosave_last_success_time: None,
-            autosave_error: None,
             project_path: None,
             project_path_input: String::new(),
             path_validation_error: None,
@@ -714,19 +707,23 @@ impl AppState {
     pub fn set_diagnostics(&mut self, diags: Vec<crate::dsl::Diagnostic>) {
         if diags.is_empty() {
             self.dsl_diagnostics.clear();
-            self.autosave_error = None;
-            // leave autosave_pending unchanged (caller may set it later)
+            self.autosave.error = None;
+            // leave pending flag untouched; callers may adjust it separately
         } else {
             self.dsl_diagnostics = diags.clone();
-            self.autosave_pending = false;
-            self.autosave_error = Some(diags[0].message.clone());
+            self.autosave.pending = false;
+            self.autosave.error = Some(diags[0].message.clone());
         }
     }
 
     /// Convenience helper invoked periodically from `ui::update` that
     /// handles the autosave debounce/cooldown logic.
     pub fn autosave_tick(&mut self, now: f64) {
-        if let Some(last_edit) = self.last_code_edit_time {
+        // run the same debounce/validation/write sequence that used to live
+        // inline in `ui::update`.  Most of the flags are stored on
+        // `self.autosave` but we still need access to the outer state for
+        // validation and the write helper.
+        if let Some(last_edit) = self.autosave.last_edit_time {
             if now - last_edit > self.autosave_cooldown_secs as f64 {
                 let diags = crate::dsl::validate_dsl(&self.dsl_code);
                 if !diags.is_empty() {
@@ -737,14 +734,14 @@ impl AppState {
                         self, false,
                     ) {
                         Ok(_) => {
-                            self.autosave_pending = false;
-                            self.autosave_last_success_time = Some(now);
-                            self.autosave_error = None;
+                            self.autosave.pending = false;
+                            self.autosave.last_success_time = Some(now);
+                            self.autosave.error = None;
                             self.dsl_diagnostics.clear();
                         }
                         Err(e) => {
-                            self.autosave_pending = false;
-                            self.autosave_error = Some(e.to_string());
+                            self.autosave.pending = false;
+                            self.autosave.error = Some(e.to_string());
                         }
                     }
                 }
@@ -762,7 +759,7 @@ impl AppState {
     pub fn debounced_parse(&mut self, now: f64) -> bool {
         // parse after ~120ms of inactivity
         let parse_debounce = 0.12_f64;
-        if let Some(last_edit) = self.last_code_edit_time {
+        if let Some(last_edit) = self.autosave.last_edit_time {
             if now - last_edit > parse_debounce && now - self.last_scene_parse_time > parse_debounce
             {
                 let diagnostics = crate::dsl::validate_dsl(&self.dsl_code);
@@ -796,7 +793,7 @@ impl AppState {
                     // helper here to avoid repeating the constants.
                     const CODE_PREVIEW_IDLE_SECS: f64 = 0.45;
                     let do_request = if self.active_tab == Some(PanelTab::Code) {
-                        if let Some(last_edit) = self.last_code_edit_time {
+                        if let Some(last_edit) = self.autosave.last_edit_time {
                             if now - last_edit > CODE_PREVIEW_IDLE_SECS {
                                 true
                             } else {

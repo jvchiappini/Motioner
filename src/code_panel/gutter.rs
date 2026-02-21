@@ -121,7 +121,8 @@ pub(crate) fn render_gutter(
                     );
                     if hit_rect.contains(pointer_pos) {
                         // Indicate interactivity via cursor. Detailed message is
-                        // already surfaced in the editor header (`autosave_error`).
+                        // already surfaced in the editor header
+                        // (`autosave.error`).
                         ui.ctx().output_mut(|out| {
                             out.cursor_icon = egui::CursorIcon::Help;
                         });

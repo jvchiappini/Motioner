@@ -105,6 +105,52 @@ pub fn handle_color_pickers(
     }
 }
 
+/// Return the byte index of the matching `)` for the `(` located at
+/// `open_pos` inside `s`. Returns `None` when no matching closing paren
+/// is found. The function ignores parentheses that appear inside string
+/// literals and correctly handles escaped quotes (e.g. `"`).
+///
+/// Originally defined in `code_panel::mod`, this helper is now colocated with
+/// other text-related utilities.
+pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
+    if open_pos >= s.len() {
+        return None;
+    }
+
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut prev_was_escape = false;
+
+    for (i, ch) in s[open_pos..].char_indices() {
+        let idx = open_pos + i; // byte index relative to `s`
+
+        // Toggle string state unless the quote is escaped.
+        if ch == '"' && !prev_was_escape {
+            in_string = !in_string;
+            prev_was_escape = false;
+            continue;
+        }
+
+        // Track escape state for the next character inside strings
+        prev_was_escape = ch == '\\' && in_string && !prev_was_escape;
+
+        if in_string {
+            continue;
+        }
+
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(idx);
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,7 @@ mod app_state;
 mod canvas;
 mod code_panel;
 mod dsl;
+mod states;
 mod events;
 mod logics;
 mod logo;

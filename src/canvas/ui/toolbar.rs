@@ -64,7 +64,7 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState, composition_rect: e
                             if state.resize_mode {
                                 state.move_mode = false;
                             }
-                            state.autosave_pending = true;
+                            state.autosave.mark_dirty(ui.input(|i| i.time));
                         }
 
                         // Toggle move mode; display simple arrow icons to hint
@@ -79,7 +79,7 @@ pub fn show_toolbar(ui: &mut egui::Ui, state: &mut AppState, composition_rect: e
                             if state.move_mode {
                                 state.resize_mode = false;
                             }
-                            state.autosave_pending = true;
+                            state.autosave.mark_dirty(ui.input(|i| i.time));
                         }
 
                         ui.separator();

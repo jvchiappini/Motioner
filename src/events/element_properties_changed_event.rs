@@ -11,7 +11,8 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
     };
 
     // Validate DSL before writing — if there are diagnostics, do not save.
-    let diags = crate::dsl::validate_dsl(&state.dsl_code);
+    // We also normalize the source text to use tabs while we're at it.
+    let diags = crate::dsl::utils::validate_and_normalize(&mut state.dsl_code);
     if !diags.is_empty() {
         state.dsl_diagnostics = diags.clone();
         if show_toast {
@@ -29,12 +30,12 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
     let dst = project_dir.join("code.motioner");
     fs::write(&dst, &state.dsl_code)?;
     state.last_export_path = Some(dst.clone());
-    // After successful save, normalise indentation to use tabs and persist
-    // the normalized version (silent autosave). Only overwrite if changes
-    // are produced and the normalized source still validates.
+    // After successful save, we still need to make sure the on-disk version
+    // uses tabs. The earlier helper already normalized `state.dsl_code` but
+    // we must re-validate the normalized string before overwriting the file
+    // (this mirrors the previous behaviour).
     let normalized = crate::dsl::generator::normalize_tabs(&state.dsl_code);
     if normalized != state.dsl_code {
-        // validate normalized before writing
         let diags = crate::dsl::validate_dsl(&normalized);
         if diags.is_empty() {
             fs::write(&dst, &normalized)?;
