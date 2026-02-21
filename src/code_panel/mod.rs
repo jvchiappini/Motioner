@@ -173,13 +173,10 @@ where
                 // let autosave state manage the pending/error flags for us
                 state.autosave.on_change(now, Some(&diagnostics));
 
-                // Apply the canonical DSL formatter (tabs for indentation).
-                // This normalizes leading 4-space groups into tabs so the
-                // editor always shows the formatted representation.
-                let normalized = crate::dsl::generator::normalize_tabs(&state.dsl_code);
-                if normalized != state.dsl_code {
-                    state.dsl_code = normalized;
-                }
+                // The helper above already normalizes the text to use tabs.  we
+                // used to duplicate that call here, but the logic has since been
+                // folded into `validate_and_normalize` (which now runs
+                // unconditionally), so this extra block is unnecessary.
 
                 // Parsing and scene/preview updates are still debounced and
                 // handled in `ui::update` (so preview updates don't happen on
