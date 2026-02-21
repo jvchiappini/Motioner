@@ -1,3 +1,10 @@
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+# NOTE: this requires installing the `mdbook-mermaid` binary (via
+# `cargo install mdbook-mermaid` or your platform's package manager) and
+# having `mdbook` invoke the preprocessor when building the book. Without
+# it, Mermaid blocks will render as plain code (as seen on GitHub Pages).
 [book]
 title = "Motioner Documentation"
 authors = ["José Valentino Chiappini"]
@@ -14,6 +21,9 @@ default-theme = "rust"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/jvchiappini/Motioner"
 edit-url-template = "https://github.com/jvchiappini/Motioner/edit/main/docs/{path}"
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
 
 [output.html.playground]
 editable = true
