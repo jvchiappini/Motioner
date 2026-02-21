@@ -8,9 +8,7 @@ pub mod cache_management;
 pub mod gpu;
 pub mod preview_worker;
 pub mod rasterizer;
-pub mod spatial_hash;
 pub mod text_rasterizer;
-pub mod tile_cache;
 pub mod ui;
 
 // Re-exportar funciones clave para facilidad de uso

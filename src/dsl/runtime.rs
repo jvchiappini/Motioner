@@ -11,6 +11,7 @@
 use super::evaluator::{self, EvalContext};
 use crate::scene::Shape;
 // shape-specific helpers are accessed via `shapes_manager`
+use crate::dsl::utils;
 
 // ─── Handler type ─────────────────────────────────────────────────────────────
 
@@ -82,33 +83,18 @@ pub fn exec_block(shapes: &mut [Shape], body: &str, ctx: &mut EvalContext) -> Re
     Ok(changed)
 }
 
-// ─── Action dispatcher ────────────────────────────────────────────────────────
+// dispatch_action was accidentally merged into exec_block during earlier
+// refactoring; restore it here as its own helper.  The implementation is
+// essentially the original body from before the utils extraction, but it
+// entrusts low-level helpers to `dsl::utils` where appropriate.
 
-/// Route a single action line to the appropriate executor.
-///
-/// **Add new actions here** following the existing pattern.
 fn dispatch_action(
     shapes: &mut [Shape],
     line: &str,
     ctx: &mut EvalContext,
 ) -> Result<bool, String> {
-    // variable declarations / assignments: `let` or `set`
-    if line.starts_with("let ") || line.starts_with("set ") {
-        // determine RHS type to delegate to correct logic file
-        if let Some(eq) = line.find('=') {
-            let rhs = line[eq + 1..].trim();
-            if rhs.starts_with('"') {
-                return crate::logics::string_logic::exec(shapes, line, ctx);
-            }
-            if rhs.starts_with('[') {
-                return crate::logics::list_logic::exec(shapes, line, ctx);
-            }
-            // otherwise numeric expression
-            return crate::logics::number_logic::exec(shapes, line, ctx);
-        }
-    }
-
-    // for-loops
+    // 'for' loops are handled specially; fall through to other checks if the
+    // line is not a loop header.
     if line.trim_start().starts_with("for ") {
         return crate::logics::for_logic::exec(shapes, line, ctx);
     }
@@ -127,9 +113,13 @@ fn dispatch_action(
     // The check is driven by the registry — no hard-coded keyword list.
     let first_word = line.trim_start().split_whitespace().next().unwrap_or("");
     if crate::shapes::shapes_manager::create_default_by_keyword(first_word, String::new()).is_some()
-        || crate::shapes::shapes_manager::parse_shape_block(
-            &[line.split('{').next().unwrap_or("").trim().to_string()],
-        ).is_some()
+        || crate::shapes::shapes_manager::parse_shape_block(&[line
+            .split('{')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string()])
+        .is_some()
         || crate::shapes::shapes_manager::registered_shape_keywords().contains(&first_word)
     {
         // Parse the provided block into scene shapes (to obtain animations
@@ -137,38 +127,6 @@ fn dispatch_action(
         // handler context (e.g. `x = seconds * 0.1`). This lets users write
         // `circle "C" { x = seconds * 0.1, ... }` inside `on_time`.
         let parsed = crate::dsl::parse_dsl(line);
-
-        // Helper: split top-level KV lines from the block body while
-        // preserving nested blocks (like `move { ... }`).
-        fn top_level_lines(body: &str) -> Vec<String> {
-            let mut out = Vec::new();
-            let mut depth: i32 = 0;
-            let mut cur = String::new();
-            for ch in body.chars() {
-                if ch == '{' {
-                    depth += 1;
-                    cur.push(ch);
-                    continue;
-                }
-                if ch == '}' {
-                    depth -= 1;
-                    cur.push(ch);
-                    continue;
-                }
-                if ch == '\n' && depth == 0 {
-                    if !cur.trim().is_empty() {
-                        out.push(cur.trim().to_string());
-                    }
-                    cur.clear();
-                    continue;
-                }
-                cur.push(ch);
-            }
-            if !cur.trim().is_empty() {
-                out.push(cur.trim().to_string());
-            }
-            out
-        }
 
         // Extract raw inner body (between first '{' and last '}')
         let inner = if let Some(start) = line.find('{') {
@@ -181,56 +139,7 @@ fn dispatch_action(
             ""
         };
 
-        let raw_lines = top_level_lines(inner);
-
-        // Split a top-level statement into comma-separated KV fragments
-        // while ignoring commas inside nested parentheses/brackets/braces.
-        fn split_top_level_kvs(s: &str) -> Vec<String> {
-            let mut out = Vec::new();
-            let mut cur = String::new();
-            let mut depth = 0i32;
-            for ch in s.chars() {
-                match ch {
-                    '(' | '{' | '[' => {
-                        depth += 1;
-                        cur.push(ch);
-                    }
-                    ')' | '}' | ']' => {
-                        depth = (depth - 1).max(0);
-                        cur.push(ch);
-                    }
-                    ',' if depth == 0 => {
-                        if !cur.trim().is_empty() {
-                            out.push(cur.trim().to_string());
-                        }
-                        cur.clear();
-                    }
-                    _ => cur.push(ch),
-                }
-            }
-            if !cur.trim().is_empty() {
-                out.push(cur.trim().to_string());
-            }
-            out
-        }
-
-        fn split_kv(s: &str) -> Option<(String, String)> {
-            if let Some(eq) = s.find('=') {
-                let key = s[..eq].trim().to_string();
-                let mut val = s[eq + 1..].trim().to_string();
-                // strip trailing comma(s)
-                while val.ends_with(',') {
-                    val.pop();
-                    val = val.trim_end().to_string();
-                }
-                return if key.is_empty() {
-                    None
-                } else {
-                    Some((key, val))
-                };
-            }
-            None
-        }
+        let raw_lines = utils::top_level_lines(inner);
 
         // Convert the first parsed shape (if any) or create a default one
         let mut created_shapes: Vec<crate::scene::Shape> = Vec::new();
@@ -238,7 +147,9 @@ fn dispatch_action(
             // fallback: instantiate a default by keyword. Delegate to
             // `shapes_manager` so the runtime doesn't match on variants.
             let kw = line.trim_start().split_whitespace().next().unwrap_or("");
-            if let Some(s) = crate::shapes::shapes_manager::create_default_by_keyword(kw, "Spawned".into()) {
+            if let Some(s) =
+                crate::shapes::shapes_manager::create_default_by_keyword(kw, "Spawned".into())
+            {
                 created_shapes.push(s);
             }
         } else {
@@ -256,11 +167,12 @@ fn dispatch_action(
                     continue;
                 }
                 // split comma-separated KV fragments on the top-level
-                for frag in split_top_level_kvs(raw) {
-                    if let Some((key, val)) = split_kv(&frag) {
+                for frag in utils::split_top_level_kvs(raw) {
+                    if let Some((key, val)) = utils::split_kv(&frag) {
                         // numeric properties
                         match key.as_str() {
-                            "x" | "y" | "radius" | "width" | "w" | "height" | "h" | "size" | "spawn" | "kill" => {
+                            "x" | "y" | "radius" | "width" | "w" | "height" | "h" | "size"
+                            | "spawn" | "kill" => {
                                 let num = evaluator::evaluate(&val, ctx)?;
                                 s.apply_kv_number(&key, num);
                                 continue;
@@ -294,7 +206,6 @@ fn dispatch_action(
 
     Err(format!("Unknown action: '{}'", line))
 }
-
 // ─── Action executors ─────────────────────────────────────────────────────────
 
 fn exec_move_element(shapes: &mut [Shape], line: &str, ctx: &EvalContext) -> Result<bool, String> {

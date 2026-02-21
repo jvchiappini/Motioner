@@ -2,18 +2,28 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-	x = 0.500,
-	y = 0.500,
+	x = 0.115,
+	y = 0.207,
 	radius = 0.100,
 	fill = "#78c8ff",
 	spawn = 0.00
 }
 
+text "Text" {
+	x = 0.500,
+	y = 0.500,
+	value = "Hello",
+	font = "System",
+	size = 0.0333,
+	fill = "#ffffff",
+	spawn = 0.00,
+}
+
 rect "Rect #2" {
-	x = 0.341,
-	y = 0.358,
-	width = 0.142,
-	height = 0.164,
+	x = 0.467,
+	y = 0.609,
+	width = 0.693,
+	height = 0.778,
 	fill = "#c87878",
 	spawn = 0.00
 }

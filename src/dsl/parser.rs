@@ -9,10 +9,9 @@
 /// - [`parse_config`] — header-only parse (used by quick-validation path)
 use std::collections::HashMap;
 
-use super::ast::{
-    BezierPoint, EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Point2, Statement,
-};
+use super::ast::{EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Statement};
 use super::lexer::extract_balanced;
+use crate::dsl::utils;
 
 // ─── Public entry points ──────────────────────────────────────────────────────
 
@@ -132,11 +131,11 @@ pub fn parse_config(src: &str) -> Result<HeaderConfig, String> {
         let sep: &[_] = if inner.contains(';') { &[';'] } else { &[','] };
         for part in inner.split(sep[0]) {
             let s = part.trim();
-            if let Some(v) = parse_named_value(s, "fps") {
-                fps = v.parse().ok();
+            if let Some(v) = utils::parse_named_value(s, "fps") {
+                fps = v.parse::<u32>().ok();
             }
-            if let Some(v) = parse_named_value(s, "duration") {
-                duration = v.parse().ok();
+            if let Some(v) = utils::parse_named_value(s, "duration") {
+                duration = v.parse::<f32>().ok();
             }
         }
     }
@@ -166,7 +165,7 @@ pub fn parse_config(src: &str) -> Result<HeaderConfig, String> {
 /// This is also the canonical parser used by [`crate::animations::move_animation`].
 pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
     let mut element: Option<String> = None;
-    let mut to: Option<Point2> = None;
+    let mut to: Option<utils::Point2> = None; // use alias via utils or define separate
     let mut start_time: Option<f32> = None;
     let mut end_time: Option<f32> = None;
     let mut easing = EasingKind::Linear;
@@ -186,14 +185,14 @@ pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
 
         match key.as_str() {
             "element" => element = Some(val.trim_matches('"').to_string()),
-            "to" => to = parse_point(&val),
+            "to" => to = utils::parse_point(&val),
             "during" => {
                 if let Some(arrow) = val.find("->") {
                     start_time = val[..arrow].trim().parse().ok();
                     end_time = val[arrow + 2..].trim().parse().ok();
                 }
             }
-            "ease" | "easing" => easing = parse_easing(&val),
+            "ease" | "easing" => easing = utils::parse_easing(&val),
             _ => {}
         }
     }
@@ -213,82 +212,6 @@ pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
 // ─── Easing parser ────────────────────────────────────────────────────────────
 
 /// Parse a DSL easing string (right-hand side of `ease = ...`).
-pub fn parse_easing(s: &str) -> EasingKind {
-    let s = s.trim().trim_end_matches(',');
-
-    if s == "linear" {
-        return EasingKind::Linear;
-    }
-    if s == "sine" {
-        return EasingKind::Sine;
-    }
-    if s == "expo" {
-        return EasingKind::Expo;
-    }
-    if s == "circ" {
-        return EasingKind::Circ;
-    }
-
-    // ease_in(power = N)
-    if s.starts_with("ease_in_out") {
-        let power = extract_f32_param(s, "power").unwrap_or(2.0);
-        return EasingKind::EaseInOut { power };
-    }
-    if s.starts_with("ease_in") {
-        let power = extract_f32_param(s, "power").unwrap_or(2.0);
-        return EasingKind::EaseIn { power };
-    }
-    if s.starts_with("ease_out") {
-        let power = extract_f32_param(s, "power").unwrap_or(2.0);
-        return EasingKind::EaseOut { power };
-    }
-
-    // spring(damping = N, stiffness = N, mass = N)
-    if s.starts_with("spring") {
-        let damping = extract_f32_param(s, "damping").unwrap_or(10.0);
-        let stiffness = extract_f32_param(s, "stiffness").unwrap_or(100.0);
-        let mass = extract_f32_param(s, "mass").unwrap_or(1.0);
-        return EasingKind::Spring {
-            damping,
-            stiffness,
-            mass,
-        };
-    }
-
-    // elastic(amplitude = N, period = N)
-    if s.starts_with("elastic") {
-        let amplitude = extract_f32_param(s, "amplitude").unwrap_or(1.0);
-        let period = extract_f32_param(s, "period").unwrap_or(0.3);
-        return EasingKind::Elastic { amplitude, period };
-    }
-
-    // bounce(bounciness = N)
-    if s.starts_with("bounce") {
-        let bounciness = extract_f32_param(s, "bounciness").unwrap_or(0.5);
-        return EasingKind::Bounce { bounciness };
-    }
-
-    // bezier(p1 = (x, y), p2 = (x, y))
-    if s.starts_with("bezier") && !s.starts_with("custom_bezier") {
-        if let (Some(p1), Some(p2)) = (extract_point_param(s, "p1"), extract_point_param(s, "p2")) {
-            return EasingKind::Bezier { p1, p2 };
-        }
-    }
-
-    // custom_bezier(points = [...])
-    if s.starts_with("custom_bezier") {
-        let pts = parse_bezier_points(s);
-        return EasingKind::CustomBezier { points: pts };
-    }
-
-    // custom(points = [(t, v), ...])
-    if s.starts_with("custom") {
-        let pts = parse_custom_points(s);
-        return EasingKind::Custom { points: pts };
-    }
-
-    EasingKind::Linear
-}
 
 // ─── KV applicators ───────────────────────────────────────────────────────────
 
@@ -410,159 +333,16 @@ fn first_ident(s: &str) -> String {
         .collect()
 }
 
-/// Split `key = value` (strips trailing commas from the value).
 pub(crate) fn split_kv(s: &str) -> Option<(String, String)> {
-    let eq = s.find('=')?;
-    let key = s[..eq].trim().to_string();
-    let val = s[eq + 1..].trim().trim_end_matches(',').trim().to_string();
-    if key.is_empty() {
-        None
-    } else {
-        Some((key, val))
-    }
-}
-
-/// Parse `key = val` or `key: val` from a short string fragment.
-fn parse_named_value<'a>(s: &'a str, key: &str) -> Option<&'a str> {
-    if s.starts_with(key) {
-        if let Some(eq) = s.find('=').or_else(|| s.find(':')) {
-            return Some(s[eq + 1..].trim().trim_end_matches(','));
-        }
-    }
-    None
-}
-
-/// Parse `(x, y)` → `Point2`.
-pub(crate) fn parse_point(s: &str) -> Option<Point2> {
-    let s = s.trim();
-    if s.starts_with('(') && s.ends_with(')') {
-        let inner = &s[1..s.len() - 1];
-        let parts: Vec<&str> = inner.split(',').collect();
-        if parts.len() == 2 {
-            let x: f32 = parts[0].trim().parse().ok()?;
-            let y: f32 = parts[1].trim().parse().ok()?;
-            return Some((x, y));
-        }
-    }
-    None
+    utils::split_kv(s)
 }
 
 /// Parse all `key = value` pairs from a comma-separated string.
 pub(crate) fn parse_kv_map(s: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for part in s.split(',') {
-        let p = part.trim();
-        if let Some(eq) = p.find('=') {
-            let key = p[..eq].trim().to_string();
-            let val = p[eq + 1..].trim().trim_matches('"').to_string();
-            map.insert(key, val);
-        }
-    }
-    map
+    utils::parse_kv_map(s)
 }
 
-/// Extract a named f32 parameter from an easing string, e.g. `power = 3.0`.
-fn extract_f32_param(s: &str, name: &str) -> Option<f32> {
-    let needle = format!("{} =", name);
-    let pos = s.find(needle.as_str())?;
-    let rest = s[pos + needle.len()..].trim();
-    let end = rest
-        .find(|c: char| c == ',' || c == ')' || c == ' ')
-        .unwrap_or(rest.len());
-    rest[..end].trim().parse().ok()
-}
-
-/// Extract a named `(x, y)` parameter from an easing string.
-fn extract_point_param(s: &str, name: &str) -> Option<Point2> {
-    let needle = format!("{} =", name);
-    let pos = s.find(needle.as_str())?;
-    let rest = s[pos + needle.len()..].trim();
-    parse_point(rest)
-}
-
-/// Parse `custom_bezier` point list from the full easing string.
-fn parse_bezier_points(s: &str) -> Vec<BezierPoint> {
-    let start = match s.find('[') {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let end = match s.rfind(']') {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let inner = &s[start + 1..end];
-
-    // Each point: `((px, py), (lx, ly), (rx, ry))`
-    let mut pts = Vec::new();
-    let mut depth = 0i32;
-    let mut current = String::new();
-    for ch in inner.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' => {
-                depth -= 1;
-                current.push(ch);
-                if depth == 0 {
-                    // parse triple of points
-                    let s = current.trim();
-                    let inner = &s[1..s.len() - 1]; // strip outer parens
-                    let sub: Vec<&str> = inner.splitn(3, "),").collect();
-                    if sub.len() == 3 {
-                        if let (Some(pos), Some(hl), Some(hr)) = (
-                            parse_point(&format!("{})", sub[0].trim())),
-                            parse_point(&format!("{})", sub[1].trim())),
-                            parse_point(&format!("{})", sub[2].trim().trim_end_matches(')'))),
-                        ) {
-                            pts.push(BezierPoint {
-                                pos,
-                                handle_left: hl,
-                                handle_right: hr,
-                            });
-                        }
-                    }
-                    current.clear();
-                }
-            }
-            ',' if depth == 0 => {} // separator between points
-            _ => {
-                if depth > 0 {
-                    current.push(ch);
-                }
-            }
-        }
-    }
-    pts
-}
-
-/// Parse `custom` easing point list: `[(t, v), ...]`.
-fn parse_custom_points(s: &str) -> Vec<Point2> {
-    let start = match s.find('[') {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let end = match s.rfind(']') {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let inner = &s[start + 1..end];
-    inner
-        .split(',')
-        .collect::<Vec<_>>()
-        .chunks(2)
-        .filter_map(|pair| {
-            if pair.len() == 2 {
-                let t: f32 = pair[0].trim().trim_matches('(').parse().ok()?;
-                let v: f32 = pair[1].trim().trim_matches(')').parse().ok()?;
-                Some((t, v))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
+// helpers above moved to utils; parser delegates there where needed.
 
 // ─── Event handler registry ───────────────────────────────────────────────────
 

@@ -9,88 +9,12 @@ pub struct MyApp {
 pub fn create_app(_cc: &eframe::CreationContext<'_>) -> MyApp {
     let mut state = AppState::default();
 
-    // -- Initialize Autocomplete Worker Thread ---------------------
-    let (atx, arx) = std::sync::mpsc::channel::<String>();
-    let (btx, brx) = std::sync::mpsc::channel::<Vec<crate::app_state::CompletionItem>>();
-    state.completion_worker_tx = Some(atx);
-    state.completion_worker_rx = Some(brx);
+    // Autocomplete worker is a reusable bit of logic; the helper ensures it's
+    // only spawned once and the channels are stored in state.
+    state.ensure_completion_worker();
 
-    std::thread::spawn(move || {
-        while let Ok(query) = arx.recv() {
-            // Catalogue of completion candidates (static for now)
-            let candidates = vec![
-                crate::app_state::CompletionItem { label: "project".into(), insert_text: "project".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "timeline".into(), insert_text: "timeline".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "layer".into(), insert_text: "layer".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "fps".into(), insert_text: "fps".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "duration".into(), insert_text: "duration".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "size".into(), insert_text: "size".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "fill".into(), insert_text: "fill".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "radius".into(), insert_text: "radius".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "width".into(), insert_text: "width".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "height".into(), insert_text: "height".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "color".into(), insert_text: "color".into(), is_snippet: false },
-                crate::app_state::CompletionItem { label: "circle".into(), insert_text: "circle \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    radius = 0.10,\n    fill = \"#78c8ff\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
-                crate::app_state::CompletionItem { label: "rect".into(), insert_text: "rect \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    width = 0.30,\n    height = 0.20,\n    fill = \"#c87878\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
-                crate::app_state::CompletionItem { label: "text".into(), insert_text: "text \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    value = \"Hello\",\n    font = \"System\",\n    size = 24.0,\n    fill = \"#ffffff\",\n    spawn = 0.00\n}\n".into(), is_snippet: true },
-                crate::app_state::CompletionItem { label: "move".into(), insert_text: "move {\n    element = \"Name\",\n    to = (0.50, 0.50),\n    during = 0.00 -> 1.00,\n    ease = linear\n}\n".into(), is_snippet: true },
-                // use full `circle "Name" { ... }` blocks inside `on_time {}` to spawn dynamically
-            ];
-
-            let filtered: Vec<_> = candidates
-                .into_iter()
-                .filter(|c| c.label.starts_with(&query) && c.label != query)
-                .collect();
-
-            let _ = btx.send(filtered);
-        }
-    });
-
-    // VRAM DETECTION: Detectar memoria GPU disponible al iniciar
-    if let Some(wgpu_render_state) = _cc.wgpu_render_state.as_ref() {
-        let adapter_info = &wgpu_render_state.adapter.get_info();
-        state.estimated_vram_bytes = canvas::detect_vram_size(adapter_info);
-        println!(
-            "[motioner] VRAM detected: {:.1} GB ({} bytes) on {}",
-            state.estimated_vram_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-            state.estimated_vram_bytes,
-            adapter_info.name
-        );
-        println!(
-            "[motioner] VRAM cache limit: {:.1} GB ({:.0}% of total)",
-            (state.estimated_vram_bytes as f64 * state.vram_cache_max_percent as f64)
-                / (1024.0 * 1024.0 * 1024.0),
-            state.vram_cache_max_percent * 100.0
-        );
-    } else {
-        state.estimated_vram_bytes = 512 * 1024 * 1024; // fallback 512 MB
-        println!("[motioner] No wgpu adapter, using fallback VRAM estimate: 512 MB");
-    }
-
-    // Load the SVG logo from the assets directory and create an egui texture.
-    // We do this once during application creation and store the handle in the
-    // AppState so it can be drawn later (e.g. in the welcome modal). Using
-    // `include_str!` embeds the file in the binary for simplicity.
-    {
-        let svg_data = include_str!("../assets/logo.svg");
-        if let Some(img) = crate::logo::color_image_from_svg(svg_data) {
-            let handle = _cc
-                .egui_ctx
-                .load_texture("app_logo", img, egui::TextureOptions::NEAREST);
-            state.logo_texture = Some(handle);
-        } else {
-            // Fallback: just ignore if rasterization fails
-            eprintln!("warning: could not render logo.svg");
-        }
-    }
-
-    // OPTIMIZACIÓN RAM: Limpiar caches al inicio para reducir uso de memoria
-    state.preview_frame_cache.clear();
-    state.preview_frame_cache.shrink_to_fit();
-    state.preview_compressed_cache.clear();
-    state.preview_compressed_cache.shrink_to_fit();
-    state.preview_texture_cache.clear();
-    state.preview_texture_cache.shrink_to_fit();
+    // perform additional initialisation (vram detection, texture loading etc)
+    state.initialize_with_context(_cc);
 
     // Check if we have wgpu access
     #[cfg(feature = "wgpu")]
@@ -116,46 +40,8 @@ impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let state = &mut self.state;
 
-        // Ensure fonts used in scene are loaded in egui.
-        // Only text elements carry font names; materialize them at spawn frame
-        // rather than cloning the entire scene into legacy Shapes.
-        let mut used_fonts = std::collections::HashSet::<String>::new();
-        for elem in &state.scene {
-            if elem.kind != "text" {
-                continue;
-            }
-            if let Some(crate::scene::Shape::Text(t)) =
-                elem.to_shape_at_frame(elem.spawn_frame, state.fps)
-            {
-                used_fonts.insert(t.font.clone());
-                for span in &t.spans {
-                    used_fonts.insert(span.font.clone());
-                }
-            }
-        }
-        let mut fonts_changed = false;
-        for font_name in used_fonts {
-            if font_name != "System" && !font_name.is_empty() {
-                if let Some(path) = state.font_map.get(&font_name) {
-                    if crate::shapes::fonts::load_font(
-                        &mut state.font_definitions,
-                        &font_name,
-                        path,
-                    ) {
-                        fonts_changed = true;
-                    }
-                    if !state.font_arc_cache.contains_key(&font_name) {
-                        if let Some(font) = crate::shapes::fonts::load_font_arc(path) {
-                            state.font_arc_cache.insert(font_name.clone(), font);
-                        }
-                    }
-                }
-            }
-        }
-        if fonts_changed {
-            ctx.set_fonts(state.font_definitions.clone());
-        }
-
+        // ensure all fonts referenced by the scene are registered with egui
+        state.load_scene_fonts(ctx);
         // --- Global Color Picker Window (Top-level, unconstrained) ---
         if let Some(mut data) = state.color_picker_data.clone() {
             let mut open = true;
@@ -224,131 +110,10 @@ impl eframe::App for MyApp {
             state.last_synced_settings = current_settings;
         }
 
-        // Throttle system stats update (e.g. every 1.0s)
+        // compute current time once and drive debounce helpers
         let now = ctx.input(|i| i.time);
-        // -- Autosave debounce handling ---------------------------------
-        // On idle (after `autosave_cooldown_secs`) re-run validation and
-        // attempt an autosave if the DSL is valid. This ensures that a file
-        // previously marked invalid but later corrected will be re-checked
-        // and saved automatically once the user is idle.
-        if let Some(last_edit) = state.last_code_edit_time {
-            if now - last_edit > state.autosave_cooldown_secs as f64 {
-                // Re-validate the DSL on idle regardless of the current
-                // `autosave_pending` flag so fixes are picked up.
-                let diags = crate::dsl::validate_dsl(&state.dsl_code);
-                if !diags.is_empty() {
-                    // Still invalid — surface diagnostics and block autosave.
-                    state.dsl_diagnostics = diags.clone();
-                    state.autosave_pending = false;
-                    state.autosave_error = Some(diags[0].message.clone());
-                } else {
-                    // Valid now — attempt the silent write and clear diagnostics.
-                    match crate::events::element_properties_changed_event::write_dsl_to_project(
-                        state, false,
-                    ) {
-                        Ok(_) => {
-                            state.autosave_pending = false;
-                            state.autosave_last_success_time = Some(now);
-                            state.autosave_error = None;
-                            state.dsl_diagnostics.clear();
-                        }
-                        Err(e) => {
-                            state.autosave_pending = false;
-                            state.autosave_error = Some(e.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        // Debounced DSL parsing (separate from autosave). Run a lightweight
-        // parse after the user stops typing for a short interval so the
-        // UI isn't blocked on every keystroke.
-        if let Some(last_edit) = state.last_code_edit_time {
-            // parse after ~120ms of inactivity
-            let parse_debounce = 0.12_f64;
-            if now - last_edit > parse_debounce
-                && now - state.last_scene_parse_time > parse_debounce
-            {
-                // 1) Run lightweight validation and surface diagnostics immediately.
-                let diagnostics = crate::dsl::validate_dsl(&state.dsl_code);
-                if !diagnostics.is_empty() {
-                    // Show diagnostics in editor and prevent autosave from proceeding.
-                    state.dsl_diagnostics = diagnostics.clone();
-                    state.autosave_pending = false;
-                    state.autosave_error = Some(diagnostics[0].message.clone());
-                    // Don't update scene/preview while code contains errors.
-                    state.last_scene_parse_time = now;
-                } else {
-                    // Clear previous diagnostics and autosave error
-                    state.dsl_diagnostics.clear();
-                    state.autosave_error = None;
-
-                    // Try to parse configuration (non-fatal). Do NOT show errors while typing.
-                    if let Ok(config) = crate::dsl::parse_config(&state.dsl_code) {
-                        state.fps = config.fps;
-                        state.duration_secs = config.duration;
-                        state.render_width = config.width;
-                        state.render_height = config.height;
-                    }
-
-                    // Try to parse DSL into scene; only update scene on successful parse.
-                    // We throttle preview requests when the Code editor is active to avoid
-                    // rapid texture swaps that produce visible flicker on high-refresh monitors.
-                    //
-                    // Use `parse_dsl_into_elements` (new primary path) so that top-level
-                    // `move {}` blocks are resolved into boundary keyframes on x/y tracks.
-                    // The GPU compute shader interpolates intermediate frames on the fly.
-                    let parsed = crate::dsl::parse_dsl_into_elements(&state.dsl_code, state.fps);
-                    if !parsed.is_empty() {
-                        // When the DSL source is edited we must *recreate* the
-                        // scene and the runtime logic from the parsed result.
-                        // Do NOT preserve previously runtime-spawned (ephemeral)
-                        // shapes here — keeping them caused runaway accumulation
-                        // when the editor re-parsed while playback was running.
-                        state.scene = parsed;
-                        state.scene_version += 1;
-                        // Recompute any caches that depend on the scene.
-                        // position cache removed — no-op
-                        // collect DSL event handler blocks (e.g. `on_time { ... }`)
-                        state.dsl_event_handlers =
-                            crate::dsl::extract_event_handlers_structured(&state.dsl_code);
-
-                        // If the Code panel is active, defer/ throttle preview requests so
-                        // the live composition callback (which renders `state.scene`) is
-                        // used for immediate feedback and we avoid swapping textures.
-                        const CODE_PREVIEW_IDLE_SECS: f64 = 0.45; // wait this long after last edit
-
-                        let do_request = if state.active_tab == Some(PanelTab::Code) {
-                            if let Some(last_edit) = state.last_code_edit_time {
-                                // If user has been idle for long enough, request now;
-                                // otherwise mark pending so we request when idle.
-                                if now - last_edit > CODE_PREVIEW_IDLE_SECS {
-                                    true
-                                } else {
-                                    state.preview_pending_from_code = true;
-                                    false
-                                }
-                            } else {
-                                true
-                            }
-                        } else {
-                            true
-                        };
-
-                        if do_request {
-                            crate::canvas::request_preview_frames(
-                                state,
-                                state.time,
-                                crate::canvas::PreviewMode::Single,
-                            );
-                            state.preview_pending_from_code = false;
-                        }
-                    }
-
-                    state.last_scene_parse_time = now;
-                }
-            }
-        }
+        state.autosave_tick(now);
+        let _ = state.debounced_parse(now);
 
         // If a preview request was deferred while editing code, trigger it once
         // the editor has been idle long enough. This keeps immediate UI feedback

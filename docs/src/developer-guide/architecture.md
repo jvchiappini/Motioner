@@ -157,10 +157,9 @@ State changes are detected via `TextEditOutput::changed()` inside the
 * `state.last_code_edit_time` is set to the current frame time (obtained from
   `ui.ctx().input(|i| i.time)`).
 * Quick validation is run using `crate::dsl::validate_dsl(&state.dsl_code)`.
-  - If diagnostics are produced, they are stored in
-    `state.dsl_diagnostics` and `state.autosave_pending` is cleared.
-  - Otherwise `state.autosave_pending` is set and `state.autosave_error`
-    cleared.
+  - Results are funneled through `state.set_diagnostics`, which stores the
+    diagnostics, clears the autosave flag on error and otherwise prepares the
+    state for a pending save.
 * The DSL is normalized with `dsl::generator::normalize_tabs` (tabs instead of
   spaces).
 
@@ -170,11 +169,15 @@ No parsing or scene updates happen at this point; those are handled in
 ### DSL interaction and parsing trigger
 
 The editor itself only calls the DSL layer for validation and formatting as
-noted above. The heavier work is performed by `ui::update` (located in
-`src/ui.rs`). After each frame, `ui::update` checks `state.last_code_edit_time`
-and, if enough wall‑clock time has passed (120 ms by default), it will:
+noted above. Much of the remaining bookkeeping – autosave debounce, repeated
+validation and diagnostics handling – has been moved into `AppState` methods
+(`set_diagnostics`, `autosave_tick`) to reduce clutter in `ui::update`.  The
+`ui` loop still orchestrates when those helpers run.  After each frame,
+`ui::update` checks `state.last_code_edit_time` and, if enough wall‑clock time
+has passed (120 ms by default), it will:
 
-* Run `dsl::validate_dsl` again and display diagnostics or block autosave.
+* Run `dsl::validate_dsl`; any resulting diagnostics are pushed through
+  `state.set_diagnostics` which also inhibits autosave.
 * Optionally parse configuration via `dsl::parse_config` to update FPS,
   duration, width/height in `AppState`.
 * Parse the full DSL into elements with
@@ -187,6 +190,9 @@ and, if enough wall‑clock time has passed (120 ms by default), it will:
 
 These deferred operations implement the debounce discussed in the mission and
 ensure that the DSL pipeline is only invoked when the user has paused typing.
+The implementation now resides in `AppState::debounced_parse`, keeping the
+UI code focused on layout and letting the state object manage the parsing
+details.
 
 ### Async / channels
 
@@ -371,6 +377,29 @@ designed to be serialisable via `serde` (most UI‑only fields are marked with
 large; for clarity this summary groups related fields and highlights how the
 state is used by other subsystems.
 
+### Initialization helpers
+
+Rather than burdening the UI code with one-off setup logic, several
+convenience methods now live on `AppState` itself.  Typical usage (see
+`ui::create_app`) is:
+
+```rust
+let mut state = AppState::default();
+state.ensure_completion_worker();        // spawn autocompletion thread
+state.initialize_with_context(&cc);      // detect VRAM, load logo, etc.
+```
+
+These routines are safe to call multiple times and centralise behaviour such
+as VRAM detection, cache clearing and texture loading.  Additional helpers
+include `clear_preview_caches` and `load_scene_fonts`, both of which are
+described later in this file alongside the fields they operate on.
+
+Two other frequently-used helpers live on `AppState`: `set_diagnostics`
+records and surfaces validation errors (and flips the autosave flag), while
+`autosave_tick` implements the idle validation / save cycle invoked every
+frame from `ui::update`.
+
+
 ### Core configuration
 
 * `fps`, `duration_secs`, `render_width`, `render_height` – canonical
@@ -433,6 +462,9 @@ in a set of `completion_snippet_*` fields that record byte ranges within
 `dsl_code`.  `ColorPickerData` is a small struct capturing the active color
 picker's text range and colour.
 
+The worker thread and associated channels are created lazily via
+`state.ensure_completion_worker()` which the UI calls once during startup.
+
 ### Export state
 
 Fields beginning with `export_` manage the export modal and background
@@ -462,6 +494,11 @@ them with sane defaults and a sample scene produced by
 * `request_dsl_update(&mut self)` – generates DSL text from `scene` and
   triggers an element‑properties‑changed event.  Called when the user edits
   shape properties via the UI.
+* `ensure_completion_worker(&mut self)` – spawn the autocomplete helper thread
+  and stash the tx/rx handles; safe to call repeatedly.
+* `debounced_parse(&mut self, now)` – run the delayed DSL parse/validation
+  cycle and update `scene`/`dsl_event_handlers`; returns whether the parse
+  produced a non-empty scene.
 
 ### Concurrency model
 
@@ -857,10 +894,11 @@ This is the most substantial file in `canvas` and it orchestrates asynchronous
 preview generation via a pair of `std::sync::mpsc` channels.  It exposes a
 simple API to the rest of the application:
 
-* `generate_preview_frames(state, center_time, ctx)` – high‑level helper called
-  from `ui::update` when the scene or playhead has changed.  It requests the
-  worker to produce frames and then polls for results, updating `state` and
-  the supplied `egui::Context` as necessary.
+* **formerly** `generate_preview_frames(state, center_time, ctx)` – this
+  convenience helper was used in earlier revisions but has since been removed.
+  The current UI code invokes `request_preview_frames` followed by
+  `poll_preview_results` directly; the legacy function is left in the source
+  only for reference and is marked `#[allow(dead_code)]`.
 * `request_preview_frames(state, center_time, mode)` – enqueues a job if the
   worker exists (creating it via `ensure_preview_worker`).  Jobs include a
   full `RenderSnapshot` capturing the current scene, event handlers, render
@@ -940,7 +978,9 @@ Several auxiliary modules support the preview worker:
   the caches, and to compress `ColorImage`s to PNG bytes.
 * `buffer_pool.rs` – manages a pool of reusable `egui::ColorImage` objects
   to reduce allocations during rapid preview updates.
-* `tile_cache.rs`, `spatial_hash.rs` – used by the old software rasteriser
+* (formerly) `tile_cache.rs` and `spatial_hash.rs` – these supported the old
+  software rasteriser which has since been removed; the modules no longer
+  exist in the codebase.
   (currently unused) and by the editor for hit testing.
 * `text_rasterizer.rs` – wraps font drawing using `ab_glyph` when previews are
   generated on CPU.
@@ -1023,6 +1063,10 @@ render dimensions, preview parameters and font cache.  The worker thread passes
 this snapshot to the GPU functions along with the requested time; the GPU
 functions mutate `GpuResources` and return either an image or a native texture
 depending on which helper is called.
+
+*Note:* the snapshot struct previously contained a `use_gpu` flag, but that
+field was removed when the worker switched to querying the global
+`preview_worker_use_gpu` flag stored in `AppState`.
 
 With the GPU renderer now described, we have covered the full path from DSL
 text all the way to pixels on the screen (and back for colour sampling).  The

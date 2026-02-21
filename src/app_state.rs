@@ -225,6 +225,14 @@ pub struct AppState {
     /// width/height/radius each frame as the pointer moves.
     #[serde(skip)]
     pub resize_info: Option<ResizeInfo>,
+    /// When true dragging anywhere on an element will move it instead of
+    /// selecting (similar to `resize_mode`).  The mini-toolbar exposes a
+    /// control for toggling this flag.
+    pub move_mode: bool,
+    /// Temporary information stored while the user is actively dragging an
+    /// element in move mode.
+    #[serde(skip)]
+    pub move_info: Option<MoveInfo>,
 
     // Drag-and-drop state
     pub drag_start_time: Option<f64>,
@@ -327,12 +335,29 @@ pub struct ResizeInfo {
     pub orig_w: Option<f32>,
     /// Original height fraction (for rects) at drag start.
     pub orig_h: Option<f32>,
+    pub orig_x: Option<f32>,
+    pub orig_y: Option<f32>,
     /// Which horizontal edge(s) were hit.
     pub left: bool,
     pub right: bool,
     /// Which vertical edge(s) were hit.
     pub top: bool,
     pub bottom: bool,
+}
+
+/// Temporary information persisted for the duration of an ongoing canvas move
+/// drag.  We only need to remember where the element centre was at the start
+/// of the drag and the pointer position so that subsequent pointer movements
+/// can be translated directly into updated centre coordinates.
+#[derive(Clone)]
+pub struct MoveInfo {
+    pub path: Vec<usize>,
+    /// Centre of the element (in screen coordinates) at the start of the drag.
+    pub centre: egui::Pos2,
+    /// Pointer position when the drag began; used to compute displacement.
+    pub start_pos: egui::Pos2,
+    pub axis_x: bool,
+    pub axis_y: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,6 +380,11 @@ impl Default for AppState {
         let mut system = System::new_all();
         system.refresh_all();
         let pid = sysinfo::get_current_pid().unwrap_or(Pid::from(0));
+        // pre-compute font list once to avoid duplicated work
+        let font_list = crate::shapes::fonts::list_system_fonts();
+        let available_fonts: Vec<String> = font_list.iter().map(|(n, _)| n.clone()).collect();
+        let font_map: std::collections::HashMap<String, PathBuf> =
+            font_list.clone().into_iter().collect();
 
         Self {
             fps: 60,
@@ -456,6 +486,8 @@ impl Default for AppState {
             picker_color: [255, 255, 255, 255],
             resize_mode: false,
             resize_info: None,
+            move_mode: false,
+            move_info: None,
             drag_start_time: None,
             potential_drag_path: None,
             renaming_path: None,
@@ -488,17 +520,329 @@ impl Default for AppState {
             timeline_root_path: None,
             timeline_prev_root_path: None,
             timeline_breadcrumb_anim_t: 1.0,
-            available_fonts: crate::shapes::fonts::list_system_fonts()
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect(),
-            font_map: crate::shapes::fonts::list_system_fonts()
-                .into_iter()
-                .collect(),
+            // `list_system_fonts` is somewhat expensive; compute once and
+            // reuse the vector for both `available_fonts` and `font_map`.
+            available_fonts,
+            font_map,
             font_definitions: egui::FontDefinitions::default(),
             font_arc_cache: std::collections::HashMap::new(),
-            scene_version: 1,
             gpu_scene_version: 0,
+            scene_version: 1,
+            // ````
+        }
+    }
+}
+
+impl AppState {
+    /// Performs a few runtime initialisation steps that require information
+    /// from the egui creation context (e.g. VRAM detection or texture loading).
+    ///
+    /// This was previously in `create_app` but migrating it here allows the
+    /// public API of the application logic to be driven from a single state
+    /// object and keeps the UI layer thin.  The method is intentionally
+    /// idempotent so it may be called multiple times during tests.
+    pub fn initialize_with_context(&mut self, cc: &eframe::CreationContext<'_>) {
+        // VRAM detection --------------------------------------------------
+        if let Some(wgpu_render_state) = cc.wgpu_render_state.as_ref() {
+            let adapter_info = &wgpu_render_state.adapter.get_info();
+            self.estimated_vram_bytes = crate::canvas::detect_vram_size(adapter_info);
+            println!(
+                "[motioner] VRAM detected: {:.1} GB ({} bytes) on {}",
+                self.estimated_vram_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+                self.estimated_vram_bytes,
+                adapter_info.name
+            );
+            println!(
+                "[motioner] VRAM cache limit: {:.1} GB ({:.0}% of total)",
+                (self.estimated_vram_bytes as f64 * self.vram_cache_max_percent as f64)
+                    / (1024.0 * 1024.0 * 1024.0),
+                self.vram_cache_max_percent * 100.0
+            );
+        } else {
+            self.estimated_vram_bytes = 512 * 1024 * 1024; // fallback 512 MB
+            println!("[motioner] No wgpu adapter, using fallback VRAM estimate: 512 MB");
+        }
+
+        // Load the SVG logo just once and cache the texture handle.
+        if self.logo_texture.is_none() {
+            if let Some(img) = crate::logo::color_image_from_svg(include_str!("../assets/logo.svg"))
+            {
+                let handle =
+                    cc.egui_ctx
+                        .load_texture("app_logo", img, egui::TextureOptions::NEAREST);
+                self.logo_texture = Some(handle);
+            }
+        }
+
+        // Clear caches that may have been accidentally serialized or carried
+        // over from a previous run.  This keeps memory usage predictable on
+        // startup and avoids accidentally keeping large buffers around during
+        // CI tests.
+        self.clear_preview_caches();
+
+        // wgpu side-effects: store render state and register our pipeline
+        #[cfg(feature = "wgpu")]
+        if let Some(render_state) = &cc.wgpu_render_state {
+            self.preview_worker_use_gpu = true;
+            self.wgpu_render_state = Some(render_state.clone());
+
+            let device = &render_state.device;
+            let target_format = render_state.target_format;
+            use crate::canvas::GpuResources;
+            let mut renderer = render_state.renderer.write();
+            renderer
+                .callback_resources
+                .insert(GpuResources::new(device, target_format));
+        }
+    }
+
+    /// Clear CPU/VRAM preview caches.  Called on startup and when the settings
+    /// change to reclaim memory.
+    pub fn clear_preview_caches(&mut self) {
+        self.preview_frame_cache.clear();
+        self.preview_frame_cache.shrink_to_fit();
+        self.preview_compressed_cache.clear();
+        self.preview_compressed_cache.shrink_to_fit();
+        self.preview_texture_cache.clear();
+        self.preview_texture_cache.shrink_to_fit();
+    }
+
+    /// Helper that spawns the autocomplete worker thread and stores the
+    /// channels in the state.  This encapsulates the repetitive boilerplate
+    /// previously duplicated in `ui::create_app`.
+    pub fn ensure_completion_worker(&mut self) {
+        if self.completion_worker_tx.is_some() {
+            return; // already spawned
+        }
+
+        let (atx, arx) = std::sync::mpsc::channel::<String>();
+        let (btx, brx) = std::sync::mpsc::channel::<Vec<CompletionItem>>();
+        self.completion_worker_tx = Some(atx.clone());
+        self.completion_worker_rx = Some(brx);
+
+        std::thread::spawn(move || {
+            // static candidate list built once
+            let candidates = vec![
+                CompletionItem::simple("project"),
+                CompletionItem::simple("timeline"),
+                CompletionItem::simple("layer"),
+                CompletionItem::simple("fps"),
+                CompletionItem::simple("duration"),
+                CompletionItem::simple("size"),
+                CompletionItem::simple("fill"),
+                CompletionItem::simple("radius"),
+                CompletionItem::simple("width"),
+                CompletionItem::simple("height"),
+                CompletionItem::simple("color"),
+                CompletionItem::snippet(
+                    "circle",
+                    "circle \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    radius = 0.10,\n    fill = \"#78c8ff\",\n    spawn = 0.00\n}\n",
+                ),
+                CompletionItem::snippet(
+                    "rect",
+                    "rect \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    width = 0.30,\n    height = 0.20,\n    fill = \"#c87878\",\n    spawn = 0.00\n}\n",
+                ),
+                CompletionItem::snippet(
+                    "text",
+                    "text \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    value = \"Hello\",\n    font = \"System\",\n    size = 24.0,\n    fill = \"#ffffff\",\n    spawn = 0.00\n}\n",
+                ),
+                CompletionItem::snippet(
+                    "move",
+                    "move {\n    element = \"Name\",\n    to = (0.50, 0.50),\n    during = 0.00 -> 1.00,\n    ease = linear\n}\n",
+                ),
+            ];
+
+            while let Ok(query) = arx.recv() {
+                let filtered: Vec<_> = candidates
+                    .iter()
+                    .filter(|c| c.label.starts_with(&query) && c.label != query)
+                    .cloned()
+                    .collect();
+                let _ = btx.send(filtered);
+            }
+        });
+    }
+
+    /// Ensure that all fonts referenced by the currently-loaded scene are
+    /// registered with egui.  This was previously repeated inline every frame
+    /// inside `ui::update` and incurred multiple clones of font names and
+    /// definition maps.
+    pub fn load_scene_fonts(&mut self, ctx: &egui::Context) {
+        let mut changed = false;
+        // gather all font names used by text elements
+        let mut names = Vec::new();
+        for elem in &self.scene {
+            if elem.kind != "text" {
+                continue;
+            }
+            if let Some(crate::scene::Shape::Text(t)) =
+                elem.to_shape_at_frame(elem.spawn_frame, self.fps)
+            {
+                names.push(t.font.clone());
+                for span in &t.spans {
+                    names.push(span.font.clone());
+                }
+            }
+        }
+
+        for font_name in names {
+            if font_name == "System" || font_name.is_empty() {
+                continue;
+            }
+            if let Some(path) = self.font_map.get(&font_name) {
+                if crate::shapes::fonts::load_font(&mut self.font_definitions, &font_name, path) {
+                    changed = true;
+                }
+                if !self.font_arc_cache.contains_key(&font_name) {
+                    if let Some(font) = crate::shapes::fonts::load_font_arc(path) {
+                        self.font_arc_cache.insert(font_name.clone(), font);
+                    }
+                }
+            }
+        }
+        if changed {
+            ctx.set_fonts(self.font_definitions.clone());
+        }
+    }
+
+    /// Record a new set of DSL diagnostics and update autosave state.
+    ///
+    /// The semantics mimic the ad-hoc sequence previously peppered through
+    /// `ui::update`: diagnostics are stored in `self.dsl_diagnostics`; if any
+    /// exist we clear the pending autosave flag and surface the first message
+    /// via `autosave_error`.  An empty vector clears both fields.
+    pub fn set_diagnostics(&mut self, diags: Vec<crate::dsl::Diagnostic>) {
+        if diags.is_empty() {
+            self.dsl_diagnostics.clear();
+            self.autosave_error = None;
+            // leave autosave_pending unchanged (caller may set it later)
+        } else {
+            self.dsl_diagnostics = diags.clone();
+            self.autosave_pending = false;
+            self.autosave_error = Some(diags[0].message.clone());
+        }
+    }
+
+    /// Convenience helper invoked periodically from `ui::update` that
+    /// handles the autosave debounce/cooldown logic.
+    pub fn autosave_tick(&mut self, now: f64) {
+        if let Some(last_edit) = self.last_code_edit_time {
+            if now - last_edit > self.autosave_cooldown_secs as f64 {
+                let diags = crate::dsl::validate_dsl(&self.dsl_code);
+                if !diags.is_empty() {
+                    self.set_diagnostics(diags);
+                } else {
+                    // attempt write
+                    match crate::events::element_properties_changed_event::write_dsl_to_project(
+                        self, false,
+                    ) {
+                        Ok(_) => {
+                            self.autosave_pending = false;
+                            self.autosave_last_success_time = Some(now);
+                            self.autosave_error = None;
+                            self.dsl_diagnostics.clear();
+                        }
+                        Err(e) => {
+                            self.autosave_pending = false;
+                            self.autosave_error = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Perform a debounced parse of the current DSL text and update the in-
+    /// memory scene if successful.  This mirrors the logic that used to live
+    /// inline in `ui::update` but is now encapsulated so the UI layer is more
+    /// concise.
+    ///
+    /// Returns `true` if the scene was replaced (i.e. parse succeeded and
+    /// produced non-empty output).
+    pub fn debounced_parse(&mut self, now: f64) -> bool {
+        // parse after ~120ms of inactivity
+        let parse_debounce = 0.12_f64;
+        if let Some(last_edit) = self.last_code_edit_time {
+            if now - last_edit > parse_debounce && now - self.last_scene_parse_time > parse_debounce
+            {
+                let diagnostics = crate::dsl::validate_dsl(&self.dsl_code);
+                if !diagnostics.is_empty() {
+                    // show diagnostics and block further work
+                    self.set_diagnostics(diagnostics);
+                    self.last_scene_parse_time = now;
+                    return false;
+                }
+
+                // clear any previous diagnostics
+                self.set_diagnostics(Vec::new());
+
+                // parse configuration (non-fatal)
+                if let Ok(config) = crate::dsl::parse_config(&self.dsl_code) {
+                    self.fps = config.fps;
+                    self.duration_secs = config.duration;
+                    self.render_width = config.width;
+                    self.render_height = config.height;
+                }
+
+                // parse full DSL into element keyframes
+                let parsed = crate::dsl::parse_dsl_into_elements(&self.dsl_code, self.fps);
+                if !parsed.is_empty() {
+                    self.scene = parsed;
+                    self.scene_version += 1;
+                    self.dsl_event_handlers =
+                        crate::dsl::extract_event_handlers_structured(&self.dsl_code);
+
+                    // preview throttle logic is UI-specific but we keep a small
+                    // helper here to avoid repeating the constants.
+                    const CODE_PREVIEW_IDLE_SECS: f64 = 0.45;
+                    let do_request = if self.active_tab == Some(PanelTab::Code) {
+                        if let Some(last_edit) = self.last_code_edit_time {
+                            if now - last_edit > CODE_PREVIEW_IDLE_SECS {
+                                true
+                            } else {
+                                self.preview_pending_from_code = true;
+                                false
+                            }
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
+                    };
+
+                    if do_request {
+                        crate::canvas::request_preview_frames(
+                            self,
+                            self.time,
+                            crate::canvas::PreviewMode::Single,
+                        );
+                        self.preview_pending_from_code = false;
+                    }
+                }
+
+                self.last_scene_parse_time = now;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// helper constructors for CompletionItem
+impl CompletionItem {
+    pub fn simple(label: &str) -> Self {
+        Self {
+            label: label.into(),
+            insert_text: label.into(),
+            is_snippet: false,
+        }
+    }
+
+    pub fn snippet(label: &str, insert_text: &str) -> Self {
+        Self {
+            label: label.into(),
+            insert_text: insert_text.into(),
+            is_snippet: true,
         }
     }
 }

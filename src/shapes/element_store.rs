@@ -138,14 +138,18 @@ impl ElementKeyframes {
     /// Insert a snapshot expressed as `FrameProps` — converts the snapshot
     /// into per-property keyframes (default easing: Linear).
     pub fn insert_frame(&mut self, frame: FrameIndex, props: FrameProps) {
-        // generic helper to push a keyframe into a typed track
-        fn push_kf<T: Clone>(vec: &mut Vec<Keyframe<T>>, frame: FrameIndex, value: T) {
-            vec.push(Keyframe {
-                frame,
-                value,
-                easing: Easing::Linear,
-            });
-            vec.sort_by_key(|k| k.frame);
+        // generic helper to push a keyframe into a typed track, replacing existing if needed.
+        fn push_kf<T: Clone + PartialEq>(vec: &mut Vec<Keyframe<T>>, frame: FrameIndex, value: T) {
+            if let Some(existing) = vec.iter_mut().find(|kf| kf.frame == frame) {
+                existing.value = value;
+            } else {
+                vec.push(Keyframe {
+                    frame,
+                    value,
+                    easing: Easing::Linear,
+                });
+                vec.sort_by_key(|k| k.frame);
+            }
         }
 
         if let Some(xv) = props.x {

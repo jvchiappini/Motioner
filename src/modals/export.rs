@@ -644,7 +644,6 @@ fn start_export(state: &mut AppState) {
             preview_multiplier: 1.0,
             duration_secs: duration,
             preview_fps: fps,
-            use_gpu: false,
             font_arc_cache: font_arc_cache.clone(),
             scene_version,
             #[cfg(feature = "wgpu")]
