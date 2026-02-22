@@ -50,6 +50,15 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         }
     }
 
+    // check for result from async save dialog
+    if let Some(rx) = &state.save_dialog_rx {
+        if let Ok(path) = rx.try_recv() {
+            state.export_output_path = Some(path);
+            start_export(state);
+            state.export_modal_step = 1;
+        }
+    }
+
     // Dimmed overlay – blocks interaction with everything behind
     let screen_rect = ctx.input(|i| i.screen_rect());
     let fade_color = egui::Color32::from_black_alpha(210);
@@ -253,18 +262,23 @@ fn draw_config_step(ui: &mut egui::Ui, state: &mut AppState, screen_rect: egui::
 
                             if ui.add(export_btn).clicked() {
                                 // Let user pick output file
-                                let dialog = rfd::FileDialog::new()
-                                    .set_title("Save exported video")
-                                    .add_filter("MP4 Video", &["mp4"])
-                                    .add_filter("WebM Video", &["webm"])
-                                    .add_filter("GIF Animation", &["gif"])
-                                    .set_file_name("output.mp4");
-
-                                if let Some(path) = dialog.save_file() {
-                                    state.export_output_path = Some(path);
-                                    start_export(state);
-                                    state.export_modal_step = 1;
-                                }
+                                        // spawn the blocking dialog in a thread and send
+                                        // result back on the save_dialog channel.  the UI
+                                        // will pull from the receiver later in this frame
+                                        // (see below) and then start the export.
+                                        if let Some(tx) = state.save_dialog_tx.clone() {
+                                            std::thread::spawn(move || {
+                                            let dialog = rfd::FileDialog::new()
+                                                .set_title("Save exported video")
+                                                .add_filter("MP4 Video", &["mp4"])
+                                                .add_filter("WebM Video", &["webm"])
+                                                .add_filter("GIF Animation", &["gif"])
+                                                .set_file_name("output.mp4");
+                                                if let Some(path) = dialog.save_file() {
+                                                    let _ = tx.send(path);
+                                                }
+                                            });
+                                        }
                             }
                         });
                     });

@@ -42,6 +42,14 @@ impl eframe::App for MyApp {
 
         // ensure all fonts referenced by the scene are registered with egui
         state.load_scene_fonts(ctx);
+
+        // collect async font refresh results if available
+        if let Some(rx) = &state.font_refresh_rx {
+            if let Ok((names, map)) = rx.try_recv() {
+                state.available_fonts = names;
+                state.font_map = map;
+            }
+        }
         // --- Global Color Picker Window (Top-level, unconstrained) ---
         if let Some(mut data) = state.color_picker_data.clone() {
             let mut open = true;

@@ -6,6 +6,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         return;
     }
 
+    // process any result from a previously spawned folder dialog thread
+    if let Some(rx) = &state.folder_dialog_rx {
+        if let Ok(path) = rx.try_recv() {
+            state.project_path_input = path.to_string_lossy().to_string();
+            state.path_validation_error = None;
+        }
+    }
+
     // Dimmed background - High opacity for modal focus
     let screen_rect = ctx.input(|i| i.screen_rect());
     let fade_color = egui::Color32::from_black_alpha(220);
@@ -97,20 +105,21 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                         std::env::current_dir().unwrap_or_default()
                                     };
 
-                                    // Open Folder Picker
-                                    let dialog = rfd::FileDialog::new();
-                                    // attempt to set start directory to help it load faster or more relevantly
-                                    let dialog = if start_dir.exists() {
-                                        dialog.set_directory(&start_dir)
-                                    } else {
-                                        dialog
-                                    };
-
-                                    if let Some(path) = dialog.pick_folder() {
-                                        state.project_path_input =
-                                            path.to_string_lossy().to_string();
-                                        state.path_validation_error = None;
-                                    }
+                                        // spawn the blocking dialog on a background thread
+                                        if let Some(tx) = state.folder_dialog_tx.clone() {
+                                            std::thread::spawn(move || {
+                                                let dialog = rfd::FileDialog::new();
+                                                let dialog = if start_dir.exists() {
+                                                    dialog.set_directory(&start_dir)
+                                                } else {
+                                                    dialog
+                                                };
+                                                if let Some(path) = dialog.pick_folder() {
+                                                    // ignore send errors (receiver might be dropped)
+                                                    let _ = tx.send(path);
+                                                }
+                                            });
+                                        }
                                 }
                             });
 
@@ -138,7 +147,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                     let path = std::path::PathBuf::from(&state.project_path_input);
                                     if path.exists() && path.is_dir() {
                                         state.project_path = Some(path);
-                                        state.refresh_fonts();
+                                        // start font refresh in background; UI continues
+                                        state.refresh_fonts_async();
                                         state.show_welcome = false;
                                     } else if !path.exists() {
                                         state.path_validation_error =

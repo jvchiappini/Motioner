@@ -129,6 +129,40 @@ pub struct AppState {
     #[serde(skip)]
     pub completion_worker_rx: Option<std::sync::mpsc::Receiver<Vec<CompletionItem>>>,
 
+    // Channels used for off‑thread file/folder dialogs.  The native dialog
+    // implementations in `rfd` block the current thread, which when run on
+    // the egui UI thread causes the UI to stall for a moment.  To avoid that
+    // we spawn the dialog in a background thread and forward the result back
+    // through these channels so the UI can remain responsive.
+    #[serde(skip)]
+    pub folder_dialog_tx: Option<std::sync::mpsc::Sender<PathBuf>>,
+    #[serde(skip)]
+    pub folder_dialog_rx: Option<std::sync::mpsc::Receiver<PathBuf>>,
+    #[serde(skip)]
+    pub save_dialog_tx: Option<std::sync::mpsc::Sender<PathBuf>>,
+    #[serde(skip)]
+    pub save_dialog_rx: Option<std::sync::mpsc::Receiver<PathBuf>>,
+
+    // Font refresh worker channels.  Clicking "Start Creating" kicks off a
+    // background scan of system/workspace fonts which can take a noticeable
+    // amount of time on slow machines.  We perform the scan on another
+    // thread and deliver the results via these channels so the GUI remains
+    // responsive while the operation completes.
+    #[serde(skip)]
+    pub font_refresh_tx: Option<
+        std::sync::mpsc::Sender<(
+            Vec<String>,
+            std::collections::HashMap<String, PathBuf>,
+        )>,
+    >,
+    #[serde(skip)]
+    pub font_refresh_rx: Option<
+        std::sync::mpsc::Receiver<(
+            Vec<String>,
+            std::collections::HashMap<String, PathBuf>,
+        )>,
+    >,
+
     /// Move operation: (from_path, to_parent_path, to_index)
     pub move_request: Option<(Vec<usize>, Vec<usize>, usize)>,
 
@@ -379,6 +413,15 @@ impl Default for AppState {
         let font_map: std::collections::HashMap<String, PathBuf> =
             font_list.clone().into_iter().collect();
 
+        // create the helper channels before we begin building the struct
+        let (folder_dialog_tx, folder_dialog_rx) = std::sync::mpsc::channel::<PathBuf>();
+        let (save_dialog_tx, save_dialog_rx) = std::sync::mpsc::channel::<PathBuf>();
+        let (font_refresh_tx, font_refresh_rx) =
+            std::sync::mpsc::channel::<(
+                Vec<String>,
+                std::collections::HashMap<String, PathBuf>,
+            )>();
+
         Self {
             fps: 60,
             duration_secs: 5.0,
@@ -523,15 +566,21 @@ impl Default for AppState {
             font_arc_cache: std::collections::HashMap::new(),
             gpu_scene_version: 0,
             scene_version: 1,
-            // ````
+            // async dialog channels (constructed above)
+            folder_dialog_tx: Some(folder_dialog_tx),
+            folder_dialog_rx: Some(folder_dialog_rx),
+            save_dialog_tx: Some(save_dialog_tx),
+            save_dialog_rx: Some(save_dialog_rx),
+            font_refresh_tx: Some(font_refresh_tx),
+            font_refresh_rx: Some(font_refresh_rx),
+            // dialog channels are added below in the normal field order
+            // (they were created above, before the `Self {` block).
         }
     }
 }
+// end impl Default for AppState
 
 impl AppState {
-    /// Performs a few runtime initialisation steps that require information
-    /// from the egui creation context (e.g. VRAM detection or texture loading).
-    ///
     /// This was previously in `create_app` but migrating it here allows the
     /// public API of the application logic to be driven from a single state
     /// object and keeps the UI layer thin.  The method is intentionally
@@ -832,6 +881,28 @@ impl AppState {
 
         self.available_fonts = all_fonts.iter().map(|(n, _)| n.clone()).collect();
         self.font_map = all_fonts.into_iter().collect();
+    }
+
+    /// Spawn a background worker to recompute the font lists and update the
+    /// state asynchronously.  Results arrive on `font_refresh_rx` and should
+    /// be polled by the UI loop (see `ui.rs`).
+    pub fn refresh_fonts_async(&mut self) {
+        if let Some(tx) = &self.font_refresh_tx {
+            let path = self.project_path.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut all_fonts = crate::shapes::fonts::list_system_fonts();
+                if let Some(p) = path {
+                    let ws_fonts = crate::shapes::fonts::list_workspace_fonts(&p);
+                    all_fonts.extend(ws_fonts);
+                }
+                all_fonts.sort_by(|a, b| a.0.cmp(&b.0));
+                all_fonts.dedup_by(|a, b| a.0 == b.0);
+                let names = all_fonts.iter().map(|(n, _)| n.clone()).collect();
+                let map = all_fonts.into_iter().collect();
+                let _ = tx.send((names, map));
+            });
+        }
     }
 
     pub fn request_dsl_update(&mut self) {
