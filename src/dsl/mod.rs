@@ -165,7 +165,7 @@ pub fn parse_dsl_into_elements(
     fps: u32,
 ) -> Vec<crate::shapes::element_store::ElementKeyframes> {
     use crate::animations::move_animation::MoveAnimation;
-    use crate::shapes::element_store::{seconds_to_frame, ElementKeyframes, Keyframe};
+    use crate::shapes::element_store::ElementKeyframes;
     use ast::Statement;
 
     let stmts = parser::parse(src);
@@ -222,7 +222,7 @@ fn apply_move_to_ek(
     ma: &crate::animations::move_animation::MoveAnimation,
     fps: u32,
 ) {
-    use crate::shapes::element_store::{seconds_to_frame, Keyframe, FrameIndex};
+    use crate::shapes::element_store::{seconds_to_frame, FrameIndex, Keyframe};
 
     let start_frame = seconds_to_frame(ma.start, fps);
     let end_frame = seconds_to_frame(ma.end, fps);
@@ -242,12 +242,21 @@ fn apply_move_to_ek(
     // new one.  this prevents duplicate entries when a move starts/ends on a
     // frame that already has a keyframe (either from a previous move or a
     // manual frame inserted by the user).
-    fn upsert_kf(track: &mut Vec<Keyframe<f32>>, frame: FrameIndex, value: f32, easing: crate::animations::easing::Easing) {
+    fn upsert_kf(
+        track: &mut Vec<Keyframe<f32>>,
+        frame: FrameIndex,
+        value: f32,
+        easing: crate::animations::easing::Easing,
+    ) {
         if let Some(existing) = track.iter_mut().find(|kf| kf.frame == frame) {
             existing.value = value;
             existing.easing = easing;
         } else {
-            track.push(Keyframe { frame, value, easing });
+            track.push(Keyframe {
+                frame,
+                value,
+                easing,
+            });
         }
     }
 
@@ -256,8 +265,18 @@ fn apply_move_to_ek(
 
     // insert end keyframes (linear easing by default – easing is only used for
     // interpolation *from* this keyframe to the next one).
-    upsert_kf(&mut ek.x, end_frame, ma.to_x, crate::animations::easing::Easing::Linear);
-    upsert_kf(&mut ek.y, end_frame, ma.to_y, crate::animations::easing::Easing::Linear);
+    upsert_kf(
+        &mut ek.x,
+        end_frame,
+        ma.to_x,
+        crate::animations::easing::Easing::Linear,
+    );
+    upsert_kf(
+        &mut ek.y,
+        end_frame,
+        ma.to_y,
+        crate::animations::easing::Easing::Linear,
+    );
 
     // keep tracks sorted by frame for correct sampling performance
     ek.x.sort_by_key(|kf| kf.frame);
@@ -267,60 +286,16 @@ fn apply_move_to_ek(
 pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
     use crate::scene::Animation;
 
-    let easing = ast_easing_to_scene(&mv.easing);
-    Animation::Move {
+        Animation::Move {
         to_x: mv.to.0,
         to_y: mv.to.1,
         start: mv.during.0,
         end: mv.during.1,
-        easing,
+        easing: mv.easing.clone(),
     }
 }
 
-fn ast_easing_to_scene(kind: &ast::EasingKind) -> crate::scene::Easing {
-    use crate::scene::{BezierPoint, Easing};
-    use ast::EasingKind;
-
-    match kind {
-        EasingKind::Linear => Easing::Linear,
-        EasingKind::EaseIn { power } => Easing::EaseIn { power: *power },
-        EasingKind::EaseOut { power } => Easing::EaseOut { power: *power },
-        EasingKind::EaseInOut { power } => Easing::EaseInOut { power: *power },
-        EasingKind::Sine => Easing::Sine,
-        EasingKind::Expo => Easing::Expo,
-        EasingKind::Circ => Easing::Circ,
-        EasingKind::Bezier { p1, p2 } => Easing::Bezier { p1: *p1, p2: *p2 },
-        EasingKind::Spring {
-            damping,
-            stiffness,
-            mass,
-        } => Easing::Spring {
-            damping: *damping,
-            stiffness: *stiffness,
-            mass: *mass,
-        },
-        EasingKind::Elastic { amplitude, period } => Easing::Elastic {
-            amplitude: *amplitude,
-            period: *period,
-        },
-        EasingKind::Bounce { bounciness } => Easing::Bounce {
-            bounciness: *bounciness,
-        },
-        EasingKind::Custom { points } => Easing::Custom {
-            points: points.clone(),
-        },
-        EasingKind::CustomBezier { points } => Easing::CustomBezier {
-            points: points
-                .iter()
-                .map(|p| BezierPoint {
-                    pos: p.pos,
-                    handle_left: p.handle_left,
-                    handle_right: p.handle_right,
-                })
-                .collect(),
-        },
-    }
-}
+// note: easing conversion helper removed; AST now stores scene::Easing directly
 
 // ─── tests ───────────────────────────────────────────────────────────────
 
@@ -332,7 +307,10 @@ mod tests {
     #[test]
     fn move_blocks_convert_to_keyframes() {
         let src = r#"
-        rect(name="foo", x=0.0, y=0.0)
+        rect "foo" {
+            x = 0.0,
+            y = 0.0,
+        }
         move {
             element = "foo",
             to = (1.0, 2.0),
@@ -359,7 +337,10 @@ mod tests {
         // start frame already has a manual x keyframe (0.0); the move should
         // replace that easing/value rather than append a duplicate entry.
         let src = r#"
-        rect(name="foo", x=0.1, y=0.0)
+        rect "foo" {
+            x = 0.1,
+            y = 0.0,
+        }
         move {
             element = "foo",
             to = (1.0, 0.0),
@@ -375,6 +356,9 @@ mod tests {
         // first keyframe should use the easing from the move, not Linear
         assert_eq!(ek.x[0].frame, seconds_to_frame(0.0, fps));
         assert_eq!(ek.x[0].value, 0.1);
-        assert!(matches!(ek.x[0].easing, crate::animations::easing::Easing::EaseIn { .. }));
+        assert!(matches!(
+            ek.x[0].easing,
+            crate::animations::easing::Easing::EaseIn { .. }
+        ));
     }
 }

@@ -9,7 +9,7 @@
 /// - [`parse_config`] — header-only parse (used by quick-validation path)
 use std::collections::HashMap;
 
-use super::ast::{EasingKind, EventHandlerNode, HeaderConfig, MoveBlock, Statement};
+use super::ast::{EventHandlerNode, HeaderConfig, MoveBlock, Statement};
 use super::lexer::extract_balanced;
 use crate::dsl::utils;
 
@@ -168,7 +168,7 @@ pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
     let mut to: Option<utils::Point2> = None; // use alias via utils or define separate
     let mut start_time: Option<f32> = None;
     let mut end_time: Option<f32> = None;
-    let mut easing = EasingKind::Linear;
+    let mut easing = crate::scene::Easing::Linear;
 
     // Skip the header line ("move {"), iterate body only.
     let body = body_lines(block);

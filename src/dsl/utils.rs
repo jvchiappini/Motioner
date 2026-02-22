@@ -15,7 +15,7 @@ pub type Point2 = super::ast::Point2;
 /// here so both grammar and evaluation layers can share it (animations can
 /// also call it if needed).  Returning `Linear` on failure ensures the
 /// surrounding parser remains resilient to malformed input.
-pub fn parse_easing(s: &str) -> super::ast::EasingKind {
+pub fn parse_easing(s: &str) -> crate::scene::Easing {
     let s = s.trim().trim_end_matches(',');
 
     // helper to parse named float parameters
@@ -30,36 +30,36 @@ pub fn parse_easing(s: &str) -> super::ast::EasingKind {
     }
 
     if s == "linear" {
-        return super::ast::EasingKind::Linear;
+        return crate::scene::Easing::Linear;
     }
     if s == "sine" {
-        return super::ast::EasingKind::Sine;
+        return crate::scene::Easing::Sine;
     }
     if s == "expo" {
-        return super::ast::EasingKind::Expo;
+        return crate::scene::Easing::Expo;
     }
     if s == "circ" {
-        return super::ast::EasingKind::Circ;
+        return crate::scene::Easing::Circ;
     }
 
     if s.starts_with("ease_in_out") {
         let power = param(s, "power").unwrap_or(2.0);
-        return super::ast::EasingKind::EaseInOut { power };
+        return crate::scene::Easing::EaseInOut { power };
     }
     if s.starts_with("ease_in") {
         let power = param(s, "power").unwrap_or(2.0);
-        return super::ast::EasingKind::EaseIn { power };
+        return crate::scene::Easing::EaseIn { power };
     }
     if s.starts_with("ease_out") {
         let power = param(s, "power").unwrap_or(2.0);
-        return super::ast::EasingKind::EaseOut { power };
+        return crate::scene::Easing::EaseOut { power };
     }
 
     if s.starts_with("spring") {
         let damping = param(s, "damping").unwrap_or(10.0);
         let stiffness = param(s, "stiffness").unwrap_or(100.0);
         let mass = param(s, "mass").unwrap_or(1.0);
-        return super::ast::EasingKind::Spring {
+        return crate::scene::Easing::Spring {
             damping,
             stiffness,
             mass,
@@ -69,31 +69,31 @@ pub fn parse_easing(s: &str) -> super::ast::EasingKind {
     if s.starts_with("elastic") {
         let amplitude = param(s, "amplitude").unwrap_or(1.0);
         let period = param(s, "period").unwrap_or(0.3);
-        return super::ast::EasingKind::Elastic { amplitude, period };
+        return crate::scene::Easing::Elastic { amplitude, period };
     }
 
     if s.starts_with("bounce") {
         let bounciness = param(s, "bounciness").unwrap_or(0.5);
-        return super::ast::EasingKind::Bounce { bounciness };
+        return crate::scene::Easing::Bounce { bounciness };
     }
 
     // bezier(p1 = (x, y), p2 = (x, y))
     if s.starts_with("bezier") && !s.starts_with("custom_bezier") {
         if let (Some(p1), Some(p2)) = (extract_point_param(s, "p1"), extract_point_param(s, "p2")) {
-            return super::ast::EasingKind::Bezier { p1, p2 };
+            return crate::scene::Easing::Bezier { p1, p2 };
         }
     }
 
     if s.starts_with("custom_bezier") {
         let pts = parse_bezier_points(s);
-        return super::ast::EasingKind::CustomBezier { points: pts };
+        return crate::scene::Easing::CustomBezier { points: pts };
     }
     if s.starts_with("custom") {
         let pts = parse_custom_points(s);
-        return super::ast::EasingKind::Custom { points: pts };
+        return crate::scene::Easing::Custom { points: pts };
     }
 
-    super::ast::EasingKind::Linear
+    crate::scene::Easing::Linear
 }
 
 /// Helper used by `parse_easing` to read a named `(x, y)` parameter.
@@ -105,7 +105,7 @@ pub fn extract_point_param(s: &str, name: &str) -> Option<(f32, f32)> {
 }
 
 /// Parse `custom_bezier` point list from the full easing string.
-pub fn parse_bezier_points(s: &str) -> Vec<super::ast::BezierPoint> {
+pub fn parse_bezier_points(s: &str) -> Vec<crate::scene::BezierPoint> {
     let start = match s.find('[') {
         Some(i) => i,
         None => return Vec::new(),
@@ -139,7 +139,7 @@ pub fn parse_bezier_points(s: &str) -> Vec<super::ast::BezierPoint> {
                             parse_point(&format!("{})", sub[1].trim())),
                             parse_point(&format!("{})", sub[2].trim().trim_end_matches(')'))),
                         ) {
-                            pts.push(super::ast::BezierPoint {
+                            pts.push(crate::scene::BezierPoint {
                                 pos,
                                 handle_left: hl,
                                 handle_right: hr,

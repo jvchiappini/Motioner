@@ -11,9 +11,7 @@ circle "Circle" {
 
 move {
 	element = "Circle",
-	to = (1.00, 1.000),
+	to = (1.50, 1.50),
 	during = 0.00 -> 1.00,
-	ease = bonce(power = 4)
+	ease = linear
 }
-
-

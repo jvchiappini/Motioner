@@ -252,7 +252,8 @@ generator used when the scene is serialized back to text (save/export).
 ### 3.1 AST (`ast.rs`)
 
 Defines the typed representations of every language construct.  Primitive
-types such as `Point2` and `Color` live here along with the `EasingKind` enum
+types such as `Point2` and `Color` live here; easing curves now use the
+shared `crate::scene::Easing` type rather than a separate AST enum
 and `MoveBlock` used for both inline and top-level animations.  Header
 directives and event handler nodes are simple structs.  The top-level
 `Statement` enum has four variants: `Header`, `Shape`, `Move` and

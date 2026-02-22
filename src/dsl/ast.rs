@@ -43,55 +43,10 @@ impl Color {
 
 // ─── Easing ───────────────────────────────────────────────────────────────────
 
-/// All supported easing curves for `move {}` animations.
-/// Mirrors `crate::scene::Easing` but lives in the DSL layer so the AST
-/// has no dependency on scene internals.
-#[derive(Clone, Debug, PartialEq)]
-pub enum EasingKind {
-    Linear,
-    EaseIn {
-        power: f32,
-    },
-    EaseOut {
-        power: f32,
-    },
-    EaseInOut {
-        power: f32,
-    },
-    Sine,
-    Expo,
-    Circ,
-    Bezier {
-        p1: Point2,
-        p2: Point2,
-    },
-    Spring {
-        damping: f32,
-        stiffness: f32,
-        mass: f32,
-    },
-    Elastic {
-        amplitude: f32,
-        period: f32,
-    },
-    Bounce {
-        bounciness: f32,
-    },
-    Custom {
-        points: Vec<Point2>,
-    },
-    CustomBezier {
-        points: Vec<BezierPoint>,
-    },
-}
-
-/// A single control point used by the `CustomBezier` easing.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BezierPoint {
-    pub pos: Point2,
-    pub handle_left: Point2,
-    pub handle_right: Point2,
-}
+// The AST no longer defines its own easing enum.  We re-use the shared
+// `crate::scene::Easing` type (which is itself an alias of
+// `animations::easing::Easing`) to avoid duplicating logic or variants.  This
+// simplifies the pipeline and keeps the DSL grammar thin.
 
 // ─── Text ─────────────────────────────────────────────────────────────────────
 
@@ -110,7 +65,7 @@ pub struct MoveBlock {
     pub to: Point2,
     /// `start -> end` time range in seconds.
     pub during: (f32, f32),
-    pub easing: EasingKind,
+    pub easing: crate::scene::Easing,
 }
 
 // ─── Shape elements ───────────────────────────────────────────────────────────
