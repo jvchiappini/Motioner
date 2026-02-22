@@ -47,6 +47,11 @@ pub use crate::states::dslstate::DslState;
 // --- Legacy shims (keep existing call-sites compiling) -----------------------
 
 use crate::scene::Shape;
+// used by unit tests below
+#[cfg(test)]
+use crate::shapes::element_store::ElementKeyframes;
+#[cfg(test)]
+use crate::animations::move_animation::MoveAnimation;
 
 /// Convenience wrapper: generate DSL from a scene.
 /// Prefer calling [`generate_from_elements`] directly when the scene is stored as `ElementKeyframes`.
@@ -236,8 +241,8 @@ fn apply_move_to_ek(
         (0.5, 0.5)
     };
 
-    // insert start keyframes; easing goes on the first keyframe so that the
-    // interpolation to the subsequent frame uses the DSL-specified curve.
+    // insert start/end keyframes; easing goes on the first keyframe so that
+    // the interpolation to the subsequent frame uses the DSL-specified curve.
     // helper that either updates an existing keyframe at `frame` or pushes a
     // new one.  this prevents duplicate entries when a move starts/ends on a
     // frame that already has a keyframe (either from a previous move or a
@@ -260,23 +265,30 @@ fn apply_move_to_ek(
         }
     }
 
-    upsert_kf(&mut ek.x, start_frame, start_x, ma.easing.clone());
-    upsert_kf(&mut ek.y, start_frame, start_y, ma.easing.clone());
+    if start_frame == end_frame {
+        // Range zero; write a single keyframe.  use the specified easing so
+        // `Step` doesn't get overwritten by the linear fallback below.
+        upsert_kf(&mut ek.x, start_frame, ma.to_x, ma.easing.clone());
+        upsert_kf(&mut ek.y, start_frame, ma.to_y, ma.easing.clone());
+    } else {
+        upsert_kf(&mut ek.x, start_frame, start_x, ma.easing.clone());
+        upsert_kf(&mut ek.y, start_frame, start_y, ma.easing.clone());
 
-    // insert end keyframes (linear easing by default – easing is only used for
-    // interpolation *from* this keyframe to the next one).
-    upsert_kf(
-        &mut ek.x,
-        end_frame,
-        ma.to_x,
-        crate::animations::easing::Easing::Linear,
-    );
-    upsert_kf(
-        &mut ek.y,
-        end_frame,
-        ma.to_y,
-        crate::animations::easing::Easing::Linear,
-    );
+        // insert end keyframes (linear easing by default – easing is only used for
+        // interpolation *from* this keyframe to the next one).
+        upsert_kf(
+            &mut ek.x,
+            end_frame,
+            ma.to_x,
+            crate::animations::easing::Easing::Linear,
+        );
+        upsert_kf(
+            &mut ek.y,
+            end_frame,
+            ma.to_y,
+            crate::animations::easing::Easing::Linear,
+        );
+    }
 
     // keep tracks sorted by frame for correct sampling performance
     ek.x.sort_by_key(|kf| kf.frame);
@@ -360,5 +372,71 @@ mod tests {
             ek.x[0].easing,
             crate::animations::easing::Easing::EaseIn { .. }
         ));
+    }
+
+    #[test]
+    fn step_on_zero_length_move() {
+        // when start == end and easing is step we should still write the
+        // single target keyframe with the "step" easing; previously the
+        // linear fallback for the end keyframe would clobber it.
+        let fps: u32 = 30;
+        // `ElementKeyframes` doesn't implement `Default`; just construct a
+        // blank one using `new` and then we can mutate it.
+        let mut ek = ElementKeyframes::new("".to_string(), "".to_string());
+        let ma = MoveAnimation {
+            to_x: 100.0,
+            to_y: 50.0,
+            start: 1.0,
+            end: 1.0,
+            easing: crate::animations::easing::Easing::Step,
+        };
+
+        apply_move_to_ek(&mut ek, &ma, fps);
+
+        assert_eq!(ek.x.len(), 1, "only one keyframe should exist");
+        assert_eq!(ek.x[0].value, 100.0);
+        assert_eq!(ek.x[0].easing, crate::animations::easing::Easing::Step);
+
+        assert_eq!(ek.y.len(), 1);
+        assert_eq!(ek.y[0].value, 50.0);
+        assert_eq!(ek.y[0].easing, crate::animations::easing::Easing::Step);
+        // sampling the single frame should give the destination value;
+        // there is no linear interpolation involved.
+        let start_frame = seconds_to_frame(ma.start, fps);
+        let sample = ek.sample(start_frame, fps).unwrap();
+        assert_eq!(sample.x, Some(100.0));
+        assert_eq!(sample.y, Some(50.0));
+    }
+    #[test]
+    fn step_easing_teleports() {
+        let src = r#"
+        rect "foo" {
+            x = 0.25,
+            y = 0.25,
+        }
+        move {
+            element = "foo",
+            to = (0.75, 0.75),
+            during = 0.0 -> 1.0,
+            ease = step
+        }
+        "#;
+
+        let fps = 10;
+        let elements = parse_dsl_into_elements(src, fps);
+        let ek = &elements[0];
+        // after converting, we should have start and end keyframes,
+        // but sampling at frame 1 (immediately after spawn) should already
+        // produce the destination value due to step easing.
+        let props0 = ek.sample(0, fps).unwrap();
+        let props1 = ek.sample(1, fps).unwrap();
+        assert_eq!(props0.x, Some(0.25));
+        assert_eq!(props1.x, Some(0.75));
+    }
+
+    #[test]
+    fn parse_step_easing_string() {
+        let e = crate::dsl::utils::parse_easing("step");
+        assert_eq!(e, crate::scene::Easing::Step);
     }
 }

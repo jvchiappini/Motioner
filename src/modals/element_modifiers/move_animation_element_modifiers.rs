@@ -127,6 +127,7 @@ pub fn render_move_animation_modifiers(
                                     Easing::EaseIn { .. } => "EaseIn",
                                     Easing::EaseOut { .. } => "EaseOut",
                                     Easing::EaseInOut { .. } => "EaseInOut",
+                                    Easing::Step => "Step",
                                     Easing::Custom { .. } => "Custom",
                                     Easing::CustomBezier { .. } => "CustomBezier",
                                     Easing::Bezier { .. } => "Bezier",
@@ -137,6 +138,10 @@ pub fn render_move_animation_modifiers(
                                     Easing::Elastic { .. } => "Elastic",
                                     Easing::Bounce { .. } => "Bounce",
                                 };
+                                                                        if ui.selectable_label(matches!(easing, Easing::Step), "Step").on_hover_text("Step — teleport instantly at animation start").clicked() {
+                                                                            *easing = Easing::Step;
+                                                                            *changed = true;
+                                                                        }
                                 egui::ComboBox::from_label("")
                                     .selected_text(easing_label)
                                     .show_ui(ui, |ui| {

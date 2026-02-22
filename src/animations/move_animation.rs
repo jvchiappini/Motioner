@@ -99,6 +99,7 @@ impl MoveAnimation {
             } => spring::to_dsl_string(*damping, *stiffness, *mass),
             Easing::Elastic { amplitude, period } => elastic::to_dsl_string(*amplitude, *period),
             Easing::Bounce { bounciness } => bounce::to_dsl_string(*bounciness),
+            Easing::Step => "step".to_string(),
         };
 
         let mut out = format!("{}move {{\n", indent);
@@ -139,6 +140,10 @@ pub fn evaluate_easing_cpu(t: f32, easing: &Easing) -> f32 {
             } else {
                 1.0 - 0.5 * (2.0 * (1.0 - t)).powf(*power)
             }
+        }
+        Easing::Step => {
+            // teleport: return 0 until strictly after start, then 1
+            if t <= 0.0 { 0.0 } else { 1.0 }
         }
         // all other easing kinds currently map to linear in the CPU fallback
         _ => t,

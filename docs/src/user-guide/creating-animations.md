@@ -45,6 +45,8 @@ Animate element movement:
 - X, Y coordinates
 - Smooth motion paths
 - Speed control via keyframe spacing
+    - **Step** easing: teleport directly to the target position at the start of
+        the move (no interpolation)
 
 ### Opacity Animation
 

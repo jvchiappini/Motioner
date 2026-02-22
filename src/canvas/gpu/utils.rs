@@ -47,6 +47,7 @@ pub fn easing_to_gpu(e: &crate::animations::easing::Easing) -> u32 {
         Easing::Sine => 4,
         Easing::Expo => 5,
         Easing::Circ => 6,
+        Easing::Step => 7,
         // Otras curvas usan linear temporalmente hasta tener soporte completo en WGSL.
         _ => 0,
     }

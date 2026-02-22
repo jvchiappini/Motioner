@@ -41,6 +41,9 @@ pub fn parse_easing(s: &str) -> crate::scene::Easing {
     if s == "circ" {
         return crate::scene::Easing::Circ;
     }
+    if s == "step" {
+        return crate::scene::Easing::Step;
+    }
 
     if s.starts_with("ease_in_out") {
         let power = param(s, "power").unwrap_or(2.0);

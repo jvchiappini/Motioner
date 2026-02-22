@@ -63,4 +63,8 @@ pub enum Easing {
     Bounce {
         bounciness: f32,
     },
+    /// Discrete step: element teleports immediately to target as soon as the
+    /// animation begins (no interpolation).  Behaviour is implemented both in
+    /// the CPU fallback and in the GPU compute shader.
+    Step,
 }

@@ -123,6 +123,12 @@ fn ease_circ(t: f32) -> f32 {
     return 1.0 - sqrt(max(0.0, 1.0 - t * t));
 }
 
+fn ease_step(t: f32) -> f32 {
+    // teleport at the very beginning of the interval: return 0 at t==0,
+    // otherwise jump to 1 immediately.
+    if t <= 0.0 { return 0.0; } else { return 1.0; }
+}
+
 fn apply_easing(t: f32, easing: u32) -> f32 {
     switch easing {
         case 0u: { return ease_linear(t); }
@@ -132,6 +138,7 @@ fn apply_easing(t: f32, easing: u32) -> f32 {
         case 4u: { return ease_sine(t); }
         case 5u: { return ease_expo(t); }
         case 6u: { return ease_circ(t); }
+        case 7u: { return ease_step(t); }
         default: { return ease_linear(t); }
     }
 }

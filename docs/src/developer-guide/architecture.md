@@ -1029,7 +1029,7 @@ pieces:
   buffers (resizing them if necessary), writes compute uniforms, and dispatches
   workgroups.  Helper methods translate animation tracks and colour tracks
   into GPU-friendly formats and apply easing conversions via
-  `utils::easing_to_gpu`.  The compute pass writes its results into the
+  `utils::easing_to_gpu` (now including the new `Step` variant).  The compute pass writes its results into the
   `shape_buffer`, which is then read by the render shader.
 * **`render.rs`** – integrates the GPU renderer with egui through
   `egui_wgpu::CallbackTrait`.  `CompositionCallback` carries all parameters
