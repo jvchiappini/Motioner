@@ -105,21 +105,21 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                         std::env::current_dir().unwrap_or_default()
                                     };
 
-                                        // spawn the blocking dialog on a background thread
-                                        if let Some(tx) = state.folder_dialog_tx.clone() {
-                                            std::thread::spawn(move || {
-                                                let dialog = rfd::FileDialog::new();
-                                                let dialog = if start_dir.exists() {
-                                                    dialog.set_directory(&start_dir)
-                                                } else {
-                                                    dialog
-                                                };
-                                                if let Some(path) = dialog.pick_folder() {
-                                                    // ignore send errors (receiver might be dropped)
-                                                    let _ = tx.send(path);
-                                                }
-                                            });
-                                        }
+                                    // spawn the blocking dialog on a background thread
+                                    if let Some(tx) = state.folder_dialog_tx.clone() {
+                                        std::thread::spawn(move || {
+                                            let dialog = rfd::FileDialog::new();
+                                            let dialog = if start_dir.exists() {
+                                                dialog.set_directory(&start_dir)
+                                            } else {
+                                                dialog
+                                            };
+                                            if let Some(path) = dialog.pick_folder() {
+                                                // ignore send errors (receiver might be dropped)
+                                                let _ = tx.send(path);
+                                            }
+                                        });
+                                    }
                                 }
                             });
 

@@ -149,18 +149,11 @@ pub struct AppState {
     // thread and deliver the results via these channels so the GUI remains
     // responsive while the operation completes.
     #[serde(skip)]
-    pub font_refresh_tx: Option<
-        std::sync::mpsc::Sender<(
-            Vec<String>,
-            std::collections::HashMap<String, PathBuf>,
-        )>,
-    >,
+    pub font_refresh_tx:
+        Option<std::sync::mpsc::Sender<(Vec<String>, std::collections::HashMap<String, PathBuf>)>>,
     #[serde(skip)]
     pub font_refresh_rx: Option<
-        std::sync::mpsc::Receiver<(
-            Vec<String>,
-            std::collections::HashMap<String, PathBuf>,
-        )>,
+        std::sync::mpsc::Receiver<(Vec<String>, std::collections::HashMap<String, PathBuf>)>,
     >,
 
     /// Move operation: (from_path, to_parent_path, to_index)
@@ -417,10 +410,7 @@ impl Default for AppState {
         let (folder_dialog_tx, folder_dialog_rx) = std::sync::mpsc::channel::<PathBuf>();
         let (save_dialog_tx, save_dialog_rx) = std::sync::mpsc::channel::<PathBuf>();
         let (font_refresh_tx, font_refresh_rx) =
-            std::sync::mpsc::channel::<(
-                Vec<String>,
-                std::collections::HashMap<String, PathBuf>,
-            )>();
+            std::sync::mpsc::channel::<(Vec<String>, std::collections::HashMap<String, PathBuf>)>();
 
         Self {
             fps: 60,
