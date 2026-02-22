@@ -54,7 +54,6 @@ impl MoveAnimation {
         })
     }
 
-
     pub fn to_dsl_block(&self, element_name: Option<&str>, indent: &str) -> String {
         let ease_str = match &self.easing {
             Easing::Linear => "linear".to_string(),
@@ -143,7 +142,11 @@ pub fn evaluate_easing_cpu(t: f32, easing: &Easing) -> f32 {
         }
         Easing::Step => {
             // teleport: return 0 until strictly after start, then 1
-            if t <= 0.0 { 0.0 } else { 1.0 }
+            if t <= 0.0 {
+                0.0
+            } else {
+                1.0
+            }
         }
         // all other easing kinds currently map to linear in the CPU fallback
         _ => t,

@@ -49,9 +49,9 @@ pub use crate::states::dslstate::DslState;
 use crate::scene::Shape;
 // used by unit tests below
 #[cfg(test)]
-use crate::shapes::element_store::ElementKeyframes;
-#[cfg(test)]
 use crate::animations::move_animation::MoveAnimation;
+#[cfg(test)]
+use crate::shapes::element_store::ElementKeyframes;
 
 /// Convenience wrapper: generate DSL from a scene.
 /// Prefer calling [`generate_from_elements`] directly when the scene is stored as `ElementKeyframes`.
@@ -298,7 +298,7 @@ fn apply_move_to_ek(
 pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
     use crate::scene::Animation;
 
-        Animation::Move {
+    Animation::Move {
         to_x: mv.to.0,
         to_y: mv.to.1,
         start: mv.during.0,
