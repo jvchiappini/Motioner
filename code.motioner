@@ -2,20 +2,18 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-	x = 0.165,
-	y = 0.427,
-	radius = 0.180,
+	x = 0.500,
+	y = 0.500,
+	radius = 0.100,
 	fill = "#78c8ff",
 	spawn = 0.00
 }
 
-text "Text" {
-	x = 0.500,
-	y = 0.500,
-	value = "Hello",
-	font = "System",
-	size = 0.0333,
-	fill = "#ffffff",
-	spawn = 0.00,
+move {
+	element = "Circle",
+	to = (1.00, 1.000),
+	during = 0.00 -> 1.00,
+	ease = bonce(power = 4)
 }
+
 

@@ -122,7 +122,8 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
 
     // Attach top-level move blocks to their target shapes. Use the
     // `Shape::push_animation` helper so this module doesn't need to match on
-    // concrete shape variants.
+    // concrete shape variants.  We don't convert these to keyframes here; the
+    // downstream `parse_dsl_into_elements` call will handle moves separately.
     for (target, mv) in pending_moves {
         if let Some(shape) = shapes.iter_mut().find(|s| s.name() == target) {
             let anim = ast_move_to_scene(&mv);
@@ -176,7 +177,10 @@ pub fn parse_dsl_into_elements(
             if let Statement::Shape(shape) = stmt {
                 let mut ek = ElementKeyframes::from_shape_at_spawn(shape, fps)?;
 
-                // Process inline animations already attached to the shape
+                // Process inline animations already attached to the shape.  Each
+                // move animation is converted immediately into two boundary
+                // keyframes on the x/y tracks; the helper takes care of sampling
+                // the existing tracks so sequences of animations chain correctly.
                 for anim in shape.animations() {
                     if let Some(ma) = MoveAnimation::from_scene(anim) {
                         apply_move_to_ek(&mut ek, &ma, fps);
@@ -209,18 +213,55 @@ pub fn parse_dsl_into_elements(
     elements
 }
 
-/// Helper to apply a MoveAnimation into ElementKeyframes as a high-level command.
+/// Helper that converts a `MoveAnimation` into explicit keyframes on the
+/// element's x/y tracks.  The algorithm mirrors the semantics previously
+/// implemented by the GPU loop, so chained or overlapping moves behave
+/// identically.
 fn apply_move_to_ek(
     ek: &mut crate::shapes::element_store::ElementKeyframes,
     ma: &crate::animations::move_animation::MoveAnimation,
-    _fps: u32,
+    fps: u32,
 ) {
-    // Instead of baking into keyframes, we store the high-level MoveAnimation.
-    // The GPU compute shader will interpolate this on-the-fly.
-    ek.move_commands.push(ma.clone());
-    // Sort by start frame to ensure correct superposition in the shader
-    ek.move_commands
-        .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+    use crate::shapes::element_store::{seconds_to_frame, Keyframe, FrameIndex};
+
+    let start_frame = seconds_to_frame(ma.start, fps);
+    let end_frame = seconds_to_frame(ma.end, fps);
+
+    // Determine the element's current position at the start of the move.  The
+    // public `sample` helper already handles interpolation of existing tracks
+    // so we can use it instead of re‑implementing that logic here.
+    let (start_x, start_y) = if let Some(props) = ek.sample(start_frame, fps) {
+        (props.x.unwrap_or(0.5), props.y.unwrap_or(0.5))
+    } else {
+        (0.5, 0.5)
+    };
+
+    // insert start keyframes; easing goes on the first keyframe so that the
+    // interpolation to the subsequent frame uses the DSL-specified curve.
+    // helper that either updates an existing keyframe at `frame` or pushes a
+    // new one.  this prevents duplicate entries when a move starts/ends on a
+    // frame that already has a keyframe (either from a previous move or a
+    // manual frame inserted by the user).
+    fn upsert_kf(track: &mut Vec<Keyframe<f32>>, frame: FrameIndex, value: f32, easing: crate::animations::easing::Easing) {
+        if let Some(existing) = track.iter_mut().find(|kf| kf.frame == frame) {
+            existing.value = value;
+            existing.easing = easing;
+        } else {
+            track.push(Keyframe { frame, value, easing });
+        }
+    }
+
+    upsert_kf(&mut ek.x, start_frame, start_x, ma.easing.clone());
+    upsert_kf(&mut ek.y, start_frame, start_y, ma.easing.clone());
+
+    // insert end keyframes (linear easing by default – easing is only used for
+    // interpolation *from* this keyframe to the next one).
+    upsert_kf(&mut ek.x, end_frame, ma.to_x, crate::animations::easing::Easing::Linear);
+    upsert_kf(&mut ek.y, end_frame, ma.to_y, crate::animations::easing::Easing::Linear);
+
+    // keep tracks sorted by frame for correct sampling performance
+    ek.x.sort_by_key(|kf| kf.frame);
+    ek.y.sort_by_key(|kf| kf.frame);
 }
 
 pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
@@ -278,5 +319,62 @@ fn ast_easing_to_scene(kind: &ast::EasingKind) -> crate::scene::Easing {
                 })
                 .collect(),
         },
+    }
+}
+
+// ─── tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shapes::element_store::seconds_to_frame;
+
+    #[test]
+    fn move_blocks_convert_to_keyframes() {
+        let src = r#"
+        rect(name="foo", x=0.0, y=0.0)
+        move {
+            element = "foo",
+            to = (1.0, 2.0),
+            during = 0.0 -> 1.0,
+            ease = linear
+        }
+        "#;
+
+        let fps = 30;
+        let elements = parse_dsl_into_elements(src, fps);
+        assert_eq!(elements.len(), 1);
+        let ek = &elements[0];
+        assert_eq!(ek.kind, "rect");
+        assert_eq!(ek.x.len(), 2);
+        assert_eq!(ek.y.len(), 2);
+        assert_eq!(ek.x[0].frame, seconds_to_frame(0.0, fps));
+        assert_eq!(ek.x[1].frame, seconds_to_frame(1.0, fps));
+        assert_eq!(ek.x[1].value, 1.0);
+        assert_eq!(ek.y[1].value, 2.0);
+    }
+
+    #[test]
+    fn move_overwrites_existing_keyframe() {
+        // start frame already has a manual x keyframe (0.0); the move should
+        // replace that easing/value rather than append a duplicate entry.
+        let src = r#"
+        rect(name="foo", x=0.1, y=0.0)
+        move {
+            element = "foo",
+            to = (1.0, 0.0),
+            during = 0.0 -> 1.0,
+            ease = ease_in(power = 2.0)
+        }
+        "#;
+
+        let fps = 10;
+        let elements = parse_dsl_into_elements(src, fps);
+        let ek = &elements[0];
+        assert_eq!(ek.x.len(), 2);
+        // first keyframe should use the easing from the move, not Linear
+        assert_eq!(ek.x[0].frame, seconds_to_frame(0.0, fps));
+        assert_eq!(ek.x[0].value, 0.1);
+        assert!(matches!(ek.x[0].easing, crate::animations::easing::Easing::EaseIn { .. }));
     }
 }

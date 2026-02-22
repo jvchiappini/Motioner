@@ -54,20 +54,6 @@ impl MoveAnimation {
         })
     }
 
-    /// Convert the animation into a GPU-friendly command.  The compute shader
-    /// expects frame indices rather than seconds, so the caller must supply the
-    /// current project `fps`.  This helper centralises the conversion logic that
-    /// used to live in `canvas::gpu::compute`.
-    pub fn to_gpu_move(&self, fps: u32) -> crate::canvas::gpu::types::GpuMove {
-        crate::canvas::gpu::types::GpuMove {
-            start_frame: crate::shapes::element_store::seconds_to_frame(self.start, fps) as u32,
-            end_frame: crate::shapes::element_store::seconds_to_frame(self.end, fps) as u32,
-            to_x: self.to_x,
-            to_y: self.to_y,
-            easing: crate::canvas::gpu::utils::easing_to_gpu(&self.easing),
-            _pad: [0, 0, 0],
-        }
-    }
 
     pub fn to_dsl_block(&self, element_name: Option<&str>, indent: &str) -> String {
         let ease_str = match &self.easing {

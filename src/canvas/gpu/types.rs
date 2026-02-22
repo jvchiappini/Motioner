@@ -42,18 +42,6 @@ pub struct GpuKeyframe {
     pub _pad: u32,
 }
 
-/// Un comando de movimiento directo procesado por la GPU.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GpuMove {
-    pub start_frame: u32,
-    pub end_frame: u32,
-    pub to_x: f32,
-    pub to_y: f32,
-    pub easing: u32,
-    pub _pad: [u32; 3], // Padding para alinear a 16 bytes (vec4 compatible)
-}
-
 /// Descriptor por elemento enviado al shader de computación.
 /// Contiene offsets y longitudes para indexar el `keyframe_buffer`.
 #[repr(C)]
@@ -71,20 +59,20 @@ pub struct GpuElementDesc {
     pub h_len: u32,
     pub shape_type: i32,
     pub spawn_frame: u32,
-    pub kill_frame: u32, // 0xFFFFFFFF = no kill
-    pub move_offset: u32, // Offset al buffer de comandos de movimiento
-    pub move_len: u32,    // Cantidad de movimientos encadenados
-    
+    pub kill_frame: u32,  // 0xFFFFFFFF = no kill
+    // move commands removed; positional animation is now encoded in the
+    // x/y keyframe tracks and no longer requires a separate buffer.
+
     pub r_offset: u32,
     pub g_offset: u32,
     pub b_offset: u32,
     pub a_offset: u32,
-    
+
     pub r_len: u32,
     pub g_len: u32,
     pub b_len: u32,
     pub a_len: u32,
-    
+
     pub _pad: u32, // Padding to align base_size (vec2) to 8 bytes
 
     pub base_size: [f32; 2],

@@ -60,8 +60,6 @@ struct GpuElementDesc {
     shape_type:    i32,
     spawn_frame:   u32,
     kill_frame:    u32,
-    move_offset:   u32,
-    move_len:      u32,
     
     r_offset:      u32,
     g_offset:      u32,
@@ -92,24 +90,12 @@ struct GpuShape {
     uv1:        vec2<f32>,
 }
 
-struct GpuMove {
-    start_frame: u32,
-    end_frame:   u32,
-    to_x:        f32,
-    to_y:        f32,
-    easing:      u32,
-    _pad0:       u32,
-    _pad1:       u32,
-    _pad2:       u32,
-}
-
 // ─── Bindings ─────────────────────────────────────────────────────────────────
 
 @group(0) @binding(0) var<uniform>            cu:             ComputeUniforms;
 @group(0) @binding(1) var<storage, read>      keyframes:      array<GpuKeyframe>;
 @group(0) @binding(2) var<storage, read>      element_descs:  array<GpuElementDesc>;
 @group(0) @binding(3) var<storage, read_write> output_shapes: array<GpuShape>;
-@group(0) @binding(4) var<storage, read>      move_commands:  array<GpuMove>;
 
 // ─── Easing functions ─────────────────────────────────────────────────────────
 
@@ -226,28 +212,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
     }
     
-    // Apply move commands iteratively to x and y
-    for (var i: u32 = 0u; i < desc.move_len; i = i + 1u) {
-        let mv = move_commands[desc.move_offset + i];
-        
-        // If current frame is before the move, no effect
-        if cu.current_frame <= mv.start_frame {
-            continue;
-        }
-        
-        let frame_range = f32(mv.end_frame - mv.start_frame);
-        let current_offset = f32(cu.current_frame - mv.start_frame);
-        
-        var t = 1.0;
-        if frame_range > 0.0 && current_offset < frame_range {
-            t = current_offset / frame_range;
-        }
-        
-        let eased_t = apply_easing(clamp(t, 0.0, 1.0), mv.easing);
-        
-        x = x + (mv.to_x - x) * eased_t;
-        y = y + (mv.to_y - y) * eased_t;
-    }
+    // No move_commands loop – all positional animation has been baked into
+    // the x/y keyframe tracks at parse time, so the sampler above already
+    // returns the correct interpolated position for the current frame.
 
     let spawn_time = f32(desc.spawn_frame) / f32(cu.fps);
 

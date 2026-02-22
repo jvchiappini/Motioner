@@ -102,7 +102,6 @@ pub struct ElementKeyframes {
     pub color: Vec<Keyframe<[u8; 4]>>,
     pub visible: Vec<Keyframe<bool>>,
     pub z_index: Vec<Keyframe<i32>>,
-    pub move_commands: Vec<crate::animations::move_animation::MoveAnimation>,
 
     /// Ephemeral flag (shapes created at runtime / not serialized into DSL)
     pub ephemeral: bool,
@@ -128,7 +127,6 @@ impl ElementKeyframes {
             color: Vec::new(),
             visible: Vec::new(),
             z_index: Vec::new(),
-            move_commands: Vec::new(),
             ephemeral: false,
             spawn_frame: 0,
             kill_frame: None,
@@ -227,7 +225,7 @@ impl ElementKeyframes {
 
     /// Sample the effective properties at `frame` with interpolation for continuous types.
     /// `fps` is required to convert move animation seconds to frames.
-    pub fn sample(&self, frame: FrameIndex, fps: u32) -> Option<FrameProps> {
+    pub fn sample(&self, frame: FrameIndex, _fps: u32) -> Option<FrameProps> {
         let any = !self.x.is_empty()
             || !self.y.is_empty()
             || !self.radius.is_empty()
@@ -237,18 +235,19 @@ impl ElementKeyframes {
             || !self.value.is_empty()
             || !self.color.is_empty()
             || !self.visible.is_empty()
-            || !self.z_index.is_empty()
-            || !self.move_commands.is_empty();
+            || !self.z_index.is_empty();
 
         if !any {
             return None;
         }
 
-        let mut x = Self::sample_f32_track(&self.x, frame).unwrap_or(0.5);
-        let mut y = Self::sample_f32_track(&self.y, frame).unwrap_or(0.5);
+        let x = Self::sample_f32_track(&self.x, frame).unwrap_or(0.5);
+        let y = Self::sample_f32_track(&self.y, frame).unwrap_or(0.5);
 
-        // Move commands are now applied exclusively in GPU shaders.
-        // We do not interpolate them on CPU to match user request.
+        // Historically we recorded high‑level move commands and let the GPU
+        // evaluate them at dispatch time.  The new pipeline bakes every move
+        // into explicit x/y keyframes during parse, so the element store no
+        // longer needs any special handling here.
 
         Some(FrameProps {
             x: Some(x),

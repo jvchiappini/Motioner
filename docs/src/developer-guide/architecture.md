@@ -1010,7 +1010,8 @@ pieces:
 
 * **`types.rs`** – POD structs mirroring WGSL buffer layouts.  These include
   `Uniforms` (global per-frame constants), `GpuShape` (flattened shape data),
-  `GpuKeyframe`/`GpuMove` (encoding animation tracks and move commands), and a
+  `GpuKeyframe` (encoding animation tracks – move commands are baked into the
+  keyframe lists), and a
   heavyweight `GpuElementDesc` describing how to slice into the keyframe
   buffer for each element.  All types derive `bytemuck::Pod` so they can be
   safely cast to byte slices for upload.
@@ -1022,7 +1023,7 @@ pieces:
   bind groups when buffers resize.
 * **`compute.rs`** – implements interpolation of keyframes entirely on the GPU
   using a compute shader (`compute_keyframes.wgsl`).  `GpuResources::dispatch_compute`
-  assembles flattened arrays of `GpuKeyframe`, `GpuMove` and `GpuElementDesc`
+  assembles flattened arrays of `GpuKeyframe` and `GpuElementDesc`
   from the `ElementKeyframes` scene, uploads them to the appropriate GPU
   buffers (resizing them if necessary), writes compute uniforms, and dispatches
   workgroups.  Helper methods translate animation tracks and colour tracks

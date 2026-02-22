@@ -28,7 +28,6 @@ pub struct GpuResources {
     pub compute_uniform_buffer: wgpu::Buffer,
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
     pub compute_bind_group: wgpu::BindGroup,
-    pub move_buffer: wgpu::Buffer,
 
     // Caché de lectura (para evitar re-preparar texturas cada frame en el worker)
     pub readback_staging_buffer: Option<wgpu::Buffer>,
@@ -202,12 +201,6 @@ impl GpuResources {
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
-                    count: None,
-                },
             ],
         });
 
@@ -240,12 +233,6 @@ impl GpuResources {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let move_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("move_buffer"),
-            size: std::mem::size_of::<GpuMove>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("compute_keyframes_bg"),
@@ -255,7 +242,6 @@ impl GpuResources {
                 wgpu::BindGroupEntry { binding: 1, resource: keyframe_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: element_desc_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: shape_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: move_buffer.as_entire_binding() },
             ],
         });
 
@@ -276,7 +262,6 @@ impl GpuResources {
             compute_uniform_buffer,
             compute_bind_group_layout: compute_bgl,
             compute_bind_group,
-            move_buffer,
             readback_staging_buffer: None,
             readback_render_texture: None,
             readback_size: [0, 0],
@@ -324,7 +309,6 @@ impl GpuResources {
                 wgpu::BindGroupEntry { binding: 1, resource: self.keyframe_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: self.element_desc_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: self.shape_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: self.move_buffer.as_entire_binding() },
             ],
         });
     }
