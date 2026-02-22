@@ -10,6 +10,7 @@
 /// 2. Add a `dispatch_action` branch here that calls it.
 use super::evaluator::{self, EvalContext};
 use crate::scene::Shape;
+use crate::shapes::ShapeDescriptor;
 // shape-specific helpers are accessed via `shapes_manager`
 use crate::dsl::utils;
 

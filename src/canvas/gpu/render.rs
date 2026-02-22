@@ -16,8 +16,6 @@ pub struct CompositionCallback {
     pub viewport_rect: egui::Rect,
     pub magnifier_pos: Option<egui::Pos2>,
     pub time: f32,
-    pub shared_device: Option<std::sync::Arc<wgpu::Device>>,
-    pub shared_queue: Option<std::sync::Arc<wgpu::Queue>>,
     pub text_pixels: Option<(Vec<u8>, u32, u32)>,
     pub elements: Option<Vec<crate::shapes::element_store::ElementKeyframes>>,
     pub current_frame: u32,

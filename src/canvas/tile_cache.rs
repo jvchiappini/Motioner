@@ -6,14 +6,12 @@ use std::collections::HashMap;
 /// Cache de tiles renderizados para evitar re-renderizar tiles sin cambios.
 /// Almacena datos RGBA indexados por coordenadas de tile y hash de la escena.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct TileCache {
     pub tile_size: usize,
     pub tiles: HashMap<(usize, usize, u64), Vec<u8>>, // (x, y, scene_hash) -> rgba data
     pub max_tiles: usize,
 }
 
-#[allow(dead_code)]
 impl TileCache {
     pub fn new(tile_size: usize, max_tiles: usize) -> Self {
         Self {

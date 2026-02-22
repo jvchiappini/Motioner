@@ -3,7 +3,6 @@
 // CPU-only easing calculations; GPU pipeline uses hardcoded formulas or
 // ignores unsupported variants.
 
-#[allow(dead_code)]
 pub fn to_dsl_string(p1: (f32, f32), p2: (f32, f32)) -> String {
     format!(
         "bezier(p1 = ({:.2}, {:.2}), p2 = ({:.2}, {:.2}))",

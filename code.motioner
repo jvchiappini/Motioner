@@ -2,17 +2,10 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-	x = 0.500,
-	y = 0.500,
-	radius = 0.100,
+	x = 0.253,
+	y = 0.496,
+	radius = 0.232,
 	fill = "#78c8ff",
 	spawn = 0.00
-}
-
-move {
-	element = "Circle"
-	to = (1.00, 1.00),
-	during = 0.00 -> 4.00,
-	ease = ease_in_out(power=-20)
 }
 

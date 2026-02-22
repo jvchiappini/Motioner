@@ -22,9 +22,9 @@ pub struct DslState {
 }
 
 impl DslState {
-    /// Convenience helper: clear both diagnostics and handlers in one call.
-    pub fn clear(&mut self) {
-        self.diagnostics.clear();
-        self.event_handlers.clear();
-    }
+    // Convenience helper removed; callers can clear fields directly if needed.
+    // pub fn clear(&mut self) {
+    //     self.diagnostics.clear();
+    //     self.event_handlers.clear();
+    // }
 }

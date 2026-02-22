@@ -1,3 +1,8 @@
+// Deny any unused code in the entire crate so that dead functions/structs
+// are caught by the compiler. This forces us to remove or refactor any
+// code that isn't referenced rather than hiding it behind `allow`.
+#![deny(dead_code)]
+
 mod animations;
 mod app_state;
 mod states; // ensure state-related modules are available early

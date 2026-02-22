@@ -1089,36 +1089,6 @@ fn start_export(state: &mut AppState) {
     });
 }
 
-// ─── Text compositing helper ──────────────────────────────────────────────────
-
-/// Blends a CPU-rasterized text layer (RGBA) on top of a GPU-rendered ColorImage.
-fn composite_text_layer(
-    base: &mut egui::ColorImage,
-    text: &crate::canvas::text_rasterizer::TextRasterResult,
-) {
-    let w = base.size[0];
-    let h = base.size[1];
-    // text.pixels is RGBA flat vec, same resolution
-    let pixel_count = (w * h) as usize;
-    for i in 0..pixel_count.min(text.pixels.len() / 4) {
-        let ta = text.pixels[i * 4 + 3];
-        if ta == 0 {
-            continue;
-        }
-        let tr = text.pixels[i * 4];
-        let tg = text.pixels[i * 4 + 1];
-        let tb = text.pixels[i * 4 + 2];
-        let alpha = ta as f32 / 255.0;
-        let inv = 1.0 - alpha;
-        let dst = base.pixels[i].to_array();
-        base.pixels[i] = egui::Color32::from_rgba_premultiplied(
-            (tr as f32 * alpha + dst[0] as f32 * inv) as u8,
-            (tg as f32 * alpha + dst[1] as f32 * inv) as u8,
-            (tb as f32 * alpha + dst[2] as f32 * inv) as u8,
-            255,
-        );
-    }
-}
 
 // ─── CPU frame renderer ───────────────────────────────────────────────────────
 
@@ -1137,13 +1107,6 @@ fn render_frame_cpu(
     egui::ColorImage::from_rgba_unmultiplied([w, h], &flat)
 }
 
-fn blend(dst: &mut [u8; 4], src: &[u8; 4], alpha: f32) {
-    let inv = 1.0 - alpha;
-    dst[0] = (src[0] as f32 * alpha + dst[0] as f32 * inv) as u8;
-    dst[1] = (src[1] as f32 * alpha + dst[1] as f32 * inv) as u8;
-    dst[2] = (src[2] as f32 * alpha + dst[2] as f32 * inv) as u8;
-    dst[3] = 255;
-}
 
 // ─── PNG save ─────────────────────────────────────────────────────────────────
 

@@ -68,8 +68,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                     viewport_rect: rect,
                     magnifier_pos,
                     time: state.time,
-                    shared_device: None,
-                    shared_queue: None,
                     text_pixels,
                     elements: state.wgpu_render_state.as_ref().map(|_| state.scene.clone()),
                     current_frame: crate::shapes::element_store::seconds_to_frame(state.time, state.fps) as u32,

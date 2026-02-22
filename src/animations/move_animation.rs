@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // The `move_animation` module previously contained CPU interpolation logic
 // for element movement.  After the GPU rewrite the real-time animation path
 // is executed entirely on the graphics card; high‑level `MoveAnimation`
@@ -8,18 +7,11 @@
 use crate::scene::Easing;
 use serde::{Deserialize, Serialize};
 
-pub mod bezier;
+// only keep easing modules that are referenced by `to_dsl_block` and
+// other code paths.  all other legacy helpers were removed along with
+// their files above, so the corresponding `mod` declarations are gone.
 pub mod bounce;
-pub mod circ;
-pub mod custom;
-pub mod custom_bezier;
-pub mod ease_in;
-pub mod ease_in_out;
-pub mod ease_out;
 pub mod elastic;
-pub mod expo;
-pub mod linear;
-pub mod sine;
 pub mod spring;
 
 // ─── MoveAnimation ───────────────────────────────────────────────────────────
@@ -37,88 +29,24 @@ pub struct MoveAnimation {
 impl MoveAnimation {
     /// Create from scene::Animation::Move (returns None for other variants).
     pub fn from_scene(anim: &crate::scene::Animation) -> Option<Self> {
-        let crate::scene::Animation::Move {
+        if let crate::scene::Animation::Move {
             to_x,
             to_y,
             start,
             end,
             easing,
-        } = anim;
-
-        Some(MoveAnimation {
-            to_x: *to_x,
-            to_y: *to_y,
-            start: *start,
-            end: *end,
-            easing: easing.clone(),
-        })
-    }
-
-    pub fn to_dsl_block(&self, element_name: Option<&str>, indent: &str) -> String {
-        let ease_str = match &self.easing {
-            Easing::Linear => "linear".to_string(),
-            Easing::EaseIn { power } => format!("ease_in(power = {:.3})", power),
-            Easing::EaseOut { power } => format!("ease_out(power = {:.3})", power),
-            Easing::EaseInOut { power } => format!("ease_in_out(power = {:.3})", power),
-            Easing::Custom { points } => {
-                let pts: Vec<String> = points
-                    .iter()
-                    .map(|(t, v)| format!("({:.3}, {:.3})", t, v))
-                    .collect();
-                format!("custom(points = [{}])", pts.join(", "))
-            }
-            Easing::CustomBezier { points } => {
-                let pts: Vec<String> = points
-                    .iter()
-                    .map(|p| {
-                        format!(
-                            "(({:.3}, {:.3}), ({:.3}, {:.3}), ({:.3}, {:.3}))",
-                            p.pos.0,
-                            p.pos.1,
-                            p.handle_left.0,
-                            p.handle_left.1,
-                            p.handle_right.0,
-                            p.handle_right.1
-                        )
-                    })
-                    .collect();
-                format!("custom_bezier(points = [{}])", pts.join(", "))
-            }
-            Easing::Bezier { p1, p2 } => format!(
-                "bezier(p1 = ({:.3}, {:.3}), p2 = ({:.3}, {:.3}))",
-                p1.0, p1.1, p2.0, p2.1
-            ),
-            Easing::Sine => "sine".to_string(),
-            Easing::Expo => "expo".to_string(),
-            Easing::Circ => "circ".to_string(),
-            Easing::Spring {
-                damping,
-                stiffness,
-                mass,
-            } => spring::to_dsl_string(*damping, *stiffness, *mass),
-            Easing::Elastic { amplitude, period } => elastic::to_dsl_string(*amplitude, *period),
-            Easing::Bounce { bounciness } => bounce::to_dsl_string(*bounciness),
-            Easing::Step => "step".to_string(),
-        };
-
-        let mut out = format!("{}move {{\n", indent);
-        let inner_indent = format!("{}    ", indent);
-
-        if let Some(name) = element_name {
-            out.push_str(&format!("{}element = \"{}\",\n", inner_indent, name));
+        } = anim
+        {
+            Some(MoveAnimation {
+                to_x: *to_x,
+                to_y: *to_y,
+                start: *start,
+                end: *end,
+                easing: easing.clone(),
+            })
+        } else {
+            None
         }
-
-        out.push_str(&format!(
-            "{}to = ({:.3}, {:.3}),\n",
-            inner_indent, self.to_x, self.to_y
-        ));
-        out.push_str(&format!(
-            "{}during = {:.3} -> {:.3},\n",
-            inner_indent, self.start, self.end
-        ));
-        out.push_str(&format!("{}ease = {}\n", inner_indent, ease_str));
-        out.push_str(&format!("{}}}\n", indent));
-        out
     }
 }
 

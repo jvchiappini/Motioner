@@ -88,14 +88,13 @@ pub struct HeaderConfig {
 // ─── Event handlers ───────────────────────────────────────────────────────────
 
 /// A top-level event handler block, e.g. `on_time { move_element(...) }`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct EventHandlerNode {
-    pub event: String,
-    /// Raw body text (not parsed further here; runtime executes it line by line).
-    pub body: String,
-    /// Display color for the editor highlighter (RGBA).
-    pub color: [u8; 4],
-}
+
+// Event handlers are no longer represented in the AST.  The parser still
+// recognizes them when scanning source (to assist with editor diagnostics),
+// but they are not returned as part of the `Statement` list; instead the
+// extracted handler list is managed separately by the runtime.  The
+// `EventHandlerNode` struct existed to support the old pipeline and has been
+// removed.
 
 // ─── Top-level statement ──────────────────────────────────────────────────────
 
@@ -108,11 +107,9 @@ pub struct EventHandlerNode {
 /// the shape module itself needs to register a `ShapeParserFactory`.
 #[derive(Clone, Debug)]
 pub enum Statement {
-    Header(HeaderConfig),
     /// Any concrete visual shape (Circle, Rect, Text, …).
     /// The variant is determined at parse time by the registered shape parsers.
     Shape(crate::shapes::shapes_manager::Shape),
     /// A top-level `move {}` block that references an element by name.
     Move(MoveBlock),
-    EventHandler(EventHandlerNode),
 }

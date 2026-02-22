@@ -2,7 +2,6 @@
 // custom easing curves in the UI; the GPU compute shader does not support
 // arbitrary point lists.
 
-#[allow(dead_code)]
 pub fn to_dsl_string(points: &[(f32, f32)]) -> String {
     let pts_str = points
         .iter()

@@ -115,7 +115,6 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
 
     changed
 }
-
 /// Dispatches all registered DSL event handlers that match "on_time".
 pub fn apply_on_time_handlers(
     scene: &mut [crate::scene::Shape],
@@ -140,38 +139,3 @@ pub fn apply_on_time_handlers(
     changed
 }
 
-/// Same as `apply_on_time_handlers` but collects any shapes queued by
-/// handler execution (via `spawn_*` actions) and appends them to the
-/// provided `scene_vec` (useful when `scene_vec` is the real application
-/// scene and new runtime-created elements must become visible in the UI).
-pub fn apply_on_time_handlers_collect_spawns(
-    scene_vec: &mut Vec<crate::scene::Shape>,
-    handlers: &[DslHandler],
-    seconds: f32,
-    frame: u32,
-) -> bool {
-    let mut changed = false;
-
-    let mut ctx = EvalContext::new()
-        .with_var("seconds", seconds)
-        .with_var("frame", frame as f32);
-
-    for handler in handlers {
-        if handler.name == "on_time" || handler.name == "time_changed" {
-            if runtime::run_handler(&mut scene_vec[..], handler, &mut ctx) {
-                changed = true;
-            }
-        }
-    }
-
-    // Append any spawned shapes requested by handlers.
-    let spawned = ctx.take_spawned_shapes();
-    if !spawned.is_empty() {
-        for s in spawned {
-            scene_vec.push(s);
-        }
-        changed = true;
-    }
-
-    changed
-}

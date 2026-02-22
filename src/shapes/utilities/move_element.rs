@@ -1,5 +1,6 @@
 use crate::dsl::evaluator::EvalContext;
 use crate::scene::Shape;
+use crate::shapes::ShapeDescriptor;
 
 /// Apply an evaluated x/y to the named element in `shapes`.
 /// Kept here so the DSL `MoveElement` and runtime can call a single
@@ -33,15 +34,6 @@ pub struct MoveElement {
 }
 
 impl MoveElement {
-    /// Serialize back to DSL string (keeps expressions verbatim).
-    #[allow(dead_code)]
-    pub fn to_dsl_string(&self) -> String {
-        format!(
-            "move_element(name = \"{}\", x = {}, y = {})",
-            self.name, self.x_expr, self.y_expr
-        )
-    }
-
     /// Parse a `move_element(...)` action and return a `MoveElement` struct.
     /// Accepts the full call text (e.g. `move_element(name = "C", x = seconds * 0.1, y = 0.25)`).
     pub fn parse_dsl(s: &str) -> Result<MoveElement, String> {
@@ -87,24 +79,5 @@ impl MoveElement {
             y_expr,
             color,
         })
-    }
-
-    /// Evaluate the stored expressions and apply the move using the provided
-    /// `apply_fn`. This helper is convenient for higher-level callers that want
-    /// parse+evaluate+apply in one step. `apply_fn` must mutate the shape with
-    /// evaluated x/y (for example `element_modifiers::move_element`).
-    #[allow(dead_code)]
-    pub fn evaluate_and_apply<F>(
-        &self,
-        shapes: &mut [Shape],
-        ctx: &EvalContext,
-        apply_fn: F,
-    ) -> Result<(), String>
-    where
-        F: Fn(&mut [Shape], &str, f32, f32) -> Result<(), String>,
-    {
-        let xv = crate::dsl::evaluator::evaluate(&self.x_expr, ctx)?;
-        let yv = crate::dsl::evaluator::evaluate(&self.y_expr, ctx)?;
-        apply_fn(shapes, &self.name, xv, yv)
     }
 }

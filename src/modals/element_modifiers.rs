@@ -2,8 +2,8 @@ use crate::app_state::AppState;
 use crate::shapes::element_store::FrameProps;
 use eframe::egui;
 
-pub mod easing_curve_editor;
-pub mod move_animation_element_modifiers;
+// animation-specific modifier submodules were removed during cleanup;
+// their functionality is no longer part of the UI.
 
 /// Fullscreen, non-draggable Element Modifiers modal.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {

@@ -104,9 +104,6 @@ pub struct AppState {
     /// Transient information derived from the current DSL source.
     pub dsl: DslState,
     pub export_in_progress: bool,
-    #[serde(skip, default = "default_progress")]
-    #[allow(dead_code)]
-    pub export_progress: Arc<AtomicUsize>,
     pub last_export_path: Option<PathBuf>,
 
     pub scene: Vec<ElementKeyframes>,
@@ -336,9 +333,7 @@ pub struct AppState {
     /// Incremented whenever the DSL is parsed into the scene.
     #[serde(skip)]
     pub scene_version: u32,
-    /// The version of the scene currently uploaded to the GPU buffers.
-    #[serde(skip)]
-    pub gpu_scene_version: u32,
+    // removed `gpu_scene_version`; tracking handled elsewhere if needed
 }
 
 /// Information persisted for the duration of an ongoing canvas resize drag.
@@ -387,9 +382,10 @@ pub enum ToastType {
     Success,
 }
 
-fn default_progress() -> Arc<AtomicUsize> {
-    Arc::new(AtomicUsize::new(0))
-}
+// removed helper, progress tracking now handled directly in export logic
+// fn default_progress() -> Arc<AtomicUsize> {
+//     Arc::new(AtomicUsize::new(0))
+// }
 
 fn default_pid() -> Pid {
     sysinfo::get_current_pid().unwrap_or(Pid::from(0))
@@ -445,7 +441,6 @@ impl Default for AppState {
             last_time_changed: None,
             dsl: DslState::default(),
             export_in_progress: false,
-            export_progress: Arc::new(AtomicUsize::new(0)),
             last_export_path: None,
             // populate scene as ElementKeyframes converted from legacy sample_scene
             scene: crate::shapes::shapes_manager::Shape::sample_scene()
@@ -554,7 +549,8 @@ impl Default for AppState {
             font_map,
             font_definitions: egui::FontDefinitions::default(),
             font_arc_cache: std::collections::HashMap::new(),
-            gpu_scene_version: 0,
+            // export_progress: Arc::new(AtomicUsize::new(0)),
+            // gpu_scene_version: 0,
             scene_version: 1,
             // async dialog channels (constructed above)
             folder_dialog_tx: Some(folder_dialog_tx),
@@ -799,12 +795,8 @@ impl AppState {
                         true
                     };
 
-                    if do_request {
-                        crate::canvas::request_preview_frames(
-                            self,
-                            self.time,
-                            crate::canvas::PreviewMode::Single,
-                        );
+                        if do_request {
+                            crate::canvas::request_preview_frames(self, self.time);
                         self.preview_pending_from_code = false;
                     }
                 }
@@ -860,18 +852,21 @@ impl AppState {
         );
     }
 
-    pub fn refresh_fonts(&mut self) {
-        let mut all_fonts = crate::shapes::fonts::list_system_fonts();
-        if let Some(path) = &self.project_path {
-            let ws_fonts = crate::shapes::fonts::list_workspace_fonts(path);
-            all_fonts.extend(ws_fonts);
-        }
-        all_fonts.sort_by(|a, b| a.0.cmp(&b.0));
-        all_fonts.dedup_by(|a, b| a.0 == b.0);
-
-        self.available_fonts = all_fonts.iter().map(|(n, _)| n.clone()).collect();
-        self.font_map = all_fonts.into_iter().collect();
-    }
+    // `refresh_fonts` is no longer called anywhere; the async variant is used
+    // by the UI.  keep the implementation around for reference, but it is
+    // effectively dead code and removed from compilation by commenting.
+    // pub fn refresh_fonts(&mut self) {
+    //     let mut all_fonts = crate::shapes::fonts::list_system_fonts();
+    //     if let Some(path) = &self.project_path {
+    //         let ws_fonts = crate::shapes::fonts::list_workspace_fonts(path);
+    //         all_fonts.extend(ws_fonts);
+    //     }
+    //     all_fonts.sort_by(|a, b| a.0.cmp(&b.0));
+    //     all_fonts.dedup_by(|a, b| a.0 == b.0);
+    //
+    //     self.available_fonts = all_fonts.iter().map(|(n, _)| n.clone()).collect();
+    //     self.font_map = all_fonts.into_iter().collect();
+    // }
 
     /// Spawn a background worker to recompute the font lists and update the
     /// state asynchronously.  Results arrive on `font_refresh_rx` and should
@@ -914,10 +909,10 @@ pub struct ColorPickerData {
     pub is_alpha: bool,
 }
 
-#[cfg(feature = "wgpu")]
-#[allow(dead_code)]
-pub struct WgpuRenderer {
-    pub pipeline: wgpu::RenderPipeline,
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    // We'll store a buffer for shapes
-}
+// GPU renderer struct was unused; remove to eliminate dead code.
+// #[cfg(feature = "wgpu")]
+// pub struct WgpuRenderer {
+//     pub pipeline: wgpu::RenderPipeline,
+//     pub bind_group_layout: wgpu::BindGroupLayout,
+//     // We'll store a buffer for shapes
+// }

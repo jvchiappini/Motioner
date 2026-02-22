@@ -9,7 +9,7 @@
 /// - [`parse_config`] — header-only parse (used by quick-validation path)
 use std::collections::HashMap;
 
-use super::ast::{EventHandlerNode, HeaderConfig, MoveBlock, Statement};
+use super::ast::{HeaderConfig, MoveBlock, Statement};
 use super::lexer::extract_balanced;
 use crate::dsl::utils;
 
@@ -33,11 +33,8 @@ pub fn parse(src: &str) -> Vec<Statement> {
         }
 
         if line.starts_with("size") {
-            // Header is parsed once from the full source string.
-            if let Ok(cfg) = parse_config(src) {
-                stmts.push(Statement::Header(cfg));
-            }
-            // Skip remaining header lines inside the iterator.
+            // Header is parsed via `parse_config` when needed; we do not include
+            // it in the returned statement list any more.
             continue;
         }
 
@@ -78,17 +75,15 @@ pub fn parse(src: &str) -> Vec<Statement> {
             }
         }
 
-        // Event handlers: `on_time { ... }`
+        // Event handlers are ignored by this parser; they are handled separately
+        // in the runtime/validator pipeline, so we simply skip over them.
+        // (We keep the lookup helper for diagnostics but do not emit a statement.)
         let ident = first_ident(line);
         if !ident.is_empty() && line.contains('{') {
-            if let Some(color) = event_handler_color(&ident) {
-                let block = collect_block(line, &mut lines);
-                let body = block_body_str(&block);
-                stmts.push(Statement::EventHandler(EventHandlerNode {
-                    event: ident,
-                    body,
-                    color,
-                }));
+            if event_handler_color(&ident).is_some() {
+                // skip entire block
+                let _ = collect_block(line, &mut lines);
+                continue;
             }
         }
     }
@@ -113,8 +108,9 @@ pub fn parse_config(src: &str) -> Result<HeaderConfig, String> {
 
     // `size(w, h)`
     if let Some(pos) = src.find("size") {
-        if let Some(inner) = extract_balanced(src, pos, '(', ')') {
-            let parts: Vec<&str> = inner.split(',').collect();
+            if let Some(inner) = extract_balanced(src, pos, '(', ')') {
+                // explicitly specify collection type to satisfy type inference
+                let parts: Vec<&str> = inner.split(',').collect::<Vec<&str>>();
             if parts.len() == 2 {
                 width = parts[0].trim().parse().ok();
                 height = parts[1].trim().parse().ok();
@@ -130,7 +126,7 @@ pub fn parse_config(src: &str) -> Result<HeaderConfig, String> {
 
         let sep: &[_] = if inner.contains(';') { &[';'] } else { &[','] };
         for part in inner.split(sep[0]) {
-            let s = part.trim();
+            let s: &str = part.trim();
             if let Some(v) = utils::parse_named_value(s, "fps") {
                 fps = v.parse::<u32>().ok();
             }
@@ -310,12 +306,6 @@ pub(crate) fn body_lines(block: &[String]) -> Vec<String> {
     result
 }
 
-// (removed wrapper) use `body_lines` directly
-
-/// Return the raw body string from a collected block (for event handlers).
-fn block_body_str(block: &[String]) -> String {
-    body_lines(block).join("\n")
-}
 
 /// Extract the quoted name from a shape header line.
 /// e.g. `circle "MyCircle" {` → `Some("MyCircle")`

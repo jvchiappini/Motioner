@@ -25,7 +25,9 @@ pub mod validator;
 
 // --- Re-exports ---------------------------------------------------------------
 
-pub use generator::{extract_event_handlers, generate, generate_from_elements};
+// `generate` was removed during the dead-code purge; only export the retained
+// symbols so that importing `dsl` doesn't fail.
+pub use generator::{extract_event_handlers, generate_from_elements};
 pub use parser::{method_color, parse_config};
 pub use runtime::DslHandler;
 pub use validator::{validate, Diagnostic};
@@ -53,12 +55,6 @@ use crate::animations::move_animation::MoveAnimation;
 #[cfg(test)]
 use crate::shapes::element_store::ElementKeyframes;
 
-/// Convenience wrapper: generate DSL from a scene.
-/// Prefer calling [`generate_from_elements`] directly when the scene is stored as `ElementKeyframes`.
-#[inline]
-pub fn generate_dsl(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
-    generate(scene, width, height, fps, duration)
-}
 
 /// Generate DSL directly from `ElementKeyframes` — no intermediate `Vec<Shape>` clone needed.
 #[inline]
@@ -86,11 +82,6 @@ pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
     extract_event_handlers(src)
 }
 
-/// Find the byte index of the `)` matching the `(` at `open_pos` inside `s`.
-/// Used by the code panel to locate function-call argument list boundaries.
-pub fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
-    lexer::find_matching_close(s, open_pos, '(', ')')
-}
 
 /// Parse DSL source and return a scene as a `Vec<Shape>`.
 ///
@@ -112,17 +103,12 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
             continue;
         }
 
-        match stmt {
-            Statement::Move(mv) => {
-                if let Some(el) = mv.element.clone() {
-                    pending_moves.push((el, mv));
-                }
+        if let Statement::Move(mv) = stmt {
+            if let Some(el) = mv.element.clone() {
+                pending_moves.push((el, mv));
             }
-            // Header and event handlers are not scene shapes.
-            Statement::Header(_) | Statement::EventHandler(_) => {}
-            // All shape cases are handled by the Statement::Shape arm above.
-            Statement::Shape(_) => unreachable!(),
         }
+        // other statement types have been retired
     }
 
     // Attach top-level move blocks to their target shapes. Use the

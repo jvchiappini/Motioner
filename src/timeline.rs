@@ -442,11 +442,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             .is_none_or(|c| (c - state.time).abs() > 1e-4)
                         {
                             // interactive scrubbing → request a *single* fast preview frame (debounced)
-                            crate::canvas::request_preview_frames(
-                                state,
-                                state.time,
-                                crate::canvas::PreviewMode::Single,
-                            );
+                            crate::canvas::request_preview_frames(state, state.time)
                         }
                     }
                 }

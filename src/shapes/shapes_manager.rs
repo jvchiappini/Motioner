@@ -35,6 +35,8 @@ pub enum Shape {
 }
 
 impl Shape {
+    /// Return the `ShapeDescriptor` for a concrete shape, if available.
+    /// Groups are not descriptors themselves and therefore return `None`.
     pub fn descriptor(&self) -> Option<&dyn crate::shapes::ShapeDescriptor> {
         match self {
             Shape::Circle(c) => Some(c),
@@ -44,6 +46,7 @@ impl Shape {
         }
     }
 
+    /// Mutable variant of [`Shape::descriptor`].
     pub fn descriptor_mut(&mut self) -> Option<&mut dyn crate::shapes::ShapeDescriptor> {
         match self {
             Shape::Circle(c) => Some(c),
@@ -52,93 +55,10 @@ impl Shape {
             Shape::Group { .. } => None,
         }
     }
-    pub fn is_visible(&self) -> bool {
-        match self {
-            // Delegate to ShapeDescriptor for concrete shapes.
-            Shape::Circle(_) | Shape::Rect(_) | Shape::Text(_) => {
-                self.descriptor().map_or(true, |d| d.is_visible())
-            }
-            Shape::Group { visible, .. } => *visible,
-        }
-    }
 
-    pub fn set_visible(&mut self, v: bool) {
-        match self {
-            Shape::Circle(_) | Shape::Rect(_) | Shape::Text(_) => {
-                if let Some(d) = self.descriptor_mut() {
-                    d.set_visible(v);
-                }
-            }
-            Shape::Group { visible, .. } => *visible = v,
-        }
-    }
-
-    pub fn to_dsl(&self, indent: &str) -> String {
-        // If indent is empty, we use our internal to_dsl_impl(0) logic.
-        // When an indent string is provided, accept both tab-based
-        // indentation and legacy 4-space groups.
-        let indent_level = if indent.contains('\t') {
-            indent.chars().filter(|c| *c == '\t').count()
-        } else {
-            indent.len() / 4
-        };
-        self.to_dsl_impl(indent_level)
-    }
-
-    fn to_dsl_impl(&self, indent_level: usize) -> String {
-        // Use tabs for indentation in generated DSL (one tab == one level).
-        let indent = "\t".repeat(indent_level);
-
-        // For all concrete shapes we can delegate uniformly via `ShapeDescriptor`:
-        // 1. Generate the shape's own DSL block.
-        // 2. If nested (indent_level > 0), also append any move animation blocks.
-        //    Top-level animation blocks are emitted by `dsl::generate_dsl()`, so
-        //    we must not duplicate them here.
-        if let Some(desc) = self.descriptor() {
-            let mut out = desc.to_dsl(&indent);
-            if indent_level > 0 {
-                for anim in desc.animations() {
-                    if let Some(ma) =
-                        crate::animations::move_animation::MoveAnimation::from_scene(anim)
-                    {
-                        out.push_str(&ma.to_dsl_block(None, &indent));
-                        out.push('\n');
-                    }
-                }
-            }
-            return out;
-        }
-
-        // Group is the only variant without a descriptor.
-        match self {
-            Shape::Group { name, children, .. } => {
-                let items: Vec<String> = children
-                    .iter()
-                    .map(|c| c.to_dsl_impl(indent_level + 1))
-                    .collect();
-                if items.is_empty() {
-                    format!("{}group(name = \"{}\") {{}}", indent, name)
-                } else {
-                    format!(
-                        "{}group(name = \"{}\") {{\n{}\n{}}}",
-                        indent,
-                        name,
-                        items.join("\n"),
-                        indent
-                    )
-                }
-            }
-            _ => String::new(), // unreachable: all concrete shapes have a descriptor
-        }
-    }
-
-    pub fn sample_scene() -> Vec<Shape> {
-        vec![
-            Shape::Circle(crate::shapes::circle::Circle::default()),
-            Shape::Text(crate::shapes::text::Text::default()),
-        ]
-    }
-
+    /// Convenience accessor for the shape's name.  Groups expose their
+    /// own `name` field, while concrete shapes forward to the descriptor
+    /// implementation.
     pub fn name(&self) -> &str {
         match self {
             Shape::Circle(c) => &c.name,
@@ -148,42 +68,48 @@ impl Shape {
         }
     }
 
-    pub fn set_name(&mut self, new_name: String) {
-        match self {
-            Shape::Circle(c) => c.name = new_name,
-            Shape::Rect(r) => r.name = new_name,
-            Shape::Text(t) => t.name = new_name,
-            Shape::Group { name, .. } => *name = new_name,
-        }
-    }
-
-    /// Mark or un-mark a shape as ephemeral (created at runtime).
+    /// Mark or unmark the shape as ephemeral (runtime-only).  Only
+    /// concrete shapes support this; groups are ignored.
     pub fn set_ephemeral(&mut self, v: bool) {
         if let Some(d) = self.descriptor_mut() {
             d.set_ephemeral(v);
         }
-        // Groups are never ephemeral — no-op.
     }
 
-    /// Apply a numeric KV to the shape (used by DSL/runtime). Unknown keys
-    /// are silently ignored so callers don't need to match on variants.
-    pub fn apply_kv_number(&mut self, key: &str, value: f32) {
-        // Delegate to the per-shape `ShapeDescriptor` implementation so
-        // concrete shape modules own the mapping of keys -> fields.
-        if let Some(desc) = self.descriptor_mut() {
-            desc.apply_kv_number(key, value);
+    /// Query visibility.  Groups maintain their own `visible` flag, other
+    /// shapes defer to the descriptor.
+    pub fn is_visible(&self) -> bool {
+        match self {
+            Shape::Group { visible, .. } => *visible,
+            _ => self.descriptor().map_or(false, |d| d.is_visible()),
         }
     }
 
-    /// Apply a string KV to the shape (name, font, value, etc.). Unknown
-    /// keys are ignored.
-    pub fn apply_kv_string(&mut self, key: &str, val: &str) {
-        if let Some(desc) = self.descriptor_mut() {
-            desc.apply_kv_string(key, val);
+    /// Render the shape (or group) as DSL text.  Groups are rendered by
+    /// iterating their children with increased indentation; concrete
+    /// shapes delegate to their descriptor.
+    pub fn to_dsl(&self, indent: &str) -> String {
+        match self {
+            Shape::Group { children, name, visible } => {
+                // groups aren't part of the DSL but we render children
+                let mut out = String::new();
+                for child in children {
+                    out.push_str(&child.to_dsl(indent));
+                }
+                out
+            }
+            _ => self
+                .descriptor()
+                .map_or(String::new(), |d| d.to_dsl(indent)),
         }
     }
 
-    /// Set the fill/color for shapes that support it.
+    /// Return a small sample scene used during state initialization.
+    /// Previously this lived in `scene.rs`.  Keep it simple: one circle
+    /// so the editor isn't completely empty.
+    pub fn sample_scene() -> Vec<Shape> {
+        vec![Shape::Circle(crate::shapes::circle::Circle::default())]
+    }
     pub fn set_fill_color(&mut self, col: [u8; 4]) {
         if let Some(d) = self.descriptor_mut() {
             d.set_fill_color(col);
@@ -258,12 +184,14 @@ impl Shape {
 
     /// Whether this shape was created at runtime and should be excluded from
     /// generated DSL output.
+    #[allow(dead_code)]
     pub fn is_ephemeral(&self) -> bool {
         self.descriptor().map_or(false, |d| d.is_ephemeral())
     }
 
     /// Recursively flattens the scene graph into a list of visual primitives (Circles, Rects).
     /// Inherits spawn_time from parents: a child is only visible if current_time >= parent_spawn and current_time >= child_spawn.
+    #[allow(dead_code)]
     pub fn flatten(&self, parent_spawn: f32) -> Vec<(Shape, f32)> {
         if !self.is_visible() {
             return Vec::new();
@@ -285,7 +213,7 @@ impl Shape {
         }
         flattened
     }
-}
+} // end impl Shape
 
 /// Helper: build a `Shape` from `ElementKeyframes` by delegating to the
 /// per-shape modules. This centralizes the single dispatch point so the
@@ -420,8 +348,107 @@ pub fn parse_shape_block(block: &[String]) -> Option<Shape> {
     None
 }
 
-pub type Scene = Vec<Shape>;
+// ---------------------------------------------------------------------------
+// implement ShapeDescriptor for the enum itself so callers can treat a
+// `Shape` uniformly without having to manually call `descriptor()` every
+// time.  This avoids having to update dozens of call sites such as the
+// DSL runtime which previously assumed the enum implemented the trait.
+// Concrete shapes already implement the trait; the enum implementation
+// simply forwards to the inner descriptor when available and supplies
+// reasonable defaults for groups.
 
+impl crate::shapes::ShapeDescriptor for Shape {
+    fn dsl_keyword(&self) -> &'static str {
+        self.descriptor().map_or("", |d| d.dsl_keyword())
+    }
+    fn icon(&self) -> &'static str {
+        self.descriptor().map_or("", |d| d.icon())
+    }
+    fn draw_modifiers(&mut self, ui: &mut eframe::egui::Ui, state: &mut crate::app_state::AppState) {
+        if let Some(d) = self.descriptor_mut() {
+            d.draw_modifiers(ui, state);
+        }
+    }
+    fn to_dsl(&self, indent: &str) -> String {
+        // use the inherent method we already defined above
+        self.to_dsl(indent)
+    }
+    fn to_element_keyframes(&self, fps: u32) -> crate::shapes::element_store::ElementKeyframes {
+        self.descriptor().map_or(
+            crate::shapes::element_store::ElementKeyframes::new(String::new(), String::new()),
+            |d| d.to_element_keyframes(fps),
+        )
+    }
+    fn create_default(name: String) -> Shape
+    where
+        Self: Sized,
+    {
+        // not very meaningful at the enum level, but provide a circle
+        let mut c = crate::shapes::circle::Circle::default();
+        c.name = name;
+        Shape::Circle(c)
+    }
+    fn animations(&self) -> &[crate::scene::Animation] {
+        self.descriptor().map_or(&[], |d| d.animations())
+    }
+    fn push_animation(&mut self, anim: crate::scene::Animation) {
+        if let Some(d) = self.descriptor_mut() {
+            d.push_animation(anim);
+        }
+    }
+    fn spawn_time(&self) -> f32 {
+        self.descriptor().map_or(0.0, |d| d.spawn_time())
+    }
+    fn kill_time(&self) -> Option<f32> {
+        self.descriptor().and_then(|d| d.kill_time())
+    }
+    fn is_ephemeral(&self) -> bool {
+        self.descriptor().map_or(false, |d| d.is_ephemeral())
+    }
+    fn set_ephemeral(&mut self, v: bool) {
+        if let Some(d) = self.descriptor_mut() {
+            d.set_ephemeral(v);
+        }
+    }
+    fn xy(&self) -> (f32, f32) {
+        self.descriptor().map_or((0.0, 0.0), |d| d.xy())
+    }
+    fn is_visible(&self) -> bool {
+        self.is_visible()
+    }
+    fn set_visible(&mut self, v: bool) {
+        if let Some(d) = self.descriptor_mut() {
+            d.set_visible(v);
+        }
+    }
+    fn set_fill_color(&mut self, col: [u8; 4]) {
+        if let Some(d) = self.descriptor_mut() {
+            d.set_fill_color(col);
+        }
+    }
+    fn changed_frame_props(
+        &self,
+        orig: Option<&crate::shapes::element_store::FrameProps>,
+    ) -> crate::shapes::element_store::FrameProps {
+        if let Some(d) = self.descriptor() {
+            d.changed_frame_props(orig)
+        } else {
+            crate::shapes::element_store::FrameProps::default()
+        }
+    }
+    fn apply_kv_number(&mut self, key: &str, value: f32) {
+        if let Some(d) = self.descriptor_mut() {
+            d.apply_kv_number(key, value);
+        }
+    }
+    fn apply_kv_string(&mut self, key: &str, value: &str) {
+        if let Some(d) = self.descriptor_mut() {
+            d.apply_kv_string(key, value);
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub fn get_shape_mut<'a>(scene: &'a mut [Shape], path: &[usize]) -> Option<&'a mut Shape> {
     if path.is_empty() {
         return None;
@@ -436,6 +463,7 @@ pub fn get_shape_mut<'a>(scene: &'a mut [Shape], path: &[usize]) -> Option<&'a m
     Some(current)
 }
 
+#[allow(dead_code)]
 pub fn get_shape<'a>(scene: &'a [Shape], path: &[usize]) -> Option<&'a Shape> {
     if path.is_empty() {
         return None;
@@ -606,8 +634,9 @@ pub fn draw_highlight_recursive(
     }
 }
 
+#[allow(dead_code)]
 pub fn move_node(
-    scene: &mut Scene,
+    scene: &mut Vec<Shape>,
     from: &[usize],
     to_parent: &[usize],
     to_index: usize,
@@ -622,7 +651,8 @@ pub fn move_node(
     }
 
     // 1. Get and clone the source node
-    let source_node = match get_shape(scene, from) {
+    // `get_shape` works on slices so we coerce the Vec to a slice here.
+    let source_node = match get_shape(&*scene, from) {
         Some(s) => s.clone(),
         None => return None,
     };
@@ -682,7 +712,7 @@ pub fn move_node(
         let insert_at = actual_to_index.min(scene.len());
         scene.insert(insert_at, source_node);
         final_path.push(insert_at);
-    } else if let Some(Shape::Group { children, .. }) = get_shape_mut(scene, &actual_to_parent) {
+    } else if let Some(Shape::Group { children, .. }) = get_shape_mut(&mut scene[..], &actual_to_parent) {
         let insert_at = actual_to_index.min(children.len());
         children.insert(insert_at, source_node);
         final_path.push(insert_at);

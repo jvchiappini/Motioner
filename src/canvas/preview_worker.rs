@@ -6,26 +6,24 @@ use super::cache_management::{
 };
 #[cfg(feature = "wgpu")]
 use super::gpu::{
-    render_frame_color_image_gpu_snapshot, render_frame_native_texture, GpuResources,
+    render_frame_color_image_gpu_snapshot, // used to produce CPU previews when necessary
+    render_frame_native_texture,
+    GpuResources,
 };
 use crate::app_state::AppState;
 use eframe::egui;
 use std::sync::mpsc;
 use std::thread;
 
-pub const MAX_PREVIEW_CACHE_FRAMES: usize = 5;
+// no buffering logic remains; remove unused constant
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreviewMode {
-    #[allow(dead_code)]
-    Buffered,
-    Single,
-}
+// `PreviewMode` has been retired; we now only ever request single-frame
+// previews.  The type remains in history for documentation but is no longer
+// referenced by compiled code.
 
 pub enum PreviewJob {
     Generate {
         center_time: f32,
-        mode: PreviewMode,
         snapshot: RenderSnapshot,
     },
 }
@@ -33,7 +31,7 @@ pub enum PreviewJob {
 pub enum PreviewResult {
     Single(f32, egui::ColorImage),
     Native(f32, wgpu::Texture),
-    Buffered(Vec<(f32, egui::ColorImage)>),
+    // Buffered mode removed; only single-frame results are produced now.
 }
 
 #[derive(Clone)]
@@ -51,15 +49,10 @@ pub struct RenderSnapshot {
     pub scene_version: u32,
 }
 
-#[allow(dead_code)]
-pub fn generate_preview_frames(state: &mut AppState, center_time: f32, ctx: &egui::Context) {
-    request_preview_frames(state, center_time, PreviewMode::Buffered);
-    poll_preview_results(state, ctx);
-}
 
-pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: PreviewMode) {
+pub fn request_preview_frames(state: &mut AppState, center_time: f32) {
     ensure_preview_worker(state);
-    if mode == PreviewMode::Single && state.preview_job_pending {
+    if state.preview_job_pending {
         return;
     }
 
@@ -79,12 +72,9 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32, mode: Prev
         };
         let job = PreviewJob::Generate {
             center_time,
-            mode,
             snapshot: snap,
         };
-        if mode == PreviewMode::Single {
-            state.preview_job_pending = true;
-        }
+        state.preview_job_pending = true;
         let _ = tx.send(job);
     }
 }
@@ -182,91 +172,14 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
 
                     needs_enforce = true;
                 }
-                PreviewResult::Buffered(frames) => {
-                    let mut vram_space = vram_available;
-                    let use_vram_strategy = state.prefer_vram_cache;
 
-                    let selected = if frames.len() > MAX_PREVIEW_CACHE_FRAMES {
-                        let center = frames.len() / 2;
-                        let half = MAX_PREVIEW_CACHE_FRAMES / 2;
-                        let start = center.saturating_sub(half);
-                        let end = (start + MAX_PREVIEW_CACHE_FRAMES).min(frames.len());
-                        frames[start..end].to_vec()
-                    } else {
-                        frames.clone()
-                    };
 
-                    // Build new caches locally and swap them in at the end to avoid
-                    // transient empty-state that causes visual flicker.
-                    let mut new_texture_cache: Vec<(f32, egui::TextureHandle, usize)> = Vec::new();
-                    let mut new_frame_cache: Vec<(f32, egui::ColorImage)> = Vec::new();
-                    let mut new_compressed_cache: Vec<(f32, Vec<u8>, (usize, usize))> = Vec::new();
 
-                    if use_vram_strategy || state.preview_worker_use_gpu {
-                        for (t, img) in &selected {
-                            let img_size = img.size[0] * img.size[1] * 4;
 
-                            if vram_space >= img_size || state.preview_worker_use_gpu {
-                                let tex_name = format!("preview_cached_{:.6}", t);
-                                let handle = ctx.load_texture(
-                                    &tex_name,
-                                    img.clone(),
-                                    egui::TextureOptions::NEAREST,
-                                );
-                                new_texture_cache.push((*t, handle, img_size));
-                                vram_space = vram_space.saturating_sub(img_size);
-                            } else if state.compress_preview_cache {
-                                if let Some(bytes) = compress_color_image_to_png(img) {
-                                    new_compressed_cache.push((
-                                        *t,
-                                        bytes,
-                                        (img.size[0], img.size[1]),
-                                    ));
-                                } else {
-                                    new_frame_cache.push((*t, img.clone()));
-                                }
-                            } else {
-                                new_frame_cache.push((*t, img.clone()));
-                            }
-                        }
-                    } else if state.compress_preview_cache {
-                        for (t, img) in &selected {
-                            if let Some(bytes) = compress_color_image_to_png(img) {
-                                new_compressed_cache.push((*t, bytes, (img.size[0], img.size[1])));
-                            } else {
-                                new_frame_cache.push((*t, img.clone()));
-                            }
-                        }
-                    } else {
-                        new_frame_cache = selected.clone();
-                    }
 
-                    // Swap atomically
-                    state.preview_texture_cache = new_texture_cache;
-                    state.preview_frame_cache = new_frame_cache;
-                    state.preview_compressed_cache = new_compressed_cache;
 
-                    if !state.preview_frame_cache.is_empty() {
-                        let center_idx = state.preview_frame_cache.len() / 2;
-                        if let Some((t, center_img)) = state.preview_frame_cache.get(center_idx) {
-                            let handle = ctx.load_texture(
-                                "preview_center",
-                                center_img.clone(),
-                                egui::TextureOptions::NEAREST,
-                            );
-                            state.preview_texture = Some(handle);
-                            state.preview_cache_center_time = Some(*t);
-                        }
-                    } else if !state.preview_texture_cache.is_empty() {
-                        let center_idx = state.preview_texture_cache.len() / 2;
-                        if let Some((_t, handle, _s)) = state.preview_texture_cache.get(center_idx)
-                        {
-                            state.preview_texture = Some(handle.clone());
-                        }
-                    }
 
-                    needs_enforce = true;
-                }
+                // Buffered mode removed; we only ever produce a single frame now.
             }
             // Request repaint after state changes have been applied (reduces mid-update flashes)
             ctx.request_repaint();
@@ -294,101 +207,57 @@ pub fn ensure_preview_worker(state: &mut AppState) {
         )> = None;
 
         while let Ok(job) = job_rx.recv() {
-            match job {
-                PreviewJob::Generate {
-                    center_time,
-                    mode,
-                    snapshot,
-                } => match mode {
-                    PreviewMode::Single => {
-                        #[cfg(feature = "wgpu")]
+            if let PreviewJob::Generate { center_time, snapshot, .. } = job {
+                #[cfg(feature = "wgpu")]
+                {
+                    // CAPTURAMOS EL ESTADO DE LA UI SI EXISTE
+                    if let Some(render_state) = &snapshot.wgpu_render_state {
+                        let device = &render_state.device;
+                        let queue = &render_state.queue;
+
+                        // Reutilizamos o creamos recursos localmente
+                        if gpu_renderer.is_none() {
+                            gpu_renderer = Some((
+                                device.clone(),
+                                queue.clone(),
+                                GpuResources::new(device, render_state.target_format),
+                            ));
+                        }
+
+                        if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer
                         {
-                            // CAPTURAMOS EL ESTADO DE LA UI SI EXISTE
-                            if let Some(render_state) = &snapshot.wgpu_render_state {
-                                let device = &render_state.device;
-                                let queue = &render_state.queue;
-
-                                // Reutilizamos o creamos recursos localmente
-                                if gpu_renderer.is_none() {
-                                    gpu_renderer = Some((
-                                        device.clone(),
-                                        queue.clone(),
-                                        GpuResources::new(device, render_state.target_format),
-                                    ));
-                                }
-
-                                if let Some((ref device, ref queue, ref mut resources)) =
-                                    gpu_renderer
-                                {
-                                    // ¡NATIVO! Renderizamos a textura sin bajar a RAM
-                                    if let Ok(tex) = render_frame_native_texture(
-                                        device,
-                                        queue,
-                                        resources,
-                                        &snapshot,
-                                        center_time,
-                                    ) {
-                                        let _ =
-                                            res_tx.send(PreviewResult::Native(center_time, tex));
-                                    }
-                                }
-                            } else {
-                                // Fallback a descarga (antiguo método) si no hay estado compartido
-                                // (Opcional: podríamos quitarlo si confiamos 100% en el compartido)
+                            // ¡NATIVO! Renderizamos a textura sin bajar a RAM
+                            if let Ok(tex) = render_frame_native_texture(
+                                device,
+                                queue,
+                                resources,
+                                &snapshot,
+                                center_time,
+                            ) {
+                                let _ = res_tx.send(PreviewResult::Native(center_time, tex));
                             }
                         }
+                    } else {
+                        // Fallback a descarga (antiguo método) si no hay estado compartido
+                        // (Opcional: podríamos quitarlo si confiamos 100% en el compartido)
                     }
-                    PreviewMode::Buffered => {
-                        let frames_each_side = if snapshot.preview_multiplier > 1.0 {
-                            2i32
-                        } else {
-                            3i32
-                        };
-                        let frame_step = 1.0 / (snapshot.preview_fps as f32);
-                        let mut frames: Vec<(f32, egui::ColorImage)> = Vec::with_capacity((frames_each_side * 2 + 1) as usize);
-
-                        #[cfg(feature = "wgpu")]
-                        {
-                            if gpu_renderer.is_none() {
-                                let instance =
-                                    wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-                                if let Some(adapter) = pollster::block_on(
-                                    instance
-                                        .request_adapter(&wgpu::RequestAdapterOptions::default()),
-                                ) {
-                                    if let Ok((device, queue)) =
-                                        pollster::block_on(adapter.request_device(
-                                            &wgpu::DeviceDescriptor::default(),
-                                            None,
-                                        ))
-                                    {
-                                        let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-                                        let resources = GpuResources::new(&device, target_format);
-                                        gpu_renderer = Some((
-                                            std::sync::Arc::new(device),
-                                            std::sync::Arc::new(queue),
-                                            resources,
-                                        ));
-                                    }
-                                }
-                            }
-
-                            if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
-                                for i in -frames_each_side..=frames_each_side {
-                                    let t = (center_time + (i as f32) * frame_step)
-                                        .clamp(0.0, snapshot.duration_secs);
-                                    if let Ok(img) = render_frame_color_image_gpu_snapshot(
-                                        device, queue, resources, &snapshot, t,
-                                    ) {
-                                        frames.push((t, img.clone()));
-                                        let _ = res_tx.send(PreviewResult::Single(t, img));
-                                    }
-                                }
-                            }
-                        }
-                        let _ = res_tx.send(PreviewResult::Buffered(frames));
+                }
+                // also always attempt to render a colour image snapshot so that the
+                // `PreviewResult::Single` case is exercised.  This keeps the existing
+                // texture caching logic in `poll_preview_results` working even when
+                // only CPU images are available.
+                #[cfg(feature = "wgpu")]
+                if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
+                    if let Ok(img) = render_frame_color_image_gpu_snapshot(
+                        device,
+                        queue,
+                        resources,
+                        &snapshot,
+                        center_time,
+                    ) {
+                        let _ = res_tx.send(PreviewResult::Single(center_time, img.clone()));
                     }
-                },
+                }
             }
         }
     });

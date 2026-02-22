@@ -135,20 +135,12 @@ impl eframe::App for MyApp {
             if let Some(last_edit) = state.autosave.last_edit_time {
                 const CODE_PREVIEW_IDLE_SECS: f64 = 0.45;
                 if now - last_edit > CODE_PREVIEW_IDLE_SECS {
-                    crate::canvas::request_preview_frames(
-                        state,
-                        state.time,
-                        crate::canvas::PreviewMode::Single,
-                    );
+                    crate::canvas::request_preview_frames(state, state.time);
                     state.preview_pending_from_code = false;
                 }
             } else {
                 // safety: no last_edit timestamp — request immediately
-                crate::canvas::request_preview_frames(
-                    state,
-                    state.time,
-                    crate::canvas::PreviewMode::Single,
-                );
+                crate::canvas::request_preview_frames(state, state.time);
                 state.preview_pending_from_code = false;
             }
         }

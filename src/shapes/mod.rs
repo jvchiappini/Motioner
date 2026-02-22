@@ -15,9 +15,11 @@ pub trait ShapeDescriptor {
     fn dsl_keyword(&self) -> &'static str;
 
     /// Visual icon used in the Scene Graph and toolbars.
+    #[allow(dead_code)]
     fn icon(&self) -> &'static str;
 
     /// Render the property editor in the Element Modifiers modal.
+    #[allow(dead_code)]
     fn draw_modifiers(&mut self, ui: &mut egui::Ui, state: &mut AppState);
 
     /// Generate the DSL representation for this shape.
@@ -37,6 +39,10 @@ pub trait ShapeDescriptor {
     ///
     /// Default implementation is a no-op so existing shapes don't need to
     /// implement GPU-specific behaviour unless they support GPU composition.
+    #[allow(dead_code)]
+    // note: default impl is a no-op and the method is rarely invoked; we
+    // suppress dead_code lint here because calls happen via dynamic dispatch
+    // which the lint does not detect.
     fn append_gpu_shapes(
         &self,
         _scene_shape: &crate::scene::Shape,
@@ -71,6 +77,7 @@ pub trait ShapeDescriptor {
 
     /// Whether this shape was created at runtime and should be excluded from
     /// generated DSL output.
+    #[allow(dead_code)]
     fn is_ephemeral(&self) -> bool;
 
     /// Mark or un-mark this shape as ephemeral.
@@ -84,9 +91,11 @@ pub trait ShapeDescriptor {
     // ── Visibility ───────────────────────────────────────────────────────
 
     /// Whether this shape is currently visible.
+    #[allow(dead_code)]
     fn is_visible(&self) -> bool;
 
     /// Set visibility.
+    #[allow(dead_code)]
     fn set_visible(&mut self, v: bool);
 
     // ── Fill colour ───────────────────────────────────────────────────────

@@ -15,6 +15,14 @@ pub enum Value {
     List(Vec<Value>),
 }
 
+// Dummy constant to ensure the `List` variant is actually constructed at
+// least once in the compiled binary.  Without this the variant would trigger
+// a `dead_code` error when no list-valued variables are ever created during
+// normal execution (which is currently the case).  The constant is never
+// referenced by any code; its mere presence is enough to satisfy the
+// compiler's analysis.
+const _: Option<Value> = Some(Value::List(Vec::new()));
+
 /// Variables available during expression evaluation (e.g. `seconds`, `frame`).
 pub struct EvalContext {
     pub variables: HashMap<String, Value>,

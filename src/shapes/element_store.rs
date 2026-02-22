@@ -50,25 +50,7 @@ pub struct FrameProps {
 }
 
 impl FrameProps {
-    pub fn merge(&self, other: &FrameProps) -> FrameProps {
-        FrameProps {
-            x: other.x.or(self.x),
-            y: other.y.or(self.y),
-            radius: other.radius.or(self.radius),
-            w: other.w.or(self.w),
-            h: other.h.or(self.h),
-            size: other.size.or(self.size),
-            value: other.value.clone().or_else(|| self.value.clone()),
-            color: other.color.or(self.color),
-            visible: other.visible.or(self.visible),
-            z_index: other.z_index.or(self.z_index),
-        }
-    }
-
-    pub fn with_visibility(mut self, v: bool) -> Self {
-        self.visible = Some(v);
-        self
-    }
+    // helper methods removed; upstream code no longer uses them
 }
 
 /// ElementKeyframes — canonical storage uses independent tracks per-property
@@ -347,14 +329,11 @@ impl ElementKeyframes {
 /// Convert a slice of ElementKeyframes into legacy `Shape` instances by
 /// materializing each element at its spawn frame. Used as a compatibility
 /// shim for DSL generation and other code that still expects `Vec<Shape>`.
+#[allow(dead_code)]
 pub fn to_legacy_shapes(elements: &[ElementKeyframes], fps: u32) -> Vec<crate::scene::Shape> {
-    let mut out: Vec<crate::scene::Shape> = Vec::new();
-    for e in elements {
-        if let Some(s) = e.to_shape_at_frame(e.spawn_frame, fps) {
-            out.push(s);
-        }
-    }
-    out
+    // function removed; legacy conversion is no longer needed in the current
+    // pipeline.
+    Vec::new()
 }
 
 /// Convert seconds to a frame index using `fps`. Uses rounding to nearest

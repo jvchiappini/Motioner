@@ -52,42 +52,6 @@ pub fn generate_from_elements(
 
 /// Generate the full DSL string for the given scene configuration.
 /// Prefer [`generate_from_elements`] when the scene is stored as `ElementKeyframes`.
-pub fn generate(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String {
-    let mut out = String::new();
-
-    // Header
-    out.push_str(&format!(
-        "size({}, {})\ntimeline(fps = {}, duration = {:.2})\n\n",
-        width, height, fps, duration
-    ));
-
-    // Shape definitions (without inline animations)
-    for shape in scene {
-        if shape.is_ephemeral() {
-            continue;
-        }
-        out.push_str(&shape.to_dsl(""));
-        out.push('\n');
-    }
-
-    // Top-level move blocks referencing elements by name
-    for shape in scene {
-        if shape.is_ephemeral() {
-            continue;
-        }
-        let name = shape.name();
-        let animations = shape_animations(shape);
-
-        for anim in animations {
-            if let Some(ma) = MoveAnimation::from_scene(anim) {
-                out.push_str(&ma.to_dsl_block(Some(name), ""));
-                out.push('\n');
-            }
-        }
-    }
-
-    out
-}
 
 /// Extract event handlers from DSL source as structured objects.
 ///
@@ -170,9 +134,9 @@ pub fn extract_event_handlers(src: &str) -> Vec<crate::dsl::runtime::DslHandler>
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn shape_animations(shape: &Shape) -> &[Animation] {
-    shape.descriptor().map_or(&[], |d| d.animations())
-}
+// legacy generator paths removed; only `generate_from_elements` is used.
+// fn generate(scene: &[Shape], width: u32, height: u32, fps: u32, duration: f32) -> String { ... }
+// fn shape_animations(shape: &Shape) -> &[Animation] { ... }
 
 /// Convert leading groups of 4 spaces into tab characters for every line.
 /// Only affects leading indentation — interior spaces are preserved.
