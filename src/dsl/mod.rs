@@ -20,8 +20,8 @@ pub mod generator;
 pub mod lexer;
 pub mod parser;
 pub mod runtime;
-pub mod validator;
 pub mod utils;
+pub mod validator;
 
 // --- Re-exports ---------------------------------------------------------------
 
@@ -163,9 +163,9 @@ pub fn parse_dsl_into_elements(
     src: &str,
     fps: u32,
 ) -> Vec<crate::shapes::element_store::ElementKeyframes> {
-    use ast::Statement;
-    use crate::shapes::element_store::{seconds_to_frame, ElementKeyframes, Keyframe};
     use crate::animations::move_animation::MoveAnimation;
+    use crate::shapes::element_store::{seconds_to_frame, ElementKeyframes, Keyframe};
+    use ast::Statement;
 
     let stmts = parser::parse(src);
 
@@ -175,14 +175,14 @@ pub fn parse_dsl_into_elements(
         .filter_map(|stmt| {
             if let Statement::Shape(shape) = stmt {
                 let mut ek = ElementKeyframes::from_shape_at_spawn(shape, fps)?;
-                
+
                 // Process inline animations already attached to the shape
                 for anim in shape.animations() {
                     if let Some(ma) = MoveAnimation::from_scene(anim) {
                         apply_move_to_ek(&mut ek, &ma, fps);
                     }
                 }
-                
+
                 Some(ek)
             } else {
                 None
@@ -193,7 +193,9 @@ pub fn parse_dsl_into_elements(
     // ── Pass 2: top-level move blocks ────────────────────────────────────────
     for stmt in &stmts {
         let Statement::Move(mv) = stmt else { continue };
-        let Some(target_name) = mv.element.as_deref() else { continue };
+        let Some(target_name) = mv.element.as_deref() else {
+            continue;
+        };
         let Some(elem) = elements.iter_mut().find(|e| e.name == target_name) else {
             continue;
         };
@@ -208,15 +210,18 @@ pub fn parse_dsl_into_elements(
 }
 
 /// Helper to apply a MoveAnimation into ElementKeyframes as a high-level command.
-fn apply_move_to_ek(ek: &mut crate::shapes::element_store::ElementKeyframes, ma: &crate::animations::move_animation::MoveAnimation, _fps: u32) {
+fn apply_move_to_ek(
+    ek: &mut crate::shapes::element_store::ElementKeyframes,
+    ma: &crate::animations::move_animation::MoveAnimation,
+    _fps: u32,
+) {
     // Instead of baking into keyframes, we store the high-level MoveAnimation.
     // The GPU compute shader will interpolate this on-the-fly.
     ek.move_commands.push(ma.clone());
     // Sort by start frame to ensure correct superposition in the shader
-    ek.move_commands.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+    ek.move_commands
+        .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
 }
-
-
 
 pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
     use crate::scene::Animation;
