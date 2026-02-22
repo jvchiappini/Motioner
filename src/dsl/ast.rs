@@ -21,7 +21,11 @@ pub struct Color {
 
 impl Color {
     pub fn from_hex(s: &str) -> Option<Self> {
-        let s = s.trim().trim_matches('"').trim_matches('\'').trim_start_matches('#');
+        let s = s
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_start_matches('#');
         if s.len() < 6 {
             return None;
         }
