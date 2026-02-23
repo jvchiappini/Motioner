@@ -33,7 +33,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             // Decide which scene paths are visible in the timeline (group-drill is
             // not supported for ElementKeyframes yet; treat root as top-level)
             let mut visible_paths: Vec<Vec<usize>> = Vec::new();
-            if let Some(root_path) = state.timeline_root_path.as_ref() {
+            if let Some(_root_path) = state.timeline_root_path.as_ref() {
                 // groups/nesting are not yet represented in ElementKeyframes;
                 // reset to top-level for now
                 state.timeline_root_path = None;

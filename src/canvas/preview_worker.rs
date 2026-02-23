@@ -1,5 +1,5 @@
-/// Gestiona hilos de trabajo en segundo plano para generar previsualizaciones.
-/// Se encarga de la generación de snapshots (CPU o GPU) sin bloquear el hilo principal.
+//! Gestiona hilos de trabajo en segundo plano para generar previsualizaciones.
+//! Se encarga de la generación de snapshots (CPU o GPU) sin bloquear el hilo principal.
 
 use super::cache_management::{
     compress_color_image_to_png, enforce_preview_cache_limits, preview_cache_vram_bytes,
@@ -120,7 +120,7 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                     // avoid replacing the texture (prevents an unnecessary swap/flicker).
                     if state
                         .preview_cache_center_time
-                        .map_or(false, |c| (c - t).abs() < 1e-6)
+                        .is_some_and(|c| (c - t).abs() < 1e-6)
                     {
                         // still ensure cache limits are correct but skip reload
                         continue;
@@ -207,6 +207,9 @@ pub fn ensure_preview_worker(state: &mut AppState) {
         )> = None;
 
         while let Ok(job) = job_rx.recv() {
+            // `PreviewJob` currently has only the `Generate` variant, so this
+            // pattern is guaranteed to match.  silence the clippy warning.
+            #[allow(irrefutable_let_patterns)]
             if let PreviewJob::Generate { center_time, snapshot, .. } = job {
                 #[cfg(feature = "wgpu")]
                 {

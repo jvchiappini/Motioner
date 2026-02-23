@@ -22,9 +22,7 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
         return Err("for: expected 'for <var> in <iterable>'".to_string());
     }
     let var_name = parts[0].trim();
-    let iterable = after_for
-        .splitn(2, "in")
-        .nth(1)
+    let iterable = after_for.split_once("in").map(|x| x.1)
         .ok_or("for: missing iterable")?
         .trim();
 
@@ -81,7 +79,7 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
     // variable name — must be a list
     if let Some(list) = ctx.get_list(iterable) {
         // clone out the list so we don't hold an immutable borrow while mutating `ctx`
-        let items: Vec<_> = list.iter().cloned().collect();
+        let items: Vec<_> = list.to_vec();
         let mut modified = false;
         for item in items {
             ctx.set_var(var_name, item);

@@ -81,7 +81,7 @@ impl Shape {
     pub fn is_visible(&self) -> bool {
         match self {
             Shape::Group { visible, .. } => *visible,
-            _ => self.descriptor().map_or(false, |d| d.is_visible()),
+            _ => self.descriptor().is_some_and(|d| d.is_visible()),
         }
     }
 
@@ -90,7 +90,11 @@ impl Shape {
     /// shapes delegate to their descriptor.
     pub fn to_dsl(&self, indent: &str) -> String {
         match self {
-            Shape::Group { children, name, visible } => {
+            Shape::Group {
+                children,
+                name: _,
+                visible: _,
+            } => {
                 // groups aren't part of the DSL but we render children
                 let mut out = String::new();
                 for child in children {
@@ -186,7 +190,7 @@ impl Shape {
     /// generated DSL output.
     #[allow(dead_code)]
     pub fn is_ephemeral(&self) -> bool {
-        self.descriptor().map_or(false, |d| d.is_ephemeral())
+        self.descriptor().is_some_and(|d| d.is_ephemeral())
     }
 
     /// Recursively flattens the scene graph into a list of visual primitives (Circles, Rects).
@@ -364,7 +368,11 @@ impl crate::shapes::ShapeDescriptor for Shape {
     fn icon(&self) -> &'static str {
         self.descriptor().map_or("", |d| d.icon())
     }
-    fn draw_modifiers(&mut self, ui: &mut eframe::egui::Ui, state: &mut crate::app_state::AppState) {
+    fn draw_modifiers(
+        &mut self,
+        ui: &mut eframe::egui::Ui,
+        state: &mut crate::app_state::AppState,
+    ) {
         if let Some(d) = self.descriptor_mut() {
             d.draw_modifiers(ui, state);
         }
@@ -384,8 +392,7 @@ impl crate::shapes::ShapeDescriptor for Shape {
         Self: Sized,
     {
         // not very meaningful at the enum level, but provide a circle
-        let mut c = crate::shapes::circle::Circle::default();
-        c.name = name;
+        let c = crate::shapes::circle::Circle { name, ..Default::default() };
         Shape::Circle(c)
     }
     fn animations(&self) -> &[crate::scene::Animation] {
@@ -403,7 +410,7 @@ impl crate::shapes::ShapeDescriptor for Shape {
         self.descriptor().and_then(|d| d.kill_time())
     }
     fn is_ephemeral(&self) -> bool {
-        self.descriptor().map_or(false, |d| d.is_ephemeral())
+        self.descriptor().is_some_and(|d| d.is_ephemeral())
     }
     fn set_ephemeral(&mut self, v: bool) {
         if let Some(d) = self.descriptor_mut() {
@@ -487,7 +494,7 @@ pub fn find_hit_path(
     _zoom: f32,
     current_time: f32,
     parent_spawn: f32,
-    render_height: u32,
+    _render_height: u32,
 ) -> Option<Vec<usize>> {
     for (i, shape) in shapes.iter().enumerate().rev() {
         let actual_spawn = shape.spawn_time().max(parent_spawn);
@@ -549,7 +556,7 @@ pub fn find_hit_path(
                     _zoom,
                     current_time,
                     actual_spawn,
-                    render_height,
+                    _render_height,
                 ) {
                     let mut path = vec![i];
                     path.append(&mut cp);
@@ -569,7 +576,7 @@ pub fn draw_highlight_recursive(
     stroke: eframe::egui::Stroke,
     current_time: f32,
     parent_spawn: f32,
-    render_height: u32,
+    _render_height: u32,
 ) {
     let actual_spawn = shape.spawn_time().max(parent_spawn);
     if current_time < actual_spawn {
@@ -627,7 +634,7 @@ pub fn draw_highlight_recursive(
                     stroke,
                     current_time,
                     actual_spawn,
-                    render_height,
+                    _render_height,
                 );
             }
         }
@@ -712,7 +719,9 @@ pub fn move_node(
         let insert_at = actual_to_index.min(scene.len());
         scene.insert(insert_at, source_node);
         final_path.push(insert_at);
-    } else if let Some(Shape::Group { children, .. }) = get_shape_mut(&mut scene[..], &actual_to_parent) {
+    } else if let Some(Shape::Group { children, .. }) =
+        get_shape_mut(&mut scene[..], &actual_to_parent)
+    {
         let insert_at = actual_to_index.min(children.len());
         children.insert(insert_at, source_node);
         final_path.push(insert_at);

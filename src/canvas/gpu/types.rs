@@ -1,5 +1,5 @@
-/// Define las estructuras de datos que se envían a la GPU.
-/// Estas estructuras deben cumplir con el layout de WGSL (std140/std430).
+//! Define las estructuras de datos que se envían a la GPU.
+//! Estas estructuras deben cumplir con el layout de WGSL (std140/std430).
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

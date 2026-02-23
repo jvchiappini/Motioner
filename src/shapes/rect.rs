@@ -165,8 +165,7 @@ impl ShapeDescriptor for Rect {
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
-        let mut r = Self::default();
-        r.name = name;
+        let r = Self { name, ..Default::default() };
         super::shapes_manager::Shape::Rect(r)
     }
 
@@ -302,10 +301,7 @@ impl ShapeDescriptor for Rect {
     }
 
     fn apply_kv_string(&mut self, key: &str, val: &str) {
-        match key {
-            "name" => self.name = val.to_string(),
-            _ => {}
-        }
+        if key == "name" { self.name = val.to_string() }
     }
 
     fn append_gpu_shapes(
@@ -366,8 +362,7 @@ pub fn from_element_keyframes(
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
     let props = ek.sample(frame, fps)?;
-    let mut r = Rect::default();
-    r.name = ek.name.clone();
+    let mut r = Rect { name: ek.name.clone(), ..Default::default() };
     if let Some(x) = props.x {
         r.x = x;
     }
@@ -409,8 +404,7 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Rect> {
     let name = crate::dsl::parser::extract_name(header)
         .unwrap_or_else(|| format!("Rect_{}", crate::dsl::parser::fastrand_usize()));
 
-    let mut node = Rect::default();
-    node.name = name;
+    let mut node = Rect { name, ..Default::default() };
 
     let body = crate::dsl::parser::body_lines(block);
     let mut iter = body.iter().peekable();
@@ -451,7 +445,7 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Rect> {
 }
 
 fn parse_rect_wrapper(block: &[String]) -> Option<crate::shapes::shapes_manager::Shape> {
-    parse_dsl_block(block).map(|r| crate::shapes::shapes_manager::Shape::Rect(r))
+    parse_dsl_block(block).map(crate::shapes::shapes_manager::Shape::Rect)
 }
 
 inventory::submit! {

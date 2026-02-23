@@ -16,13 +16,12 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
     if !diags.is_empty() {
         state.dsl.diagnostics = diags.clone();
         if show_toast {
-            state.toast_message = Some(format!("Save failed: DSL errors"));
+            state.toast_message = Some("Save failed: DSL errors".to_string());
             state.toast_type = crate::app_state::ToastType::Error;
             // We don't have access to egui::Context here; approximate deadline
             state.toast_deadline = state.last_update as f64 + 3.0;
         }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             diags[0].message.clone(),
         ));
     }

@@ -1,9 +1,11 @@
 /// Procesa los elementos de texto para generar el atlas que se enviará a la GPU.
-
 use crate::app_state::AppState;
 
+// Alias to reduce return type complexity for the atlas preparation helper.
+type AtlasData = (Option<(Vec<u8>, u32, u32)>, Option<Vec<(usize, [f32; 4])>>);
+
 /// Genera los datos del atlas de texto y los overrides de UV para el frame actual.
-pub fn prepare_text_atlas(state: &mut AppState) -> (Option<(Vec<u8>, u32, u32)>, Option<Vec<(usize, [f32; 4])>>) {
+pub fn prepare_text_atlas(state: &mut AppState) -> AtlasData {
     let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.preview_fps);
     let mut text_entries: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
 

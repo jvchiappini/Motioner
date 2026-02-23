@@ -2,9 +2,9 @@ size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
 circle "Circle" {
-	x = 0.253,
-	y = 0.496,
-	radius = 0.232,
+	x = 0.306,
+	y = 0.483,
+	radius = 0.256,
 	fill = "#78c8ff",
 	spawn = 0.00
 }

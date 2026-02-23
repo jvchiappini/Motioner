@@ -1,5 +1,4 @@
 /// Dibuja la cuadrícula de fondo y los ejes del canvas.
-
 use eframe::egui;
 
 /// Dibuja la cuadrícula infinita basada en el nivel de zoom actual.

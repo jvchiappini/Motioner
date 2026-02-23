@@ -2,7 +2,6 @@ use super::resources::GpuResources;
 use super::types::*;
 /// Implementa la lógica de computación para interpolar keyframes directamente en la GPU.
 /// Esto evita el muestreo excesivo en la CPU y mejora el rendimiento drásticamente.
-
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;
 
@@ -13,6 +12,7 @@ pub const COMPUTE_WGSL: &str = include_str!("../../shaders/compute_keyframes.wgs
 impl GpuResources {
     /// Sube los keyframes de la escena a los buffers de computación y dispara el dispatch.
     /// Al finalizar, `shape_buffer` contendrá los datos actualizados para el frame solicitado.
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch_compute(
         &mut self,
         device: &wgpu::Device,

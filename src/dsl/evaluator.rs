@@ -205,7 +205,7 @@ fn parse_muldiv<'a>(it: &mut Peekable<Iter<'a, Tok<'a>>>, ctx: &EvalContext) -> 
 fn parse_primary<'a>(it: &mut Peekable<Iter<'a, Tok<'a>>>, ctx: &EvalContext) -> Option<f32> {
     match it.next() {
         Some(Tok::Num(n)) => Some(*n),
-        Some(Tok::Ident(id)) => ctx.get_number(*id),
+        Some(Tok::Ident(id)) => ctx.get_number(id),
         Some(Tok::LParen) => {
             let v = parse_expr(it, ctx)?;
             if matches!(it.next(), Some(Tok::RParen)) {

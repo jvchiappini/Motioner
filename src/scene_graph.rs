@@ -1,7 +1,6 @@
 ﻿use crate::app_state::AppState;
 use crate::dsl;
 use crate::shapes::element_store::ElementKeyframes;
-use crate::shapes::ShapeDescriptor;
 use eframe::egui;
 use eframe::egui::{Color32, Frame, Id, InnerResponse, LayerId, Order, Sense};
 use std::any::Any;
@@ -183,6 +182,7 @@ fn render_node(ui: &mut egui::Ui, state: &mut AppState, path: Vec<usize>) {
 // Group node
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_group_node(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -278,6 +278,7 @@ fn render_group_node(
 // Leaf node
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_leaf_node(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -324,6 +325,7 @@ fn render_leaf_node(
 // Row content — visibility toggle + name label / rename field
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_row(
     ui: &mut egui::Ui,
     state: &mut AppState,

@@ -28,6 +28,7 @@ pub struct TextRasterResult {
 
 /// Rasteriza UN elemento `Text` en un buffer RGBA independiente del tamaño `rw × rh`.
 /// Retorna `None` si no se dibujó ningún píxel visible (texto invisible o sin fuente).
+#[allow(clippy::too_many_arguments)]
 pub fn rasterize_single_text(
     text_shape: &crate::scene::Shape,
     rw: u32,
@@ -146,11 +147,11 @@ pub fn rasterize_single_text(
     }
 }
 
-/// Previously there were helpers for rasterizing entire layers recursively.
-/// They were removed during the dead-code purge; all logic now lives inside
-/// `rasterize_single_text` above.  The remainder of this file consists solely
-/// of support routines (font resolution, drawing) which are still exercised
-/// by that function.
+// Previously there were helpers for rasterizing entire layers recursively.
+// They were removed during the dead-code purge; all logic now lives inside
+// `rasterize_single_text` above.  The remainder of this file consists solely
+// of support routines (font resolution, drawing) which are still exercised
+// by that function.
 
 // (no further public API)
 // (no further public API)
@@ -202,7 +203,7 @@ fn get_system_font(font_map: &HashMap<String, std::path::PathBuf>) -> Option<Fon
         }
     }
     // 2. Usar cualquier fuente disponible en font_map como último recurso
-    for (_name, path) in font_map {
+    for path in font_map.values() {
         if let Ok(data) = std::fs::read(path) {
             if let Ok(font) = FontArc::try_from_vec(data) {
                 eprintln!(
@@ -218,6 +219,7 @@ fn get_system_font(font_map: &HashMap<String, std::path::PathBuf>) -> Option<Fon
 }
 
 /// Dibuja texto en el buffer y retorna el avance horizontal total en píxeles.
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 fn draw_text_to_buffer(
     pixels: &mut Vec<u8>,
     rw: u32,

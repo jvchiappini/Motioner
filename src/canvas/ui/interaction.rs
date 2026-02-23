@@ -46,8 +46,7 @@ pub fn handle_pan_zoom(
 /// Función auxiliar para actualizar el código DSL de forma robusta
 fn patch_dsl_property(code: &mut String, element_name: &str, prop: &str, val: f32) {
     let mut new_lines = Vec::new();
-    let mut patched = false;
-    let target_name_quoted = format!("\"{}\"", element_name);
+    let _target_name_quoted = format!("\"{}\"", element_name);
 
     let mut inside_target = false;
 
@@ -79,7 +78,6 @@ fn patch_dsl_property(code: &mut String, element_name: &str, prop: &str, val: f3
                 let first_char_idx = line.find(|c: char| !c.is_whitespace()).unwrap_or(0);
                 let indentation = &line[0..first_char_idx];
                 new_lines.push(format!("{}{} = {:.3},", indentation, prop, val));
-                patched = true;
                 continue;
             }
 
@@ -614,7 +612,7 @@ pub fn handle_canvas_clicks(
                                     // Las flechas se dibujan desde el centro del objeto: Rojo (X), Verde (Y)
                                     let c = rect.center();
                                     let arrow_len = 60.0;
-                                    let hit_dist = 10.0; // Tolerancia de clic
+                                    let _hit_dist = 10.0; // Tolerancia de clic
 
                                     // Rectángulo de la flecha X (Eje horizontal)
                                     let x_arrow_rect = egui::Rect::from_min_max(
@@ -716,7 +714,7 @@ pub fn handle_canvas_clicks(
                     Vec::with_capacity(state.scene.len());
                 for elem in &state.scene {
                     if frame_idx >= elem.spawn_frame
-                        && elem.kill_frame.map_or(true, |k| frame_idx < k)
+                        && elem.kill_frame.is_none_or(|k| frame_idx < k)
                     {
                         if let Some(s) = elem.to_shape_at_frame(frame_idx, state.fps) {
                             live_shapes.push(s);

@@ -5,8 +5,6 @@
 ///
 /// The read direction lives in [`crate::dsl::parser`].
 use super::parser;
-use crate::animations::move_animation::MoveAnimation;
-use crate::scene::{Animation, Shape};
 use crate::shapes::element_store::ElementKeyframes;
 
 // ─── Public entry points ──────────────────────────────────────────────────────
@@ -50,8 +48,8 @@ pub fn generate_from_elements(
     out
 }
 
-/// Generate the full DSL string for the given scene configuration.
-/// Prefer [`generate_from_elements`] when the scene is stored as `ElementKeyframes`.
+// Generate the full DSL string for the given scene configuration.
+// Prefer [`generate_from_elements`] when the scene is stored as `ElementKeyframes`.
 
 /// Extract event handlers from DSL source as structured objects.
 ///

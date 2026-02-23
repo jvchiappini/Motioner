@@ -6,8 +6,10 @@ use eframe::egui; // bring Pos2/Rect etc into scope for resize helpers
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{atomic::AtomicUsize, Arc};
 use sysinfo::{Pid, System};
+
+// Alias used for font refresh worker messages to reduce type complexity.
+type FontRefreshMsg = (Vec<String>, std::collections::HashMap<String, PathBuf>);
 
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum PanelTab {
@@ -146,12 +148,9 @@ pub struct AppState {
     // thread and deliver the results via these channels so the GUI remains
     // responsive while the operation completes.
     #[serde(skip)]
-    pub font_refresh_tx:
-        Option<std::sync::mpsc::Sender<(Vec<String>, std::collections::HashMap<String, PathBuf>)>>,
+    pub font_refresh_tx: Option<std::sync::mpsc::Sender<FontRefreshMsg>>,
     #[serde(skip)]
-    pub font_refresh_rx: Option<
-        std::sync::mpsc::Receiver<(Vec<String>, std::collections::HashMap<String, PathBuf>)>,
-    >,
+    pub font_refresh_rx: Option<std::sync::mpsc::Receiver<FontRefreshMsg>>,
 
     /// Move operation: (from_path, to_parent_path, to_index)
     pub move_request: Option<(Vec<usize>, Vec<usize>, usize)>,

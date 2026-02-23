@@ -1,5 +1,5 @@
-/// Implementa la integración del renderizado GPU con egui y el sistema de previsualización.
-/// Contiene el callback de pintura y funciones para generar snapshots.
+//! Implementa la integración del renderizado GPU con egui y el sistema de previsualización.
+//! Contiene el callback de pintura y funciones para generar snapshots.
 
 #[cfg(feature = "wgpu")]
 use eframe::{egui, egui_wgpu, wgpu};
@@ -124,7 +124,7 @@ pub fn render_frame_color_image_gpu_snapshot(
         if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
 
         if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
-            if shape.descriptor().map_or(false, |d| d.dsl_keyword() == "text") {
+            if shape.descriptor().is_some_and(|d| d.dsl_keyword() == "text") {
                 text_entries_local.push((scene_idx, shape.clone(), (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0)));
             }
         }
@@ -137,11 +137,11 @@ pub fn render_frame_color_image_gpu_snapshot(
     let mut overrides_map = std::collections::HashMap::new();
     let rw = snap.render_width;
     let rh = snap.render_height;
-    let mut atlas_buf = Vec::new();
 
     if !text_entries_local.is_empty() {
         let atlas_h = rh * text_entries_local.len() as u32;
-        atlas_buf = vec![0u8; (rw * atlas_h * 4) as usize];
+        // allocate buffer sized to contain all text tiles stacked vertically
+        let mut atlas_buf = vec![0u8; (rw * atlas_h * 4) as usize];
 
         for (tile_idx, (scene_idx, shape, parent_spawn)) in text_entries_local.iter().enumerate() {
             if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
@@ -189,7 +189,7 @@ pub fn render_frame_color_image_gpu_snapshot(
     let bytes_per_pixel = 4u32;
     let unpadded_bpr = render_w * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bpr = (unpadded_bpr + align - 1) / align * align;
+    let padded_bpr = unpadded_bpr.div_ceil(align) * align;
     let staging_size = (padded_bpr * render_h) as u64;
 
     if resources.readback_size != [render_w, render_h] {
@@ -234,8 +234,8 @@ pub fn render_frame_color_image_gpu_snapshot(
         if !snap.scene.is_empty() { rpass.draw(0..6, 0..snap.scene.len() as u32); }
     }
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture { texture: &render_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::ImageCopyBuffer { buffer: &staging_buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: Some(render_h) } },
+        wgpu::ImageCopyTexture { texture: render_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::ImageCopyBuffer { buffer: staging_buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: Some(render_h) } },
         wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
     );
     queue.submit(Some(encoder.finish()));
@@ -278,7 +278,7 @@ pub fn render_frame_native_texture(
         if frame_idx < ek.spawn_frame { continue; }
         if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
         if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
-            if shape.descriptor().map_or(false, |d| d.dsl_keyword() == "text") {
+            if shape.descriptor().is_some_and(|d| d.dsl_keyword() == "text") {
                 text_entries_local.push((scene_idx, shape.clone(), (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0)));
             }
         }

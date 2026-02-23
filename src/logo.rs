@@ -5,7 +5,6 @@ use usvg::TreeParsing;
 /// rendering it via `resvg`/`usvg`/`tiny_skia` and decoding the result with
 /// the `image` crate. This is purposely standalone so the caller can cache the
 /// texture handle in the UI context and avoid re-parsing on every frame.
-
 pub fn color_image_from_svg(svg_data: &str) -> Option<egui::ColorImage> {
     // usvg will parse the SVG and compute an absolute size.  We then render it
     // into a tiny-skia pixmap and convert that to an `egui::ColorImage` using
@@ -19,7 +18,7 @@ pub fn color_image_from_svg(svg_data: &str) -> Option<egui::ColorImage> {
     let height = size.height().max(1);
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
-    let mut render_rtree = resvg::Tree::from_usvg(&rtree);
+    let render_rtree = resvg::Tree::from_usvg(&rtree);
     render_rtree.render(usvg::Transform::default(), &mut pixmap.as_mut());
 
     // Encode to PNG and then re-decode with `image` so we can easily obtain
@@ -46,7 +45,7 @@ pub fn icon_data_from_svg(svg_data: &str) -> Option<egui::IconData> {
     let height = size.height().max(1);
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
-    let mut render_rtree = resvg::Tree::from_usvg(&rtree);
+    let render_rtree = resvg::Tree::from_usvg(&rtree);
     render_rtree.render(usvg::Transform::default(), &mut pixmap.as_mut());
 
     let png = pixmap.encode_png().ok()?;

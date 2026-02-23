@@ -1,5 +1,5 @@
-/// Este archivo contiene constantes y utilidades pequeñas para el renderizado GPU.
-/// Incluye detección de VRAM, conversión de color y mapeo de curvas de animación.
+//! Este archivo contiene constantes y utilidades pequeñas para el renderizado GPU.
+//! Incluye detección de VRAM, conversión de color y mapeo de curvas de animación.
 
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;

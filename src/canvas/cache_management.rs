@@ -1,6 +1,5 @@
 /// Gestiona la memoria caché del canvas, incluyendo RAM y VRAM.
 /// Implementa políticas de limpieza automática para evitar desbordamientos de memoria.
-
 use crate::app_state::AppState;
 use eframe::egui;
 use image::codecs::png::PngEncoder;

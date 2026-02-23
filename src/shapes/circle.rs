@@ -160,8 +160,7 @@ impl ShapeDescriptor for Circle {
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
-        let mut c = Self::default();
-        c.name = name;
+        let c = Self { name, ..Default::default() };
         super::shapes_manager::Shape::Circle(c)
     }
 
@@ -288,9 +287,8 @@ impl ShapeDescriptor for Circle {
     }
 
     fn apply_kv_string(&mut self, key: &str, val: &str) {
-        match key {
-            "name" => self.name = val.to_string(),
-            _ => {}
+        if key == "name" {
+            self.name = val.to_string()
         }
     }
 
@@ -350,8 +348,7 @@ pub fn from_element_keyframes(
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
     let props = ek.sample(frame, fps)?;
-    let mut c = Circle::default();
-    c.name = ek.name.clone();
+    let mut c = Circle { name: ek.name.clone(), ..Default::default() };
     if let Some(x) = props.x {
         c.x = x;
     }
@@ -396,8 +393,7 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Circle> {
     let name = crate::dsl::parser::extract_name(header)
         .unwrap_or_else(|| format!("Circle_{}", crate::dsl::parser::fastrand_usize()));
 
-    let mut node = Circle::default();
-    node.name = name;
+    let mut node = Circle { name, ..Default::default() };
 
     let body = crate::dsl::parser::body_lines(block);
     let mut iter = body.iter().peekable();
@@ -437,7 +433,7 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Circle> {
 }
 
 fn parse_circle_wrapper(block: &[String]) -> Option<crate::shapes::shapes_manager::Shape> {
-    parse_dsl_block(block).map(|c| crate::shapes::shapes_manager::Shape::Circle(c))
+    parse_dsl_block(block).map(crate::shapes::shapes_manager::Shape::Circle)
 }
 
 inventory::submit! {

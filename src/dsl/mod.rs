@@ -32,19 +32,6 @@ pub use parser::{method_color, parse_config};
 pub use runtime::DslHandler;
 pub use validator::{validate, Diagnostic};
 
-/// Container for transient state derived from the DSL source.
-///
-/// This holds the list of diagnostics produced by validation and the set of
-/// event handlers that have been extracted from the current `dsl_code` text.
-/// Previously these vectors lived directly on `AppState`, but they are more
-/// logically part of the DSL subsystem itself, so they have been moved here.
-///
-/// The application state maintains a single `dsl: DslState` field; helpers in
-/// `states::autosave` and `app_state` access these subfields as needed.
-// Re-export the state type from the `states` module.  The concrete definition
-// lives in `src/states/dslstate.rs` as that location better reflects the data's
-// role as transient application state rather than part of the parsing logic.
-pub use crate::states::dslstate::DslState;
 
 // --- Legacy shims (keep existing call-sites compiling) -----------------------
 

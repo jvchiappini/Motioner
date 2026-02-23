@@ -43,6 +43,7 @@ pub trait ShapeDescriptor {
     // note: default impl is a no-op and the method is rarely invoked; we
     // suppress dead_code lint here because calls happen via dynamic dispatch
     // which the lint does not detect.
+    #[allow(clippy::too_many_arguments)]
     fn append_gpu_shapes(
         &self,
         _scene_shape: &crate::scene::Shape,
@@ -111,7 +112,6 @@ pub trait ShapeDescriptor {
     /// insert hold keyframes for changed properties. Default
     /// implementation returns an empty `FrameProps` (no changes).
     // ── DSL editor colour ───────────────────────────────────────────────
-
     /// Colour that should be used when highlighting this shape's keyword in
     /// the code editor.  The default implementation returns the same blue
     /// that was previously hard‑coded in `highlighter.rs` for `circle`/`rect`.

@@ -1,5 +1,5 @@
-/// Este es el módulo principal encargado de la aceleración por hardware (GPU).
-/// Divide las responsabilidades en tipos, recursos, computación y renderizado.
+//! Este es el módulo principal encargado de la aceleración por hardware (GPU).
+//! Divide las responsabilidades en tipos, recursos, computación y renderizado.
 
 pub mod types;
 pub mod resources;

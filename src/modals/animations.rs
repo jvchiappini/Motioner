@@ -2,7 +2,6 @@ use crate::app_state::AppState;
 use eframe::egui;
 
 /// Top-level Animations modal (moved from `scene_graph.rs`).
-
 /// Animations modal — lightweight UI to add basic animations to elements.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     if !state.show_animations_modal {

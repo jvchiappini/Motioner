@@ -1,10 +1,9 @@
-/// AST node types for the Motioner DSL.
-///
-/// Every piece of DSL source is represented as a typed node in this tree.
-/// The parser produces `Vec<Statement>` from raw source text; downstream
-/// modules (evaluator, validator, generator) operate on these nodes rather
-/// than raw strings.
-
+//! AST node types for the Motioner DSL.
+//!
+//! Every piece of DSL source is represented as a typed node in this tree.
+//! The parser produces `Vec<Statement>` from raw source text; downstream
+//! modules (evaluator, validator, generator) operate on these nodes rather
+//! than raw strings.
 // ─── Primitive value types ────────────────────────────────────────────────────
 
 /// A 2-tuple of floats, used for coordinates and bezier control points.
@@ -87,7 +86,7 @@ pub struct HeaderConfig {
 
 // ─── Event handlers ───────────────────────────────────────────────────────────
 
-/// A top-level event handler block, e.g. `on_time { move_element(...) }`.
+// A top-level event handler block, e.g. `on_time { move_element(...) }`.
 
 // Event handlers are no longer represented in the AST.  The parser still
 // recognizes them when scanning source (to assist with editor diagnostics),

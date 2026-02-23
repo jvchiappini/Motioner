@@ -165,7 +165,7 @@ impl ElementKeyframes {
     }
 
     /// Sample a numeric track at `frame` with interpolation.
-    fn sample_f32_track(track: &Vec<Keyframe<f32>>, frame: FrameIndex) -> Option<f32> {
+    fn sample_f32_track(track: &[Keyframe<f32>], frame: FrameIndex) -> Option<f32> {
         if track.is_empty() {
             return None;
         }
@@ -245,7 +245,7 @@ impl ElementKeyframes {
         })
     }
 
-    fn sample_color_track(track: &Vec<Keyframe<[u8; 4]>>, frame: FrameIndex) -> Option<[u8; 4]> {
+    fn sample_color_track(track: &[Keyframe<[u8; 4]>], frame: FrameIndex) -> Option<[u8; 4]> {
         if track.is_empty() {
             return None;
         }
@@ -278,15 +278,15 @@ impl ElementKeyframes {
         let eased_t = apply_easing_cpu(t, &prev.easing);
 
         let mut out = [0u8; 4];
-        for i in 0..4 {
+        for (i, slot) in out.iter_mut().enumerate() {
             let v0 = prev.value[i] as f32;
             let v1 = next.value[i] as f32;
-            out[i] = (v0 + (v1 - v0) * eased_t).round().clamp(0.0, 255.0) as u8;
+            *slot = (v0 + (v1 - v0) * eased_t).round().clamp(0.0, 255.0) as u8;
         }
         Some(out)
     }
 
-    fn latest_from_track<T: Clone>(track: &Vec<Keyframe<T>>, frame: FrameIndex) -> Option<T> {
+    fn latest_from_track<T: Clone>(track: &[Keyframe<T>], frame: FrameIndex) -> Option<T> {
         for kf in track.iter().rev() {
             if kf.frame <= frame {
                 return Some(kf.value.clone());
@@ -301,11 +301,7 @@ impl ElementKeyframes {
         // Delegate conversion to the concrete Shape implementation via the
         // ShapeDescriptor trait. This keeps per-shape mapping logic inside
         // the shape's module and makes adding a new Shape much easier.
-        if let Some(desc) = s.descriptor() {
-            Some(desc.to_element_keyframes(fps))
-        } else {
-            None
-        }
+        s.descriptor().map(|desc| desc.to_element_keyframes(fps))
     }
 
     /// Reconstruct a `Shape` representing this element at the given `frame`.
@@ -330,7 +326,7 @@ impl ElementKeyframes {
 /// materializing each element at its spawn frame. Used as a compatibility
 /// shim for DSL generation and other code that still expects `Vec<Shape>`.
 #[allow(dead_code)]
-pub fn to_legacy_shapes(elements: &[ElementKeyframes], fps: u32) -> Vec<crate::scene::Shape> {
+pub fn to_legacy_shapes(_elements: &[ElementKeyframes], _fps: u32) -> Vec<crate::scene::Shape> {
     // function removed; legacy conversion is no longer needed in the current
     // pipeline.
     Vec::new()

@@ -1,8 +1,7 @@
-/// Lexer for the Motioner DSL.
-///
-/// Converts raw source text into a flat sequence of [`Token`]s.
-/// The parser consumes this token stream to build the AST.
-
+//! Lexer for the Motioner DSL.
+//!
+//! Converts raw source text into a flat sequence of [`Token`]s.
+//! The parser consumes this token stream to build the AST.
 // This module used to contain a full lexer implementation with token
 // definitions and span tracking.  The parser now operates directly on raw
 // lines, so the only remaining helper is `extract_balanced` below.  The old
@@ -10,11 +9,11 @@
 
 // ─── Lexer ────────────────────────────────────────────────────────────────────
 
-/// Tokenises a DSL source string into a `Vec<SpannedToken>`.
-///
-/// Comments (`// …`) are silently skipped.
-/// Errors (e.g. unterminated strings) produce a diagnostic but continue
-/// tokenising so the caller can report all problems at once.
+// Tokenises a DSL source string into a `Vec<SpannedToken>`.
+//
+// Comments (`// …`) are silently skipped.
+// Errors (e.g. unterminated strings) produce a diagnostic but continue
+// tokenising so the caller can report all problems at once.
 // The lexer used by the parser only needs a simple helper to extract a
 // balanced parenthesized or brace-delimited substring.  The original token
 // definitions and tokenizer logic are retained in history but removed from
@@ -26,7 +25,7 @@
 pub fn extract_balanced(src: &str, ident_pos: usize, open: char, close: char) -> Option<String> {
     let mut depth = 0;
     let mut out = String::new();
-    for (i, c) in src[ident_pos..].char_indices() {
+    for (_i, c) in src[ident_pos..].char_indices() {
         if c == open {
             depth += 1;
             if depth > 1 {

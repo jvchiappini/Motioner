@@ -361,8 +361,8 @@ impl ShapeDescriptor for Text {
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
-        let mut t = Self::default();
-        t.name = name;
+        // build directly with name to avoid redundant assignment
+        let t = Self { name, ..Default::default() };
         super::shapes_manager::Shape::Text(t)
     }
 
@@ -516,8 +516,7 @@ pub fn from_element_keyframes(
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
     let props = ek.sample(frame, fps)?;
-    let mut t = Text::default();
-    t.name = ek.name.clone();
+    let mut t = Text { name: ek.name.clone(), ..Default::default() };
     if let Some(x) = props.x {
         t.x = x;
     }
@@ -588,8 +587,7 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Text> {
     let name = crate::dsl::parser::extract_name(header)
         .unwrap_or_else(|| format!("Text_{}", crate::dsl::parser::fastrand_usize()));
 
-    let mut node = Text::default();
-    node.name = name;
+    let mut node = Text { name, ..Default::default() };
 
     let body = crate::dsl::parser::body_lines(block);
     let mut iter = body.iter().peekable();
@@ -644,7 +642,7 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Text> {
 }
 
 fn parse_text_wrapper(block: &[String]) -> Option<crate::shapes::shapes_manager::Shape> {
-    parse_dsl_block(block).map(|t| crate::shapes::shapes_manager::Shape::Text(t))
+    parse_dsl_block(block).map(crate::shapes::shapes_manager::Shape::Text)
 }
 
 inventory::submit! {

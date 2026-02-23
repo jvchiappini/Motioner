@@ -33,10 +33,7 @@ pub struct DslHandler {
 ///
 /// Returns `true` if at least one action modified the scene.
 pub fn run_handler(shapes: &mut [Shape], handler: &DslHandler, ctx: &mut EvalContext) -> bool {
-    match exec_block(shapes, &handler.body, ctx) {
-        Ok(changed) => changed,
-        Err(_) => false,
-    }
+    exec_block(shapes, &handler.body, ctx).unwrap_or_default()
 }
 
 /// Execute a block of DSL lines (handler body or nested block). Returns
@@ -112,7 +109,7 @@ fn dispatch_action(
     // Allow handler bodies to declare full shape blocks (treated as
     // runtime-spawned/ephemeral shapes). Example: `circle "S" { ... }`.
     // The check is driven by the registry — no hard-coded keyword list.
-    let first_word = line.trim_start().split_whitespace().next().unwrap_or("");
+    let first_word = line.split_whitespace().next().unwrap_or("");
     if crate::shapes::shapes_manager::create_default_by_keyword(first_word, String::new()).is_some()
         || crate::shapes::shapes_manager::parse_shape_block(&[line
             .split('{')
@@ -147,7 +144,7 @@ fn dispatch_action(
         if parsed.is_empty() {
             // fallback: instantiate a default by keyword. Delegate to
             // `shapes_manager` so the runtime doesn't match on variants.
-            let kw = line.trim_start().split_whitespace().next().unwrap_or("");
+            let kw = line.split_whitespace().next().unwrap_or("");
             if let Some(s) =
                 crate::shapes::shapes_manager::create_default_by_keyword(kw, "Spawned".into())
             {

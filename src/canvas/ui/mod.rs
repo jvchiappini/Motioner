@@ -1,6 +1,5 @@
 /// Este módulo orquestra la interfaz de usuario del canvas central.
 /// Divide la lógica en interacción, cuadrícula, barra de herramientas y procesamiento de texto.
-
 use eframe::egui;
 use crate::app_state::AppState;
 

@@ -64,11 +64,10 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
 
     // 2) run handlers on the working copy of shapes
     for handler in handlers {
-        if handler.name == "on_time" || handler.name == "time_changed" {
-            if runtime::run_handler(&mut shapes[..], handler, &mut ctx) {
+        if (handler.name == "on_time" || handler.name == "time_changed")
+            && runtime::run_handler(&mut shapes[..], handler, &mut ctx) {
                 changed = true;
             }
-        }
     }
 
     // 3) propagate changes back into ElementKeyframes by inserting hold keyframes
@@ -76,7 +75,7 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
         // find matching element by name
         let maybe_elem = elements_vec.iter_mut().find(|e| e.name == shape.name());
         if let Some(elem) = maybe_elem {
-            let frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, fps);
+            let _frame_idx = crate::shapes::element_store::seconds_to_frame(seconds, fps);
             let orig = originals.get(i).and_then(|o| o.clone());
             // extract current props from shape (delegate per-shape logic into `Shape`)
             let new_props = shape.changed_frame_props(orig.as_ref());

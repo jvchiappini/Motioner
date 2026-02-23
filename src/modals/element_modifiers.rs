@@ -37,16 +37,16 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             // Body: render the same controls that previously lived in ui::show_modifier_modal
             let mut changed = false;
             // We only support top-level paths for now (ElementKeyframes are flat)
-            let Some(elem) = path.get(0).and_then(|&i| state.scene.get_mut(i)) else {
+            let Some(elem) = path.first().and_then(|&i| state.scene.get_mut(i)) else {
                 return;
             };
             ui.add_space(4.0);
 
-            let earliest_spawn = elem.spawn_frame as f32 / state.fps as f32;
+            let _earliest_spawn = elem.spawn_frame as f32 / state.fps as f32;
 
             // Stable identifier for this element's modifier UI (used as id_source
             // for collapsing headers so they don't reset when labels change).
-            let path_id = state
+            let _path_id = state
                 .modifier_active_path
                 .as_ref()
                 .map(|p| {
@@ -707,11 +707,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                         ui.add_space(12.0);
 
                         // --- SECTION: ANIMATIONS ---
-                        let base_x = elem
+                        let _base_x = elem
                             .sample(elem.spawn_frame, state.fps)
                             .and_then(|p| p.x)
                             .unwrap_or(0.5);
-                        let base_y = elem
+                        let _base_y = elem
                             .sample(elem.spawn_frame, state.fps)
                             .and_then(|p| p.y)
                             .unwrap_or(0.5);

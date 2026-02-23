@@ -1,5 +1,5 @@
-/// Maneja los recursos de bajo nivel de WGPU: buffers, texturas y pipelines.
-/// Responsable de la inicialización y actualización de recursos globales.
+//! Maneja los recursos de bajo nivel de WGPU: buffers, texturas y pipelines.
+//! Responsable de la inicialización y actualización de recursos globales.
 
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;

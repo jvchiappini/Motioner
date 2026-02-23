@@ -1,4 +1,3 @@
-use crate::dsl::evaluator::EvalContext;
 use crate::scene::Shape;
 use crate::shapes::ShapeDescriptor;
 

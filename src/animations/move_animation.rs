@@ -29,6 +29,10 @@ pub struct MoveAnimation {
 impl MoveAnimation {
     /// Create from scene::Animation::Move (returns None for other variants).
     pub fn from_scene(anim: &crate::scene::Animation) -> Option<Self> {
+        // currently `Animation` only has the `Move` variant; keep the
+        // `Option` return type for future extensibility.  Clippy warns that
+        // the `if let` is irrefutable, so silence that specific lint here.
+        #[allow(irrefutable_let_patterns)]
         if let crate::scene::Animation::Move {
             to_x,
             to_y,

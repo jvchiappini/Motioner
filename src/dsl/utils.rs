@@ -5,8 +5,8 @@ use std::collections::HashMap;
 // convenient alias re-exported for parser consumers
 pub type Point2 = super::ast::Point2;
 
-/// Collect a block starting at `header` until the matching `}`.
-/// Returns lines including the header and the closing `}`.
+// Collect a block starting at `header` until the matching `}`.
+// Returns lines including the header and the closing `}`.
 
 /// Return the body lines of a collected block (everything between `{` and `}`).
 /// Parse a DSL easing string into the AST easing kind.
@@ -24,7 +24,7 @@ pub fn parse_easing(s: &str) -> crate::scene::Easing {
         let pos = s.find(&needle)?;
         let rest = s[pos + needle.len()..].trim();
         let end = rest
-            .find(|c: char| c == ',' || c == ')' || c == ' ')
+            .find([',', ')', ' '])
             .unwrap_or(rest.len());
         rest[..end].trim().parse().ok()
     }
@@ -239,7 +239,7 @@ pub fn split_top_level_kvs(s: &str) -> Vec<String> {
 pub fn validate_and_normalize(src: &mut String) -> Vec<super::validator::Diagnostic> {
     // Note: use the public facade functions so callers don't need to import
     // inner modules.
-    let mut diags = super::validate_dsl(src);
+    let diags = super::validate_dsl(src);
 
     // Always normalise the indentation; this is a harmless transformation that
     // makes it easier for the UI to present a canonical view.  Doing it
@@ -294,14 +294,14 @@ pub fn parse_kv_map(s: &str) -> HashMap<String, String> {
     }
     map
 }
-/// Return the raw body string from a collected block (for event handlers).
+// Return the raw body string from a collected block (for event handlers).
 
-/// Extract the quoted name from a shape header line.
-/// e.g. `circle "MyCircle" {` → `Some("MyCircle")`
+// Extract the quoted name from a shape header line.
+// e.g. `circle "MyCircle" {` → `Some("MyCircle")`
 
-/// Return the first identifier in a line (letters, digits, `_`).
+// Return the first identifier in a line (letters, digits, `_`).
 
-/// Split `key = value` (strips trailing commas from the value).
+// Split `key = value` (strips trailing commas from the value).
 pub fn split_kv(s: &str) -> Option<(String, String)> {
     let eq = s.find('=')?;
     let key = s[..eq].trim().to_string();

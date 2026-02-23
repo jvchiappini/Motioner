@@ -531,7 +531,7 @@ fn start_export(state: &mut AppState) {
     let project_dir = state
         .project_path
         .clone()
-        .unwrap_or_else(|| std::env::temp_dir());
+        .unwrap_or_else(std::env::temp_dir);
     let frames_dir = project_dir.join("tempdir");
 
     let fps = state.export_modal_fps;
@@ -682,7 +682,7 @@ fn start_export(state: &mut AppState) {
                             device, queue, resources, &snap_base, t,
                         );
                         match gpu_img {
-                            Ok(mut img) => {
+                            Ok(img) => {
                                 // Text compositing disabled for export preview — return
                                 // the GPU snapshot as-is (currently white).
                                 // TODO: re-enable text compositing when renderer is ready.
@@ -819,7 +819,10 @@ fn start_export(state: &mut AppState) {
                     use std::io::BufRead;
                     let reader = std::io::BufReader::new(stderr);
                     let mut count = 0usize;
-                    for line in reader.lines().flatten() {
+                    // clamp the iterator to only deliver `Ok` lines; otherwise
+                    // `flatten()` could spin forever on a stream that keeps
+                    // yielding `Err` values.
+                    for line in reader.lines().map_while(Result::ok) {
                         count += 1;
                         // Only forward the first 60 lines to avoid flooding the log
                         if count <= 60 {
@@ -909,7 +912,7 @@ fn start_export(state: &mut AppState) {
 
                     let done = batch_start + i as u32 + 1;
                     let _ = tx.send(FfmpegMsg::Progress(done, total_frames));
-                    if done % log_interval == 0 || done == total_frames {
+                    if done.is_multiple_of(log_interval) || done == total_frames {
                         let t = (done - 1) as f32 / fps as f32;
                         let _ = tx.send(FfmpegMsg::Log(format!(
                             "  Frame {}/{} ({:.1}s)",
@@ -1094,10 +1097,10 @@ fn start_export(state: &mut AppState) {
 
 fn render_frame_cpu(
     snap: &crate::canvas::preview_worker::RenderSnapshot,
-    time: f32,
-    font_arc_cache: &std::collections::HashMap<String, ab_glyph::FontArc>,
-    font_map: &std::collections::HashMap<String, std::path::PathBuf>,
-    dsl_handlers: &[crate::dsl::runtime::DslHandler],
+    _time: f32,
+    _font_arc_cache: &std::collections::HashMap<String, ab_glyph::FontArc>,
+    _font_map: &std::collections::HashMap<String, std::path::PathBuf>,
+    _dsl_handlers: &[crate::dsl::runtime::DslHandler],
 ) -> egui::ColorImage {
     // CPU renderer disabled — return a plain white image for export frames.
     // TODO: implement CPU composition using ElementKeyframes when ready.
@@ -1124,7 +1127,7 @@ fn save_png(
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn round_even(n: u32) -> u32 {
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         n
     } else {
         n + 1

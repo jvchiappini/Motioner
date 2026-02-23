@@ -79,13 +79,12 @@ pub fn parse(src: &str) -> Vec<Statement> {
         // in the runtime/validator pipeline, so we simply skip over them.
         // (We keep the lookup helper for diagnostics but do not emit a statement.)
         let ident = first_ident(line);
-        if !ident.is_empty() && line.contains('{') {
-            if event_handler_color(&ident).is_some() {
+        if !ident.is_empty() && line.contains('{')
+            && event_handler_color(&ident).is_some() {
                 // skip entire block
                 let _ = collect_block(line, &mut lines);
                 continue;
             }
-        }
     }
 
     // Attach top-level move blocks as `Statement::Move`.
@@ -207,7 +206,7 @@ pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
 
 // ─── Easing parser ────────────────────────────────────────────────────────────
 
-/// Parse a DSL easing string (right-hand side of `ease = ...`).
+// Parse a DSL easing string (right-hand side of `ease = ...`).
 
 // ─── KV applicators ───────────────────────────────────────────────────────────
 
