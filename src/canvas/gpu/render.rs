@@ -4,6 +4,7 @@
 use super::resources::GpuResources;
 use super::types::*;
 use super::utils::MAX_GPU_TEXTURE_SIZE;
+use ab_glyph::FontArc;
 #[cfg(feature = "wgpu")]
 use eframe::{egui, egui_wgpu, wgpu};
 
@@ -16,12 +17,12 @@ pub struct CompositionCallback {
     pub viewport_rect: egui::Rect,
     pub magnifier_pos: Option<egui::Pos2>,
     pub time: f32,
-    pub text_pixels: Option<(Vec<u8>, u32, u32)>,
     pub elements: Option<Vec<crate::shapes::element_store::ElementKeyframes>>,
+    pub font_map: std::collections::HashMap<String, std::path::PathBuf>,
+    pub font_arc_cache: std::collections::HashMap<String, FontArc>,
     pub current_frame: u32,
     pub fps: u32,
     pub scene_version: u32,
-    pub text_overrides: Option<Vec<(usize, [f32; 4])>>,
 }
 
 #[cfg(feature = "wgpu")]
@@ -39,14 +40,6 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
         if let Some(ref elements) = self.elements {
             let dirty = self.scene_version > resources.current_scene_version;
 
-            // Convertir overrides de Vec a HashMap para el despachador de computación
-            let mut overrides_map = std::collections::HashMap::new();
-            if let Some(ref overrides) = self.text_overrides {
-                for (idx, uvs) in overrides {
-                    overrides_map.insert(*idx, *uvs);
-                }
-            }
-
             resources.dispatch_compute(
                 device,
                 queue,
@@ -57,14 +50,12 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
                 self.render_width as u32,
                 self.render_height as u32,
                 dirty,
-                Some(&overrides_map),
+                None,
+                &self.font_map,
+                &mut self.font_arc_cache.clone(),
             );
             if dirty {
                 resources.current_scene_version = self.scene_version;
-            }
-
-            if let Some((ref pixels, w, h)) = self.text_pixels {
-                resources.update_text_atlas(device, queue, pixels, w, h);
             }
         }
 
@@ -137,6 +128,7 @@ pub fn render_frame_color_image_gpu_snapshot(
     resources: &mut GpuResources,
     snap: &crate::canvas::preview_worker::RenderSnapshot,
     time: f32,
+    clear_color: wgpu::Color,
 ) -> Result<egui::ColorImage, String> {
     let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier)
         .round()
@@ -153,71 +145,12 @@ pub fn render_frame_color_image_gpu_snapshot(
     }
 
     let frame_idx = crate::shapes::element_store::seconds_to_frame(time, snap.preview_fps);
-    let mut text_entries_local: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
-    for (scene_idx, ek) in snap.scene.iter().enumerate() {
-        if frame_idx < ek.spawn_frame {
-            continue;
-        }
-        if let Some(kf) = ek.kill_frame {
-            if frame_idx >= kf {
-                continue;
-            }
-        }
-
-        if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
-            if shape
-                .descriptor()
-                .is_some_and(|d| d.dsl_keyword() == "text")
-            {
-                text_entries_local.push((
-                    scene_idx,
-                    shape.clone(),
-                    (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0),
-                ));
-            }
-        }
-    }
-
     let mut compute_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("compute_keyframes"),
     });
     let dirty = snap.scene_version > resources.current_scene_version;
 
-    // Primero preparamos los overrides de texto para el compute shader
-    let mut overrides_map = std::collections::HashMap::new();
-    let rw = snap.render_width;
-    let rh = snap.render_height;
-
-    if !text_entries_local.is_empty() {
-        let atlas_h = rh * text_entries_local.len() as u32;
-        // allocate buffer sized to contain all text tiles stacked vertically
-        let mut atlas_buf = vec![0u8; (rw * atlas_h * 4) as usize];
-
-        for (tile_idx, (scene_idx, shape, parent_spawn)) in text_entries_local.iter().enumerate() {
-            if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
-                shape,
-                rw,
-                rh,
-                time,
-                snap.duration_secs,
-                &mut snap.font_arc_cache.clone(),
-                &std::collections::HashMap::new(),
-                &snap.dsl.event_handlers,
-                *parent_spawn,
-            ) {
-                let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
-                atlas_buf[row_offset..row_offset + (rw * rh * 4) as usize]
-                    .copy_from_slice(&result.pixels);
-
-                let uv0_y = tile_idx as f32 / text_entries_local.len() as f32;
-                let uv1_y = (tile_idx + 1) as f32 / text_entries_local.len() as f32;
-                overrides_map.insert(*scene_idx, [0.0, uv0_y, 1.0, uv1_y]);
-            }
-        }
-        resources.update_text_atlas(device, queue, &atlas_buf, rw, atlas_h);
-    }
-
-    // Ahora ejecutamos el compute shader con los UVs ya calculados
+    // dispatch compute; it will handle glyph atlases internally
     resources.dispatch_compute(
         device,
         queue,
@@ -228,7 +161,9 @@ pub fn render_frame_color_image_gpu_snapshot(
         snap.render_width,
         snap.render_height,
         dirty,
-        Some(&overrides_map),
+        None,
+        &snap.font_map,
+        &mut snap.font_arc_cache.clone(),
     );
     if dirty {
         resources.current_scene_version = snap.scene_version;
@@ -237,6 +172,22 @@ pub fn render_frame_color_image_gpu_snapshot(
 
     let render_w = snap.render_width;
     let render_h = snap.render_height;
+
+    // Guard against absurdly large dimensions coming from the caller (for
+    // example, a corrupted project file or an unbounded export request).  The
+    // GPU has hard limits on texture sizes and attempting to create a texture
+    // beyond those limits results in a validation error that crashes the app
+    // (see panic above).  Instead we report an error back to the caller so it
+    // can decide how to handle it.
+    if render_w == 0 || render_h == 0 {
+        return Err("requested snapshot has zero width or height".to_string());
+    }
+    if render_w > MAX_GPU_TEXTURE_SIZE || render_h > MAX_GPU_TEXTURE_SIZE {
+        return Err(format!(
+            "requested snapshot size {}x{} exceeds GPU limit {}",
+            render_w, render_h, MAX_GPU_TEXTURE_SIZE
+        ));
+    }
     let uniforms = Uniforms {
         resolution: [render_w as f32, render_h as f32],
         preview_res: [preview_w as f32, preview_h as f32],
@@ -257,11 +208,24 @@ pub fn render_frame_color_image_gpu_snapshot(
     };
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-    let bytes_per_pixel = 4u32;
-    let unpadded_bpr = render_w * bytes_per_pixel;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bpr = unpadded_bpr.div_ceil(align) * align;
-    let staging_size = (padded_bpr * render_h) as u64;
+    // Compute the number of bytes per row required for the readback.  The
+    // original implementation worked purely in `u32`, which could overflow in
+    // debug builds when the user requested a very large snapshot (for
+    // example, exporting a 100k×100k canvas).  We convert to `u64` and use
+    // checked arithmetic to avoid panics; if we do overflow we simply abort
+    // the snapshot with a descriptive error rather than crashing the whole
+    // application.
+
+    let bytes_per_pixel = 4u64;
+    let unpadded_bpr = (render_w as u64).checked_mul(bytes_per_pixel).ok_or_else(|| {
+        "render width too large when calculating bytes per row".to_string()
+    })?;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
+    // align up to the copy bytes-per-row requirement
+    let padded_bpr = ((unpadded_bpr + align - 1) / align) * align;
+    let staging_size = padded_bpr
+        .checked_mul(render_h as u64)
+        .ok_or_else(|| "render height too large when computing staging buffer".to_string())?;
 
     if resources.readback_size != [render_w, render_h] {
         // The readback texture must use the same format as the pipeline we created
@@ -310,7 +274,7 @@ pub fn render_frame_color_image_gpu_snapshot(
                 view: &render_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    load: wgpu::LoadOp::Clear(clear_color),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -324,6 +288,15 @@ pub fn render_frame_color_image_gpu_snapshot(
             rpass.draw(0..6, 0..snap.scene.len() as u32);
         }
     }
+    // `padded_bpr` must be passed back to wgpu as a `u32`.  We already
+    // performed overflow checking above, so this conversion should never
+    // fail; however, do a checked cast just to keep the compiler happy and
+    // produce a reasonable error message in the unlikely event we hit the
+    // 32‑bit limit.
+    let padded_bpr_u32: u32 = padded_bpr
+        .try_into()
+        .map_err(|_| "bytes-per-row exceeds 32-bit limit".to_string())?;
+
     encoder.copy_texture_to_buffer(
         wgpu::ImageCopyTexture {
             texture: render_texture,
@@ -335,7 +308,7 @@ pub fn render_frame_color_image_gpu_snapshot(
             buffer: staging_buffer,
             layout: wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(padded_bpr),
+                bytes_per_row: Some(padded_bpr_u32),
                 rows_per_image: Some(render_h),
             },
         },
@@ -348,19 +321,35 @@ pub fn render_frame_color_image_gpu_snapshot(
     queue.submit(Some(encoder.finish()));
 
     let slice = staging_buffer.slice(..);
-    let caller_thread = std::thread::current();
-    slice.map_async(wgpu::MapMode::Read, move |_r| {
-        caller_thread.unpark();
-    });
+    // We'll capture the mapping result so we can detect failures instead of
+    // blindly calling `get_mapped_range` which panics when the slice isn't
+    // actually mapped.
+    let map_result: std::sync::Arc<std::sync::Mutex<Option<Result<(), wgpu::BufferAsyncError>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    {
+        let caller_thread = std::thread::current();
+        let map_result = map_result.clone();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            *map_result.lock().unwrap() = Some(res);
+            caller_thread.unpark();
+        });
+    }
     device.poll(wgpu::Maintain::Poll);
     std::thread::park_timeout(std::time::Duration::from_secs(5));
+
+    // check mapping outcome
+    let mapped_ok = map_result.lock().unwrap().take();
+    if mapped_ok != Some(Ok(())) {
+        return Err("failed to map staging buffer for readback".to_string());
+    }
 
     {
         let mapped = slice.get_mapped_range();
         resources.readback_pixel_buf.clear();
         for row in 0..render_h {
-            let start = (row * padded_bpr) as usize;
-            let end = start + unpadded_bpr as usize;
+            // perform the row arithmetic in u64 to avoid overflow
+            let start = (row as u64 * padded_bpr) as usize;
+            let end = start + (unpadded_bpr as usize);
             resources
                 .readback_pixel_buf
                 .extend_from_slice(&mapped[start..end]);
@@ -387,67 +376,10 @@ pub fn render_frame_native_texture(
     let preview_h = (snap.render_height as f32 * snap.preview_multiplier).round() as u32;
     let frame_idx = crate::shapes::element_store::seconds_to_frame(time, snap.preview_fps);
 
-    let mut text_entries_local: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
-    for (scene_idx, ek) in snap.scene.iter().enumerate() {
-        if frame_idx < ek.spawn_frame {
-            continue;
-        }
-        if let Some(kf) = ek.kill_frame {
-            if frame_idx >= kf {
-                continue;
-            }
-        }
-        if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
-            if shape
-                .descriptor()
-                .is_some_and(|d| d.dsl_keyword() == "text")
-            {
-                text_entries_local.push((
-                    scene_idx,
-                    shape.clone(),
-                    (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0),
-                ));
-            }
-        }
-    }
-
+    // simple compute dispatch; glyph atlas updates are handled internally
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let dirty = snap.scene_version > resources.current_scene_version;
-
-    // Preparar UVs para el compute shader
-    let mut overrides_map = std::collections::HashMap::new();
-    let rw = snap.render_width;
-    let rh = snap.render_height;
-
-    if !text_entries_local.is_empty() {
-        let atlas_h = rh * text_entries_local.len() as u32;
-        let mut atlas = vec![0u8; (rw * atlas_h * 4) as usize];
-
-        for (tile_idx, (scene_idx, shape, parent_spawn)) in text_entries_local.iter().enumerate() {
-            if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
-                shape,
-                rw,
-                rh,
-                time,
-                snap.duration_secs,
-                &mut snap.font_arc_cache.clone(),
-                &std::collections::HashMap::new(),
-                &snap.dsl.event_handlers,
-                *parent_spawn,
-            ) {
-                let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
-                atlas[row_offset..row_offset + (rw * rh * 4) as usize]
-                    .copy_from_slice(&result.pixels);
-
-                let uv0_y = tile_idx as f32 / text_entries_local.len() as f32;
-                let uv1_y = (tile_idx + 1) as f32 / text_entries_local.len() as f32;
-                overrides_map.insert(*scene_idx, [0.0, uv0_y, 1.0, uv1_y]);
-            }
-        }
-        resources.update_text_atlas(device, queue, &atlas, rw, atlas_h);
-    }
-
     resources.dispatch_compute(
         device,
         queue,
@@ -458,7 +390,9 @@ pub fn render_frame_native_texture(
         snap.render_width,
         snap.render_height,
         dirty,
-        Some(&overrides_map),
+        None,
+        &snap.font_map,
+        &mut snap.font_arc_cache.clone(),
     );
     if dirty {
         resources.current_scene_version = snap.scene_version;

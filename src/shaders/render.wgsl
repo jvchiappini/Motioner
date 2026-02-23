@@ -10,6 +10,9 @@ struct VertexOutput {
     @location(2) @interpolate(flat) shape_type: i32,
     @location(3) @interpolate(flat) size: vec2<f32>,
     @location(4) tex_uv: vec2<f32>,
+    // glyph sequence offset/length (for text shapes)
+    @location(5) @interpolate(flat) p1: i32,
+    @location(6) @interpolate(flat) p2: i32,
 };
 
 struct Shape {
@@ -63,6 +66,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.color = s.color;
     out.shape_type = s.shape_type;
     out.size = s.size;
+    out.p1 = s.p1;
+    out.p2 = s.p2;
 
     // UV interpolada en el rango [uv0, uv1] del atlas de texto.
     // Invertimos Y porque el NDC tiene Y invertido respecto al buffer CPU (Y=0 arriba en imagen).

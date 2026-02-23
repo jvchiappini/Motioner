@@ -10,6 +10,7 @@ use crate::app_state::AppState;
 use eframe::egui;
 
 /// Trait that all shapes must implement to be fully integrated into the system automatically.
+#[allow(dead_code)]
 pub trait ShapeDescriptor {
     /// The keyword used in the DSL (e.g., "circle", "rect").
     fn dsl_keyword(&self) -> &'static str;

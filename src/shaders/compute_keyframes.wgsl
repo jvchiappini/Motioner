@@ -71,6 +71,9 @@ struct GpuElementDesc {
     b_len:         u32,
     a_len:         u32,
 
+    glyph_offset:  u32,
+    glyph_len:     u32,
+
     base_size:     vec2<f32>,
     uv0:           vec2<f32>,
     uv1:           vec2<f32>,
@@ -90,12 +93,26 @@ struct GpuShape {
     uv1:        vec2<f32>,
 }
 
+// Glyph metadata exists for render pass; declare it here to occupy binding 4
+// in the compute pipeline (unused otherwise).
+struct Glyph {
+    uv0: vec2<f32>,
+    uv1: vec2<f32>,
+    advance: f32,
+    _pad_align_0: f32,
+    _pad_align_1: f32,
+    _pad_align_2: f32,
+    color: vec4<f32>,
+    _pad: vec4<f32>,
+}
+
 // ─── Bindings ─────────────────────────────────────────────────────────────────
 
 @group(0) @binding(0) var<uniform>            cu:             ComputeUniforms;
 @group(0) @binding(1) var<storage, read>      keyframes:      array<GpuKeyframe>;
 @group(0) @binding(2) var<storage, read>      element_descs:  array<GpuElementDesc>;
 @group(0) @binding(3) var<storage, read_write> output_shapes: array<GpuShape>;
+@group(0) @binding(4) var<storage, read> glyphs: array<Glyph>;
 
 // ─── Easing functions ─────────────────────────────────────────────────────────
 
@@ -214,9 +231,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Derive size from shape type.
     var size = vec2<f32>(0.0, 0.0);
     if desc.shape_type == 0 {
+        // circle: radius is normalized to horizontal resolution
         size = vec2<f32>(radius * cu.resolution.x, radius * cu.resolution.x);
-    } else {
+    } else if desc.shape_type == 1 {
+        // rectangle: w/h are normalized full dimensions, convert to half-extents
         size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
+    } else if desc.shape_type == 2 {
+        // text: base_size contains the [half_width, half_height] of the text quad
+        // (we stored it in the Rust side).
+        size = desc.base_size;
     }
     
     // No move_commands loop – all positional animation has been baked into
@@ -236,6 +259,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out.p2         = 0;
     out.uv0        = desc.uv0;
     out.uv1        = desc.uv1;
+    // propagate glyph buffer indices so the fragment shader can look up
+    // the correct run for text shapes
+    out.p1         = i32(desc.glyph_offset);
+    out.p2         = i32(desc.glyph_len);
 
     output_shapes[idx] = out;
 }

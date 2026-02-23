@@ -21,6 +21,9 @@ pub struct GpuResources {
     pub text_sampler: wgpu::Sampler,
     pub text_atlas_size: [u32; 2],
 
+    /// Buffer containing glyph metadata for text shapes.
+    pub glyph_buffer: wgpu::Buffer,
+
     // Pipeline de Computación (interpolación de keyframes)
     pub compute_pipeline: wgpu::ComputePipeline,
     pub keyframe_buffer: wgpu::Buffer,
@@ -88,6 +91,17 @@ impl GpuResources {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // glyph metadata buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -139,6 +153,15 @@ impl GpuResources {
             mapped_at_creation: false,
         });
 
+        // create an initially-empty glyph buffer; it will be resized/uploaded
+        // on demand when text shapes are encountered.
+        let glyph_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("glyph_buffer"),
+            size: std::mem::size_of::<GpuGlyph>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Configuración inicial del atlas
         let initial_atlas_size = [1u32, 1u32];
         let text_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -151,7 +174,12 @@ impl GpuResources {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // Use Rgba8Unorm (NOT sRGB): ab_glyph produces linear RGBA pixels
+            // and the glyph color is already stored linear in the GpuGlyph buffer.
+            // Rgba8UnormSrgb would make wgpu perform an automatic sRGB decode on
+            // every sample, corrupting coverage-alpha values and causing text to
+            // appear invisible.
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -159,8 +187,8 @@ impl GpuResources {
             text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("text_sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -183,6 +211,10 @@ impl GpuResources {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&text_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: glyph_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -233,6 +265,17 @@ impl GpuResources {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // glyph metadata buffer for compute (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -293,6 +336,10 @@ impl GpuResources {
                     binding: 3,
                     resource: shape_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: glyph_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -307,6 +354,7 @@ impl GpuResources {
             text_atlas_view,
             text_sampler,
             text_atlas_size: initial_atlas_size,
+            glyph_buffer,
             compute_pipeline,
             keyframe_buffer,
             element_desc_buffer,
@@ -332,6 +380,19 @@ impl GpuResources {
         if w == 0 || h == 0 {
             return;
         }
+        // Reject atlas updates that would require textures larger than the
+        // GPU can support.  This is a defensive check: callers should already
+        // avoid producing such atlases (see `merge_all_atlases`), but a
+        // validation error from wgpu would crash the app if we allowed the
+        // call to proceed.
+        if w > super::utils::MAX_GPU_TEXTURE_SIZE || h > super::utils::MAX_GPU_TEXTURE_SIZE {
+            panic!(
+                "attempted to update text atlas to {}x{}, which exceeds GPU limit {}",
+                w,
+                h,
+                super::utils::MAX_GPU_TEXTURE_SIZE
+            );
+        }
         if self.text_atlas_size[0] != w || self.text_atlas_size[1] != h {
             self.text_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("text_atlas"),
@@ -343,7 +404,8 @@ impl GpuResources {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // Rgba8Unorm — same reasoning as the initial allocation above
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -353,6 +415,35 @@ impl GpuResources {
             self.text_atlas_size = [w, h];
             self.rebuild_render_bind_group(device);
         }
+        // compute padding and prepare data buffer before issuing write
+        // (see comment below for rationale)
+        let bytes_per_pixel = 4;
+        let unpadded_bytes_per_row = bytes_per_pixel * w;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u32;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+
+        let data_to_upload = if padded_bytes_per_row == unpadded_bytes_per_row {
+            pixels.to_vec()
+        } else {
+            let mut buf = Vec::with_capacity((padded_bytes_per_row * h) as usize);
+            for row in 0..h {
+                let start = (row * unpadded_bytes_per_row) as usize;
+                let end = start + unpadded_bytes_per_row as usize;
+                buf.extend_from_slice(&pixels[start..end]);
+                buf.extend(
+                    std::iter::repeat(0)
+                        .take((padded_bytes_per_row - unpadded_bytes_per_row) as usize),
+                );
+            }
+            buf
+        };
+
+        // debug log to help diagnose mysterious blank atlases
+        /*eprintln!(
+            "[gpu::resources] writing atlas {}x{} (unpadded row {} bytes, padded {} bytes)",
+            w, h, unpadded_bytes_per_row, padded_bytes_per_row
+        );*/
+
         queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &self.text_atlas_texture,
@@ -360,11 +451,11 @@ impl GpuResources {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            pixels,
+            &data_to_upload,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: None,
             },
             wgpu::Extent3d {
                 width: w,
@@ -395,6 +486,10 @@ impl GpuResources {
                     binding: 3,
                     resource: self.shape_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.glyph_buffer.as_entire_binding(),
+                },
             ],
         });
     }
@@ -419,6 +514,10 @@ impl GpuResources {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.glyph_buffer.as_entire_binding(),
                 },
             ],
         });

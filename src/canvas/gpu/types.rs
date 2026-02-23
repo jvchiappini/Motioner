@@ -71,10 +71,26 @@ pub struct GpuElementDesc {
     pub g_len: u32,
     pub b_len: u32,
     pub a_len: u32,
-
+    pub glyph_offset: u32,
+    pub glyph_len: u32,
     pub _pad: u32, // Padding to align base_size (vec2) to 8 bytes
 
     pub base_size: [f32; 2],
     pub uv0: [f32; 2],
     pub uv1: [f32; 2],
+}
+
+/// Information for a single glyph within the global glyph atlas.
+/// Advance is normalized so that the sum of advances for a string equals 1.0.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuGlyph {
+    pub uv0: [f32; 2],
+    pub uv1: [f32; 2],
+    pub advance: f32,
+    pub _pad_align_0: f32,
+    pub _pad_align_1: f32,
+    pub _pad_align_2: f32,
+    pub color: [f32; 4],
+    pub _pad: [f32; 4], // Pad out to 64 bytes total
 }

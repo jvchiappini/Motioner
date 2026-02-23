@@ -9,7 +9,8 @@ use eframe::egui;
 use std::sync::mpsc;
 use std::thread;
 
-// no buffering logic remains; remove unused constant
+// previously we only generated a single preview frame; now we render a small
+// batch of frames around the request and keep them cached in VRAM.
 
 // `PreviewMode` has been retired; we now only ever request single-frame
 // previews.  The type remains in history for documentation but is no longer
@@ -31,7 +32,6 @@ pub enum PreviewResult {
 #[derive(Clone)]
 pub struct RenderSnapshot {
     pub scene: Vec<crate::shapes::element_store::ElementKeyframes>,
-    pub dsl: crate::states::dslstate::DslState,
     pub render_width: u32,
     pub render_height: u32,
     pub preview_multiplier: f32,
@@ -40,11 +40,27 @@ pub struct RenderSnapshot {
     pub wgpu_render_state: Option<eframe::egui_wgpu::RenderState>,
     pub preview_fps: u32,
     pub font_arc_cache: std::collections::HashMap<String, ab_glyph::FontArc>,
+    pub font_map: std::collections::HashMap<String, std::path::PathBuf>,
     pub scene_version: u32,
 }
 
 pub fn request_preview_frames(state: &mut AppState, center_time: f32) {
     ensure_preview_worker(state);
+    // if we already have a cached texture for this time, reuse it immediately
+    if let Some((_, id, tex_arc)) = state
+        .preview_gpu_cache
+        .iter()
+        .find(|(tt, _, _)| (tt - center_time).abs() < 1e-6)
+    {
+        // bump to the cache head by swapping into native_texture fields
+        state.preview_native_texture_id = Some(*id);
+        #[cfg(feature = "wgpu")]
+        {
+            state.preview_native_texture_resource = Some(tex_arc.clone());
+        }
+        return;
+    }
+
     if state.preview_job_pending {
         return;
     }
@@ -52,13 +68,13 @@ pub fn request_preview_frames(state: &mut AppState, center_time: f32) {
     if let Some(tx) = &state.preview_worker_tx {
         let snap = RenderSnapshot {
             scene: state.scene.clone(),
-            dsl: state.dsl.clone(),
             render_width: state.render_width,
             render_height: state.render_height,
             preview_multiplier: state.preview_multiplier,
             duration_secs: state.duration_secs,
             preview_fps: state.preview_fps,
             font_arc_cache: state.font_arc_cache.clone(),
+            font_map: state.font_map.clone(),
             scene_version: state.scene_version,
             #[cfg(feature = "wgpu")]
             wgpu_render_state: state.wgpu_render_state.clone(),
@@ -80,7 +96,7 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
         while let Ok(result) = rx.try_recv() {
             state.preview_job_pending = false;
             // the enum now has only one variant; destructure directly
-            let PreviewResult::Native(_t, tex) = result;
+            let PreviewResult::Native(t, tex) = result;
             #[cfg(feature = "wgpu")]
             if let Some(render_state) = &state.wgpu_render_state {
                 // Free previous texture if any
@@ -88,15 +104,41 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                     render_state.renderer.write().free_texture(&old_id);
                 }
 
-                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                // wrap texture in Arc so we can keep multiple copies alive
+                let tex_arc = std::sync::Arc::new(tex);
+                let view = tex_arc.create_view(&wgpu::TextureViewDescriptor::default());
                 let id = render_state.renderer.write().register_native_texture(
                     &render_state.device,
                     &view,
                     wgpu::FilterMode::Nearest,
                 );
                 state.preview_native_texture_id = Some(id);
-                state.preview_native_texture_resource = Some(tex);
-                // CPU texture field is left untouched; we never write it.
+                state.preview_native_texture_resource = Some(tex_arc.clone());
+
+                // insert into GPU cache if not already present
+                if !state
+                    .preview_gpu_cache
+                    .iter()
+                    .any(|(tt, _, _)| (tt - t).abs() < 1e-6)
+                {
+                    state.preview_gpu_cache.push((t, id, tex_arc.clone()));
+                }
+                // simple eviction policy: keep at most 10 entries
+                const MAX_GPU_CACHE_FRAMES: usize = 10;
+                if state.preview_gpu_cache.len() > MAX_GPU_CACHE_FRAMES {
+                    // remove entry farthest from current time
+                    if let Some(idx) = state
+                        .preview_gpu_cache
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (tt, _, _))| (i, (tt - t).abs()))
+                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                        .map(|(i, _)| i)
+                    {
+                        let (_tt, old_id, _old_tex) = state.preview_gpu_cache.remove(idx);
+                        render_state.renderer.write().free_texture(&old_id);
+                    }
+                }
             }
             // Request repaint after state changes have been applied (reduces mid-update flashes)
             ctx.request_repaint();
@@ -148,15 +190,29 @@ pub fn ensure_preview_worker(state: &mut AppState) {
                         }
 
                         if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
-                            // ¡NATIVO! Renderizamos a textura sin bajar a RAM
-                            if let Ok(tex) = render_frame_native_texture(
-                                device,
-                                queue,
-                                resources,
-                                &snapshot,
+                            // We pre‑render a small batch of frames around the
+                            // requested time so that scrubbing forward/backward
+                            // can hit the GPU cache.  The radius is measured in
+                            // preview frames; e.g. 2 means centre±2 frames.
+                            let radius: i32 = 2;
+                            let frame_idx = crate::shapes::element_store::seconds_to_frame(
                                 center_time,
-                            ) {
-                                let _ = res_tx.send(PreviewResult::Native(center_time, tex));
+                                snapshot.preview_fps,
+                            );
+                            for off in -radius..=radius {
+                                let idx = frame_idx as i32 + off;
+                                if idx < 0 {
+                                    continue;
+                                }
+                                let t = (idx as f32) / snapshot.preview_fps as f32;
+                                if t < 0.0 || t > snapshot.duration_secs {
+                                    continue;
+                                }
+                                if let Ok(tex) = render_frame_native_texture(
+                                    device, queue, resources, &snapshot, t,
+                                ) {
+                                    let _ = res_tx.send(PreviewResult::Native(t, tex));
+                                }
                             }
                         }
                     } else {

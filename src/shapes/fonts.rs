@@ -92,7 +92,7 @@ pub fn load_font(font_def: &mut egui::FontDefinitions, name: &str, path: &std::p
             vec![name.to_owned()],
         );
 
-        println!("[motioner] Loaded font data for: {} from {:?}", name, path);
+        //println!("[motioner] Loaded font data for: {} from {:?}", name, path);
         return true;
     }
     false

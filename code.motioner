@@ -1,19 +1,13 @@
 size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
-circle "Circle" {
-	x = 0.500,
-	y = 0.500,
-	radius = 0.100,
-	fill = "#78c8ff",
+
+text "Name" {
+	x = 0.50,
+	y = 0.50,
+	value = "Helasglo",
+	font = "System",
+	size = 0.2,
+	fill = "#000000",
 	spawn = 0.00
 }
-
-move {
-	element = "Circle",
-	to = (1.50, 1.50),
-	during = 0.00 -> 1.00,
-	ease = linear
-}
-
-

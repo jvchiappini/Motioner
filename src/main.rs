@@ -79,16 +79,16 @@ fn main() -> Result<()> {
             viewport = viewport.with_position(p);
         }
         native_options.viewport = viewport;
-        println!(
+        /*println!(
             "[motioner] explicit viewport applied - size={}x{} pos={:?}",
             win_w, win_h, pos
-        );
+        );*/
     } else {
         native_options.viewport = viewport;
-        println!(
+        /*println!(
             "[motioner] explicit viewport NOT applied - using OS placement (size={}x{} pos={:?})",
             win_w, win_h, pos
-        );
+        );*/
     }
 
     // Run the native eframe app. If initialization fails (wgpu/device/etc.)
@@ -102,11 +102,11 @@ fn main() -> Result<()> {
         Box::new(|cc| Box::new(ui::create_app(cc))),
     ) {
         Ok(()) => Ok(()),
-        Err(err) => {
-            eprintln!(
+        Err(_err) => {
+            /*eprintln!(
                 "eframe::run_native failed: {:?}. Retrying with default options...",
-                err
-            );
+                _err
+            );*/
             // Retry with default options (no explicit viewport)
             let mut fallback = eframe::NativeOptions::default();
             fallback.renderer = eframe::Renderer::Wgpu;
@@ -117,7 +117,7 @@ fn main() -> Result<()> {
             ) {
                 Ok(()) => Ok(()),
                 Err(err2) => {
-                    eprintln!("Fallback start failed too: {:?}", err2);
+                    //eprintln!("Fallback start failed too: {:?}", err2);
                     Err(anyhow::anyhow!("eframe fallback start failed: {:#?}", err2))
                 }
             }

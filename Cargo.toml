@@ -23,6 +23,7 @@ rayon = "1.8"
 splines = "5.0.0"
 ab_glyph = "0.2"
 inventory = "0.1"
+once_cell = "1.17"
 
 # dependencies needed for rasterizing SVG assets at runtime
 usvg = "0.36"

@@ -135,8 +135,8 @@ fn check_memory() {
     let mut sys = System::new_all();
     sys.refresh_memory();
     
-    println!("Used memory: {} MB", sys.used_memory() / 1024 / 1024);
-    println!("Total memory: {} MB", sys.total_memory() / 1024 / 1024);
+    //println!("Used memory: {} MB", sys.used_memory() / 1024 / 1024);
+    //println!("Total memory: {} MB", sys.total_memory() / 1024 / 1024);
 }
 ```
 
@@ -188,8 +188,8 @@ mod benches {
         }
         let duration = start.elapsed();
         
-        println!("100 frames in {:?}", duration);
-        println!("Average: {:?} per frame", duration / 100);
+        //println!("100 frames in {:?}", duration);
+        //println!("Average: {:?} per frame", duration / 100);
     }
 }
 ```

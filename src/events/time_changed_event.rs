@@ -116,7 +116,8 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
     changed
 }
 /// Dispatches all registered DSL event handlers that match "on_time".
-pub fn apply_on_time_handlers(
+    #[allow(dead_code)]
+    pub fn apply_on_time_handlers(
     scene: &mut [crate::scene::Shape],
     handlers: &[DslHandler],
     seconds: f32,

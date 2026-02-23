@@ -337,6 +337,27 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 });
         });
 
+        // GPU cache management
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Clear GPU cache").clicked() {
+                if let Some(render_state) = &state.wgpu_render_state {
+                    for (_t, id, _tex) in state.preview_gpu_cache.drain(..) {
+                        render_state.renderer.write().free_texture(&id);
+                    }
+                }
+                state.preview_native_texture_id = None;
+                if cfg!(feature = "wgpu") {
+                    state.preview_native_texture_resource = None;
+                }
+            }
+            ui.label(
+                egui::RichText::new("(release all cached preview textures)")
+                    .italics()
+                    .size(10.0),
+            );
+        });
+
         // With the new GPU-only preview pipeline there is no longer any
         // CPU-side frame cache to clean; all rendering happens in VRAM.  The
         // previous controls for inspecting/clearing the RAM cache have been

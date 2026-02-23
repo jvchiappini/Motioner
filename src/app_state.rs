@@ -49,12 +49,12 @@ pub struct AppState {
     pub preview_native_texture_id: Option<egui::TextureId>,
     #[serde(skip)]
     #[cfg(feature = "wgpu")]
-    pub preview_native_texture_resource: Option<wgpu::Texture>,
-    /// Cached preview frames around the current playhead (time, image)
-    // `preview_texture` used to be the CPU-backed texture for previews; it is
-    // kept here for serde compatibility but is never set in the GPU-only
-    // pipeline.  All remaining cache-related fields have been removed.
-    /// Texture handle containing the application logo (loaded from SVG asset).
+    pub preview_native_texture_resource: Option<std::sync::Arc<wgpu::Texture>>,
+    /// GPU cache of nearby preview frames.  Each entry holds an egui texture
+    /// id and a shared reference to the wgpu texture so the resource remains
+    /// alive while cached.
+    #[serde(skip)]
+    pub preview_gpu_cache: Vec<(f32, egui::TextureId, std::sync::Arc<wgpu::Texture>)>,
     // cache fields removed: frame_cache, texture_cache, estimated_vram_bytes,
     // prefer_vram_cache, vram_cache_max_percent, preview_compressed_cache and
     // preview_cache_center_time were part of the old CPU/RAM caching system.
@@ -402,6 +402,7 @@ impl Default for AppState {
             preview_native_texture_id: None,
             #[cfg(feature = "wgpu")]
             preview_native_texture_resource: None,
+            preview_gpu_cache: Vec::new(),
             // legacy cache fields removed
             preview_worker_tx: None,
             preview_worker_rx: None,

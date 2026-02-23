@@ -5,7 +5,6 @@ use eframe::egui;
 
 mod grid;
 mod interaction;
-mod text_atlas;
 mod toolbar;
 
 #[cfg(feature = "wgpu")]
@@ -52,12 +51,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             egui::Stroke::new(1.0, egui::Color32::BLACK),
         );
 
-        // 4. Procesar Texto (Solo si WGPU está activo)
-        let (text_pixels, text_overrides) = if state.wgpu_render_state.is_some() {
-            text_atlas::prepare_text_atlas(state)
-        } else {
-            (None, None)
-        };
+        // 4. (no CPU text processing anymore; GPU pipeline will handle glyphs)
+        let font_map = state.font_map.clone();
+        let font_arc_cache = state.font_arc_cache.clone();
 
         let magnifier_pos = if state.picker_active {
             ui.input(|i| i.pointer.hover_pos())
@@ -79,7 +75,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 viewport_rect: rect,
                 magnifier_pos,
                 time: state.time,
-                text_pixels,
                 elements: state
                     .wgpu_render_state
                     .as_ref()
@@ -88,7 +83,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                     as u32,
                 fps: state.fps,
                 scene_version: state.scene_version,
-                text_overrides,
+                font_map,
+                font_arc_cache,
             },
         );
         painter.add(cb);

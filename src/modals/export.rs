@@ -652,16 +652,13 @@ fn start_export(state: &mut AppState) {
         // ── Snapshot base used by both CPU & GPU renderers ─────────────────
         let snap_base = crate::canvas::preview_worker::RenderSnapshot {
             scene: ek_scene.clone(),
-            dsl: crate::states::dslstate::DslState {
-                event_handlers: dsl_handlers.clone(),
-                diagnostics: Vec::new(),
-            },
             render_width: render_w,
             render_height: render_h,
             preview_multiplier: 1.0,
             duration_secs: duration,
             preview_fps: fps,
             font_arc_cache: font_arc_cache.clone(),
+            font_map: font_map.clone(),
             scene_version,
             #[cfg(feature = "wgpu")]
             wgpu_render_state: None,
@@ -682,7 +679,12 @@ fn start_export(state: &mut AppState) {
                 let render_result: Result<egui::ColorImage, String> = {
                     if let Some((ref device, ref queue, ref mut resources)) = gpu_res {
                         let gpu_img = crate::canvas::gpu::render_frame_color_image_gpu_snapshot(
-                            device, queue, resources, &snap_base, t,
+                            device,
+                            queue,
+                            resources,
+                            &snap_base,
+                            t,
+                            wgpu::Color::WHITE,
                         );
                         match gpu_img {
                             Ok(img) => {

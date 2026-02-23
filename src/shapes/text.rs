@@ -531,7 +531,12 @@ impl ShapeDescriptor for Text {
                 duration,
             );
 
-            let sz_px = t.size * rh; // size is fraction of render height
+            // `t.size` is expected to be a fraction of the render height.
+            // However, the DSL historically accepted raw pixel values which
+            // confused users (e.g. `size = 24.0` became 24× the height).  To
+            // remain backwards-compatible we treat values greater than 1.0 as
+            // absolute pixels and otherwise scale by the canvas height.
+            let sz_px = if t.size > 1.0 { t.size } else { t.size * rh };
             let x_px = x * rw;
             let y_px = y * rh;
 

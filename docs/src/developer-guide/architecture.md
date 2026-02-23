@@ -907,8 +907,10 @@ simple API to the rest of the application:
   worker exists (creating it via `ensure_preview_worker`).  Jobs include a
   full `RenderSnapshot` capturing the current scene, event handlers, render
   size, preview multiplier, FPS, font cache, and the current `scene_version`.
-  Only a single-frame request is issued; the worker always renders directly to
-  a GPU texture (no CPU image path remains).
+  The worker still accepts a single centre time, but it renders a small batch
+  of neighbouring frames (centre ±2 by default) in one job.  Those textures are
+  cached in VRAM so that subsequent scrubs can hit the GPU cache instead of
+  re-rendering.
 * `poll_preview_results(state, ctx)` – called every frame on the UI thread to
   drain results from the worker and apply them.  There is now only one kind
   of `PreviewResult`:
@@ -947,7 +949,7 @@ messages and executing them synchronously.  Inside the worker:
 
 This asynchronous design ensures that expensive rasterisation does not block
 the egui UI thread.  `AppState` fields such as `preview_job_pending`,
-`preview_frame_cache`, and the various texture caches allow the UI to display
+cached GPU textures held in `preview_gpu_cache` allow the UI to display
 the most recent frames and manage eviction policies.  The worker is started
 the first time `request_preview_frames` is called and lives for the lifetime of
 the application; there is no explicit shutdown logic beyond dropping the
@@ -1021,8 +1023,12 @@ pieces:
   - `render_frame_color_image_gpu_snapshot` – renders a single frame to a CPU
     `ColorImage` by performing a compute pass, a render pass to a staging
     texture, and a readback to a mapped buffer.  Text elements are rasterised
-    on the CPU, packed into a temporary atlas, uploaded, and referenced via
-    UV overrides passed to the compute shader.
+    on the GPU.  The atlas-building step itself also runs on the GPU: when a
+    new font/size is requested we spawn a temporary “grid of glyph” scene and
+    render it exactly like a normal preview frame.  The resulting texture is
+    read back once and merged into the global atlas, so the CPU never touches
+    pixels.  In short, all text raster work is off‑loaded to the GPU, leaving
+    the CPU with only trivial metric calculations.
   - `render_frame_native_texture` – similar to the above but renders directly
     into a newly created `wgpu::Texture` which can be returned to the UI
     without any CPU readback; this is used for ultra‑fast previews when the

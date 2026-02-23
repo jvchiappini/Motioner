@@ -181,6 +181,7 @@ impl Shape {
     }
 
     /// Optional explicit kill time for the shape (`None` ⇒ lives forever).
+    #[allow(dead_code)]
     pub fn kill_time(&self) -> Option<f32> {
         self.descriptor().and_then(|d| d.kill_time())
         // Groups have no kill time.
