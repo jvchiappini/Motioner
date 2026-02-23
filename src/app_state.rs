@@ -42,8 +42,6 @@ pub struct AppState {
     #[serde(skip)]
     pub wgpu_render_state: Option<eframe::egui_wgpu::RenderState>,
 
-    #[serde(skip)]
-    pub preview_texture: Option<egui::TextureHandle>,
     /// Texture handle containing the application logo (loaded from SVG asset).
     #[serde(skip)]
     pub logo_texture: Option<egui::TextureHandle>,
@@ -53,26 +51,13 @@ pub struct AppState {
     #[cfg(feature = "wgpu")]
     pub preview_native_texture_resource: Option<wgpu::Texture>,
     /// Cached preview frames around the current playhead (time, image)
-    #[serde(skip)]
-    pub preview_frame_cache: Vec<(f32, egui::ColorImage)>,
-    /// When GPU previews are enabled we may store cached preview frames as
-    /// textures (VRAM) to avoid holding large ColorImage buffers in RAM.
-    #[serde(skip)]
-    pub preview_texture_cache: Vec<(f32, egui::TextureHandle, usize)>,
-    /// VRAM disponible estimada (en bytes)
-    #[serde(skip)]
-    pub estimated_vram_bytes: usize,
-    /// Si true, prioriza cache en VRAM sobre RAM
-    pub prefer_vram_cache: bool,
-    /// Máximo porcentaje de VRAM a usar para cache (default: 50%)
-    pub vram_cache_max_percent: f32,
-    /// Optional compressed preview cache (PNG bytes) used when
-    /// `compress_preview_cache` is enabled and GPU texture caching is not used.
-    #[serde(skip)]
-    pub preview_compressed_cache: Vec<(f32, Vec<u8>, (usize, usize))>,
-    /// Center time of the cached preview frames, if any
-    #[serde(skip)]
-    pub preview_cache_center_time: Option<f32>,
+    // `preview_texture` used to be the CPU-backed texture for previews; it is
+    // kept here for serde compatibility but is never set in the GPU-only
+    // pipeline.  All remaining cache-related fields have been removed.
+    /// Texture handle containing the application logo (loaded from SVG asset).
+    // cache fields removed: frame_cache, texture_cache, estimated_vram_bytes,
+    // prefer_vram_cache, vram_cache_max_percent, preview_compressed_cache and
+    // preview_cache_center_time were part of the old CPU/RAM caching system.
     /// When true, a preview request should be issued once the editor becomes idle.
     #[serde(skip)]
     pub preview_pending_from_code: bool,
@@ -89,12 +74,7 @@ pub struct AppState {
     /// uses the CPU rasterizer. Exposed in Settings → Performance.
     pub preview_worker_use_gpu: bool,
     /// Automatically trim preview caches when they exceed `preview_cache_max_mb`.
-    pub preview_cache_auto_clean: bool,
-    /// Maximum preview cache size (MB) before warning/auto-clean triggers.
-    pub preview_cache_max_mb: usize,
-    /// If true, compress preview frames in RAM (PNG) to reduce working set.
-    pub compress_preview_cache: bool,
-
+    // preview cache maintenance flags removed (CPU caching no longer exists)
     pub playing: bool,
     pub time: f32,
     /// Last observed time-changed event (seconds, frame) — for UI/tests. Not serialized.
@@ -334,6 +314,8 @@ pub struct AppState {
     pub scene_version: u32,
     // removed `gpu_scene_version`; tracking handled elsewhere if needed
 }
+// (field removed) preview_texture no longer exists; GPU preview handled via
+// `preview_native_texture_id`/`resource`.
 
 /// Information persisted for the duration of an ongoing canvas resize drag.
 #[derive(Clone)]
@@ -416,25 +398,16 @@ impl Default for AppState {
             preview_fps: 60,
             #[cfg(feature = "wgpu")]
             wgpu_render_state: None,
-            preview_texture: None,
             logo_texture: None,
             preview_native_texture_id: None,
             #[cfg(feature = "wgpu")]
             preview_native_texture_resource: None,
-            preview_frame_cache: Vec::new(),
-            preview_texture_cache: Vec::new(),
-            estimated_vram_bytes: 0,     // Se detecta en runtime
-            prefer_vram_cache: true,     // Por defecto usar VRAM
-            vram_cache_max_percent: 0.6, // Usar hasta 60% de VRAM para caché (3.6GB en RTX 4050)
-            preview_compressed_cache: Vec::new(),
-            preview_cache_center_time: None,
+            // legacy cache fields removed
             preview_worker_tx: None,
             preview_worker_rx: None,
             preview_job_pending: false,
             preview_worker_use_gpu: true,
-            preview_cache_auto_clean: true,
-            preview_cache_max_mb: 1024,
-            compress_preview_cache: false,
+            // legacy cache flags removed
             playing: false,
             time: 0.0,
             last_time_changed: None,
@@ -571,26 +544,9 @@ impl AppState {
     /// object and keeps the UI layer thin.  The method is intentionally
     /// idempotent so it may be called multiple times during tests.
     pub fn initialize_with_context(&mut self, cc: &eframe::CreationContext<'_>) {
-        // VRAM detection --------------------------------------------------
-        if let Some(wgpu_render_state) = cc.wgpu_render_state.as_ref() {
-            let adapter_info = &wgpu_render_state.adapter.get_info();
-            self.estimated_vram_bytes = crate::canvas::detect_vram_size(adapter_info);
-            println!(
-                "[motioner] VRAM detected: {:.1} GB ({} bytes) on {}",
-                self.estimated_vram_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-                self.estimated_vram_bytes,
-                adapter_info.name
-            );
-            println!(
-                "[motioner] VRAM cache limit: {:.1} GB ({:.0}% of total)",
-                (self.estimated_vram_bytes as f64 * self.vram_cache_max_percent as f64)
-                    / (1024.0 * 1024.0 * 1024.0),
-                self.vram_cache_max_percent * 100.0
-            );
-        } else {
-            self.estimated_vram_bytes = 512 * 1024 * 1024; // fallback 512 MB
-            println!("[motioner] No wgpu adapter, using fallback VRAM estimate: 512 MB");
-        }
+        // Old VRAM detection and cache sizing logic has been removed.  The
+        // preview pipeline now renders directly to GPU textures and no
+        // estimate is required.
 
         // Load the SVG logo just once and cache the texture handle.
         if self.logo_texture.is_none() {
@@ -603,11 +559,7 @@ impl AppState {
             }
         }
 
-        // Clear caches that may have been accidentally serialized or carried
-        // over from a previous run.  This keeps memory usage predictable on
-        // startup and avoids accidentally keeping large buffers around during
-        // CI tests.
-        self.clear_preview_caches();
+        // no-op: CPU caches are gone
 
         // wgpu side-effects: store render state and register our pipeline
         #[cfg(feature = "wgpu")]
@@ -623,17 +575,6 @@ impl AppState {
                 .callback_resources
                 .insert(GpuResources::new(device, target_format));
         }
-    }
-
-    /// Clear CPU/VRAM preview caches.  Called on startup and when the settings
-    /// change to reclaim memory.
-    pub fn clear_preview_caches(&mut self) {
-        self.preview_frame_cache.clear();
-        self.preview_frame_cache.shrink_to_fit();
-        self.preview_compressed_cache.clear();
-        self.preview_compressed_cache.shrink_to_fit();
-        self.preview_texture_cache.clear();
-        self.preview_texture_cache.shrink_to_fit();
     }
 
     /// Helper that spawns the autocomplete worker thread and stores the

@@ -9,3 +9,4 @@ test.motioner
 # Local release helper (ignored)
 publish-release.bat
 output.mp4
+cleancode.bat

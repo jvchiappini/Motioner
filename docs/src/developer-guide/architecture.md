@@ -421,11 +421,10 @@ produces frames for the canvas and code‑editor thumbnails.  The worker is a
 pair of `std::sync::mpsc` channels (`preview_worker_tx`/`rx`) carrying
 `canvas::PreviewJob`/`PreviewResult`.  Jobs are sent when the user pauses
 typing or seeks the timeline; results are pulled in `ui::handle_preview`.
-`preview_frame_cache` and `preview_texture_cache` hold recent frames either in
-CPU memory or as GPU textures (depending on `prefer_vram_cache` and
-`estimated_vram_bytes`).  `preview_job_pending` and
-`preview_pending_from_code` drive debounce logic.  `preview_worker_use_gpu` and
-`export_use_gpu` toggle between CPU rasteriser and the headless GPU renderer.
+The worker renders every request to a GPU texture; no RAM caches are
+maintained.  `preview_job_pending` and `preview_pending_from_code` drive
+debounce logic.  `preview_worker_use_gpu` simply controls whether the worker
+attempts to reuse a shared WGPU context or falls back to a headless adapter.
 
 ### Scene & selection state
 
@@ -907,41 +906,20 @@ simple API to the rest of the application:
 * `request_preview_frames(state, center_time, mode)` – enqueues a job if the
   worker exists (creating it via `ensure_preview_worker`).  Jobs include a
   full `RenderSnapshot` capturing the current scene, event handlers, render
-  size, preview multiplier, FPS, VRAM preference, font cache, and the current
-  `scene_version`.  Two modes are supported:
-  - `PreviewMode::Single` – generate a single image centred at the requested
-    time.  Used for interactive scrubbing and when the code editor requests a
-    snapshot.  If another `Single` job is pending it is ignored to avoid
-    flooding the worker.
-  - `PreviewMode::Buffered` – generate a series of frames around the centre
-    time for smoother playback when the user is playing the timeline.
+  size, preview multiplier, FPS, font cache, and the current `scene_version`.
+  Only a single-frame request is issued; the worker always renders directly to
+  a GPU texture (no CPU image path remains).
 * `poll_preview_results(state, ctx)` – called every frame on the UI thread to
-  drain results from the worker and store them in `AppState` caches.  The
-  function handles three kinds of `PreviewResult`:
-  - `Single(f32, ColorImage)` – a sole frame.  The code may update
-    `preview_texture`, `preview_cache_center_time`, and potentially push the
-    image into one of three caches (`preview_texture_cache`,
-    `preview_frame_cache`, or `preview_compressed_cache`) depending on
-    `state.prefer_vram_cache`, available VRAM, and compression settings.
-  - `Native(f32, wgpu::Texture)` – produced only when the worker rendered to a
-    WGPU texture.  The UI thread registers this native texture with egui and
-    updates `preview_native_texture_id`/`preview_native_texture_resource`,
-    evicting any previous texture.  The `preview_texture` (CPU image) is
-    cleared to signal the renderer which to display.
-  - `Buffered(Vec<(f32, ColorImage)>)` – a batch of frames around the centre
-    time.  The result is trimmed to at most `MAX_PREVIEW_CACHE_FRAMES` (5) and
-    reorganised into the appropriate cache formats using the same VRAM/usage
-    heuristics.  After updating caches the center frame is reloaded as the
-    active texture.  `needs_enforce` is flagged so that `enforce_preview_cache_limits`
-    (in `cache_management.rs`) may evict old entries if the caches grew too
-    large.
+  drain results from the worker and apply them.  There is now only one kind
+  of `PreviewResult`:
+  - `Native(f32, wgpu::Texture)` – the worker rendered directly to a GPU
+    texture.  The UI thread registers this native texture with egui and updates
+    `preview_native_texture_id`/`preview_native_texture_resource`, evicting the
+    previous texture if present.  No CPU image is ever produced or cached.
 
-`poll_preview_results` also respects the user’s `state.prefer_vram_cache` and
-`state.vram_cache_max_percent` settings: it tracks current VRAM usage using a
-helper in `cache_management` and decides whether to store incoming images as
-GPU textures or fall back to compressed CPU buffers.  When compression is
-enabled, individual frames are converted to PNG bytes and held in
-`preview_compressed_cache` to reduce RAM usage.
+`poll_preview_results` simply updates the latest texture; all previous
+VRAM/RAM cache logic has been removed.  The helper module `cache_management`
+now contains only legacy comments and may be deleted in a future cleanup.
 
 `ensure_preview_worker(state)` lazily creates the worker thread and channels if
 they don’t already exist.  The spawned thread runs a loop receiving `PreviewJob`
@@ -979,8 +957,8 @@ transmitters when the app exits.
 
 Several auxiliary modules support the preview worker:
 
-* `cache_management.rs` – implements functions to measure and evict frames from
-  the caches, and to compress `ColorImage`s to PNG bytes.
+* `cache_management.rs` – now a no‑op placeholder.  Previous cache handling
+  logic has been migrated out of the preview path and is no longer active.
 * `buffer_pool.rs` – manages a pool of reusable `egui::ColorImage` objects
   to reduce allocations during rapid preview updates.
 * (formerly) `tile_cache.rs` and `spatial_hash.rs` – these supported the old

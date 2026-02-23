@@ -1,30 +1,10 @@
 //! Este archivo contiene constantes y utilidades pequeñas para el renderizado GPU.
 //! Incluye detección de VRAM, conversión de color y mapeo de curvas de animación.
 
-#[cfg(feature = "wgpu")]
-use eframe::wgpu;
+// wgpu is used in other parts of this module; import inline when needed.
 
 /// Tamaño máximo de textura para el renderizado GPU.
 pub const MAX_GPU_TEXTURE_SIZE: u32 = 8192;
-
-/// Detecta el tamaño aproximado de VRAM basado en el tipo de adaptador.
-pub fn detect_vram_size(adapter_info: &wgpu::AdapterInfo) -> usize {
-    let estimated_vram = match adapter_info.device_type {
-        wgpu::DeviceType::DiscreteGpu => 6 * 1024 * 1024 * 1024,
-        wgpu::DeviceType::IntegratedGpu => 2 * 1024 * 1024 * 1024,
-        wgpu::DeviceType::VirtualGpu => 512 * 1024 * 1024,
-        _ => 1024 * 1024 * 1024,
-    };
-
-    eprintln!(
-        "[VRAM] Detected GPU: {} ({:?}) - Estimated VRAM: {} MB",
-        adapter_info.name,
-        adapter_info.device_type,
-        estimated_vram / (1024 * 1024)
-    );
-
-    estimated_vram
-}
 
 /// Convierte un valor sRGB [0-255] a espacio lineal [0.0-1.0].
 pub(crate) fn srgb_to_linear(u: u8) -> f32 {

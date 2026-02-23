@@ -337,24 +337,10 @@ fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
                 });
         });
 
-        // Memory usage warning (approx.)
-        let _current_mem_mb = (state.preview_frame_cache.len() * 4 * 100 * 100) / 1024 / 1024;
-
-        // Simplified Maintenance
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Clean Memory Cache").clicked() {
-                state.preview_frame_cache.clear();
-                state.preview_texture_cache.clear();
-                state.preview_compressed_cache.clear();
-                state.preview_texture = None;
-            }
-            ui.label(
-                egui::RichText::new("Fews cached frames")
-                    .italics()
-                    .size(10.0),
-            );
-        });
+        // With the new GPU-only preview pipeline there is no longer any
+        // CPU-side frame cache to clean; all rendering happens in VRAM.  The
+        // previous controls for inspecting/clearing the RAM cache have been
+        // removed accordingly.
     });
 }
 

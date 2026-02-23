@@ -1,9 +1,9 @@
 //! Módulo de gestión del canvas de renderizado.
-//!
-//! Este módulo maneja la visualización de la composición, la gestión de caches (RAM/VRAM),
-//! el rasterizado (CPU/GPU) y el procesamiento en segundo plano de los frames.
-
-pub mod cache_management;
+//
+// Este módulo maneja la visualización de la composición, el rasterizado
+// (ahora exclusivamente GPU) y el procesamiento en segundo plano de los
+// frames.  El antiguo módulo `cache_management` y las políticas de RAM/VRAM
+// fueron eliminadas junto con la lógica de previsualización en CPU.
 pub mod gpu;
 pub mod preview_worker;
 pub mod rasterizer;
@@ -22,7 +22,7 @@ pub use preview_worker::{
 pub use ui::show;
 
 #[cfg(feature = "wgpu")]
-pub use gpu::{detect_vram_size, GpuResources};
+pub use gpu::GpuResources;
 
 // The `CanvasManager` stub was originally used by older code, but the
 // current architecture places all canvas-related functionality in the
