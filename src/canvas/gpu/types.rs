@@ -59,10 +59,9 @@ pub struct GpuElementDesc {
     pub h_len: u32,
     pub shape_type: i32,
     pub spawn_frame: u32,
-    pub kill_frame: u32,  // 0xFFFFFFFF = no kill
+    pub kill_frame: u32, // 0xFFFFFFFF = no kill
     // move commands removed; positional animation is now encoded in the
     // x/y keyframe tracks and no longer requires a separate buffer.
-
     pub r_offset: u32,
     pub g_offset: u32,
     pub b_offset: u32,

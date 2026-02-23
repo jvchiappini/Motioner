@@ -794,8 +794,8 @@ impl AppState {
                         true
                     };
 
-                        if do_request {
-                            crate::canvas::request_preview_frames(self, self.time);
+                    if do_request {
+                        crate::canvas::request_preview_frames(self, self.time);
                         self.preview_pending_from_code = false;
                     }
                 }

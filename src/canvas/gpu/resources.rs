@@ -1,9 +1,9 @@
 //! Maneja los recursos de bajo nivel de WGPU: buffers, texturas y pipelines.
 //! Responsable de la inicialización y actualización de recursos globales.
 
+use super::types::*;
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;
-use super::types::*;
 
 #[cfg(feature = "wgpu")]
 pub struct GpuResources {
@@ -14,7 +14,7 @@ pub struct GpuResources {
     pub bind_group: wgpu::BindGroup,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub target_format: wgpu::TextureFormat,
-    
+
     // Atlas de texto
     pub text_atlas_texture: wgpu::Texture,
     pub text_atlas_view: wgpu::TextureView,
@@ -126,7 +126,9 @@ impl GpuResources {
         let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shape_buffer"),
             size: 1024,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -141,7 +143,11 @@ impl GpuResources {
         let initial_atlas_size = [1u32, 1u32];
         let text_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("text_atlas"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -149,7 +155,8 @@ impl GpuResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let text_atlas_view = text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let text_atlas_view =
+            text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("text_sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -161,17 +168,31 @@ impl GpuResources {
             label: Some("composition_bind_group"),
             layout: &bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: shape_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&text_atlas_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&text_sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&text_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&text_sampler),
+                },
             ],
         });
 
         // Preparación del pipeline de computación
         let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("compute_keyframes"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(super::compute::COMPUTE_WGSL)),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                super::compute::COMPUTE_WGSL,
+            )),
         });
 
         let compute_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -180,25 +201,41 @@ impl GpuResources {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -206,11 +243,13 @@ impl GpuResources {
 
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("compute_keyframes_pipeline"),
-            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("compute_keyframes_layout"),
-                bind_group_layouts: &[&compute_bgl],
-                push_constant_ranges: &[],
-            })),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("compute_keyframes_layout"),
+                    bind_group_layouts: &[&compute_bgl],
+                    push_constant_ranges: &[],
+                }),
+            ),
             module: &compute_shader,
             entry_point: "cs_main",
         });
@@ -238,10 +277,22 @@ impl GpuResources {
             label: Some("compute_keyframes_bg"),
             layout: &compute_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: compute_uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: keyframe_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: element_desc_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: shape_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: compute_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: keyframe_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: element_desc_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: shape_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -270,12 +321,25 @@ impl GpuResources {
         }
     }
 
-    pub fn update_text_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pixels: &[u8], w: u32, h: u32) {
-        if w == 0 || h == 0 { return; }
+    pub fn update_text_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pixels: &[u8],
+        w: u32,
+        h: u32,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
         if self.text_atlas_size[0] != w || self.text_atlas_size[1] != h {
             self.text_atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("text_atlas"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -283,7 +347,9 @@ impl GpuResources {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            self.text_atlas_view = self.text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.text_atlas_view = self
+                .text_atlas_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
             self.text_atlas_size = [w, h];
             self.rebuild_render_bind_group(device);
         }
@@ -295,8 +361,16 @@ impl GpuResources {
                 aspect: wgpu::TextureAspect::All,
             },
             pixels,
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -305,10 +379,22 @@ impl GpuResources {
             label: Some("compute_keyframes_bg"),
             layout: &self.compute_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.compute_uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.keyframe_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.element_desc_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.shape_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.compute_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.keyframe_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.element_desc_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.shape_buffer.as_entire_binding(),
+                },
             ],
         });
     }
@@ -318,10 +404,22 @@ impl GpuResources {
             label: Some("composition_bind_group"),
             layout: &self.bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.shape_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.uniform_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.text_atlas_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.text_sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.text_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
             ],
         });
     }

@@ -1,12 +1,12 @@
+use crate::app_state::AppState;
 /// Este módulo orquestra la interfaz de usuario del canvas central.
 /// Divide la lógica en interacción, cuadrícula, barra de herramientas y procesamiento de texto.
 use eframe::egui;
-use crate::app_state::AppState;
 
-mod interaction;
 mod grid;
-mod toolbar;
+mod interaction;
 mod text_atlas;
+mod toolbar;
 
 #[cfg(feature = "wgpu")]
 use super::gpu::CompositionCallback;
@@ -40,9 +40,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         state.last_composition_rect = Some(composition_rect);
 
         // Sombra y fondo del papel
-        painter.rect_filled(composition_rect.expand(4.0 * zoom), 0.0, egui::Color32::from_black_alpha(100));
+        painter.rect_filled(
+            composition_rect.expand(4.0 * zoom),
+            0.0,
+            egui::Color32::from_black_alpha(100),
+        );
         painter.rect_filled(composition_rect, 0.0, egui::Color32::WHITE);
-        painter.rect_stroke(composition_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+        painter.rect_stroke(
+            composition_rect,
+            0.0,
+            egui::Stroke::new(1.0, egui::Color32::BLACK),
+        );
 
         // 4. Procesar Texto (Solo si WGPU está activo)
         let (text_pixels, text_overrides) = if state.wgpu_render_state.is_some() {
@@ -51,31 +59,39 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             (None, None)
         };
 
-        let magnifier_pos = if state.picker_active { ui.input(|i| i.pointer.hover_pos()) } else { None };
-        
+        let magnifier_pos = if state.picker_active {
+            ui.input(|i| i.pointer.hover_pos())
+        } else {
+            None
+        };
+
         // 5. Renderizado 100% GPU
         // Hemos eliminado el uso de caché de texturas (egui::Image) para el área de composición.
         // Esto garantiza fidelidad absoluta y elimina problemas de espacios de color entre texturas y renderizado directo.
-        
+
         let cb = eframe::egui_wgpu::Callback::new_paint_callback(
-                rect,
-                CompositionCallback {
-                    render_width: state.render_width as f32,
-                    render_height: state.render_height as f32,
-                    preview_multiplier: state.preview_multiplier,
-                    paper_rect: composition_rect,
-                    viewport_rect: rect,
-                    magnifier_pos,
-                    time: state.time,
-                    text_pixels,
-                    elements: state.wgpu_render_state.as_ref().map(|_| state.scene.clone()),
-                    current_frame: crate::shapes::element_store::seconds_to_frame(state.time, state.fps) as u32,
-                    fps: state.fps,
-                    scene_version: state.scene_version,
-                    text_overrides,
-                },
-            );
-            painter.add(cb);
+            rect,
+            CompositionCallback {
+                render_width: state.render_width as f32,
+                render_height: state.render_height as f32,
+                preview_multiplier: state.preview_multiplier,
+                paper_rect: composition_rect,
+                viewport_rect: rect,
+                magnifier_pos,
+                time: state.time,
+                text_pixels,
+                elements: state
+                    .wgpu_render_state
+                    .as_ref()
+                    .map(|_| state.scene.clone()),
+                current_frame: crate::shapes::element_store::seconds_to_frame(state.time, state.fps)
+                    as u32,
+                fps: state.fps,
+                scene_version: state.scene_version,
+                text_overrides,
+            },
+        );
+        painter.add(cb);
         // The closing brace for the `egui::Frame::canvas(...).show` closure was misplaced here.
         // It is now removed, allowing the following code to be part of the closure.
 
@@ -87,7 +103,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
         let is_interacting = state.resize_mode || state.move_mode;
         if main_ui_enabled
             && (response.clicked()
-                || (is_interacting && (response.hovered() || response.dragged_by(egui::PointerButton::Primary))))
+                || (is_interacting
+                    && (response.hovered() || response.dragged_by(egui::PointerButton::Primary))))
         {
             interaction::handle_canvas_clicks(ui, state, &response, composition_rect, zoom);
         }
@@ -97,9 +114,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
             let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0));
             let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
             if let Some(elem) = state.scene.get(path[0]) {
-                 if let Some(node) = elem.to_shape_at_frame(frame_idx, state.fps) {
+                if let Some(node) = elem.to_shape_at_frame(frame_idx, state.fps) {
                     crate::shapes::shapes_manager::draw_highlight_recursive(
-                        &painter, &node, composition_rect, stroke, state.time, 0.0, state.render_height,
+                        &painter,
+                        &node,
+                        composition_rect,
+                        stroke,
+                        state.time,
+                        0.0,
+                        state.render_height,
                     );
                 }
             }
@@ -117,7 +140,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                 .cloned()
                 .or_else(|| state.selected.map(|i| vec![i]));
             if let Some(path) = maybe_path {
-                let frame_idx = crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
+                let frame_idx =
+                    crate::shapes::element_store::seconds_to_frame(state.time, state.fps);
                 if let Some(elem) = state.scene.get(path[0]) {
                     if let Some(node) = elem.to_shape_at_frame(frame_idx, state.fps) {
                         // compute bounding rectangle for the shape
@@ -164,7 +188,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                         let head_size = 12.0;
 
                         // Highlight if hovering
-                        let hover_pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(egui::Pos2::ZERO);
+                        let hover_pos = ui
+                            .input(|i| i.pointer.hover_pos())
+                            .unwrap_or(egui::Pos2::ZERO);
                         let x_arrow_rect = egui::Rect::from_min_max(
                             egui::pos2(cen.x, cen.y - 12.0),
                             egui::pos2(cen.x + arrow_len, cen.y + 12.0),
@@ -174,8 +200,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                             egui::pos2(cen.x + 12.0, cen.y + arrow_len),
                         );
 
-                        let color_x = if x_arrow_rect.contains(hover_pos) { egui::Color32::LIGHT_RED } else { egui::Color32::from_rgb(200, 40, 40) };
-                        let color_y = if y_arrow_rect.contains(hover_pos) { egui::Color32::LIGHT_GREEN } else { egui::Color32::from_rgb(40, 200, 40) };
+                        let color_x = if x_arrow_rect.contains(hover_pos) {
+                            egui::Color32::LIGHT_RED
+                        } else {
+                            egui::Color32::from_rgb(200, 40, 40)
+                        };
+                        let color_y = if y_arrow_rect.contains(hover_pos) {
+                            egui::Color32::LIGHT_GREEN
+                        } else {
+                            egui::Color32::from_rgb(40, 200, 40)
+                        };
 
                         // X axis (Horizontal)
                         let x_end = egui::pos2(cen.x + arrow_len, cen.y);
@@ -205,7 +239,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
 
                         // Origin pivot point
                         painter.circle_filled(cen, 4.0, egui::Color32::WHITE);
-                        painter.circle_stroke(cen, 4.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+                        painter.circle_stroke(
+                            cen,
+                            4.0,
+                            egui::Stroke::new(1.0, egui::Color32::BLACK),
+                        );
                     }
                 }
             }

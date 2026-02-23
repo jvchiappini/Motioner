@@ -362,7 +362,10 @@ impl ShapeDescriptor for Text {
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
         // build directly with name to avoid redundant assignment
-        let t = Self { name, ..Default::default() };
+        let t = Self {
+            name,
+            ..Default::default()
+        };
         super::shapes_manager::Shape::Text(t)
     }
 
@@ -374,28 +377,74 @@ impl ShapeDescriptor for Text {
         self.animations.push(anim);
     }
 
-    fn spawn_time(&self) -> f32 { self.spawn_time }
-    fn kill_time(&self) -> Option<f32> { self.kill_time }
-    fn is_ephemeral(&self) -> bool { self.ephemeral }
-    fn set_ephemeral(&mut self, v: bool) { self.ephemeral = v; }
-    fn xy(&self) -> (f32, f32) { (self.x, self.y) }
-    fn is_visible(&self) -> bool { self.visible }
-    fn set_visible(&mut self, v: bool) { self.visible = v; }
-    fn set_fill_color(&mut self, col: [u8; 4]) { self.color = col; }
+    fn spawn_time(&self) -> f32 {
+        self.spawn_time
+    }
+    fn kill_time(&self) -> Option<f32> {
+        self.kill_time
+    }
+    fn is_ephemeral(&self) -> bool {
+        self.ephemeral
+    }
+    fn set_ephemeral(&mut self, v: bool) {
+        self.ephemeral = v;
+    }
+    fn xy(&self) -> (f32, f32) {
+        (self.x, self.y)
+    }
+    fn is_visible(&self) -> bool {
+        self.visible
+    }
+    fn set_visible(&mut self, v: bool) {
+        self.visible = v;
+    }
+    fn set_fill_color(&mut self, col: [u8; 4]) {
+        self.color = col;
+    }
 
     fn to_element_keyframes(&self, fps: u32) -> crate::shapes::element_store::ElementKeyframes {
         use crate::shapes::element_store::{ElementKeyframes, Keyframe};
         let mut ek = ElementKeyframes::new(self.name.clone(), "text".into());
         let spawn = crate::shapes::element_store::seconds_to_frame(self.spawn_time, fps);
         ek.spawn_frame = spawn;
-        ek.kill_frame = self.kill_time.map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
-        ek.x.push(Keyframe { frame: spawn, value: self.x, easing: crate::animations::easing::Easing::Linear });
-        ek.y.push(Keyframe { frame: spawn, value: self.y, easing: crate::animations::easing::Easing::Linear });
-        ek.size.push(Keyframe { frame: spawn, value: self.size, easing: crate::animations::easing::Easing::Linear });
-        ek.value.push(Keyframe { frame: spawn, value: self.value.clone(), easing: crate::animations::easing::Easing::Linear });
-        ek.color.push(Keyframe { frame: spawn, value: self.color, easing: crate::animations::easing::Easing::Linear });
-        ek.visible.push(Keyframe { frame: spawn, value: self.visible, easing: crate::animations::easing::Easing::Linear });
-        ek.z_index.push(Keyframe { frame: spawn, value: self.z_index, easing: crate::animations::easing::Easing::Linear });
+        ek.kill_frame = self
+            .kill_time
+            .map(|k| crate::shapes::element_store::seconds_to_frame(k, fps));
+        ek.x.push(Keyframe {
+            frame: spawn,
+            value: self.x,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.y.push(Keyframe {
+            frame: spawn,
+            value: self.y,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.size.push(Keyframe {
+            frame: spawn,
+            value: self.size,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.value.push(Keyframe {
+            frame: spawn,
+            value: self.value.clone(),
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.color.push(Keyframe {
+            frame: spawn,
+            value: self.color,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.visible.push(Keyframe {
+            frame: spawn,
+            value: self.visible,
+            easing: crate::animations::easing::Easing::Linear,
+        });
+        ek.z_index.push(Keyframe {
+            frame: spawn,
+            value: self.z_index,
+            easing: crate::animations::easing::Easing::Linear,
+        });
         ek.ephemeral = self.ephemeral;
         ek
     }
@@ -516,7 +565,10 @@ pub fn from_element_keyframes(
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
     let props = ek.sample(frame, fps)?;
-    let mut t = Text { name: ek.name.clone(), ..Default::default() };
+    let mut t = Text {
+        name: ek.name.clone(),
+        ..Default::default()
+    };
     if let Some(x) = props.x {
         t.x = x;
     }
@@ -570,14 +622,25 @@ fn parse_spans_block(lines: &[String]) -> Vec<TextSpan> {
                 .get("text")
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
-            let font = kv.get("font").cloned().unwrap_or_else(|| "System".to_string());
-            let size = kv.get("size").and_then(|s| s.parse().ok()).unwrap_or(0.033_f32);
+            let font = kv
+                .get("font")
+                .cloned()
+                .unwrap_or_else(|| "System".to_string());
+            let size = kv
+                .get("size")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.033_f32);
             let color = kv
                 .get("fill")
                 .and_then(|s| crate::dsl::ast::Color::from_hex(s))
                 .map(|c| c.to_array())
                 .unwrap_or([255, 255, 255, 255]);
-            Some(TextSpan { text, font, size, color })
+            Some(TextSpan {
+                text,
+                font,
+                size,
+                color,
+            })
         })
         .collect()
 }
@@ -587,7 +650,10 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Text> {
     let name = crate::dsl::parser::extract_name(header)
         .unwrap_or_else(|| format!("Text_{}", crate::dsl::parser::fastrand_usize()));
 
-    let mut node = Text { name, ..Default::default() };
+    let mut node = Text {
+        name,
+        ..Default::default()
+    };
 
     let body = crate::dsl::parser::body_lines(block);
     let mut iter = body.iter().peekable();

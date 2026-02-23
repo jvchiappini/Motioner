@@ -22,7 +22,9 @@ pub fn exec(shapes: &mut [Shape], block: &str, ctx: &mut EvalContext) -> Result<
         return Err("for: expected 'for <var> in <iterable>'".to_string());
     }
     let var_name = parts[0].trim();
-    let iterable = after_for.split_once("in").map(|x| x.1)
+    let iterable = after_for
+        .split_once("in")
+        .map(|x| x.1)
         .ok_or("for: missing iterable")?
         .trim();
 

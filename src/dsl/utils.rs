@@ -23,9 +23,7 @@ pub fn parse_easing(s: &str) -> crate::scene::Easing {
         let needle = format!("{} =", name);
         let pos = s.find(&needle)?;
         let rest = s[pos + needle.len()..].trim();
-        let end = rest
-            .find([',', ')', ' '])
-            .unwrap_or(rest.len());
+        let end = rest.find([',', ')', ' ']).unwrap_or(rest.len());
         rest[..end].trim().parse().ok()
     }
 

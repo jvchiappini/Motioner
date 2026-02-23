@@ -5,7 +5,6 @@
 
 mod animations;
 mod app_state;
-mod states; // ensure state-related modules are available early
 mod canvas;
 mod code_panel;
 mod dsl;
@@ -18,6 +17,7 @@ mod renderer;
 mod scene;
 mod scene_graph;
 mod shapes;
+mod states; // ensure state-related modules are available early
 mod timeline;
 mod ui;
 mod welcome_modal; // Added this

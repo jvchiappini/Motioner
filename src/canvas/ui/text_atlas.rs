@@ -10,8 +10,14 @@ pub fn prepare_text_atlas(state: &mut AppState) -> AtlasData {
     let mut text_entries: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
 
     for (scene_idx, ek) in state.scene.iter().enumerate() {
-        if frame_idx < ek.spawn_frame { continue; }
-        if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
+        if frame_idx < ek.spawn_frame {
+            continue;
+        }
+        if let Some(kf) = ek.kill_frame {
+            if frame_idx >= kf {
+                continue;
+            }
+        }
 
         if ek.kind == "text" {
             if let Some(mut shape) = ek.to_shape_at_frame(frame_idx, state.preview_fps) {
@@ -44,8 +50,15 @@ pub fn prepare_text_atlas(state: &mut AppState) -> AtlasData {
         let uv1_y = (tile_idx + 1) as f32 / n_texts as f32;
 
         if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
-            shape, rw, rh, state.time, state.duration_secs,
-            &mut state.font_arc_cache, &state.font_map, &state.dsl.event_handlers, *parent_spawn
+            shape,
+            rw,
+            rh,
+            state.time,
+            state.duration_secs,
+            &mut state.font_arc_cache,
+            &state.font_map,
+            &state.dsl.event_handlers,
+            *parent_spawn,
         ) {
             let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
             let len = (rw * rh * 4) as usize;

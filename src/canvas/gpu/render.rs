@@ -1,11 +1,11 @@
 //! Implementa la integración del renderizado GPU con egui y el sistema de previsualización.
 //! Contiene el callback de pintura y funciones para generar snapshots.
 
+use super::resources::GpuResources;
+use super::types::*;
+use super::utils::MAX_GPU_TEXTURE_SIZE;
 #[cfg(feature = "wgpu")]
 use eframe::{egui, egui_wgpu, wgpu};
-use super::types::*;
-use super::resources::GpuResources;
-use super::utils::MAX_GPU_TEXTURE_SIZE;
 
 #[cfg(feature = "wgpu")]
 pub struct CompositionCallback {
@@ -38,7 +38,7 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
 
         if let Some(ref elements) = self.elements {
             let dirty = self.scene_version > resources.current_scene_version;
-            
+
             // Convertir overrides de Vec a HashMap para el despachador de computación
             let mut overrides_map = std::collections::HashMap::new();
             if let Some(ref overrides) = self.text_overrides {
@@ -48,33 +48,63 @@ impl egui_wgpu::CallbackTrait for CompositionCallback {
             }
 
             resources.dispatch_compute(
-                device, queue, _egui_encoder, elements,
-                self.current_frame, self.fps,
-                self.render_width as u32, self.render_height as u32,
+                device,
+                queue,
+                _egui_encoder,
+                elements,
+                self.current_frame,
+                self.fps,
+                self.render_width as u32,
+                self.render_height as u32,
                 dirty,
                 Some(&overrides_map),
             );
-            if dirty { resources.current_scene_version = self.scene_version; }
+            if dirty {
+                resources.current_scene_version = self.scene_version;
+            }
 
             if let Some((ref pixels, w, h)) = self.text_pixels {
                 resources.update_text_atlas(device, queue, pixels, w, h);
             }
         }
 
-        let mag_active = if self.magnifier_pos.is_some() { 1.0 } else { 0.0 };
+        let mag_active = if self.magnifier_pos.is_some() {
+            1.0
+        } else {
+            0.0
+        };
         let m_pos = self.magnifier_pos.unwrap_or(egui::Pos2::ZERO);
         let count = self.elements.as_ref().map(|el| el.len()).unwrap_or(0);
-        
+
         let uniforms = Uniforms {
             resolution: [self.render_width, self.render_height],
-            preview_res: [self.render_width * self.preview_multiplier, self.render_height * self.preview_multiplier],
-            paper_rect: [self.paper_rect.min.x, self.paper_rect.min.y, self.paper_rect.max.x, self.paper_rect.max.y],
-            viewport_rect: [self.viewport_rect.min.x, self.viewport_rect.min.y, self.viewport_rect.max.x, self.viewport_rect.max.y],
+            preview_res: [
+                self.render_width * self.preview_multiplier,
+                self.render_height * self.preview_multiplier,
+            ],
+            paper_rect: [
+                self.paper_rect.min.x,
+                self.paper_rect.min.y,
+                self.paper_rect.max.x,
+                self.paper_rect.max.y,
+            ],
+            viewport_rect: [
+                self.viewport_rect.min.x,
+                self.viewport_rect.min.y,
+                self.viewport_rect.max.x,
+                self.viewport_rect.max.y,
+            ],
             count: count as f32,
-            mag_x: m_pos.x, mag_y: m_pos.y, mag_active,
+            mag_x: m_pos.x,
+            mag_y: m_pos.y,
+            mag_active,
             time: self.time,
             pixels_per_point: screen_descriptor.pixels_per_point,
-            gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") { 0.0 } else { 1.0 },
+            gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") {
+                0.0
+            } else {
+                1.0
+            },
             _pad: 0.0,
         };
 
@@ -108,11 +138,16 @@ pub fn render_frame_color_image_gpu_snapshot(
     snap: &crate::canvas::preview_worker::RenderSnapshot,
     time: f32,
 ) -> Result<egui::ColorImage, String> {
-    let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier).round().max(1.0) as u32;
-    let mut preview_h = (snap.render_height as f32 * snap.preview_multiplier).round().max(1.0) as u32;
+    let mut preview_w = (snap.render_width as f32 * snap.preview_multiplier)
+        .round()
+        .max(1.0) as u32;
+    let mut preview_h = (snap.render_height as f32 * snap.preview_multiplier)
+        .round()
+        .max(1.0) as u32;
 
     if preview_w > MAX_GPU_TEXTURE_SIZE || preview_h > MAX_GPU_TEXTURE_SIZE {
-        let scale = (MAX_GPU_TEXTURE_SIZE as f32 / preview_w as f32).min(MAX_GPU_TEXTURE_SIZE as f32 / preview_h as f32);
+        let scale = (MAX_GPU_TEXTURE_SIZE as f32 / preview_w as f32)
+            .min(MAX_GPU_TEXTURE_SIZE as f32 / preview_h as f32);
         preview_w = (preview_w as f32 * scale).round() as u32;
         preview_h = (preview_h as f32 * scale).round() as u32;
     }
@@ -120,19 +155,34 @@ pub fn render_frame_color_image_gpu_snapshot(
     let frame_idx = crate::shapes::element_store::seconds_to_frame(time, snap.preview_fps);
     let mut text_entries_local: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
     for (scene_idx, ek) in snap.scene.iter().enumerate() {
-        if frame_idx < ek.spawn_frame { continue; }
-        if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
+        if frame_idx < ek.spawn_frame {
+            continue;
+        }
+        if let Some(kf) = ek.kill_frame {
+            if frame_idx >= kf {
+                continue;
+            }
+        }
 
         if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
-            if shape.descriptor().is_some_and(|d| d.dsl_keyword() == "text") {
-                text_entries_local.push((scene_idx, shape.clone(), (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0)));
+            if shape
+                .descriptor()
+                .is_some_and(|d| d.dsl_keyword() == "text")
+            {
+                text_entries_local.push((
+                    scene_idx,
+                    shape.clone(),
+                    (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0),
+                ));
             }
         }
     }
 
-    let mut compute_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compute_keyframes") });
+    let mut compute_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("compute_keyframes"),
+    });
     let dirty = snap.scene_version > resources.current_scene_version;
-    
+
     // Primero preparamos los overrides de texto para el compute shader
     let mut overrides_map = std::collections::HashMap::new();
     let rw = snap.render_width;
@@ -145,12 +195,19 @@ pub fn render_frame_color_image_gpu_snapshot(
 
         for (tile_idx, (scene_idx, shape, parent_spawn)) in text_entries_local.iter().enumerate() {
             if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
-                shape, rw, rh, time, snap.duration_secs,
-                &mut snap.font_arc_cache.clone(), &std::collections::HashMap::new(),
-                &snap.dsl.event_handlers, *parent_spawn,
+                shape,
+                rw,
+                rh,
+                time,
+                snap.duration_secs,
+                &mut snap.font_arc_cache.clone(),
+                &std::collections::HashMap::new(),
+                &snap.dsl.event_handlers,
+                *parent_spawn,
             ) {
                 let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
-                atlas_buf[row_offset..row_offset + (rw * rh * 4) as usize].copy_from_slice(&result.pixels);
+                atlas_buf[row_offset..row_offset + (rw * rh * 4) as usize]
+                    .copy_from_slice(&result.pixels);
 
                 let uv0_y = tile_idx as f32 / text_entries_local.len() as f32;
                 let uv1_y = (tile_idx + 1) as f32 / text_entries_local.len() as f32;
@@ -162,12 +219,20 @@ pub fn render_frame_color_image_gpu_snapshot(
 
     // Ahora ejecutamos el compute shader con los UVs ya calculados
     resources.dispatch_compute(
-        device, queue, &mut compute_encoder, &snap.scene,
-        frame_idx as u32, snap.preview_fps, snap.render_width, snap.render_height,
+        device,
+        queue,
+        &mut compute_encoder,
+        &snap.scene,
+        frame_idx as u32,
+        snap.preview_fps,
+        snap.render_width,
+        snap.render_height,
         dirty,
         Some(&overrides_map),
     );
-    if dirty { resources.current_scene_version = snap.scene_version; }
+    if dirty {
+        resources.current_scene_version = snap.scene_version;
+    }
     queue.submit(Some(compute_encoder.finish()));
 
     let render_w = snap.render_width;
@@ -178,10 +243,16 @@ pub fn render_frame_color_image_gpu_snapshot(
         paper_rect: [0.0, 0.0, render_w as f32, render_h as f32],
         viewport_rect: [0.0, 0.0, render_w as f32, render_h as f32],
         count: snap.scene.len() as f32,
-        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        mag_x: 0.0,
+        mag_y: 0.0,
+        mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
-        gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") { 0.0 } else { 1.0 },
+        gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") {
+            0.0
+        } else {
+            1.0
+        },
         _pad: 0.0,
     };
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -193,11 +264,26 @@ pub fn render_frame_color_image_gpu_snapshot(
     let staging_size = (padded_bpr * render_h) as u64;
 
     if resources.readback_size != [render_w, render_h] {
+        // The readback texture must use the same format as the pipeline we created
+        // earlier (stored in `resources.target_format`).  Before this change we
+        // hard-coded `Rgba8UnormSrgb` which could differ from the swapchain
+        // format and lead to a validation error when the pipeline was used
+        // against the render pass (see panic reported by users).
+        //
+        // Using `resources.target_format` here ensures the render pass and
+        // pipeline remain compatible regardless of the surface format chosen by
+        // wgpu/egui on the host platform.
         resources.readback_render_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("preview_readback_texture"),
-            size: wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            size: wgpu::Extent3d {
+                width: render_w,
+                height: render_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: resources.target_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         }));
@@ -215,7 +301,8 @@ pub fn render_frame_color_image_gpu_snapshot(
     let staging_buffer = resources.readback_staging_buffer.as_ref().unwrap();
     let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -227,22 +314,44 @@ pub fn render_frame_color_image_gpu_snapshot(
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None,
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
         });
         rpass.set_pipeline(&resources.pipeline);
         rpass.set_bind_group(0, &resources.bind_group, &[]);
-        if !snap.scene.is_empty() { rpass.draw(0..6, 0..snap.scene.len() as u32); }
+        if !snap.scene.is_empty() {
+            rpass.draw(0..6, 0..snap.scene.len() as u32);
+        }
     }
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture { texture: render_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::ImageCopyBuffer { buffer: staging_buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: Some(render_h) } },
-        wgpu::Extent3d { width: render_w, height: render_h, depth_or_array_layers: 1 },
+        wgpu::ImageCopyTexture {
+            texture: render_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::ImageCopyBuffer {
+            buffer: staging_buffer,
+            layout: wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bpr),
+                rows_per_image: Some(render_h),
+            },
+        },
+        wgpu::Extent3d {
+            width: render_w,
+            height: render_h,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit(Some(encoder.finish()));
 
     let slice = staging_buffer.slice(..);
     let caller_thread = std::thread::current();
-    slice.map_async(wgpu::MapMode::Read, move |_r| { caller_thread.unpark(); });
+    slice.map_async(wgpu::MapMode::Read, move |_r| {
+        caller_thread.unpark();
+    });
     device.poll(wgpu::Maintain::Poll);
     std::thread::park_timeout(std::time::Duration::from_secs(5));
 
@@ -252,12 +361,17 @@ pub fn render_frame_color_image_gpu_snapshot(
         for row in 0..render_h {
             let start = (row * padded_bpr) as usize;
             let end = start + unpadded_bpr as usize;
-            resources.readback_pixel_buf.extend_from_slice(&mapped[start..end]);
+            resources
+                .readback_pixel_buf
+                .extend_from_slice(&mapped[start..end]);
         }
     }
     staging_buffer.unmap();
 
-    Ok(egui::ColorImage::from_rgba_unmultiplied([render_w as usize, render_h as usize], &resources.readback_pixel_buf))
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [render_w as usize, render_h as usize],
+        &resources.readback_pixel_buf,
+    ))
 }
 
 /// Renderiza un frame directamente a una wgpu::Texture.
@@ -275,18 +389,32 @@ pub fn render_frame_native_texture(
 
     let mut text_entries_local: Vec<(usize, crate::scene::Shape, f32)> = Vec::new();
     for (scene_idx, ek) in snap.scene.iter().enumerate() {
-        if frame_idx < ek.spawn_frame { continue; }
-        if let Some(kf) = ek.kill_frame { if frame_idx >= kf { continue; } }
+        if frame_idx < ek.spawn_frame {
+            continue;
+        }
+        if let Some(kf) = ek.kill_frame {
+            if frame_idx >= kf {
+                continue;
+            }
+        }
         if let Some(shape) = ek.to_shape_at_frame(frame_idx, snap.preview_fps) {
-            if shape.descriptor().is_some_and(|d| d.dsl_keyword() == "text") {
-                text_entries_local.push((scene_idx, shape.clone(), (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0)));
+            if shape
+                .descriptor()
+                .is_some_and(|d| d.dsl_keyword() == "text")
+            {
+                text_entries_local.push((
+                    scene_idx,
+                    shape.clone(),
+                    (ek.spawn_frame as f32 / snap.preview_fps as f32).max(0.0),
+                ));
             }
         }
     }
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let dirty = snap.scene_version > resources.current_scene_version;
-    
+
     // Preparar UVs para el compute shader
     let mut overrides_map = std::collections::HashMap::new();
     let rw = snap.render_width;
@@ -298,12 +426,19 @@ pub fn render_frame_native_texture(
 
         for (tile_idx, (scene_idx, shape, parent_spawn)) in text_entries_local.iter().enumerate() {
             if let Some(result) = crate::canvas::text_rasterizer::rasterize_single_text(
-                shape, rw, rh, time, snap.duration_secs,
-                &mut snap.font_arc_cache.clone(), &std::collections::HashMap::new(),
-                &snap.dsl.event_handlers, *parent_spawn,
+                shape,
+                rw,
+                rh,
+                time,
+                snap.duration_secs,
+                &mut snap.font_arc_cache.clone(),
+                &std::collections::HashMap::new(),
+                &snap.dsl.event_handlers,
+                *parent_spawn,
             ) {
                 let row_offset = (tile_idx as u32 * rh * rw * 4) as usize;
-                atlas[row_offset..row_offset + (rw * rh * 4) as usize].copy_from_slice(&result.pixels);
+                atlas[row_offset..row_offset + (rw * rh * 4) as usize]
+                    .copy_from_slice(&result.pixels);
 
                 let uv0_y = tile_idx as f32 / text_entries_local.len() as f32;
                 let uv1_y = (tile_idx + 1) as f32 / text_entries_local.len() as f32;
@@ -314,12 +449,20 @@ pub fn render_frame_native_texture(
     }
 
     resources.dispatch_compute(
-        device, queue, &mut encoder, &snap.scene,
-        frame_idx as u32, snap.preview_fps, snap.render_width, snap.render_height,
+        device,
+        queue,
+        &mut encoder,
+        &snap.scene,
+        frame_idx as u32,
+        snap.preview_fps,
+        snap.render_width,
+        snap.render_height,
         dirty,
         Some(&overrides_map),
     );
-    if dirty { resources.current_scene_version = snap.scene_version; }
+    if dirty {
+        resources.current_scene_version = snap.scene_version;
+    }
     queue.submit(Some(encoder.finish()));
 
     let uniforms = Uniforms {
@@ -328,25 +471,38 @@ pub fn render_frame_native_texture(
         paper_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
         viewport_rect: [0.0, 0.0, preview_w as f32, preview_h as f32],
         count: snap.scene.len() as f32,
-        mag_x: 0.0, mag_y: 0.0, mag_active: 0.0,
+        mag_x: 0.0,
+        mag_y: 0.0,
+        mag_active: 0.0,
         time,
         pixels_per_point: 1.0,
-        gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") { 0.0 } else { 1.0 },
+        gamma_correction: if format!("{:?}", resources.target_format).contains("Srgb") {
+            0.0
+        } else {
+            1.0
+        },
         _pad: 0.0,
     };
     queue.write_buffer(&resources.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("gpu_cache_texture"),
-        size: wgpu::Extent3d { width: preview_w, height: preview_h, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        size: wgpu::Extent3d {
+            width: preview_w,
+            height: preview_h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
         format: resources.target_format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -358,11 +514,15 @@ pub fn render_frame_native_texture(
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None,
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
         });
         rpass.set_pipeline(&resources.pipeline);
         rpass.set_bind_group(0, &resources.bind_group, &[]);
-        if !snap.scene.is_empty() { rpass.draw(0..6, 0..snap.scene.len() as u32); }
+        if !snap.scene.is_empty() {
+            rpass.draw(0..6, 0..snap.scene.len() as u32);
+        }
     }
     queue.submit(Some(encoder.finish()));
     Ok(texture)

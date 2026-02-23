@@ -65,9 +65,10 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
     // 2) run handlers on the working copy of shapes
     for handler in handlers {
         if (handler.name == "on_time" || handler.name == "time_changed")
-            && runtime::run_handler(&mut shapes[..], handler, &mut ctx) {
-                changed = true;
-            }
+            && runtime::run_handler(&mut shapes[..], handler, &mut ctx)
+        {
+            changed = true;
+        }
     }
 
     // 3) propagate changes back into ElementKeyframes by inserting hold keyframes
@@ -137,4 +138,3 @@ pub fn apply_on_time_handlers(
     }
     changed
 }
-

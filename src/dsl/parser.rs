@@ -79,12 +79,11 @@ pub fn parse(src: &str) -> Vec<Statement> {
         // in the runtime/validator pipeline, so we simply skip over them.
         // (We keep the lookup helper for diagnostics but do not emit a statement.)
         let ident = first_ident(line);
-        if !ident.is_empty() && line.contains('{')
-            && event_handler_color(&ident).is_some() {
-                // skip entire block
-                let _ = collect_block(line, &mut lines);
-                continue;
-            }
+        if !ident.is_empty() && line.contains('{') && event_handler_color(&ident).is_some() {
+            // skip entire block
+            let _ = collect_block(line, &mut lines);
+            continue;
+        }
     }
 
     // Attach top-level move blocks as `Statement::Move`.
@@ -107,9 +106,9 @@ pub fn parse_config(src: &str) -> Result<HeaderConfig, String> {
 
     // `size(w, h)`
     if let Some(pos) = src.find("size") {
-            if let Some(inner) = extract_balanced(src, pos, '(', ')') {
-                // explicitly specify collection type to satisfy type inference
-                let parts: Vec<&str> = inner.split(',').collect::<Vec<&str>>();
+        if let Some(inner) = extract_balanced(src, pos, '(', ')') {
+            // explicitly specify collection type to satisfy type inference
+            let parts: Vec<&str> = inner.split(',').collect::<Vec<&str>>();
             if parts.len() == 2 {
                 width = parts[0].trim().parse().ok();
                 height = parts[1].trim().parse().ok();
@@ -304,7 +303,6 @@ pub(crate) fn body_lines(block: &[String]) -> Vec<String> {
     result.retain(|l| l != "{");
     result
 }
-
 
 /// Extract the quoted name from a shape header line.
 /// e.g. `circle "MyCircle" {` → `Some("MyCircle")`

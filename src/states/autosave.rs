@@ -35,7 +35,7 @@ pub fn apply_diagnostics(
         autosave.error = None;
         // leave pending flag untouched; callers may adjust it separately
     } else {
-            state.dsl.diagnostics = diags.clone();
+        state.dsl.diagnostics = diags.clone();
         autosave.pending = false;
         autosave.error = Some(diags[0].message.clone());
     }
@@ -55,8 +55,7 @@ pub fn tick(state: &mut crate::app_state::AppState, now: f64) {
             } else {
                 // attempt write
                 match crate::events::element_properties_changed_event::write_dsl_to_project(
-                    state,
-                    false,
+                    state, false,
                 ) {
                     Ok(_) => {
                         state.autosave.pending = false;

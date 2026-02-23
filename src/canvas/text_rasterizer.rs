@@ -21,9 +21,9 @@ const SYSTEM_FONT_CANDIDATES: &[&str] = &[
 /// Resultado de la rasterización: píxeles RGBA y dimensiones.
 pub struct TextRasterResult {
     pub pixels: Vec<u8>, // RGBA8, tamaño: w * h * 4
-    // width/height fields unused (size information is available elsewhere)
-    // pub width: u32,
-    // pub height: u32,
+                         // width/height fields unused (size information is available elsewhere)
+                         // pub width: u32,
+                         // pub height: u32,
 }
 
 /// Rasteriza UN elemento `Text` en un buffer RGBA independiente del tamaño `rw × rh`.

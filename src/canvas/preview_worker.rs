@@ -49,7 +49,6 @@ pub struct RenderSnapshot {
     pub scene_version: u32,
 }
 
-
 pub fn request_preview_frames(state: &mut AppState, center_time: f32) {
     ensure_preview_worker(state);
     if state.preview_job_pending {
@@ -171,15 +170,7 @@ pub fn poll_preview_results(state: &mut AppState, ctx: &egui::Context) {
                     }
 
                     needs_enforce = true;
-                }
-
-
-
-
-
-
-
-                // Buffered mode removed; we only ever produce a single frame now.
+                } // Buffered mode removed; we only ever produce a single frame now.
             }
             // Request repaint after state changes have been applied (reduces mid-update flashes)
             ctx.request_repaint();
@@ -210,7 +201,12 @@ pub fn ensure_preview_worker(state: &mut AppState) {
             // `PreviewJob` currently has only the `Generate` variant, so this
             // pattern is guaranteed to match.  silence the clippy warning.
             #[allow(irrefutable_let_patterns)]
-            if let PreviewJob::Generate { center_time, snapshot, .. } = job {
+            if let PreviewJob::Generate {
+                center_time,
+                snapshot,
+                ..
+            } = job
+            {
                 #[cfg(feature = "wgpu")]
                 {
                     // CAPTURAMOS EL ESTADO DE LA UI SI EXISTE
@@ -227,8 +223,7 @@ pub fn ensure_preview_worker(state: &mut AppState) {
                             ));
                         }
 
-                        if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer
-                        {
+                        if let Some((ref device, ref queue, ref mut resources)) = gpu_renderer {
                             // ¡NATIVO! Renderizamos a textura sin bajar a RAM
                             if let Ok(tex) = render_frame_native_texture(
                                 device,

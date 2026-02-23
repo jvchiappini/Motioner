@@ -5,8 +5,12 @@ use eframe::egui;
 pub fn draw_grid(painter: &egui::Painter, rect: egui::Rect, zoom: f32, pan: egui::Vec2) {
     let center = rect.center();
     let mut base_step = 100.0;
-    while base_step * zoom > 200.0 { base_step /= 10.0; }
-    while base_step * zoom < 20.0 { base_step *= 10.0; }
+    while base_step * zoom > 200.0 {
+        base_step /= 10.0;
+    }
+    while base_step * zoom < 20.0 {
+        base_step *= 10.0;
+    }
 
     let step = base_step * zoom;
     let grid_origin = center + pan;
@@ -22,7 +26,10 @@ pub fn draw_grid(painter: &egui::Painter, rect: egui::Rect, zoom: f32, pan: egui
     let mut x = start_x;
     while x <= rect.right() + step {
         if x >= rect.left() {
-            painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], grid_stroke);
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                grid_stroke,
+            );
         }
         x += step;
     }
@@ -31,16 +38,31 @@ pub fn draw_grid(painter: &egui::Painter, rect: egui::Rect, zoom: f32, pan: egui
     let mut y = start_y;
     while y <= rect.bottom() + step {
         if y >= rect.top() {
-            painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid_stroke);
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                grid_stroke,
+            );
         }
         y += step;
     }
 
     // Dibujar ejes principales
     if grid_origin.x >= rect.left() && grid_origin.x <= rect.right() {
-        painter.line_segment([egui::pos2(grid_origin.x, rect.top()), egui::pos2(grid_origin.x, rect.bottom())], origin_stroke_y);
+        painter.line_segment(
+            [
+                egui::pos2(grid_origin.x, rect.top()),
+                egui::pos2(grid_origin.x, rect.bottom()),
+            ],
+            origin_stroke_y,
+        );
     }
     if grid_origin.y >= rect.top() && grid_origin.y <= rect.bottom() {
-        painter.line_segment([egui::pos2(rect.left(), grid_origin.y), egui::pos2(rect.right(), grid_origin.y)], origin_stroke_x);
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), grid_origin.y),
+                egui::pos2(rect.right(), grid_origin.y),
+            ],
+            origin_stroke_x,
+        );
     }
 }

@@ -1,4 +1,4 @@
-﻿/// Motioner DSL - public module facade.
+/// Motioner DSL - public module facade.
 ///
 /// The DSL pipeline is split into focused sub-modules:
 ///
@@ -32,7 +32,6 @@ pub use parser::{method_color, parse_config};
 pub use runtime::DslHandler;
 pub use validator::{validate, Diagnostic};
 
-
 // --- Legacy shims (keep existing call-sites compiling) -----------------------
 
 use crate::scene::Shape;
@@ -41,7 +40,6 @@ use crate::scene::Shape;
 use crate::animations::move_animation::MoveAnimation;
 #[cfg(test)]
 use crate::shapes::element_store::ElementKeyframes;
-
 
 /// Generate DSL directly from `ElementKeyframes` — no intermediate `Vec<Shape>` clone needed.
 #[inline]
@@ -68,7 +66,6 @@ pub fn validate_dsl(src: &str) -> Vec<Diagnostic> {
 pub fn extract_event_handlers_structured(src: &str) -> Vec<DslHandler> {
     extract_event_handlers(src)
 }
-
 
 /// Parse DSL source and return a scene as a `Vec<Shape>`.
 ///

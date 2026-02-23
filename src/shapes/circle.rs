@@ -160,7 +160,10 @@ impl ShapeDescriptor for Circle {
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
-        let c = Self { name, ..Default::default() };
+        let c = Self {
+            name,
+            ..Default::default()
+        };
         super::shapes_manager::Shape::Circle(c)
     }
 
@@ -348,7 +351,10 @@ pub fn from_element_keyframes(
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
     let props = ek.sample(frame, fps)?;
-    let mut c = Circle { name: ek.name.clone(), ..Default::default() };
+    let mut c = Circle {
+        name: ek.name.clone(),
+        ..Default::default()
+    };
     if let Some(x) = props.x {
         c.x = x;
     }
@@ -393,7 +399,10 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Circle> {
     let name = crate::dsl::parser::extract_name(header)
         .unwrap_or_else(|| format!("Circle_{}", crate::dsl::parser::fastrand_usize()));
 
-    let mut node = Circle { name, ..Default::default() };
+    let mut node = Circle {
+        name,
+        ..Default::default()
+    };
 
     let body = crate::dsl::parser::body_lines(block);
     let mut iter = body.iter().peekable();

@@ -262,23 +262,23 @@ fn draw_config_step(ui: &mut egui::Ui, state: &mut AppState, screen_rect: egui::
 
                             if ui.add(export_btn).clicked() {
                                 // Let user pick output file
-                                        // spawn the blocking dialog in a thread and send
-                                        // result back on the save_dialog channel.  the UI
-                                        // will pull from the receiver later in this frame
-                                        // (see below) and then start the export.
-                                        if let Some(tx) = state.save_dialog_tx.clone() {
-                                            std::thread::spawn(move || {
-                                            let dialog = rfd::FileDialog::new()
-                                                .set_title("Save exported video")
-                                                .add_filter("MP4 Video", &["mp4"])
-                                                .add_filter("WebM Video", &["webm"])
-                                                .add_filter("GIF Animation", &["gif"])
-                                                .set_file_name("output.mp4");
-                                                if let Some(path) = dialog.save_file() {
-                                                    let _ = tx.send(path);
-                                                }
-                                            });
+                                // spawn the blocking dialog in a thread and send
+                                // result back on the save_dialog channel.  the UI
+                                // will pull from the receiver later in this frame
+                                // (see below) and then start the export.
+                                if let Some(tx) = state.save_dialog_tx.clone() {
+                                    std::thread::spawn(move || {
+                                        let dialog = rfd::FileDialog::new()
+                                            .set_title("Save exported video")
+                                            .add_filter("MP4 Video", &["mp4"])
+                                            .add_filter("WebM Video", &["webm"])
+                                            .add_filter("GIF Animation", &["gif"])
+                                            .set_file_name("output.mp4");
+                                        if let Some(path) = dialog.save_file() {
+                                            let _ = tx.send(path);
                                         }
+                                    });
+                                }
                             }
                         });
                     });
@@ -652,7 +652,10 @@ fn start_export(state: &mut AppState) {
         // ── Snapshot base used by both CPU & GPU renderers ─────────────────
         let snap_base = crate::canvas::preview_worker::RenderSnapshot {
             scene: ek_scene.clone(),
-            dsl: crate::states::dslstate::DslState { event_handlers: dsl_handlers.clone(), diagnostics: Vec::new() },
+            dsl: crate::states::dslstate::DslState {
+                event_handlers: dsl_handlers.clone(),
+                diagnostics: Vec::new(),
+            },
             render_width: render_w,
             render_height: render_h,
             preview_multiplier: 1.0,
@@ -1092,7 +1095,6 @@ fn start_export(state: &mut AppState) {
     });
 }
 
-
 // ─── CPU frame renderer ───────────────────────────────────────────────────────
 
 fn render_frame_cpu(
@@ -1109,7 +1111,6 @@ fn render_frame_cpu(
     let flat = vec![255u8; w * h * 4];
     egui::ColorImage::from_rgba_unmultiplied([w, h], &flat)
 }
-
 
 // ─── PNG save ─────────────────────────────────────────────────────────────────
 

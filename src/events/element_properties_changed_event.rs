@@ -21,9 +21,7 @@ pub fn write_dsl_to_project(state: &mut AppState, show_toast: bool) -> std::io::
             // We don't have access to egui::Context here; approximate deadline
             state.toast_deadline = state.last_update as f64 + 3.0;
         }
-        return Err(std::io::Error::other(
-            diags[0].message.clone(),
-        ));
+        return Err(std::io::Error::other(diags[0].message.clone()));
     }
 
     let dst = project_dir.join("code.motioner");

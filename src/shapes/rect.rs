@@ -165,7 +165,10 @@ impl ShapeDescriptor for Rect {
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
-        let r = Self { name, ..Default::default() };
+        let r = Self {
+            name,
+            ..Default::default()
+        };
         super::shapes_manager::Shape::Rect(r)
     }
 
@@ -301,7 +304,9 @@ impl ShapeDescriptor for Rect {
     }
 
     fn apply_kv_string(&mut self, key: &str, val: &str) {
-        if key == "name" { self.name = val.to_string() }
+        if key == "name" {
+            self.name = val.to_string()
+        }
     }
 
     fn append_gpu_shapes(
@@ -362,7 +367,10 @@ pub fn from_element_keyframes(
     fps: u32,
 ) -> Option<super::shapes_manager::Shape> {
     let props = ek.sample(frame, fps)?;
-    let mut r = Rect { name: ek.name.clone(), ..Default::default() };
+    let mut r = Rect {
+        name: ek.name.clone(),
+        ..Default::default()
+    };
     if let Some(x) = props.x {
         r.x = x;
     }
@@ -404,7 +412,10 @@ pub(crate) fn parse_dsl_block(block: &[String]) -> Option<Rect> {
     let name = crate::dsl::parser::extract_name(header)
         .unwrap_or_else(|| format!("Rect_{}", crate::dsl::parser::fastrand_usize()));
 
-    let mut node = Rect { name, ..Default::default() };
+    let mut node = Rect {
+        name,
+        ..Default::default()
+    };
 
     let body = crate::dsl::parser::body_lines(block);
     let mut iter = body.iter().peekable();

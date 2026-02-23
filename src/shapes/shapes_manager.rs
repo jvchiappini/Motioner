@@ -392,7 +392,10 @@ impl crate::shapes::ShapeDescriptor for Shape {
         Self: Sized,
     {
         // not very meaningful at the enum level, but provide a circle
-        let c = crate::shapes::circle::Circle { name, ..Default::default() };
+        let c = crate::shapes::circle::Circle {
+            name,
+            ..Default::default()
+        };
         Shape::Circle(c)
     }
     fn animations(&self) -> &[crate::scene::Animation] {

@@ -243,7 +243,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
                             ui.add_space(4.0);
                             // Animations are no longer stored on `ElementKeyframes`.
-                            ui.label("Animations editing disabled — migrating to per-track storage");
+                            ui.label(
+                                "Animations editing disabled — migrating to per-track storage",
+                            );
                         });
                     });
                 }
@@ -466,7 +468,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 });
 
                             ui.add_space(4.0);
-                            ui.label("Animations editing disabled — migrating to per-track storage");
+                            ui.label(
+                                "Animations editing disabled — migrating to per-track storage",
+                            );
                         });
                     });
                 }
@@ -588,7 +592,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 ui.end_row();
 
                                 ui.label("Spawn Time:");
-                                    let mut spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
+                                let mut spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
                                 if ui
                                     .add(
                                         egui::Slider::new(
@@ -601,7 +605,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                 {
                                     elem.spawn_frame =
                                         crate::shapes::element_store::seconds_to_frame(
-                                                spawn_secs, state.fps,
+                                            spawn_secs, state.fps,
                                         );
                                     changed = true;
                                 }
