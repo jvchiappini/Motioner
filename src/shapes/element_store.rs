@@ -46,6 +46,7 @@ pub struct FrameProps {
     /* common */
     pub color: Option<[u8; 4]>,
     pub visible: Option<bool>,
+    pub reveal: Option<f32>,
     pub z_index: Option<i32>,
 }
 
@@ -83,6 +84,8 @@ pub struct ElementKeyframes {
     /* common */
     pub color: Vec<Keyframe<[u8; 4]>>,
     pub visible: Vec<Keyframe<bool>>,
+    pub reveal: Vec<Keyframe<f32>>,
+    pub both_sides: Vec<Keyframe<f32>>,
     pub z_index: Vec<Keyframe<i32>>,
 
     /// Ephemeral flag (shapes created at runtime / not serialized into DSL)
@@ -108,6 +111,8 @@ impl ElementKeyframes {
             value: Vec::new(),
             color: Vec::new(),
             visible: Vec::new(),
+            reveal: Vec::new(),
+            both_sides: Vec::new(),
             z_index: Vec::new(),
             ephemeral: false,
             spawn_frame: 0,
@@ -143,6 +148,9 @@ impl ElementKeyframes {
         }
         if let Some(wv) = props.w {
             push_kf(&mut self.w, frame, wv);
+        }
+        if let Some(rv) = props.reveal {
+            push_kf(&mut self.reveal, frame, rv);
         }
         if let Some(hv) = props.h {
             push_kf(&mut self.h, frame, hv);
@@ -217,6 +225,7 @@ impl ElementKeyframes {
             || !self.value.is_empty()
             || !self.color.is_empty()
             || !self.visible.is_empty()
+            || !self.reveal.is_empty()
             || !self.z_index.is_empty();
 
         if !any {
@@ -238,6 +247,7 @@ impl ElementKeyframes {
             w: Self::sample_f32_track(&self.w, frame),
             h: Self::sample_f32_track(&self.h, frame),
             size: Self::sample_f32_track(&self.size, frame),
+            reveal: Self::sample_f32_track(&self.reveal, frame),
             value: Self::latest_from_track(&self.value, frame),
             color: Self::sample_color_track(&self.color, frame),
             visible: Self::latest_from_track(&self.visible, frame),

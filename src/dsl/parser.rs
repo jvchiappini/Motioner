@@ -9,7 +9,7 @@
 /// - [`parse_config`] — header-only parse (used by quick-validation path)
 use std::collections::HashMap;
 
-use super::ast::{HeaderConfig, MoveBlock, Statement};
+use super::ast::{HeaderConfig, MoveBlock, Statement, WriteBlock};
 use super::lexer::extract_balanced;
 use crate::dsl::utils;
 
@@ -57,6 +57,14 @@ pub fn parse(src: &str) -> Vec<Statement> {
                 if mv.element.is_some() {
                     pending_moves.push(mv);
                 }
+            }
+            continue;
+        }
+
+        if line.starts_with("write_text") && line.contains('{') {
+            let block = collect_block(line, &mut lines);
+            if let Some(wr) = parse_write_block_lines(&block) {
+                stmts.push(Statement::Write(wr));
             }
             continue;
         }
@@ -200,6 +208,50 @@ pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
         to,
         during: (start, end),
         easing,
+    })
+}
+
+/// Parse the inner lines of a `write_text { ... }` block.
+pub fn parse_write_block_lines(block: &[String]) -> Option<WriteBlock> {
+    let mut element: Option<String> = None;
+    let mut start_time: Option<f32> = None;
+    let mut end_time: Option<f32> = None;
+    let mut easing = crate::scene::Easing::Linear;
+
+    // Skip the header line ("write_text {"), iterate body only.
+    let body = body_lines(block);
+
+    for line in &body {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+
+        let Some((key, val)) = split_kv(line) else {
+            continue;
+        };
+
+        match key.as_str() {
+            "element" => element = Some(val.trim_matches('"').to_string()),
+            "during" => {
+                if let Some(arrow) = val.find("->") {
+                    start_time = val[..arrow].trim().parse().ok();
+                    end_time = val[arrow + 2..].trim().parse().ok();
+                }
+            }
+            "ease" | "easing" => easing = utils::parse_easing(&val),
+            _ => {}
+        }
+    }
+
+    let start = start_time?;
+    let end = end_time?;
+
+    Some(WriteBlock {
+        element,
+        during: (start, end),
+        easing,
+        both_sides: block.iter().any(|l| l.contains("both_sides") && l.contains("true")),
     })
 }
 

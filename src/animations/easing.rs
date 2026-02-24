@@ -68,3 +68,30 @@ pub enum Easing {
     /// the CPU fallback and in the GPU compute shader.
     Step,
 }
+
+impl Easing {
+    pub fn to_dsl(&self) -> String {
+        match self {
+            Easing::Linear => "linear".to_string(),
+            Easing::Step => "step".to_string(),
+            Easing::Sine => "sine".to_string(),
+            Easing::Expo => "expo".to_string(),
+            Easing::Circ => "circ".to_string(),
+            Easing::EaseIn { power } => format!("ease_in(power = {:.2})", power),
+            Easing::EaseOut { power } => format!("ease_out(power = {:.2})", power),
+            Easing::EaseInOut { power } => format!("ease_in_out(power = {:.2})", power),
+            Easing::Bezier { p1, p2 } => format!("bezier(p1 = ({:.3}, {:.3}), p2 = ({:.3}, {:.3}))", p1.0, p1.1, p2.0, p2.1),
+            Easing::Spring { damping, stiffness, mass } => format!("spring(damping = {:.2}, stiffness = {:.2}, mass = {:.2})", damping, stiffness, mass),
+            Easing::Elastic { amplitude, period } => format!("elastic(amplitude = {:.2}, period = {:.2})", amplitude, period),
+            Easing::Bounce { bounciness } => format!("bounce(bounciness = {:.2})", bounciness),
+            Easing::Custom { points } => {
+                let pts: Vec<String> = points.iter().map(|(t, v)| format!("({:.3}, {:.3})", t, v)).collect();
+                format!("custom(points = [{}])", pts.join(", "))
+            }
+            Easing::CustomBezier { points } => {
+                let pts: Vec<String> = points.iter().map(|p| format!("(({:.3}, {:.3}), ({:.3}, {:.3}), ({:.3}, {:.3}))", p.pos.0, p.pos.1, p.handle_left.0, p.handle_left.1, p.handle_right.0, p.handle_right.1)).collect();
+                format!("custom_bezier(points = [{}])", pts.join(", "))
+            }
+        }
+    }
+}

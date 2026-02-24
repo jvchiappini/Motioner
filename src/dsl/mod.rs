@@ -82,17 +82,24 @@ pub fn parse_dsl(src: &str) -> Vec<Shape> {
     let mut pending_moves: Vec<(String, ast::MoveBlock)> = Vec::new();
 
     for stmt in stmts {
-        if let Statement::Shape(s) = stmt {
-            shapes.push(s);
-            continue;
-        }
-
-        if let Statement::Move(mv) = stmt {
-            if let Some(el) = mv.element.clone() {
-                pending_moves.push((el, mv));
+        match stmt {
+            Statement::Shape(s) => {
+                shapes.push(s);
+            }
+            Statement::Move(mv) => {
+                if let Some(el) = mv.element.clone() {
+                    pending_moves.push((el, mv));
+                }
+            }
+            Statement::Write(wr) => {
+                if let Some(target) = wr.element.as_deref() {
+                    if let Some(shape) = shapes.iter_mut().find(|s| s.name() == target) {
+                        let anim = ast_write_to_scene(&wr);
+                        shape.push_animation(anim);
+                    }
+                }
             }
         }
-        // other statement types have been retired
     }
 
     // Attach top-level move blocks to their target shapes. Use the
@@ -185,6 +192,18 @@ pub fn parse_dsl_into_elements(
         }
     }
 
+    for stmt in &stmts {
+        let Statement::Write(wr) = stmt else { continue };
+        let Some(target_name) = wr.element.as_deref() else {
+            continue;
+        };
+        let Some(elem) = elements.iter_mut().find(|e| e.name == target_name) else {
+            continue;
+        };
+
+        apply_write_to_ek(elem, wr, fps);
+    }
+
     elements
 }
 
@@ -265,6 +284,60 @@ fn apply_move_to_ek(
     ek.y.sort_by_key(|kf| kf.frame);
 }
 
+/// Helper that converts a `write_text` block into keyframes on the element's
+/// `reveal` track.
+fn apply_write_to_ek(
+    ek: &mut crate::shapes::element_store::ElementKeyframes,
+    wr: &ast::WriteBlock,
+    fps: u32,
+) {
+    use crate::shapes::element_store::{seconds_to_frame, FrameIndex, Keyframe};
+
+    let start_frame = seconds_to_frame(wr.during.0, fps);
+    let end_frame = seconds_to_frame(wr.during.1, fps);
+
+    fn upsert_kf(
+        track: &mut Vec<Keyframe<f32>>,
+        frame: FrameIndex,
+        value: f32,
+        easing: crate::animations::easing::Easing,
+    ) {
+        if let Some(existing) = track.iter_mut().find(|kf| kf.frame == frame) {
+            existing.value = value;
+            existing.easing = easing;
+        } else {
+            track.push(Keyframe {
+                frame,
+                value,
+                easing,
+            });
+        }
+    }
+
+    if start_frame == end_frame {
+        upsert_kf(&mut ek.reveal, start_frame, 1.0, wr.easing.clone());
+        upsert_kf(&mut ek.both_sides, start_frame, wr.both_sides as u32 as f32, wr.easing.clone());
+    } else {
+        upsert_kf(&mut ek.reveal, start_frame, 0.0, wr.easing.clone());
+        upsert_kf(&mut ek.both_sides, start_frame, wr.both_sides as u32 as f32, wr.easing.clone());
+        upsert_kf(
+            &mut ek.reveal,
+            end_frame,
+            1.0,
+            crate::animations::easing::Easing::Linear,
+        );
+        upsert_kf(
+            &mut ek.both_sides,
+            end_frame,
+            wr.both_sides as u32 as f32,
+            crate::animations::easing::Easing::Linear,
+        );
+    }
+
+    ek.reveal.sort_by_key(|kf| kf.frame);
+    ek.both_sides.sort_by_key(|kf| kf.frame);
+}
+
 pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation {
     use crate::scene::Animation;
 
@@ -274,6 +347,17 @@ pub(crate) fn ast_move_to_scene(mv: &ast::MoveBlock) -> crate::scene::Animation 
         start: mv.during.0,
         end: mv.during.1,
         easing: mv.easing.clone(),
+    }
+}
+
+pub(crate) fn ast_write_to_scene(wr: &ast::WriteBlock) -> crate::scene::Animation {
+    use crate::scene::Animation;
+
+    Animation::Write {
+        start: wr.during.0,
+        end: wr.during.1,
+        easing: wr.easing.clone(),
+        both_sides: wr.both_sides,
     }
 }
 

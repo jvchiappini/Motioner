@@ -32,6 +32,8 @@ pub struct Text {
     pub ephemeral: bool,
     #[serde(default = "super::shapes_manager::default_visible")]
     pub visible: bool,
+    #[serde(default = "super::shapes_manager::default_reveal")]
+    pub reveal: f32,
 }
 
 impl Default for Text {
@@ -51,6 +53,7 @@ impl Default for Text {
             z_index: 0,
             animations: Vec::new(),
             visible: true,
+            reveal: 1.0,
         }
     }
 }
@@ -356,6 +359,43 @@ impl ShapeDescriptor for Text {
             out.push_str(&format!("{}\t]\n", indent));
         }
 
+        for anim in &self.animations {
+            match anim {
+                crate::scene::Animation::Move {
+                    to_x,
+                    to_y,
+                    start,
+                    end,
+                    easing,
+                } => {
+                    out.push_str(&format!(
+                        "{}\tmove {{ to = ({:.3}, {:.3}), during = {:.2} -> {:.2}, ease = {} }},\n",
+                        indent,
+                        to_x,
+                        to_y,
+                        start,
+                        end,
+                        easing.to_dsl()
+                    ));
+                }
+                crate::scene::Animation::Write {
+                    start,
+                    end,
+                    easing,
+                    both_sides,
+                } => {
+                    out.push_str(&format!(
+                        "{}\twrite_text {{ during = {:.2} -> {:.2}, ease = {}{} }},\n",
+                        indent,
+                        start,
+                        end,
+                        easing.to_dsl(),
+                        if *both_sides { ", both_sides = true" } else { "" }
+                    ));
+                }
+            }
+        }
+
         out.push_str(&format!("{}}}\n", indent));
         out
     }
@@ -445,6 +485,11 @@ impl ShapeDescriptor for Text {
             value: self.z_index,
             easing: crate::animations::easing::Easing::Linear,
         });
+        ek.reveal.push(Keyframe {
+            frame: spawn,
+            value: 1.0,
+            easing: crate::animations::easing::Easing::Linear,
+        });
         ek.ephemeral = self.ephemeral;
         ek
     }
@@ -464,6 +509,7 @@ impl ShapeDescriptor for Text {
             color: None,
             visible: None,
             z_index: None,
+            reveal: None,
         };
 
         if orig.and_then(|p| p.x).unwrap_or(f32::NAN) != self.x {
@@ -556,6 +602,9 @@ impl ShapeDescriptor for Text {
                 spawn_time: spawn,
                 p1: 0,
                 p2: 0,
+                reveal: t.reveal,
+                both_sides: 0.0,
+                _pad: [0.0; 2],
                 uv0: [0.0, 0.0],
                 uv1: [0.0, 0.0],
             });

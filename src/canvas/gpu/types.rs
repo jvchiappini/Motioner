@@ -28,6 +28,9 @@ pub struct GpuShape {
     pub spawn_time: f32,
     pub p1: i32,
     pub p2: i32,
+    pub reveal: f32,
+    pub both_sides: f32,
+    pub _pad: [f32; 2],
     pub uv0: [f32; 2], // UV min en el atlas de texto
     pub uv1: [f32; 2], // UV max en el atlas de texto
 }
@@ -73,7 +76,11 @@ pub struct GpuElementDesc {
     pub a_len: u32,
     pub glyph_offset: u32,
     pub glyph_len: u32,
-    pub _pad: u32, // Padding to align base_size (vec2) to 8 bytes
+    pub reveal_offset: u32,
+    pub reveal_len: u32,
+    pub both_sides_offset: u32,
+    pub both_sides_len: u32,
+    pub _pad_align: u32,
 
     pub base_size: [f32; 2],
     pub uv0: [f32; 2],

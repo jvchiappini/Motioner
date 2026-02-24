@@ -23,6 +23,8 @@ pub struct Rect {
     pub animations: Vec<crate::scene::Animation>,
     #[serde(default = "super::shapes_manager::default_visible")]
     pub visible: bool,
+    #[serde(default = "super::shapes_manager::default_reveal")]
+    pub reveal: f32,
 }
 
 impl Default for Rect {
@@ -40,6 +42,7 @@ impl Default for Rect {
             z_index: 0,
             animations: Vec::new(),
             visible: true,
+            reveal: 1.0,
         }
     }
 }
@@ -117,51 +120,69 @@ impl ShapeDescriptor for Rect {
     }
 
     fn to_dsl(&self, indent: &str) -> String {
+        let mut out = format!(
+            "{}rect \"{}\" {{\n{}\tx = {:.3},\n{}\ty = {:.3},\n{}\twidth = {:.3},\n{}\theight = {:.3},\n{}\tfill = \"#{:02x}{:02x}{:02x}\",\n{}\tspawn = {:.2},\n",
+            indent,
+            self.name,
+            indent,
+            self.x,
+            indent,
+            self.y,
+            indent,
+            self.w,
+            indent,
+            self.h,
+            indent,
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            indent,
+            self.spawn_time
+        );
+
         if let Some(k) = self.kill_time {
-            format!(
-                "{}rect \"{}\" {{\n{}\tx = {:.3},\n{}\ty = {:.3},\n{}\twidth = {:.3},\n{}\theight = {:.3},\n{}\tfill = \"#{:02x}{:02x}{:02x}\",\n{}\tspawn = {:.2},\n{}\tkill = {:.2}\n{}}}\n",
-                indent,
-                self.name,
-                indent,
-                self.x,
-                indent,
-                self.y,
-                indent,
-                self.w,
-                indent,
-                self.h,
-                indent,
-                self.color[0],
-                self.color[1],
-                self.color[2],
-                indent,
-                self.spawn_time,
-                indent,
-                k,
-                indent
-            )
-        } else {
-            format!(
-                "{}rect \"{}\" {{\n{}\tx = {:.3},\n{}\ty = {:.3},\n{}\twidth = {:.3},\n{}\theight = {:.3},\n{}\tfill = \"#{:02x}{:02x}{:02x}\",\n{}\tspawn = {:.2}\n{}}}\n",
-                indent,
-                self.name,
-                indent,
-                self.x,
-                indent,
-                self.y,
-                indent,
-                self.w,
-                indent,
-                self.h,
-                indent,
-                self.color[0],
-                self.color[1],
-                self.color[2],
-                indent,
-                self.spawn_time,
-                indent
-            )
+            out.push_str(&format!("{}\tkill = {:.2},\n", indent, k));
         }
+
+        for anim in &self.animations {
+            match anim {
+                crate::scene::Animation::Move {
+                    to_x,
+                    to_y,
+                    start,
+                    end,
+                    easing,
+                } => {
+                    out.push_str(&format!(
+                        "{}\tmove {{ to = ({:.3}, {:.3}), during = {:.2} -> {:.2}, ease = {} }},\n",
+                        indent,
+                        to_x,
+                        to_y,
+                        start,
+                        end,
+                        easing.to_dsl()
+                    ));
+                }
+                crate::scene::Animation::Write {
+                    start,
+                    end,
+                    easing,
+                    both_sides,
+                } => {
+                    out.push_str(&format!(
+                        "{}\twrite_text {{ during = {:.2} -> {:.2}, ease = {}{} }},\n",
+                        indent,
+                        start,
+                        end,
+                        easing.to_dsl(),
+                        if *both_sides { ", both_sides = true" } else { "" }
+                    ));
+                }
+            }
+        }
+
+        out.push_str(&format!("{}}}\n", indent));
+        out
     }
 
     fn create_default(name: String) -> super::shapes_manager::Shape {
@@ -248,6 +269,11 @@ impl ShapeDescriptor for Rect {
             value: self.z_index,
             easing: crate::animations::easing::Easing::Linear,
         });
+        ek.reveal.push(Keyframe {
+            frame: spawn,
+            value: 1.0,
+            easing: crate::animations::easing::Easing::Linear,
+        });
         ek.ephemeral = self.ephemeral;
         ek
     }
@@ -267,6 +293,7 @@ impl ShapeDescriptor for Rect {
             color: None,
             visible: None,
             z_index: None,
+            reveal: None,
         };
 
         if orig.and_then(|p| p.x).unwrap_or(f32::NAN) != self.x {
@@ -353,6 +380,9 @@ impl ShapeDescriptor for Rect {
                 spawn_time: spawn,
                 p1: 0,
                 p2: 0,
+                reveal: r.reveal,
+                both_sides: 0.0,
+                _pad: [0.0; 2],
                 uv0: [0.0, 0.0],
                 uv1: [0.0, 0.0],
             });

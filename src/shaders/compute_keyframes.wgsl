@@ -73,6 +73,11 @@ struct GpuElementDesc {
 
     glyph_offset:  u32,
     glyph_len:     u32,
+    reveal_offset: u32,
+    reveal_len:    u32,
+    both_sides_offset: u32,
+    both_sides_len: u32,
+    _pad_align:    u32,
 
     base_size:     vec2<f32>,
     uv0:           vec2<f32>,
@@ -89,6 +94,9 @@ struct GpuShape {
     spawn_time: f32,
     p1:         i32,
     p2:         i32,
+    reveal:     f32,
+    both_sides: f32,
+    _pad:       vec2<f32>,
     uv0:        vec2<f32>,
     uv1:        vec2<f32>,
 }
@@ -227,6 +235,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let g      = sample_track(desc.g_offset,       desc.g_len,      cu.current_frame);
     let b      = sample_track(desc.b_offset,       desc.b_len,      cu.current_frame);
     let a      = sample_track(desc.a_offset,       desc.a_len,      cu.current_frame);
+    let reveal = sample_track(desc.reveal_offset,  desc.reveal_len, cu.current_frame);
+    let both_sides = sample_track(desc.both_sides_offset, desc.both_sides_len, cu.current_frame);
 
     // Derive size from shape type.
     var size = vec2<f32>(0.0, 0.0);
@@ -257,6 +267,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out.spawn_time = spawn_time;
     out.p1         = 0;
     out.p2         = 0;
+    out.reveal     = reveal;
+    out.both_sides = both_sides;
     out.uv0        = desc.uv0;
     out.uv1        = desc.uv1;
     // propagate glyph buffer indices so the fragment shader can look up

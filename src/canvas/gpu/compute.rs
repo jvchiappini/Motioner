@@ -77,7 +77,11 @@ impl GpuResources {
                     a_len: 0,
                     glyph_offset: 0,
                     glyph_len: 0,
-                    _pad: 0,
+                    reveal_offset: 0,
+                    reveal_len: 0,
+                    both_sides_offset: 0,
+                    both_sides_len: 0,
+                    _pad_align: 0,
                     base_size: [0.0, 0.0],
                     uv0: [0.0, 0.0],
                     uv1: [0.0, 0.0],
@@ -154,15 +158,28 @@ impl GpuResources {
                                     if size_px <= 0.0 {
                                         return;
                                     }
+                                    
+                                    // Use debug outline if "reveal" track implies a write_text animation
+                                    // (heuristic: reveal track has keyframes with values other than initial 1.0)
+                                    // Or simply if the text element is being animated by write_text.
+                                    // Ideally `ek` has a way to check this, but `ek.reveal` track length is a good proxy.
+                                    // `write_text` usually adds multiple keyframes. Default reveal is 1 kf (value 1.0).
+                                    // If we see more than 1 keyframe, or value < 1.0, use outline.
+                                    // However, `Text` shape always gets a default reveal keyframe.
+                                    // Let's assume > 1 keyframe on reveal means write_text.
+                                    let is_debug_outline = ek.reveal.len() > 1;
+
                                     let res =
                                         crate::canvas::text_rasterizer::ensure_glyph_atlas_gpu(
                                             font_name,
                                             size_px,
+                                            text,
                                             font_map,
                                             font_arc_cache,
                                             self,
                                             device,
                                             queue,
+                                            is_debug_outline,
                                         );
                                     // always update combined dims; upload pixels only if new
                                     combined_w = res.combined_width;
@@ -303,6 +320,10 @@ impl GpuResources {
                     self.push_track_helper(&mut all_keyframes, &ek.w, 1.0);
                 (desc.h_offset, desc.h_len) =
                     self.push_track_helper(&mut all_keyframes, &ek.h, 1.0);
+                (desc.reveal_offset, desc.reveal_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.reveal, 1.0);
+                (desc.both_sides_offset, desc.both_sides_len) =
+                    self.push_track_helper(&mut all_keyframes, &ek.both_sides, 1.0);
 
                 // Tracks de color (convertidos a lineal 0..1)
                 (desc.r_offset, desc.r_len) =

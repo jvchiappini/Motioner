@@ -3,7 +3,8 @@
 /// el texto de la escena dibujado en sus posiciones animadas.
 /// El buffer luego se sube como textura a la GPU para que el shader lo muestre
 /// con filtrado NEAREST (pixelado, sin resolución "infinita").
-use ab_glyph::{Font, FontArc, Glyph, ScaleFont};
+use ab_glyph::{Font, FontArc, ScaleFont};
+
 #[cfg(feature = "wgpu")]
 use eframe::wgpu;
 use once_cell::sync::Lazy;
@@ -41,6 +42,7 @@ pub struct GlyphAtlas {
     pub height: u32,
     pub pixels: Vec<u8>, // RGBA8 atlas image
     pub metrics: HashMap<char, GlyphMetric>,
+    pub known_chars: Vec<char>, // list of chars inside
 }
 
 // refine_glyph_metrics has been removed because the text compute shader relies 
@@ -51,8 +53,10 @@ pub struct GlyphAtlas {
 // global cache of glyph atlases keyed by (font_name, size_px)
 // El tamaño se redondea a u32 para servir como clave; evita problemas con
 // `f32` no siendo `Eq`/`Hash`/`Ord`.
-static GLYPH_ATLASES: Lazy<Mutex<HashMap<(String, u32), GlyphAtlas>>> =
+
+static GLYPH_ATLASES: Lazy<Mutex<HashMap<(String, u32, bool), GlyphAtlas>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
 
 /// Result returned by `ensure_glyph_atlas`.
 pub struct AtlasResult {
@@ -72,33 +76,65 @@ pub struct AtlasResult {
 /// re-generated; `AtlasResult` will include the updated combined image so the
 /// caller can upload it to the GPU.
 #[cfg(not(feature = "wgpu"))]
-pub fn ensure_glyph_atlas(
-    font_name: Option<&str>,
-    size_px: f32,
-    font_map: &HashMap<String, std::path::PathBuf>,
-    font_arc_cache: &mut HashMap<String, FontArc>,
-) -> AtlasResult {
-    let key = (
-        font_name.unwrap_or("__system__").to_string(),
-        size_px.round() as u32,
-    );
+
+    pub fn ensure_glyph_atlas(
+        font_name: Option<&str>,
+        size_px: f32,
+        text: &str,
+        font_map: &HashMap<String, std::path::PathBuf>,
+        font_arc_cache: &mut HashMap<String, FontArc>,
+        debug_outline: bool, // Changed named param
+    ) -> AtlasResult {
+        let key = (
+            font_name.unwrap_or("__system__").to_string(),
+            size_px.round() as u32,
+            debug_outline,
+        );
+
     let mut map = GLYPH_ATLASES.lock().unwrap();
     let mut new = false;
-    if !map.contains_key(&key) {
-        // build new atlas for this font/size
-        let atlas = build_single_font_atlas(font_name, size_px, font_map, font_arc_cache);
+    
+    let mut rebuild = false;
+    let mut current_chars = Vec::new();
+    let needed_chars: Vec<char> = text.chars().collect();
+
+    if let Some(atlas) = map.get(&key) {
+        current_chars = atlas.known_chars.clone();
+        for c in &needed_chars {
+            if !current_chars.contains(c) {
+                rebuild = true;
+                current_chars.push(*c);
+            }
+        }
+    } else {
+        rebuild = true;
+        for c in &needed_chars {
+            if !current_chars.contains(c) {
+                current_chars.push(*c);
+            }
+        }
+        if !current_chars.contains(&' ') {
+            current_chars.push(' ');
+        }
+    }
+
+
+    if rebuild {
+        let atlas = build_single_font_atlas(font_name, size_px, font_map, font_arc_cache, &current_chars, debug_outline);
         map.insert(key.clone(), atlas);
         new = true;
     }
+    
     // compute combined atlas if something changed
     let mut combined_pixels = None;
     let (combined_w, combined_h, offsets) = if new {
-        let (pixels, w, h, offs) = merge_all_atlases(&*map);
-        combined_pixels = Some(pixels.clone());
+        let (pixels, w, h, offs) = merge_all_atlases(&*map, true);
+        combined_pixels = Some(pixels);
         (w, h, offs)
     } else {
-        // if no new atlas, offsets still needed for uv calculation
-        let (_pixels, w, h, offs) = merge_all_atlases(&*map);
+        // if no new atlas, we only need the offsets; merge_all_atlases is now
+        // optimized to only compute offsets without allocating a pixel buffer.
+        let (_, w, h, offs) = merge_all_atlases(&*map, false);
         (w, h, offs)
     };
     let offset_x = offsets.get(&key).cloned().unwrap_or(0);
@@ -127,39 +163,61 @@ pub fn ensure_glyph_atlas(
 pub fn ensure_glyph_atlas_gpu(
     font_name: Option<&str>,
     size_px: f32,
+    text: &str,
     font_map: &HashMap<String, std::path::PathBuf>,
     font_arc_cache: &mut HashMap<String, FontArc>,
     _resources: &mut crate::canvas::gpu::resources::GpuResources,
     _device: &wgpu::Device,
     _queue: &wgpu::Queue,
+    debug_outline: bool,
 ) -> AtlasResult {
     // same key rounding as CPU version
     let key = (
         font_name.unwrap_or("__system__").to_string(),
         size_px.round() as u32,
+        debug_outline,
     );
     let mut map = GLYPH_ATLASES.lock().unwrap();
     let mut new = false;
-    if !map.contains_key(&key) {
-        // build new atlas using CPU renderer to avoid recursion in GPU compute pipeline
-        let atlas = build_single_font_atlas(font_name, size_px, font_map, font_arc_cache);
-        if atlas.metrics.is_empty() {
-            /*eprintln!(
-                "[text_rasterizer] WARNING: generated empty atlas for font={:?} size={:.1}",
-                font_name, size_px
-            );*/
+    
+    let mut rebuild = false;
+    let mut current_chars = Vec::new();
+    let needed_chars: Vec<char> = text.chars().collect();
+
+    if let Some(atlas) = map.get(&key) {
+        current_chars = atlas.known_chars.clone();
+        for c in &needed_chars {
+            if !current_chars.contains(c) {
+                rebuild = true;
+                current_chars.push(*c);
+            }
         }
+    } else {
+        rebuild = true;
+        for c in &needed_chars {
+            if !current_chars.contains(c) {
+                current_chars.push(*c);
+            }
+        }
+        if !current_chars.contains(&' ') {
+            current_chars.push(' ');
+        }
+    }
+
+    if rebuild {
+        let atlas = build_single_font_atlas(font_name, size_px, font_map, font_arc_cache, &current_chars, debug_outline);
         map.insert(key.clone(), atlas);
         new = true;
     }
+    
     // compute combined atlas (cpu only, small)
     let mut combined_pixels = None;
     let (combined_w, combined_h, offsets) = if new {
-        let (pixels, w, h, offs) = merge_all_atlases(&*map);
-        combined_pixels = Some(pixels.clone());
+        let (pixels, w, h, offs) = merge_all_atlases(&*map, true);
+        combined_pixels = Some(pixels);
         (w, h, offs)
     } else {
-        let (_pixels, w, h, offs) = merge_all_atlases(&*map);
+        let (_, w, h, offs) = merge_all_atlases(&*map, false);
         (w, h, offs)
     };
     let offset_x = offsets.get(&key).cloned().unwrap_or(0);
@@ -182,12 +240,15 @@ fn build_single_font_atlas(
     size_px: f32,
     font_map: &HashMap<String, std::path::PathBuf>,
     font_arc_cache: &mut HashMap<String, FontArc>,
+    chars_to_render: &[char],
+    debug_outline: bool,
 ) -> GlyphAtlas {
     let mut atlas = GlyphAtlas {
         width: 0,
         height: 0,
         pixels: Vec::new(),
         metrics: HashMap::new(),
+        known_chars: chars_to_render.to_vec(),
     };
     if let Some(font_arc) = resolve_font_with_warning(font_name, font_arc_cache, font_map) {
         let scale = ab_glyph::PxScale::from(size_px);
@@ -197,18 +258,20 @@ fn build_single_font_atlas(
         let descent = scaled.descent();
         let glyph_h = (ascent - descent).ceil() as u32;
         let mut max_adv = 0.0f32;
-        let chars: Vec<char> = (32u8..127u8).map(|b| b as char).collect();
-        for &ch in &chars {
+        for &ch in chars_to_render {
             max_adv = max_adv.max(scaled.h_advance(scaled.glyph_id(ch)));
         }
         let cell_w = max_adv.ceil() as u32 + 2;
-        let cols = 16;
-        let rows = ((chars.len() as u32) + cols - 1) / cols;
+        let cols = 16.min(chars_to_render.len().max(1) as u32);
+        let rows = ((chars_to_render.len() as u32) + cols - 1) / cols;
         atlas.width = cols * cell_w;
         atlas.height = rows * glyph_h;
+        if atlas.width == 0 || atlas.height == 0 {
+            return atlas;
+        }
         atlas.pixels = vec![0u8; (atlas.width * atlas.height * 4) as usize];
 
-        for (i, &ch) in chars.iter().enumerate() {
+        for (i, &ch) in chars_to_render.iter().enumerate() {
             let col = (i as u32) % cols;
             let row = (i as u32) / cols;
             let x0 = col * cell_w;
@@ -235,7 +298,8 @@ fn build_single_font_atlas(
                 y_draw,
                 [255, 255, 255, 255],
                 &mut has,
-            ) as f32;
+                debug_outline,
+            );
 
             // force `has` to be true for debugging purposes if advance > 0,
             // otherwise invisible outlined chars might be skipped.
@@ -312,16 +376,11 @@ fn build_single_font_atlas(
 /// (pixels, width, height, offsets) where `offsets` maps atlas key to its x
 /// offset within the combined image.
 fn merge_all_atlases(
-    map: &HashMap<(String, u32), GlyphAtlas>,
-) -> (Vec<u8>, u32, u32, HashMap<(String, u32), u32>) {
-    let mut entries: Vec<(&(String, u32), &GlyphAtlas)> = map.iter().collect();
+    map: &HashMap<(String, u32, bool), GlyphAtlas>,
+    include_pixels: bool,
+) -> (Vec<u8>, u32, u32, HashMap<(String, u32, bool), u32>) {
+    let mut entries: Vec<(&(String, u32, bool), &GlyphAtlas)> = map.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
-    
-    // Instead of actual 2D pack, let's keep 1D layout but CAP the maximum size_px earlier so
-    // individual atlases are never this big! Wait, `merge_all_atlases` signature assumes 1D X-offsets.
-    // Making it 2D requires changing `compute.rs`, `render.wgsl`, `text.wgsl` to take vec2 offsets.
-    // Let's stick with 1D layout but ensure `actual_combined_w` never exceeds MAX_TEXTURE_SIZE.
-    // If it does, we just allocate up to MAX_TEXTURE_SIZE and skip any atlas that doesn't fit horizontally.
     
     let mut actual_combined_w = 0;
     let mut actual_combined_h = 0;
@@ -337,27 +396,38 @@ fn merge_all_atlases(
         return (vec![0u8; 4], 1, 1, HashMap::new());
     }
 
-    let pixel_count = (actual_combined_w as u64) * (actual_combined_h as u64) * 4;
-    let mut pixels = vec![0u8; pixel_count as usize];
+    let mut pixels = if include_pixels {
+        let pixel_count = (actual_combined_w as u64) * (actual_combined_h as u64) * 4;
+        vec![0u8; pixel_count as usize]
+    } else {
+        Vec::new()
+    };
     let mut offsets = HashMap::new();
     let mut cursor_x = 0;
-    
-    for (key, atlas) in entries {
+
+    for (k, atlas) in entries {
         if cursor_x + atlas.width > actual_combined_w {
-            continue; // Doesn't fit, skip
+            break;
         }
-        offsets.insert(key.clone(), cursor_x);
-        for y in 0..atlas.height {
-            let dest_row = y;
-            let src_offset = (y * atlas.width * 4) as usize;
-            let dest_offset = (dest_row * actual_combined_w * 4 + cursor_x * 4) as usize;
-            pixels[dest_offset..dest_offset + (atlas.width * 4) as usize]
-                .copy_from_slice(&atlas.pixels[src_offset..src_offset + (atlas.width * 4) as usize]);
+        offsets.insert((*k).clone(), cursor_x);
+
+        if include_pixels {
+            for row in 0..atlas.height {
+                let src_start = (row * atlas.width * 4) as usize;
+                let src_end = src_start + (atlas.width * 4) as usize;
+                let dst_start = ((row * actual_combined_w + cursor_x) * 4) as usize;
+                let dst_end = dst_start + (atlas.width * 4) as usize;
+                if src_end <= atlas.pixels.len() && dst_end <= pixels.len() {
+                    pixels[dst_start..dst_end].copy_from_slice(&atlas.pixels[src_start..src_end]);
+                }
+            }
         }
         cursor_x += atlas.width;
     }
+
     (pixels, actual_combined_w, actual_combined_h, offsets)
 }
+
 
 /// text layout helper removed; glyph runs are generated inside compute.rs
 
@@ -373,7 +443,7 @@ fn merge_all_atlases(
 /// Obtiene o carga una fuente. Para "System"/vacío usa el fallback del sistema.
 fn resolve_font(
     name: Option<&str>,
-    cache: &HashMap<String, FontArc>,
+    cache: &mut HashMap<String, FontArc>,
     font_map: &HashMap<String, std::path::PathBuf>,
 ) -> Option<FontArc> {
     match name {
@@ -392,13 +462,23 @@ fn resolve_font(
                 }
             }
             // 3. Si no se encontró la fuente nombrada, caer al sistema
-            get_system_font(font_map)
+            let f = get_system_font(font_map);
+            if let Some(font) = &f {
+                cache.insert(n.to_string(), font.clone());
+            }
+            f
         }
         // "System" o vacío → usar fuente del sistema (primero del caché)
-        _ => cache
-            .get("__system__")
-            .cloned()
-            .or_else(|| get_system_font(font_map)),
+        _ => {
+            if let Some(f) = cache.get("__system__") {
+                return Some(f.clone());
+            }
+            let f = get_system_font(font_map);
+            if let Some(font) = &f {
+                cache.insert("__system__".to_string(), font.clone());
+            }
+            f
+        }
     }
 }
 
@@ -408,9 +488,9 @@ fn resolve_font(
 // warning so it's easier to diagnose when the system font lookup fails.
 // It is deliberately kept separate from `resolve_font` itself to avoid
 // cluttering every call site with logging logic.
-fn resolve_font_with_warning(
+pub(crate) fn resolve_font_with_warning(
     name: Option<&str>,
-    cache: &HashMap<String, FontArc>,
+    cache: &mut HashMap<String, FontArc>,
     font_map: &HashMap<String, std::path::PathBuf>,
 ) -> Option<FontArc> {
     let res = resolve_font(name, cache, font_map);
@@ -467,78 +547,221 @@ fn draw_text_to_buffer(
     y: i32,
     color: [u8; 4],
     has_text: &mut bool,
-) -> i32 {
+    debug_outline: bool,
+) -> f32 {
     let Some(font) = font else {
-        // Sin fuente disponible: no dibujar nada
-        return 0;
+        return 0.0;
     };
 
-    // Escalar la fuente al tamaño en píxeles
     let scale = ab_glyph::PxScale::from(size_pts);
     let scaled = font.as_scaled(scale);
-
     let ascent = scaled.ascent();
+
     let mut cursor_x = x as f32;
     let baseline_y = y as f32 + ascent;
-
     let mut total_advance = 0.0f32;
     let mut prev_glyph: Option<ab_glyph::GlyphId> = None;
 
     for ch in text.chars() {
         let glyph_id = scaled.glyph_id(ch);
-        // Kerning
         if let Some(prev) = prev_glyph {
             cursor_x += scaled.kern(prev, glyph_id);
             total_advance += scaled.kern(prev, glyph_id);
         }
         prev_glyph = Some(glyph_id);
 
-        let glyph: Glyph =
-            glyph_id.with_scale_and_position(scale, ab_glyph::point(cursor_x, baseline_y));
+        let glyph = glyph_id.with_scale_and_position(scale, ab_glyph::point(cursor_x, baseline_y));
+        
 
-        if let Some(outlined) = font.outline_glyph(glyph) {
-            let bounds = outlined.px_bounds();
-            outlined.draw(|bx, by, cov| {
-                let px = bounds.min.x as i32 + bx as i32;
-                let py = bounds.min.y as i32 + by as i32;
-                if px < 0 || py < 0 || px >= rw as i32 || py >= rh as i32 {
-                    return;
-                }
-                let idx = (py as u32 * rw + px as u32) as usize * 4;
-                // Alpha compositing: pre-blendear sobre fondo transparente
-                let src_a = (cov * color[3] as f32).clamp(0.0, 255.0) as u8;
-                if src_a == 0 {
-                    return;
-                }
-                let dst_a = pixels[idx + 3];
-                if dst_a == 0 {
-                    // Pixel destino transparente: simplemente copiar
-                    pixels[idx] = color[0];
-                    pixels[idx + 1] = color[1];
-                    pixels[idx + 2] = color[2];
-                    pixels[idx + 3] = src_a;
-                } else {
-                    // Alpha over compositing
-                    let sa = src_a as f32 / 255.0;
-                    let da = dst_a as f32 / 255.0;
-                    let out_a = sa + da * (1.0 - sa);
-                    if out_a > 0.0 {
-                        pixels[idx] =
-                            ((color[0] as f32 * sa + pixels[idx] as f32 * da * (1.0 - sa)) / out_a)
-                                .round() as u8;
-                        pixels[idx + 1] = ((color[1] as f32 * sa
-                            + pixels[idx + 1] as f32 * da * (1.0 - sa))
-                            / out_a)
-                            .round() as u8;
-                        pixels[idx + 2] = ((color[2] as f32 * sa
-                            + pixels[idx + 2] as f32 * da * (1.0 - sa))
-                            / out_a)
-                            .round() as u8;
-                        pixels[idx + 3] = (out_a * 255.0).round() as u8;
+        
+        if debug_outline {
+            if let Some(outline) = font.outline(glyph_id) {
+                // CRITICAL: ab_glyph's ScaleFont uses height_unscaled() as the
+                // divisor for scale factors, NOT units_per_em(). These differ for
+                // most fonts.  height_unscaled = ascent_unscaled - descent_unscaled.
+                // See ab_glyph scale.rs: h_scale_factor = scale.x / height_unscaled
+                //                        v_scale_factor = scale.y / height_unscaled
+                // The OutlinedGlyph::draw() method then applies:
+                //   scaled_point = point(p.x * h_factor, p.y * (-v_factor))
+                //   final_point  = scaled_point + (glyph.position - px_bounds.min)
+                // For our wireframe rendering we skip the px_bounds offset and
+                // instead add the glyph position directly (cursor_x, baseline_y),
+                // which gives identical absolute coordinates.
+                let mut path_command_counts = Vec::new();
+                let mut current_command_count = 0;
+                let mut last_p1: Option<ab_glyph::Point> = None;
+
+                let mut draw_line = |p0: ab_glyph::Point, p1: ab_glyph::Point| {
+                    let x0 = p0.x.round() as i32;
+                    let y0 = p0.y.round() as i32;
+                    let x1 = p1.x.round() as i32;
+                    let y1 = p1.y.round() as i32;
+
+                    let dx = (x1 - x0).abs();
+                    let dy = -(y1 - y0).abs();
+                    let sx = if x0 < x1 { 1 } else { -1 };
+                    let sy = if y0 < y1 { 1 } else { -1 };
+                    let mut err = dx + dy;
+                    
+                    let mut cx = x0;
+                    let mut cy = y0;
+
+                    loop {
+                        if cx >= 0 && cy >= 0 && cx < rw as i32 && cy < rh as i32 {
+                            let idx = ((cy as u32 * rw + cx as u32) * 4) as usize;
+                            if idx + 3 < pixels.len() {
+                                pixels[idx] = 0;
+                                pixels[idx + 1] = 255;  
+                                pixels[idx + 2] = 255; 
+                                pixels[idx + 3] = 255;
+                            }
+                        }
+
+                        if cx == x1 && cy == y1 { break; }
+                        let e2 = 2 * err;
+                        if e2 >= dy {
+                            if cx == x1 { break; }
+                            err += dy;
+                            cx += sx;
+                        }
+                        if e2 <= dx {
+                            if cy == y1 { break; }
+                            err += dx;
+                            cy += sy;
+                        }
+                    }
+                };
+
+                for curve in &outline.curves {
+                    let p0_unscaled = match curve {
+                        ab_glyph::OutlineCurve::Line(p, _) => *p,
+                        ab_glyph::OutlineCurve::Quad(p, _, _) => *p,
+                        ab_glyph::OutlineCurve::Cubic(p, _, _, _) => *p,
+                    };
+                    let p_end_unscaled = match curve {
+                        ab_glyph::OutlineCurve::Line(_, p) => *p,
+                        ab_glyph::OutlineCurve::Quad(_, _, p) => *p,
+                        ab_glyph::OutlineCurve::Cubic(_, _, _, p) => *p,
+                    };
+
+                    // Detect new path (contour) by checking for jumps in unscaled coordinates
+                    if last_p1.is_none() || (p0_unscaled.x - last_p1.unwrap().x).abs() > 0.1 || (p0_unscaled.y - last_p1.unwrap().y).abs() > 0.1 {
+                        if last_p1.is_some() {
+                            path_command_counts.push(current_command_count);
+                        }
+                        current_command_count = 0;
+                    }
+                    current_command_count += 1;
+                    last_p1 = Some(p_end_unscaled);
+
+                    let h_factor = scaled.h_scale_factor();
+                    let v_factor = -scaled.v_scale_factor(); // negate: font Y-up → screen Y-down
+
+                    let pos_x = cursor_x;
+                    let pos_y = baseline_y;
+
+                    // Sample the curve (higher density for smoothness)
+                    let mut points = Vec::new();
+                    match curve {
+                        ab_glyph::OutlineCurve::Line(p0, p1) => {
+                            points.push(*p0);
+                            points.push(*p1);
+                        }
+                        ab_glyph::OutlineCurve::Quad(p0, p1, p2) => {
+                            let steps = 64;
+                            for i in 0..=steps {
+                                let t = i as f32 / steps as f32;
+                                let it = 1.0 - t;
+                                let x = it * it * p0.x + 2.0 * it * t * p1.x + t * t * p2.x;
+                                let y = it * it * p0.y + 2.0 * it * t * p1.y + t * t * p2.y;
+                                points.push(ab_glyph::point(x, y));
+                            }
+                        }
+                        ab_glyph::OutlineCurve::Cubic(p0, p1, p2, p3) => {
+                            let steps = 64;
+                            for i in 0..=steps {
+                                let t = i as f32 / steps as f32;
+                                let it = 1.0 - t;
+                                let it2 = it * it;
+                                let t2 = t * t;
+                                let x = it2 * it * p0.x + 3.0 * it2 * t * p1.x + 3.0 * it * t2 * p2.x + t2 * t * p3.x;
+                                let y = it2 * it * p0.y + 3.0 * it2 * t * p1.y + 3.0 * it * t2 * p2.y + t2 * t * p3.y;
+                                points.push(ab_glyph::point(x, y));
+                            }
+                        }
+                    }
+
+                    // Transform: same as ab_glyph's OutlinedGlyph::draw()
+                    // scale_up(p) = point(p.x * h_factor, p.y * v_factor)
+                    // absolute   = scale_up(p) + glyph_position
+                    for win in points.windows(2) {
+                        let p0_u = win[0];
+                        let p1_u = win[1];
+                        let p0 = ab_glyph::point(p0_u.x * h_factor + pos_x, p0_u.y * v_factor + pos_y);
+                        let p1 = ab_glyph::point(p1_u.x * h_factor + pos_x, p1_u.y * v_factor + pos_y);
+                        draw_line(p0, p1);
                     }
                 }
+
+                if last_p1.is_some() {
+                    path_command_counts.push(current_command_count);
+                }
+                
+                eprintln!(
+                    "[debug_outline] Glyph '{}' | Paths: {} | Commands per path: {:?}",
+                    ch,
+                    path_command_counts.len(),
+                    path_command_counts
+                );
+
                 *has_text = true;
-            });
+            }
+        } else {
+            // Normal rasterization
+            if let Some(outlined) = font.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|bx, by, cov| {
+                    let px = bounds.min.x as i32 + bx as i32;
+                    let py = bounds.min.y as i32 + by as i32;
+                    if px < 0 || py < 0 || px >= rw as i32 || py >= rh as i32 {
+                        return;
+                    }
+                    let idx = (py as u32 * rw + px as u32) as usize * 4;
+                    // Alpha compositing: pre-blendear sobre fondo transparente
+                    let src_a = (cov * color[3] as f32).clamp(0.0, 255.0) as u8;
+                    if src_a == 0 {
+                        return;
+                    }
+                    let dst_a = pixels[idx + 3];
+                    if dst_a == 0 {
+                        // Pixel destino transparente: simplemente copiar
+                        pixels[idx] = color[0];
+                        pixels[idx + 1] = color[1];
+                        pixels[idx + 2] = color[2];
+                        pixels[idx + 3] = src_a;
+                    } else {
+                        // Alpha over compositing
+                        let sa = src_a as f32 / 255.0;
+                        let da = dst_a as f32 / 255.0;
+                        let out_a = sa + da * (1.0 - sa);
+                        if out_a > 0.0 {
+                            pixels[idx] =
+                                ((color[0] as f32 * sa + pixels[idx] as f32 * da * (1.0 - sa)) / out_a)
+                                    .round() as u8;
+                            pixels[idx + 1] = ((color[1] as f32 * sa
+                                + pixels[idx + 1] as f32 * da * (1.0 - sa))
+                                / out_a)
+                                .round() as u8;
+                            pixels[idx + 2] = ((color[2] as f32 * sa
+                                + pixels[idx + 2] as f32 * da * (1.0 - sa))
+                                / out_a)
+                                .round() as u8;
+                            pixels[idx + 3] = (out_a * 255.0).round() as u8;
+                        }
+                    }
+                    *has_text = true;
+                });
+            }
         }
 
         let advance = scaled.h_advance(glyph_id);
@@ -546,5 +769,8 @@ fn draw_text_to_buffer(
         total_advance += advance;
     }
 
-    total_advance.round() as i32
+    total_advance
 }
+
+
+

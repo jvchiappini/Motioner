@@ -140,6 +140,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -173,6 +174,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -206,6 +208,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -234,6 +237,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: Some(color),
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -333,6 +337,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -366,6 +371,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -399,6 +405,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -432,6 +439,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -460,6 +468,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: Some(color),
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -553,6 +562,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -584,6 +594,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -639,6 +650,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -673,6 +685,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: None,
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;
@@ -701,6 +714,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 color: Some(color),
                                                 visible: None,
                                                 z_index: None,
+                                                reveal: None,
                                             },
                                         );
                                         changed = true;

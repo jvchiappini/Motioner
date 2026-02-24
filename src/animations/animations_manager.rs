@@ -15,6 +15,14 @@ pub enum Animation {
         end: f32,
         easing: crate::animations::Easing,
     },
+    Write {
+        /// start time in seconds
+        start: f32,
+        /// end time in seconds
+        end: f32,
+        easing: crate::animations::Easing,
+        both_sides: bool,
+    },
 }
 
 /// Public interface used by the UI/renderer to resolve an element's animated position.

@@ -138,7 +138,7 @@ fn check_header_config(src: &str, diags: &mut Vec<Diagnostic>) {
 
 fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
     // Non-shape top-level keywords that are always allowed.
-    const ALWAYS_ALLOWED: &[&str] = &["move", "group", "on_time", "size", "timeline"];
+    const ALWAYS_ALLOWED: &[&str] = &["move", "write_text", "group", "on_time", "size", "timeline"];
 
     // Shape keywords come from the live registry — no hard-coded list needed.
     // Adding a new shape automatically makes it recognised here.

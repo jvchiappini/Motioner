@@ -71,6 +71,17 @@ pub struct MoveBlock {
     pub easing: crate::scene::Easing,
 }
 
+/// A `write_text {}` animation block.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WriteBlock {
+    /// Target element name.
+    pub element: Option<String>,
+    /// `start -> end` time range in seconds.
+    pub during: (f32, f32),
+    pub easing: crate::scene::Easing,
+    pub both_sides: bool,
+}
+
 // ─── Shape elements ───────────────────────────────────────────────────────────
 
 // ─── Header ───────────────────────────────────────────────────────────────────
@@ -111,4 +122,6 @@ pub enum Statement {
     Shape(crate::shapes::shapes_manager::Shape),
     /// A top-level `move {}` block that references an element by name.
     Move(MoveBlock),
+    /// A top-level `write_text {}` block that references an element by name.
+    Write(WriteBlock),
 }

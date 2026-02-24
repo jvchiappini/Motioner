@@ -140,6 +140,7 @@ pub trait ShapeDescriptor {
             color: None,
             visible: None,
             z_index: None,
+            reveal: None,
         }
     }
 

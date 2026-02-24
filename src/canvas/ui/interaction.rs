@@ -443,6 +443,7 @@ pub fn handle_canvas_clicks(
                                                     color: None,
                                                     visible: None,
                                                     z_index: None,
+                                                    reveal: None,
                                                 },
                                             );
 
@@ -502,6 +503,7 @@ pub fn handle_canvas_clicks(
                                                     color: None,
                                                     visible: None,
                                                     z_index: None,
+                                                    reveal: None,
                                                 },
                                             );
                                             let elem_name = elem.name.clone();
@@ -529,6 +531,7 @@ pub fn handle_canvas_clicks(
                                                     color: None,
                                                     visible: None,
                                                     z_index: None,
+                                                    reveal: None,
                                                 },
                                             );
                                             let elem_name = elem.name.clone();
@@ -674,6 +677,7 @@ pub fn handle_canvas_clicks(
                                     color: None,
                                     visible: None,
                                     z_index: None,
+                                    reveal: None,
                                 },
                             );
                             let elem_name = elem.name.clone();
