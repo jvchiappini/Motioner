@@ -79,7 +79,7 @@ impl GpuResources {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -88,7 +88,7 @@ impl GpuResources {
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
                 // glyph metadata buffer
@@ -187,8 +187,12 @@ impl GpuResources {
             text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("text_sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            // MUST use Nearest filtering for the write_text outline atlas.
+            // Linear filtering interpolates between outline pixels (with priority
+            // data in R) and transparent background (all zeros), which smears
+            // the priority values and produces severe visual artifacts.
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 

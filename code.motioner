@@ -1,11 +1,10 @@
 size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
-
 text "Name" {
 	x = 0.50,
 	y = 0.50,
-	value = "Hello",
+	value = "Testing",
 	font = "System",
 	size = 0.2,
 	fill = "#000000",
@@ -17,4 +16,5 @@ write_text {
 	both_sides = false,
 	ease = linear
 }
+
 

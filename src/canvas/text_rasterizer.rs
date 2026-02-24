@@ -307,6 +307,39 @@ fn build_single_font_atlas(
                 has = true;
             }
 
+            // ── Fill: rasterize filled glyph for opacity fade (Manim style) ──────
+            // Manim's DrawBorderThenFill simply fades in the entire fill uniformly.
+            // No BFS/wave needed — just store coverage from ab_glyph rasterization.
+            if debug_outline && has {
+                let gid = scaled.glyph_id(ch);
+                let fill_glyph = gid.with_scale_and_position(
+                    scale,
+                    ab_glyph::point(x_draw as f32, y_draw as f32 + ascent),
+                );
+                if let Some(outlined_glyph) = font_arc.outline_glyph(fill_glyph) {
+                    let bounds = outlined_glyph.px_bounds();
+                    // Rasterize filled glyph — write non-outline pixels as fill
+                    outlined_glyph.draw(|bx, by, cov| {
+                        if cov < 0.05 { return; }
+                        let px = bounds.min.x as i32 + bx as i32;
+                        let py = bounds.min.y as i32 + by as i32;
+                        if px < 0 || py < 0 || px >= atlas.width as i32 || py >= atlas.height as i32 {
+                            return;
+                        }
+                        let idx = (py as u32 * atlas.width + px as u32) as usize * 4;
+                        if idx + 3 >= atlas.pixels.len() { return; }
+                        // Only write fill data if this pixel is NOT already an outline pixel
+                        if atlas.pixels[idx + 2] != 255 {
+                            let cov_byte = (cov * 255.0).clamp(0.0, 255.0) as u8;
+                            atlas.pixels[idx] = 0;         // R = no outline priority
+                            atlas.pixels[idx + 1] = cov_byte; // G = coverage for smooth edges
+                            atlas.pixels[idx + 2] = 128;   // B = fill pixel marker
+                            atlas.pixels[idx + 3] = 255;   // A = visible
+                        }
+                    });
+                }
+            }
+
             if has {
                 // sample alpha at the middle of the cell to verify the glyph
                 // actually landed where the metrics think it did.  This helps
@@ -587,11 +620,45 @@ fn draw_text_to_buffer(
                 // For our wireframe rendering we skip the px_bounds offset and
                 // instead add the glyph position directly (cursor_x, baseline_y),
                 // which gives identical absolute coordinates.
-                let mut path_command_counts = Vec::new();
-                let mut current_command_count = 0;
-                let mut last_p1: Option<ab_glyph::Point> = None;
+                let mut paths: Vec<Vec<&ab_glyph::OutlineCurve>> = Vec::new();
+                let mut current_path_curves = Vec::new();
+                let mut last_p1_unscaled: Option<ab_glyph::Point> = None;
 
-                let mut draw_line = |p0: ab_glyph::Point, p1: ab_glyph::Point| {
+                for curve in &outline.curves {
+                    let p0_unscaled = match curve {
+                        ab_glyph::OutlineCurve::Line(p, _) => *p,
+                        ab_glyph::OutlineCurve::Quad(p, _, _) => *p,
+                        ab_glyph::OutlineCurve::Cubic(p, _, _, _) => *p,
+                    };
+                    let p_end_unscaled = match curve {
+                        ab_glyph::OutlineCurve::Line(_, p) => *p,
+                        ab_glyph::OutlineCurve::Quad(_, _, p) => *p,
+                        ab_glyph::OutlineCurve::Cubic(_, _, _, p) => *p,
+                    };
+
+                    // Detect new path (contour) by checking for jumps in unscaled coordinates
+                    if last_p1_unscaled.is_none() || (p0_unscaled.x - last_p1_unscaled.unwrap().x).abs() > 0.1 || (p0_unscaled.y - last_p1_unscaled.unwrap().y).abs() > 0.1 {
+                        if !current_path_curves.is_empty() {
+                            paths.push(current_path_curves);
+                        }
+                        current_path_curves = Vec::new();
+                    }
+                    current_path_curves.push(curve);
+                    last_p1_unscaled = Some(p_end_unscaled);
+                }
+                if !current_path_curves.is_empty() {
+                    paths.push(current_path_curves);
+                }
+
+                let path_command_counts: Vec<usize> = paths.iter().map(|p| p.len()).collect();
+                eprintln!(
+                    "[debug_outline] Glyph '{}' | Paths: {} | Commands per path: {:?}",
+                    ch,
+                    paths.len(),
+                    path_command_counts
+                );
+
+                let mut draw_line = |p0: ab_glyph::Point, p1: ab_glyph::Point, priority_start: u8, priority_end: u8| {
                     let x0 = p0.x.round() as i32;
                     let y0 = p0.y.round() as i32;
                     let x1 = p1.x.round() as i32;
@@ -606,13 +673,22 @@ fn draw_text_to_buffer(
                     let mut cx = x0;
                     let mut cy = y0;
 
+                    // Total pixel steps for interpolation
+                    let total_steps = (dx + dy.abs()).max(1) as f32;
+                    let mut step_count = 0u32;
+
                     loop {
+                        // Per-pixel priority interpolation
+                        let t = step_count as f32 / total_steps;
+                        let interp = priority_start as f32 + (priority_end as f32 - priority_start as f32) * t;
+                        let priority = interp.clamp(0.0, 255.0) as u8;
+
                         if cx >= 0 && cy >= 0 && cx < rw as i32 && cy < rh as i32 {
                             let idx = ((cy as u32 * rw + cx as u32) * 4) as usize;
                             if idx + 3 < pixels.len() {
-                                pixels[idx] = 0;
-                                pixels[idx + 1] = 255;  
-                                pixels[idx + 2] = 255; 
+                                pixels[idx] = priority;
+                                pixels[idx + 1] = 0;
+                                pixels[idx + 2] = 255;  // B = outline pixel marker
                                 pixels[idx + 3] = 255;
                             }
                         }
@@ -629,90 +705,66 @@ fn draw_text_to_buffer(
                             err += dx;
                             cy += sy;
                         }
+                        step_count += 1;
                     }
                 };
 
-                for curve in &outline.curves {
-                    let p0_unscaled = match curve {
-                        ab_glyph::OutlineCurve::Line(p, _) => *p,
-                        ab_glyph::OutlineCurve::Quad(p, _, _) => *p,
-                        ab_glyph::OutlineCurve::Cubic(p, _, _, _) => *p,
-                    };
-                    let p_end_unscaled = match curve {
-                        ab_glyph::OutlineCurve::Line(_, p) => *p,
-                        ab_glyph::OutlineCurve::Quad(_, _, p) => *p,
-                        ab_glyph::OutlineCurve::Cubic(_, _, _, p) => *p,
-                    };
+                let h_factor = scaled.h_scale_factor();
+                let v_factor = -scaled.v_scale_factor();
+                let pos_x = cursor_x;
+                let pos_y = baseline_y;
 
-                    // Detect new path (contour) by checking for jumps in unscaled coordinates
-                    if last_p1.is_none() || (p0_unscaled.x - last_p1.unwrap().x).abs() > 0.1 || (p0_unscaled.y - last_p1.unwrap().y).abs() > 0.1 {
-                        if last_p1.is_some() {
-                            path_command_counts.push(current_command_count);
-                        }
-                        current_command_count = 0;
-                    }
-                    current_command_count += 1;
-                    last_p1 = Some(p_end_unscaled);
+                for path in paths {
+                    let total_cmds = path.len();
+                    if total_cmds == 0 { continue; }
 
-                    let h_factor = scaled.h_scale_factor();
-                    let v_factor = -scaled.v_scale_factor(); // negate: font Y-up → screen Y-down
-
-                    let pos_x = cursor_x;
-                    let pos_y = baseline_y;
-
-                    // Sample the curve (higher density for smoothness)
-                    let mut points = Vec::new();
-                    match curve {
-                        ab_glyph::OutlineCurve::Line(p0, p1) => {
-                            points.push(*p0);
-                            points.push(*p1);
-                        }
-                        ab_glyph::OutlineCurve::Quad(p0, p1, p2) => {
-                            let steps = 64;
-                            for i in 0..=steps {
-                                let t = i as f32 / steps as f32;
-                                let it = 1.0 - t;
-                                let x = it * it * p0.x + 2.0 * it * t * p1.x + t * t * p2.x;
-                                let y = it * it * p0.y + 2.0 * it * t * p1.y + t * t * p2.y;
-                                points.push(ab_glyph::point(x, y));
+                    for (cmd_idx, curve) in path.iter().enumerate() {
+                        let mut points = Vec::new();
+                        match curve {
+                            ab_glyph::OutlineCurve::Line(p0, p1) => {
+                                points.push((*p0, 0.0));
+                                points.push((*p1, 1.0));
+                            }
+                            ab_glyph::OutlineCurve::Quad(p0, p1, p2) => {
+                                let steps = 32;
+                                for i in 0..=steps {
+                                    let t = i as f32 / steps as f32;
+                                    let it = 1.0 - t;
+                                    let x = it * it * p0.x + 2.0 * it * t * p1.x + t * t * p2.x;
+                                    let y = it * it * p0.y + 2.0 * it * t * p1.y + t * t * p2.y;
+                                    points.push((ab_glyph::point(x, y), t));
+                                }
+                            }
+                            ab_glyph::OutlineCurve::Cubic(p0, p1, p2, p3) => {
+                                let steps = 32;
+                                for i in 0..=steps {
+                                    let t = i as f32 / steps as f32;
+                                    let it = 1.0 - t;
+                                    let it2 = it * it;
+                                    let t2 = t * t;
+                                    let x = it2 * it * p0.x + 3.0 * it2 * t * p1.x + 3.0 * it * t2 * p2.x + t2 * t * p3.x;
+                                    let y = it2 * it * p0.y + 3.0 * it2 * t * p1.y + 3.0 * it * t2 * p2.y + t2 * t * p3.y;
+                                    points.push((ab_glyph::point(x, y), t));
+                                }
                             }
                         }
-                        ab_glyph::OutlineCurve::Cubic(p0, p1, p2, p3) => {
-                            let steps = 64;
-                            for i in 0..=steps {
-                                let t = i as f32 / steps as f32;
-                                let it = 1.0 - t;
-                                let it2 = it * it;
-                                let t2 = t * t;
-                                let x = it2 * it * p0.x + 3.0 * it2 * t * p1.x + 3.0 * it * t2 * p2.x + t2 * t * p3.x;
-                                let y = it2 * it * p0.y + 3.0 * it2 * t * p1.y + 3.0 * it * t2 * p2.y + t2 * t * p3.y;
-                                points.push(ab_glyph::point(x, y));
-                            }
+
+                        for win in points.windows(2) {
+                            let (p0_u, t0) = win[0];
+                            let (p1_u, t1) = win[1];
+                            
+                            // Map each sub-segment to a unique priority range within 0..255
+                            let p_start = (cmd_idx as f32 + t0) / total_cmds as f32;
+                            let p_end   = (cmd_idx as f32 + t1) / total_cmds as f32;
+                            let p_byte_start = (p_start * 255.0).clamp(0.0, 255.0) as u8;
+                            let p_byte_end   = (p_end   * 255.0).clamp(0.0, 255.0) as u8;
+
+                            let p0 = ab_glyph::point(p0_u.x * h_factor + pos_x, p0_u.y * v_factor + pos_y);
+                            let p1 = ab_glyph::point(p1_u.x * h_factor + pos_x, p1_u.y * v_factor + pos_y);
+                            draw_line(p0, p1, p_byte_start, p_byte_end);
                         }
                     }
-
-                    // Transform: same as ab_glyph's OutlinedGlyph::draw()
-                    // scale_up(p) = point(p.x * h_factor, p.y * v_factor)
-                    // absolute   = scale_up(p) + glyph_position
-                    for win in points.windows(2) {
-                        let p0_u = win[0];
-                        let p1_u = win[1];
-                        let p0 = ab_glyph::point(p0_u.x * h_factor + pos_x, p0_u.y * v_factor + pos_y);
-                        let p1 = ab_glyph::point(p1_u.x * h_factor + pos_x, p1_u.y * v_factor + pos_y);
-                        draw_line(p0, p1);
-                    }
                 }
-
-                if last_p1.is_some() {
-                    path_command_counts.push(current_command_count);
-                }
-                
-                eprintln!(
-                    "[debug_outline] Glyph '{}' | Paths: {} | Commands per path: {:?}",
-                    ch,
-                    path_command_counts.len(),
-                    path_command_counts
-                );
 
                 *has_text = true;
             }
