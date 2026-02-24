@@ -15,6 +15,7 @@ struct VertexOutput {
     @location(6) @interpolate(flat) p2: i32,
     @location(7) reveal: f32,
     @location(8) @interpolate(flat) both_sides: f32,
+    @location(9) raw_local_uv: vec2<f32>,
 };
 
 struct Shape {

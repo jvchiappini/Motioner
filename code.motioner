@@ -4,17 +4,9 @@ timeline(fps = 60, duration = 5.00)
 text "Name" {
 	x = 0.50,
 	y = 0.50,
-	value = "Testing",
+	value = "Hello",
 	font = "System",
 	size = 0.2,
 	fill = "#000000",
 	spawn = 0.00
 }
-write_text {
-	element = "Name",
-	during = 0.0 -> 1.0,
-	both_sides = false,
-	ease = linear
-}
-
-

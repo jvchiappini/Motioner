@@ -318,9 +318,9 @@ fn build_single_font_atlas(
                 );
                 if let Some(outlined_glyph) = font_arc.outline_glyph(fill_glyph) {
                     let bounds = outlined_glyph.px_bounds();
-                    // Rasterize filled glyph — write non-outline pixels as fill
+                    // Rasterize filled glyph — store coverage in G for AA and fill
                     outlined_glyph.draw(|bx, by, cov| {
-                        if cov < 0.05 { return; }
+                        if cov < 0.01 { return; }
                         let px = bounds.min.x as i32 + bx as i32;
                         let py = bounds.min.y as i32 + by as i32;
                         if px < 0 || py < 0 || px >= atlas.width as i32 || py >= atlas.height as i32 {
@@ -328,13 +328,15 @@ fn build_single_font_atlas(
                         }
                         let idx = (py as u32 * atlas.width + px as u32) as usize * 4;
                         if idx + 3 >= atlas.pixels.len() { return; }
-                        // Only write fill data if this pixel is NOT already an outline pixel
+
+                        let cov_byte = (cov * 255.0).clamp(0.0, 255.0) as u8;
+                        // Always store fill coverage in G for all character pixels
+                        atlas.pixels[idx + 1] = atlas.pixels[idx + 1].max(cov_byte);
+
+                        // Only write fill marker/alpha if this pixel is NOT already an outline pixel
                         if atlas.pixels[idx + 2] != 255 {
-                            let cov_byte = (cov * 255.0).clamp(0.0, 255.0) as u8;
-                            atlas.pixels[idx] = 0;         // R = no outline priority
-                            atlas.pixels[idx + 1] = cov_byte; // G = coverage for smooth edges
                             atlas.pixels[idx + 2] = 128;   // B = fill pixel marker
-                            atlas.pixels[idx + 3] = 255;   // A = visible
+                            atlas.pixels[idx + 3] = 255;   // A = visible (fill uses G for cov)
                         }
                     });
                 }
@@ -659,53 +661,54 @@ fn draw_text_to_buffer(
                 );
 
                 let mut draw_line = |p0: ab_glyph::Point, p1: ab_glyph::Point, priority_start: u8, priority_end: u8| {
-                    let x0 = p0.x.round() as i32;
-                    let y0 = p0.y.round() as i32;
-                    let x1 = p1.x.round() as i32;
-                    let y1 = p1.y.round() as i32;
+                    let dx = p1.x - p0.x;
+                    let dy = p1.y - p0.y;
+                    let len = (dx*dx + dy*dy).sqrt();
+                    // 2 samples per pixel to ensure no gaps or shimmering
+                    let num_steps = (len * 2.0).ceil() as u32 + 1;
 
-                    let dx = (x1 - x0).abs();
-                    let dy = -(y1 - y0).abs();
-                    let sx = if x0 < x1 { 1 } else { -1 };
-                    let sy = if y0 < y1 { 1 } else { -1 };
-                    let mut err = dx + dy;
-                    
-                    let mut cx = x0;
-                    let mut cy = y0;
-
-                    // Total pixel steps for interpolation
-                    let total_steps = (dx + dy.abs()).max(1) as f32;
-                    let mut step_count = 0u32;
-
-                    loop {
-                        // Per-pixel priority interpolation
-                        let t = step_count as f32 / total_steps;
+                    for s in 0..num_steps {
+                        let t = s as f32 / (num_steps - 1) as f32;
+                        let x = p0.x + dx * t;
+                        let y = p0.y + dy * t;
+                        
                         let interp = priority_start as f32 + (priority_end as f32 - priority_start as f32) * t;
                         let priority = interp.clamp(0.0, 255.0) as u8;
 
-                        if cx >= 0 && cy >= 0 && cx < rw as i32 && cy < rh as i32 {
-                            let idx = ((cy as u32 * rw + cx as u32) * 4) as usize;
-                            if idx + 3 < pixels.len() {
-                                pixels[idx] = priority;
-                                pixels[idx + 1] = 0;
-                                pixels[idx + 2] = 255;  // B = outline pixel marker
-                                pixels[idx + 3] = 255;
+                        // Bilinear splat for anti-aliasing
+                        let ix = x.floor() as i32;
+                        let iy = y.floor() as i32;
+                        let fx = x - ix as f32;
+                        let fy = y - iy as f32;
+
+                        let weights = [
+                            (1.0 - fx) * (1.0 - fy),
+                            fx * (1.0 - fy),
+                            (1.0 - fx) * fy,
+                            fx * fy,
+                        ];
+                        let coords = [
+                            (ix, iy),
+                            (ix + 1, iy),
+                            (ix, iy + 1),
+                            (ix + 1, iy + 1),
+                        ];
+
+                        for (coord, w) in coords.iter().zip(weights.iter()) {
+                            let (cx, cy) = *coord;
+                            if cx >= 0 && cy >= 0 && cx < rw as i32 && cy < rh as i32 {
+                                let idx = ((cy as u32 * rw + cx as u32) * 4) as usize;
+                                if idx + 3 < pixels.len() {
+                                    // R: Store highest priority for overlapping segments
+                                    pixels[idx] = pixels[idx].max(priority);
+                                    // B: Marker for outline pixel
+                                    pixels[idx + 2] = 255;
+                                    // A: Accumulate coverage
+                                    let cov_byte = (w * 255.0).clamp(0.0, 255.0) as u8;
+                                    pixels[idx + 3] = pixels[idx + 3].max(cov_byte);
+                                }
                             }
                         }
-
-                        if cx == x1 && cy == y1 { break; }
-                        let e2 = 2 * err;
-                        if e2 >= dy {
-                            if cx == x1 { break; }
-                            err += dy;
-                            cx += sx;
-                        }
-                        if e2 <= dx {
-                            if cy == y1 { break; }
-                            err += dx;
-                            cy += sy;
-                        }
-                        step_count += 1;
                     }
                 };
 

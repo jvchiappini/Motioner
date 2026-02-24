@@ -19,17 +19,22 @@
 //   Phase 2 (60% → 100%): Interior fill fades in uniformly.
 //   All paths within a character are drawn in parallel.
 //   Characters overlap by lag_ratio (next char starts when previous is 85% done).
-fn shape_text(_in: VertexOutput, _effective_uv: vec2<f32>) -> vec4<f32> {
+fn shape_text(_in: VertexOutput, _snapped_uv: vec2<f32>, _raw_uv: vec2<f32>) -> vec4<f32> {
     // Normalized coordinate within the quad [0..1]
-    let local = _effective_uv * 0.5 + vec2<f32>(0.5, 0.5);
-    let u = local.x;
-    let v = local.y;
+    let local_snapped = _snapped_uv * 0.5 + vec2<f32>(0.5, 0.5);
+    let local_raw     = _raw_uv * 0.5 + vec2<f32>(0.5, 0.5);
+
+    let u_snapped = local_snapped.x;
+    let v_snapped = local_snapped.y;
+    let u_raw     = local_raw.x;
+    let v_raw     = local_raw.y;
+
     let offset = u32(_in.p1);
     let len    = u32(_in.p2);
     if (len == 0u) { return vec4<f32>(0.0); }
 
-    // ── Find which glyph owns this UV column ──────────────────────────────────
-    var cum: f32 = 0.0;
+    // ── Find which glyph owns this UV column (based on snapped X for reveal consistency) ──
+    var cum_snapped: f32 = 0.0;
     var glyph_adv: f32 = 0.0;
     var idx: u32 = offset;
     var i: u32 = 0u;
@@ -37,21 +42,36 @@ fn shape_text(_in: VertexOutput, _effective_uv: vec2<f32>) -> vec4<f32> {
         let g = glyphs[offset + i];
         idx       = offset + i;
         glyph_adv = g.advance;
-        if (u < cum + g.advance) { break; }
-        cum = cum + g.advance;
+        if (u_snapped < cum_snapped + g.advance) { break; }
+        cum_snapped = cum_snapped + g.advance;
     }
-    let g        = glyphs[idx];
-    let char_u   = (u - cum) / max(glyph_adv, 1e-6);
-    let sample_uv = mix(g.uv0, g.uv1, vec2<f32>(char_u, v));
-    let col      = textureSample(text_atlas, text_sampler, sample_uv);
+    
+    // We also need the cumulative offset for the RAW coordinate to sample texture correctly
+    var cum_raw: f32 = 0.0;
+    for (var j: u32 = 0u; j < i; j = j + 1u) {
+        cum_raw = cum_raw + glyphs[offset + j].advance;
+    }
+
+    let g             = glyphs[idx];
+    let char_u_raw    = (u_raw - cum_raw) / max(glyph_adv, 1e-6);
+    let sample_uv_raw = mix(g.uv0, g.uv1, vec2<f32>(char_u_raw, v_raw));
+
+    // For priority/pixel_type, we sample the SNAPPED position to avoid "shimmering" during reveal.
+    let char_u_snapped    = (u_snapped - cum_snapped) / max(glyph_adv, 1e-6);
+    let sample_uv_snapped = mix(g.uv0, g.uv1, vec2<f32>(char_u_snapped, v_snapped));
+    
+    // Antialiasing: sample coverage with the linear sampler from RAW uv,
+    // but keep priority/pixel_type with nearest from SNAPPED uv.
+    let col_linear  = textureSample(text_atlas, text_linear_sampler, sample_uv_raw);
+    let col_nearest = textureSample(text_atlas, text_sampler, sample_uv_snapped);
 
     // ── Decode atlas channels ─────────────────────────────────────────────────
-    let coverage = col.a;
-    if (coverage < 0.5) { return vec4<f32>(0.0); }
+    let coverage = col_linear.a;
+    if (coverage <= 0.001) { return vec4<f32>(0.0); }
 
-    let pixel_type = col.b;   // 1.0 = outline, ~0.5 = fill
-    let stroke_priority = col.r;
-    let fill_coverage = col.g;
+    let pixel_type = col_nearest.b;   // 1.0 = outline, ~0.5 = fill
+    let stroke_priority = col_nearest.r;
+    let fill_coverage = col_linear.g; // use linear for smooth interior edges
 
     // ── Per-character reveal progress ─────────────────────────────────────────
     let lag_ratio   = 0.15;
@@ -63,32 +83,31 @@ fn shape_text(_in: VertexOutput, _effective_uv: vec2<f32>) -> vec4<f32> {
     // Nothing should be visible before the character animation starts.
     if (char_progress <= 0.0) { return vec4<f32>(0.0); }
 
-    // ── Outline pixel ─────────────────────────────────────────────────────────
-    if (pixel_type > 0.75) {
-        // Outline draws during 0% → 80% of char_progress.
-        let outline_end = 0.8;
-        let progress = clamp(char_progress / outline_end, 0.0, 1.0);
-        
-        let adjusted_priority = stroke_priority * 0.95 + 0.02;
-        let window = 0.03;
-        let visible = smoothstep(adjusted_priority - window, adjusted_priority, progress);
-        if (visible <= 0.0) { return vec4<f32>(0.0); }
-        return g.color * visible;
-    }
+    // ── Animation progress calculations ──────────────────────────────────────
+    let outline_end = 0.8;
+    let fill_start  = 0.6;
+    let window      = 0.03;
 
-    // ── Fill pixel ────────────────────────────────────────────────────────────
-    if (pixel_type > 0.25) {
-        // Fill fades in uniformly during 60% → 100% of char_progress.
-        let fill_start = 0.6;
-        if (char_progress < fill_start) { return vec4<f32>(0.0); }
+    // 1. Stroke visibility (priority-based sequential reveal)
+    let stroke_progress = clamp(char_progress / outline_end, 0.0, 1.0);
+    let adjusted_priority = stroke_priority * 0.95 + 0.02;
+    let stroke_visible = smoothstep(adjusted_priority - window, adjusted_priority, stroke_progress);
+    
+    // Only apply stroke reveal if this pixel is actually marked as an outline pixel
+    // (B channel >= 0.75). Otherwise, it's purely a fill pixel.
+    let is_outline = step(0.75, pixel_type);
+    let stroke_alpha = stroke_visible * coverage * is_outline;
 
-        let fill_progress = (char_progress - fill_start) / (1.0 - fill_start);
-        
-        // Use G channel for smoothness/anti-aliasing, and fill_progress for global fade
-        return g.color * (fill_coverage * fill_progress);
-    }
+    // 2. Fill visibility (global character fade-in)
+    let fill_progress = clamp((char_progress - fill_start) / (1.0 - fill_start), 0.0, 1.0);
+    let fill_alpha = fill_progress * fill_coverage;
 
-    return vec4<f32>(0.0);
+    // 3. Unified result: Union of stroke and fill
+    // This closes any gaps between the path splatting and the fill area.
+    let final_alpha = max(stroke_alpha, fill_alpha);
+
+    if (final_alpha <= 0.001) { return vec4<f32>(0.0); }
+    return g.color * final_alpha;
 }
 
 fn rotate_fade(v: f32, start: f32, end: f32) -> f32 {

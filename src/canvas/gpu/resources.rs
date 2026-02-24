@@ -19,6 +19,7 @@ pub struct GpuResources {
     pub text_atlas_texture: wgpu::Texture,
     pub text_atlas_view: wgpu::TextureView,
     pub text_sampler: wgpu::Sampler,
+    pub text_linear_sampler: wgpu::Sampler,
     pub text_atlas_size: [u32; 2],
 
     /// Buffer containing glyph metadata for text shapes.
@@ -79,7 +80,7 @@ impl GpuResources {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -89,6 +90,12 @@ impl GpuResources {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
                 // glyph metadata buffer
@@ -186,13 +193,15 @@ impl GpuResources {
         let text_atlas_view =
             text_atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("text_sampler"),
-            // MUST use Nearest filtering for the write_text outline atlas.
-            // Linear filtering interpolates between outline pixels (with priority
-            // data in R) and transparent background (all zeros), which smears
-            // the priority values and produces severe visual artifacts.
+            label: Some("text_sampler_nearest"),
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let text_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("text_sampler_linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -215,6 +224,10 @@ impl GpuResources {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&text_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&text_linear_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -357,6 +370,7 @@ impl GpuResources {
             text_atlas_texture,
             text_atlas_view,
             text_sampler,
+            text_linear_sampler,
             text_atlas_size: initial_atlas_size,
             glyph_buffer,
             compute_pipeline,
@@ -518,6 +532,10 @@ impl GpuResources {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.text_linear_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,

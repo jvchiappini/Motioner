@@ -2,6 +2,7 @@
 @group(0) @binding(1) var<uniform> uniforms: Uniforms;
 @group(0) @binding(2) var text_atlas: texture_2d<f32>;
 @group(0) @binding(3) var text_sampler: sampler;
+@group(0) @binding(5) var text_linear_sampler: sampler;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -26,6 +27,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.p2 = s.p2;
     out.reveal = s.reveal;
     out.both_sides = s.both_sides;
+    out.raw_local_uv = quad_pos;
 
     // UV interpolada en el rango [uv0, uv1] del atlas de texto.
     // Invertimos Y porque el NDC tiene Y invertido respecto al buffer CPU (Y=0 arriba en imagen).
@@ -100,11 +102,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dv = (dy * uniforms.resolution.y) / sz.y;
     
     let effective_uv = in.local_uv + vec2<f32>(du, dv);
-
-    // Delegate actual per-shape rendering to shape-specific helpers.
-    // Per-shape helpers are provided from separate WGSL snippets (one file per shape)
-    // and are concatenated at compile time by the Rust side.
-    let final_color = eval_shape(in, effective_uv);
+    
+    // Use the raw_local_uv for the final rendering to avoid pixelation
+    // but keep effective_uv (snapped) for animation priority.
+    let final_color = eval_shape(in, effective_uv, in.raw_local_uv);
     if (uniforms.gamma_correction > 0.5) {
         return vec4<f32>(pow(final_color.rgb, vec3<f32>(1.0/2.2)), final_color.a);
     }
@@ -114,13 +115,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // Dispatcher: call the per-shape helper function according to `shape_type`.
 // When adding a new shape: implement `shape_<name>` in a WGSL file and
 // add the Rust-side include so it becomes part of the shader module.
-fn eval_shape(in: VertexOutput, effective_uv: vec2<f32>) -> vec4<f32> {
+fn eval_shape(in: VertexOutput, snapped_uv: vec2<f32>, raw_uv: vec2<f32>) -> vec4<f32> {
     if (in.shape_type == 0) {
-        return shape_circle(in, effective_uv);
+        return shape_circle(in, raw_uv);
     } else if (in.shape_type == 1) {
-        return shape_rect(in, effective_uv);
+        return shape_rect(in, raw_uv);
     } else if (in.shape_type == 2) {
-        return shape_text(in, effective_uv);
+        return shape_text(in, snapped_uv, raw_uv);
     }
     // fallback: opaque solid color
     return vec4<f32>(in.color.rgb, in.color.a);
