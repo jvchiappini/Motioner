@@ -254,7 +254,7 @@ pub(crate) fn highlight_code<F>(
                 } // Blue (#569CD6)
 
                 // Parameters / Properties
-                "name" | "x" | "y" | "radius" | "w" | "h" | "width" | "height" | "fill"
+                "name" | "x" | "y" | "radius" | "width" | "height" | "fill"
                 | "spawn" | "to" | "during" | "ease" | "startAt" | "time" | "element" | "type"
                 | "fps" | "duration" => egui::Color32::from_rgb(156, 220, 254), // Light Blue (#9CDCFE)
 

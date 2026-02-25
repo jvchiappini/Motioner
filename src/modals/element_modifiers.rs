@@ -46,248 +46,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 
             // Stable identifier for this element's modifier UI (used as id_source
             // for collapsing headers so they don't reset when labels change).
-            let _path_id = state
-                .modifier_active_path
-                .as_ref()
-                .map(|p| {
-                    p.iter()
-                        .map(|n| n.to_string())
-                        .collect::<Vec<_>>()
-                        .join("-")
-                })
-                .unwrap_or_else(|| "root".to_string());
-
             match elem.kind.as_str() {
-                "rect" => {
-                    ui.group(|ui| {
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("⬜").size(18.0));
-                                ui.label(
-                                    egui::RichText::new("Rectangle Parameters")
-                                        .strong()
-                                        .size(14.0),
-                                );
-                            });
-                            ui.separator();
-
-                            egui::Grid::new("rect_grid")
-                                .num_columns(2)
-                                .spacing([12.0, 8.0])
-                                .show(ui, |ui| {
-                                    ui.label("Name:");
-                                    if ui.text_edit_singleline(&mut elem.name).changed() {
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Visible:");
-                                    let mut vis =
-                                        elem.visible.first().map(|kf| kf.value).unwrap_or(true);
-                                    if ui.checkbox(&mut vis, "").changed() {
-                                        elem.visible.clear();
-                                        elem.visible.push(crate::shapes::element_store::Keyframe {
-                                            frame: elem.spawn_frame,
-                                            value: vis,
-                                            easing: crate::animations::easing::Easing::Linear,
-                                        });
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Spawn Time:");
-                                    let mut spawn_secs = elem.spawn_frame as f32 / state.fps as f32;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(
-                                                &mut spawn_secs,
-                                                0.0..=state.duration_secs,
-                                            )
-                                            .suffix("s"),
-                                        )
-                                        .changed()
-                                    {
-                                        elem.spawn_frame =
-                                            crate::shapes::element_store::seconds_to_frame(
-                                                spawn_secs, state.fps,
-                                            );
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Position X:");
-                                    let mut val_x = elem
-                                        .sample(elem.spawn_frame, state.fps)
-                                        .and_then(|p| p.x)
-                                        .unwrap_or(0.5)
-                                        * 100.0;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut val_x, 0.0..=100.0)
-                                                .suffix("%")
-                                                .clamp_to_range(false),
-                                        )
-                                        .changed()
-                                    {
-                                        elem.insert_frame(
-                                            elem.spawn_frame,
-                                            FrameProps {
-                                                x: Some(val_x / 100.0),
-                                                y: None,
-                                                radius: None,
-                                                w: None,
-                                                h: None,
-                                                size: None,
-                                                value: None,
-                                                color: None,
-                                                visible: None,
-                                                z_index: None,
-                                                reveal: None,
-                                            },
-                                        );
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Position Y:");
-                                    let mut val_y = elem
-                                        .sample(elem.spawn_frame, state.fps)
-                                        .and_then(|p| p.y)
-                                        .unwrap_or(0.5)
-                                        * 100.0;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut val_y, 0.0..=100.0)
-                                                .suffix("%")
-                                                .clamp_to_range(false),
-                                        )
-                                        .changed()
-                                    {
-                                        elem.insert_frame(
-                                            elem.spawn_frame,
-                                            FrameProps {
-                                                x: None,
-                                                y: Some(val_y / 100.0),
-                                                radius: None,
-                                                w: None,
-                                                h: None,
-                                                size: None,
-                                                value: None,
-                                                color: None,
-                                                visible: None,
-                                                z_index: None,
-                                                reveal: None,
-                                            },
-                                        );
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Width:");
-                                    let mut val_w = elem
-                                        .sample(elem.spawn_frame, state.fps)
-                                        .and_then(|p| p.w)
-                                        .unwrap_or(0.3)
-                                        * 100.0;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut val_w, 0.0..=100.0)
-                                                .suffix("%")
-                                                .clamp_to_range(false),
-                                        )
-                                        .changed()
-                                    {
-                                        elem.insert_frame(
-                                            elem.spawn_frame,
-                                            FrameProps {
-                                                x: None,
-                                                y: None,
-                                                radius: None,
-                                                w: Some(val_w / 100.0),
-                                                h: None,
-                                                size: None,
-                                                value: None,
-                                                color: None,
-                                                visible: None,
-                                                z_index: None,
-                                                reveal: None,
-                                            },
-                                        );
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Height:");
-                                    let mut val_h = elem
-                                        .sample(elem.spawn_frame, state.fps)
-                                        .and_then(|p| p.h)
-                                        .unwrap_or(0.2)
-                                        * 100.0;
-                                    if ui
-                                        .add(
-                                            egui::Slider::new(&mut val_h, 0.0..=100.0)
-                                                .suffix("%")
-                                                .clamp_to_range(false),
-                                        )
-                                        .changed()
-                                    {
-                                        elem.insert_frame(
-                                            elem.spawn_frame,
-                                            FrameProps {
-                                                x: None,
-                                                y: None,
-                                                radius: None,
-                                                w: None,
-                                                h: Some(val_h / 100.0),
-                                                size: None,
-                                                value: None,
-                                                color: None,
-                                                visible: None,
-                                                z_index: None,
-                                                reveal: None,
-                                            },
-                                        );
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-
-                                    ui.label("Color:");
-                                    let mut color = elem
-                                        .sample(elem.spawn_frame, state.fps)
-                                        .and_then(|p| p.color)
-                                        .unwrap_or([255, 100, 100, 255]);
-                                    if ui
-                                        .color_edit_button_srgba_unmultiplied(&mut color)
-                                        .changed()
-                                    {
-                                        elem.insert_frame(
-                                            elem.spawn_frame,
-                                            FrameProps {
-                                                x: None,
-                                                y: None,
-                                                radius: None,
-                                                w: None,
-                                                h: None,
-                                                size: None,
-                                                value: None,
-                                                color: Some(color),
-                                                visible: None,
-                                                z_index: None,
-                                                reveal: None,
-                                            },
-                                        );
-                                        changed = true;
-                                    }
-                                    ui.end_row();
-                                });
-
-                            ui.add_space(4.0);
-                            ui.label(
-                                "Animations editing disabled — migrating to per-track storage",
-                            );
-                        });
-                    });
-                }
+                // rectangle branch removed; rectangles no longer exist
+                // remaining kinds are handled in subsequent arms below
                 "text" => {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
@@ -360,8 +121,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 x: Some(x),
                                                 y: None,
                                                 radius: None,
-                                                w: None,
-                                                h: None,
+                                                // rect props removed
                                                 size: None,
                                                 value: None,
                                                 color: None,
@@ -392,8 +152,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 x: None,
                                                 y: Some(y),
                                                 radius: None,
-                                                w: None,
-                                                h: None,
+                                                // rect props removed
                                                 size: None,
                                                 value: None,
                                                 color: None,
@@ -448,8 +207,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 x: None,
                                                 y: None,
                                                 radius: None,
-                                                w: None,
-                                                h: None,
+                                                // rect props removed
                                                 size: None,
                                                 value: Some(val.clone()),
                                                 color: None,
@@ -483,8 +241,6 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 x: None,
                                                 y: None,
                                                 radius: None,
-                                                w: None,
-                                                h: None,
                                                 size: Some(size_pct / 100.0),
                                                 value: None,
                                                 color: None,
@@ -512,8 +268,6 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                                                 x: None,
                                                 y: None,
                                                 radius: None,
-                                                w: None,
-                                                h: None,
                                                 size: None,
                                                 value: None,
                                                 color: Some(color),

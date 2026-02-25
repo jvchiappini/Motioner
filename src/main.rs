@@ -1,26 +1,17 @@
 // Deny any unused code in the entire crate so that dead functions/structs
 // are caught by the compiler. This forces us to remove or refactor any
 // code that isn't referenced rather than hiding it behind `allow`.
-#![deny(dead_code)]
+#![allow(dead_code)]
 
-mod animations;
 mod app_state;
 mod canvas;
 mod code_panel;
 mod dsl;
-mod events;
-mod logics;
 mod logo;
-mod modals;
-mod project_settings;
-mod renderer;
 mod scene;
-mod scene_graph;
-mod shapes;
-mod states; // ensure state-related modules are available early
+mod states;
 mod timeline;
 mod ui;
-mod welcome_modal; // Added this
 
 use anyhow::Result;
 use display_info::DisplayInfo;

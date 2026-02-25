@@ -85,8 +85,6 @@ pub fn apply_on_time_handlers_collect_spawns_elements(
             let any = new_props.x.is_some()
                 || new_props.y.is_some()
                 || new_props.radius.is_some()
-                || new_props.w.is_some()
-                || new_props.h.is_some()
                 || new_props.size.is_some()
                 || new_props.value.is_some()
                 || new_props.color.is_some()

@@ -1,0 +1,52 @@
+    Checking motioner_ui v0.1.0 (C:\Users\jvchi\CARPETAS\Motioner)
+error[E0603]: module `toolbar` is private
+  --> src\ui.rs:26:29
+   |
+26 |                 canvas::ui::toolbar::show(ui, state);
+   |                             ^^^^^^^  ---- function `show` is not publicly re-exported
+   |                             |
+   |                             private module
+   |
+note: the module `toolbar` is defined here
+  --> src\canvas\ui\mod.rs:6:1
+   |
+ 6 | mod toolbar;
+   | ^^^^^^^^^^^^
+
+warning: unused import: `eframe::egui`
+ --> src\app_state.rs:3:5
+  |
+3 | use eframe::egui;
+  |     ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::path::PathBuf`
+ --> src\app_state.rs:5:5
+  |
+5 | use std::path::PathBuf;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src\dsl\parser.rs:2:5
+  |
+2 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PanelTab`
+ --> src\ui.rs:1:34
+  |
+1 | use crate::app_state::{AppState, PanelTab};
+  |                                  ^^^^^^^^
+
+warning: unused variable: `timeline_rect`
+ --> src\timeline.rs:5:9
+  |
+5 |     let timeline_rect = ui.available_rect_before_wrap();
+  |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_timeline_rect`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0603`.
+warning: `motioner_ui` (bin "motioner_ui") generated 5 warnings
+error: could not compile `motioner_ui` (bin "motioner_ui") due to 1 previous error; 5 warnings emitted

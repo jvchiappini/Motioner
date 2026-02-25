@@ -8,6 +8,7 @@ authors = ["jvchiappini <jvchiappini@gmail.com>"]
 eframe = { version = "0.26", features = ["wgpu"] }
 egui = "0.26"
 egui-wgpu = "0.26"
+egui_extras = { version = "0.26", features = ["syntect"] }
 image = "0.24"
 sysinfo = "0.30"
 tempfile = "3.6"

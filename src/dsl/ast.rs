@@ -118,10 +118,7 @@ pub struct HeaderConfig {
 #[derive(Clone, Debug)]
 pub enum Statement {
     /// Any concrete visual shape (Circle, Rect, Text, …).
-    /// The variant is determined at parse time by the registered shape parsers.
-    Shape(crate::shapes::shapes_manager::Shape),
+    Shape(crate::scene::Shape),
     /// A top-level `move {}` block that references an element by name.
     Move(MoveBlock),
-    /// A top-level `write_text {}` block that references an element by name.
-    Write(WriteBlock),
 }

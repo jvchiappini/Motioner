@@ -87,8 +87,9 @@ mod tests {
         let td = tempdir().expect("tempdir");
         state.project_path = Some(td.path().to_path_buf());
 
-        // valid DSL (includes header) but indented with spaces
-        state.dsl_code = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n\nrect \"R\" {\n    x = 0.5,\n    y = 0.5,\n    width = 0.3,\n    height = 0.2,\n    spawn = 0.0\n}\n".to_string();
+        // valid DSL (includes header) but indented with spaces; use a text
+        // element since rectangles have been removed.
+        state.dsl_code = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n\ntext \"T\" {\n    x = 0.5,\n    y = 0.5,\n    value = \"Hi\",\n    size = 24.0,\n    spawn = 0.0\n}\n".to_string();
 
         let res = write_dsl_to_project(&mut state, false);
         assert!(res.is_ok());
