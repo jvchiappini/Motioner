@@ -8,6 +8,7 @@ mod canvas;
 mod code_panel;
 mod dsl;
 mod logo;
+mod modals;
 mod scene;
 mod states;
 mod timeline;

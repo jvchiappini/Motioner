@@ -1,5 +1,4 @@
 /// Parser for the Motioner DSL.
-use std::collections::HashMap;
 use super::ast::{HeaderConfig, MoveBlock, Statement};
 use super::lexer::extract_balanced;
 use crate::dsl::utils;

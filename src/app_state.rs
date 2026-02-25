@@ -1,9 +1,17 @@
 use crate::states::autosave::AutosaveState;
 use crate::states::dslstate::DslState;
-use eframe::egui;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use crate::scene::Shape;
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender};
+
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+pub enum Tool {
+    Select,
+    Rectangle,
+    Circle,
+    Text,
+}
 
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum PanelTab {
@@ -29,6 +37,7 @@ pub struct AppState {
     
     pub active_tab: Option<PanelTab>,
     pub last_active_tab: PanelTab,
+    pub active_tool: Tool,
 
     #[serde(skip)]
     pub autosave: AutosaveState,
@@ -50,6 +59,20 @@ pub struct AppState {
     pub timeline_breadcrumb_anim_t: f32,
 
     pub scene_version: u32,
+
+    pub transport_pos: Option<egui::Pos2>,
+
+    pub show_welcome: bool,
+    pub project_path_input: String,
+    pub project_path: Option<PathBuf>,
+    pub path_validation_error: Option<String>,
+
+    #[serde(skip)]
+    pub folder_dialog_rx: Option<Receiver<PathBuf>>,
+    #[serde(skip)]
+    pub folder_dialog_tx: Option<Sender<PathBuf>>,
+    #[serde(skip)]
+    pub logo_texture: Option<egui::TextureHandle>,
 }
 
 impl Default for AppState {
@@ -68,6 +91,7 @@ impl Default for AppState {
             selected_node_path: None,
             active_tab: Some(PanelTab::Code),
             last_active_tab: PanelTab::Code,
+            active_tool: Tool::Select,
             autosave: AutosaveState::default(),
             last_scene_parse_time: 0.0,
             canvas_pan_x: 0.0,
@@ -80,6 +104,14 @@ impl Default for AppState {
             timeline_prev_root_path: None,
             timeline_breadcrumb_anim_t: 1.0,
             scene_version: 1,
+            transport_pos: None,
+            show_welcome: true,
+            project_path_input: String::new(),
+            project_path: None,
+            path_validation_error: None,
+            folder_dialog_rx: None,
+            folder_dialog_tx: None,
+            logo_texture: None,
         }
     }
 }
@@ -116,7 +148,21 @@ impl AppState {
         self.time = seconds.clamp(0.0, self.duration_secs);
     }
 
+    pub fn step_forward(&mut self) {
+        let dt = 1.0 / (self.fps as f32);
+        self.set_time(self.time + dt);
+    }
+
+    pub fn step_backward(&mut self) {
+        let dt = 1.0 / (self.fps as f32);
+        self.set_time(self.time - dt);
+    }
+
     pub fn request_dsl_update(&mut self) {
         // Simple mock for now if needed
+    }
+
+    pub fn refresh_fonts_async(&mut self) {
+        // Placeholder for now
     }
 }
