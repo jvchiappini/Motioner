@@ -561,20 +561,6 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
                 state.scene.push(ek);
                 added = true;
             }
-            if ui.button("⭕   Circle").clicked() {
-                if let Some(ek) = crate::shapes::shapes_manager::create_default_by_keyword(
-                    "circle",
-                    format!("Circle #{}", state.scene.len()),
-                )
-                .and_then(|s| {
-                    crate::shapes::element_store::ElementKeyframes::from_shape_at_spawn(
-                        &s, state.fps,
-                    )
-                }) {
-                    state.scene.push(ek);
-                }
-                added = true;
-            }
             if ui.button("⬜  Rectangle").clicked() {
                 if let Some(ek) = crate::shapes::shapes_manager::create_default_by_keyword(
                     "rect",
@@ -626,7 +612,6 @@ fn show_elements_modal(ui: &mut egui::Ui, state: &mut AppState) {
 fn element_icon(elem: &ElementKeyframes) -> (&'static str, Color32) {
     match elem.kind.as_str() {
         "group" => ("📦", Color32::from_rgb(255, 200, 100)),
-        "circle" => ("⭕", Color32::from_rgb(100, 200, 255)),
         "rect" => ("⬜", Color32::from_rgb(255, 100, 100)),
         "text" => ("🔤", Color32::from_rgb(200, 255, 100)),
         _ => ("❓", Color32::from_gray(180)),

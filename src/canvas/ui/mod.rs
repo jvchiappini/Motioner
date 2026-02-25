@@ -152,20 +152,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, main_ui_enabled: bool) {
                                 let h = r.h * composition_rect.height();
                                 egui::Rect::from_center_size(centre, egui::vec2(w, h))
                             }
-                            crate::scene::Shape::Circle(c) => {
-                                let centre = composition_rect.left_top()
-                                    + egui::vec2(
-                                        c.x * composition_rect.width(),
-                                        c.y * composition_rect.height(),
-                                    );
-                                egui::Rect::from_center_size(
-                                    centre,
-                                    egui::vec2(
-                                        2.0 * c.radius * composition_rect.width(),
-                                        2.0 * c.radius * composition_rect.width(),
-                                    ),
-                                )
-                            }
                             crate::scene::Shape::Text(t) => {
                                 let centre = composition_rect.left_top()
                                     + egui::vec2(

@@ -227,7 +227,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Sample animated tracks.
     var x      = sample_track(desc.x_offset,      desc.x_len,      cu.current_frame);
     var y      = sample_track(desc.y_offset,       desc.y_len,      cu.current_frame);
-    let radius = sample_track(desc.radius_offset,  desc.radius_len, cu.current_frame);
+        // radius track is unused for remaining shapes but keep sampling for compatibility
+        let radius = sample_track(desc.radius_offset,  desc.radius_len, cu.current_frame);
     let w      = sample_track(desc.w_offset,       desc.w_len,      cu.current_frame);
     let h      = sample_track(desc.h_offset,       desc.h_len,      cu.current_frame);
     
@@ -240,17 +241,15 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Derive size from shape type.
     var size = vec2<f32>(0.0, 0.0);
-    if desc.shape_type == 0 {
-        // circle: radius is normalized to horizontal resolution
-        size = vec2<f32>(radius * cu.resolution.x, radius * cu.resolution.x);
-    } else if desc.shape_type == 1 {
-        // rectangle: w/h are normalized full dimensions, convert to half-extents
-        size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
-    } else if desc.shape_type == 2 {
-        // text: base_size contains the [half_width, half_height] of the text quad
-        // (we stored it in the Rust side).
-        size = desc.base_size;
-    }
+        // new numbering: 0 = rect, 1 = text
+        if desc.shape_type == 0 {
+            // rectangle: w/h are normalized full dimensions, convert to half-extents
+            size = vec2<f32>(w * cu.resolution.x * 0.5, h * cu.resolution.y * 0.5);
+        } else if desc.shape_type == 1 {
+            // text: base_size contains the [half_width, half_height] of the text quad
+            // (we stored it in the Rust side).
+            size = desc.base_size;
+        }
     
     // No move_commands loop – all positional animation has been baked into
     // the x/y keyframe tracks at parse time, so the sampler above already

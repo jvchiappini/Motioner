@@ -19,7 +19,7 @@ Parameters
 Example
 
 ```
-circle(name = "Dot", x = 0.5, y = 0.5, radius = 0.05) {
+rect(name = "Dot", x = 0.5, y = 0.5, width = 0.05, height = 0.05) {
   animations {
     fade(start = 0.0, end = 1.5, from = 0.0, to = 1.0, ease = expo)
   }

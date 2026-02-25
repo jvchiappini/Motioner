@@ -107,7 +107,7 @@ fn dispatch_action(
     }
 
     // Allow handler bodies to declare full shape blocks (treated as
-    // runtime-spawned/ephemeral shapes). Example: `circle "S" { ... }`.
+    // runtime-spawned/ephemeral shapes). Example: `rect "S" { ... }`.
     // The check is driven by the registry — no hard-coded keyword list.
     let first_word = line.split_whitespace().next().unwrap_or("");
     if crate::shapes::shapes_manager::create_default_by_keyword(first_word, String::new()).is_some()
@@ -123,7 +123,7 @@ fn dispatch_action(
         // Parse the provided block into scene shapes (to obtain animations
         // and defaults), but also re-evaluate any KV expressions inside the
         // handler context (e.g. `x = seconds * 0.1`). This lets users write
-        // `circle "C" { x = seconds * 0.1, ... }` inside `on_time`.
+        // `rect "R" { x = seconds * 0.1, ... }` inside `on_time`.
         let parsed = crate::dsl::parse_dsl(line);
 
         // Extract raw inner body (between first '{' and last '}')

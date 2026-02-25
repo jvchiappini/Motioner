@@ -356,7 +356,7 @@ The combination of evaluator + runtime allows handlers such as:
 on_time {
     let t = seconds * 0.1
     move_element name = "ball", x = t, y = t
-    circle "debug" { x = seconds, y = seconds }
+    rect "debug" { x = seconds, y = seconds, width = 0.1, height = 0.1 }
 }
 ```
 
@@ -609,7 +609,7 @@ element kind; this is used throughout the row rendering.
 ### Modals
 
 `show_elements_modal` displays a simple `egui::Window` listing the available
-shapes (group, circle, rect, text).  When the user clicks one, a default
+shapes (group, rect, text).  When the user clicks one, a default
 `Shape` is created via `shapes_manager::create_default_by_keyword`, converted
 to `ElementKeyframes` and pushed onto `state.scene`.  The DSL text is
 regenerated and the event dispatched exactly as with a drag‑drop move.
@@ -773,8 +773,8 @@ Three helper functions implement the handler dispatch logic:
     inserts hold keyframes into the originating `ElementKeyframes` when
     differences are found.
   - converts any spawned shapes back into `ElementKeyframes` (using the
-    provided `fps`) and pushes them onto the vector.  This allows runtime-
-    created elements (via `spawn_circle`, `spawn_text`, etc.) to appear in the
+  provided `fps`) and pushes them onto the vector.  This allows runtime-
+  created elements (via `spawn_text`, etc.) to appear in the
     UI immediately.
 
 All of this is shape‑agnostic; the per‑shape diffing logic is provided by

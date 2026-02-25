@@ -88,7 +88,7 @@ mod tests {
         state.project_path = Some(td.path().to_path_buf());
 
         // valid DSL (includes header) but indented with spaces
-        state.dsl_code = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n\ncircle \"C\" {\n    x = 0.5,\n    y = 0.5,\n    radius = 0.1,\n    spawn = 0.0\n}\n".to_string();
+        state.dsl_code = "size(1280, 720)\ntimeline(fps = 60, duration = 5.00)\n\nrect \"R\" {\n    x = 0.5,\n    y = 0.5,\n    width = 0.3,\n    height = 0.2,\n    spawn = 0.0\n}\n".to_string();
 
         let res = write_dsl_to_project(&mut state, false);
         assert!(res.is_ok());

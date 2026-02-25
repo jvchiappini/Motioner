@@ -1,4 +1,3 @@
-pub mod circle;
 pub mod element_store;
 pub mod fonts;
 pub mod rect;
@@ -115,7 +114,8 @@ pub trait ShapeDescriptor {
     // ── DSL editor colour ───────────────────────────────────────────────
     /// Colour that should be used when highlighting this shape's keyword in
     /// the code editor.  The default implementation returns the same blue
-    /// that was previously hard‑coded in `highlighter.rs` for `circle`/`rect`.
+    /// that was previously hard‑coded in `highlighter.rs` for the built-in
+    /// shapes.
     ///
     /// Concrete shapes can override this if they want a different colour; the
     /// highlighter will look up the descriptor for a given keyword and call

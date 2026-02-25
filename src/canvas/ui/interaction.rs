@@ -119,20 +119,6 @@ pub fn handle_canvas_clicks(
                                     let h = r.h * composition_rect.height();
                                     egui::Rect::from_center_size(centre, egui::vec2(w, h))
                                 }
-                                crate::scene::Shape::Circle(c) => {
-                                    let centre = composition_rect.left_top()
-                                        + egui::vec2(
-                                            c.x * composition_rect.width(),
-                                            c.y * composition_rect.height(),
-                                        );
-                                    egui::Rect::from_center_size(
-                                        centre,
-                                        egui::vec2(
-                                            2.0 * c.radius * composition_rect.width(),
-                                            2.0 * c.radius * composition_rect.width(),
-                                        ),
-                                    )
-                                }
                                 crate::scene::Shape::Text(t) => {
                                     let centre = composition_rect.left_top()
                                         + egui::vec2(
@@ -146,15 +132,12 @@ pub fn handle_canvas_clicks(
                                 _ => egui::Rect::EVERYTHING,
                             };
 
-                            let (h_flag, v_flag) = match &shape {
-                                crate::scene::Shape::Circle(_) => (true, true),
-                                _ => {
-                                    let near_left = (hover.x - rect.left()).abs() <= 20.0;
-                                    let near_right = (hover.x - rect.right()).abs() <= 20.0;
-                                    let near_top = (hover.y - rect.top()).abs() <= 20.0;
-                                    let near_bottom = (hover.y - rect.bottom()).abs() <= 20.0;
-                                    ((near_left || near_right), (near_top || near_bottom))
-                                }
+                            let (h_flag, v_flag) = {
+                                let near_left = (hover.x - rect.left()).abs() <= 20.0;
+                                let near_right = (hover.x - rect.right()).abs() <= 20.0;
+                                let near_top = (hover.y - rect.top()).abs() <= 20.0;
+                                let near_bottom = (hover.y - rect.bottom()).abs() <= 20.0;
+                                ((near_left || near_right), (near_top || near_bottom))
                             };
                             let is_edge = h_flag || v_flag;
                             if is_edge {
@@ -195,20 +178,6 @@ pub fn handle_canvas_clicks(
                                     let w = r.w * composition_rect.width();
                                     let h = r.h * composition_rect.height();
                                     egui::Rect::from_center_size(centre, egui::vec2(w, h))
-                                }
-                                crate::scene::Shape::Circle(c) => {
-                                    let centre = composition_rect.left_top()
-                                        + egui::vec2(
-                                            c.x * composition_rect.width(),
-                                            c.y * composition_rect.height(),
-                                        );
-                                    egui::Rect::from_center_size(
-                                        centre,
-                                        egui::vec2(
-                                            2.0 * c.radius * composition_rect.width(),
-                                            2.0 * c.radius * composition_rect.width(),
-                                        ),
-                                    )
                                 }
                                 crate::scene::Shape::Text(t) => {
                                     let centre = composition_rect.left_top()
@@ -259,20 +228,6 @@ pub fn handle_canvas_clicks(
                                             ),
                                         )
                                     }
-                                    crate::scene::Shape::Circle(c) => {
-                                        let centre = composition_rect.left_top()
-                                            + egui::vec2(
-                                                c.x * composition_rect.width(),
-                                                c.y * composition_rect.height(),
-                                            );
-                                        egui::Rect::from_center_size(
-                                            centre,
-                                            egui::vec2(
-                                                2.0 * c.radius * composition_rect.width(),
-                                                2.0 * c.radius * composition_rect.width(),
-                                            ),
-                                        )
-                                    }
                                     crate::scene::Shape::Text(t) => {
                                         let centre = composition_rect.left_top()
                                             + egui::vec2(
@@ -288,26 +243,20 @@ pub fn handle_canvas_clicks(
                                     _ => egui::Rect::EVERYTHING,
                                 };
 
-                                let (h_flag, v_flag, left_hit, right_hit, top_hit, bottom_hit) =
-                                    match &shape {
-                                        crate::scene::Shape::Circle(_) => {
-                                            (true, true, true, true, true, true)
-                                        }
-                                        _ => {
-                                            let near_left = (pos.x - rect.left()).abs() <= 20.0;
-                                            let near_right = (pos.x - rect.right()).abs() <= 20.0;
-                                            let near_top = (pos.y - rect.top()).abs() <= 20.0;
-                                            let near_bottom = (pos.y - rect.bottom()).abs() <= 20.0;
-                                            (
-                                                near_left || near_right,
-                                                near_top || near_bottom,
-                                                near_left,
-                                                near_right,
-                                                near_top,
-                                                near_bottom,
-                                            )
-                                        }
-                                    };
+                                let (h_flag, v_flag, left_hit, right_hit, top_hit, bottom_hit) = {
+                                    let near_left = (pos.x - rect.left()).abs() <= 20.0;
+                                    let near_right = (pos.x - rect.right()).abs() <= 20.0;
+                                    let near_top = (pos.y - rect.top()).abs() <= 20.0;
+                                    let near_bottom = (pos.y - rect.bottom()).abs() <= 20.0;
+                                    (
+                                        near_left || near_right,
+                                        near_top || near_bottom,
+                                        near_left,
+                                        near_right,
+                                        near_top,
+                                        near_bottom,
+                                    )
+                                };
 
                                 if h_flag || v_flag {
                                     let centre = rect.center(); // Simplificación para obtener el centro
@@ -484,37 +433,6 @@ pub fn handle_canvas_clicks(
 
                                             state.autosave.mark_dirty(ui.input(|i| i.time));
                                         }
-                                        crate::scene::Shape::Circle(_) => {
-                                            let dx = cur_pos.x - info.centre.x;
-                                            let dy = cur_pos.y - info.centre.y;
-                                            let r_frac = (dx * dx + dy * dy).sqrt()
-                                                / composition_rect.width();
-
-                                            elem.insert_frame(
-                                                elem.spawn_frame,
-                                                crate::shapes::element_store::FrameProps {
-                                                    x: None,
-                                                    y: None,
-                                                    radius: Some(r_frac),
-                                                    w: None,
-                                                    h: None,
-                                                    size: None,
-                                                    value: None,
-                                                    color: None,
-                                                    visible: None,
-                                                    z_index: None,
-                                                    reveal: None,
-                                                },
-                                            );
-                                            let elem_name = elem.name.clone();
-                                            patch_dsl_property(
-                                                &mut state.dsl_code,
-                                                &elem_name,
-                                                "radius",
-                                                r_frac,
-                                            );
-                                            state.autosave.mark_dirty(ui.input(|i| i.time));
-                                        }
                                         crate::scene::Shape::Text(_) => {
                                             let size_frac = (cur_pos.y - info.centre.y).abs()
                                                 / composition_rect.height();
@@ -582,20 +500,6 @@ pub fn handle_canvas_clicks(
                                         let w = r.w * composition_rect.width();
                                         let h = r.h * composition_rect.height();
                                         egui::Rect::from_center_size(centre, egui::vec2(w, h))
-                                    }
-                                    crate::scene::Shape::Circle(c) => {
-                                        let centre = composition_rect.left_top()
-                                            + egui::vec2(
-                                                c.x * composition_rect.width(),
-                                                c.y * composition_rect.height(),
-                                            );
-                                        egui::Rect::from_center_size(
-                                            centre,
-                                            egui::vec2(
-                                                2.0 * c.radius * composition_rect.width(),
-                                                2.0 * c.radius * composition_rect.width(),
-                                            ),
-                                        )
                                     }
                                     crate::scene::Shape::Text(t) => {
                                         let centre = composition_rect.left_top()

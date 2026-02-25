@@ -182,7 +182,7 @@ pub struct AppState {
     pub completion_items: Vec<CompletionItem>,
     pub completion_selected_index: usize,
 
-    // Snippet/tabstop state for multi-field completions (e.g. `circle { ... }`).
+    // Snippet/tabstop state for multi-field completions (e.g. `rect { ... }`).
     #[serde(skip)]
     pub completion_snippet_active: bool,
     #[serde(skip)]
@@ -605,10 +605,6 @@ impl AppState {
                 CompletionItem::simple("width"),
                 CompletionItem::simple("height"),
                 CompletionItem::simple("color"),
-                CompletionItem::snippet(
-                    "circle",
-                    "circle \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    radius = 0.10,\n    fill = \"#78c8ff\",\n    spawn = 0.00\n}\n",
-                ),
                 CompletionItem::snippet(
                     "rect",
                     "rect \"Name\" {\n    x = 0.50,\n    y = 0.50,\n    width = 0.30,\n    height = 0.20,\n    fill = \"#c87878\",\n    spawn = 0.00\n}\n",

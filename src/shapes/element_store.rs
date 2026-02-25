@@ -62,7 +62,7 @@ impl FrameProps {
 pub struct ElementKeyframes {
     /// Element name (from `Shape::name()`)
     pub name: String,
-    /// Keyword / kind: "circle" | "rect" | "text"
+    /// Keyword / kind: "rect" | "text"
     pub kind: String,
     /// NOTE: `fps` removed from element storage — frame/second conversions
     /// must be performed by callers (use global `AppState.fps` or pass fps).

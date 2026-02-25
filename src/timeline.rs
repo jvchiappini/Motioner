@@ -385,15 +385,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                             .and_then(|p| p.color)
                             .map(|c| egui::Color32::from_rgba_premultiplied(c[0], c[1], c[2], c[3]))
                             .unwrap_or_else(|| match elem.kind.as_str() {
-                                "circle" => {
-                                    egui::Color32::from_rgba_premultiplied(120, 200, 255, 255)
-                                }
-                                "rect" => {
-                                    egui::Color32::from_rgba_premultiplied(255, 100, 100, 255)
-                                }
-                                "text" => {
-                                    egui::Color32::from_rgba_premultiplied(200, 255, 100, 255)
-                                }
+                                "rect" => egui::Color32::from_rgba_premultiplied(255, 100, 100, 255),
+                                "text" => egui::Color32::from_rgba_premultiplied(200, 255, 100, 255),
                                 _ => egui::Color32::from_gray(120),
                             });
 

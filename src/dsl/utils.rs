@@ -295,7 +295,7 @@ pub fn parse_kv_map(s: &str) -> HashMap<String, String> {
 // Return the raw body string from a collected block (for event handlers).
 
 // Extract the quoted name from a shape header line.
-// e.g. `circle "MyCircle" {` → `Some("MyCircle")`
+// e.g. `rect "MyRect" {` → `Some("MyRect")`
 
 // Return the first identifier in a line (letters, digits, `_`).
 

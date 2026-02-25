@@ -19,7 +19,6 @@ pub fn default_reveal() -> f32 {
 pub const COMBINED_WGSL: &str = concat!(
     include_str!("../shaders/common.wgsl"),
     include_str!("../shaders/render.wgsl"),
-    include_str!("shaders/circle.wgsl"),
     include_str!("shaders/rect.wgsl"),
     include_str!("shaders/text.wgsl"),
 );
@@ -27,7 +26,6 @@ pub const COMBINED_WGSL: &str = concat!(
 /// Shape enum moved from `scene.rs` to `src/shapes/shapes_manager.rs`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {
-    Circle(crate::shapes::circle::Circle),
     Rect(crate::shapes::rect::Rect),
     Text(crate::shapes::text::Text),
     /// Non-visual group that can contain other shapes.
@@ -44,7 +42,6 @@ impl Shape {
     /// Groups are not descriptors themselves and therefore return `None`.
     pub fn descriptor(&self) -> Option<&dyn crate::shapes::ShapeDescriptor> {
         match self {
-            Shape::Circle(c) => Some(c),
             Shape::Rect(r) => Some(r),
             Shape::Text(t) => Some(t),
             Shape::Group { .. } => None,
@@ -54,7 +51,6 @@ impl Shape {
     /// Mutable variant of [`Shape::descriptor`].
     pub fn descriptor_mut(&mut self) -> Option<&mut dyn crate::shapes::ShapeDescriptor> {
         match self {
-            Shape::Circle(c) => Some(c),
             Shape::Rect(r) => Some(r),
             Shape::Text(t) => Some(t),
             Shape::Group { .. } => None,
@@ -66,7 +62,6 @@ impl Shape {
     /// implementation.
     pub fn name(&self) -> &str {
         match self {
-            Shape::Circle(c) => &c.name,
             Shape::Rect(r) => &r.name,
             Shape::Text(t) => &t.name,
             Shape::Group { name, .. } => name,
@@ -115,9 +110,10 @@ impl Shape {
 
     /// Return a small sample scene used during state initialization.
     /// Previously this lived in `scene.rs`.  Keep it simple: one circle
-    /// so the editor isn't completely empty.
+    /// (circle removed) start with empty scene so the editor isn't completely empty.
     pub fn sample_scene() -> Vec<Shape> {
-        vec![Shape::Circle(crate::shapes::circle::Circle::default())]
+        // no default shapes; user will add elements explicitly
+        Vec::new()
     }
     pub fn set_fill_color(&mut self, col: [u8; 4]) {
         if let Some(d) = self.descriptor_mut() {
@@ -199,7 +195,7 @@ impl Shape {
         self.descriptor().is_some_and(|d| d.is_ephemeral())
     }
 
-    /// Recursively flattens the scene graph into a list of visual primitives (Circles, Rects).
+    /// Recursively flattens the scene graph into a list of visual primitives (Rects, Text, etc.).
     /// Inherits spawn_time from parents: a child is only visible if current_time >= parent_spawn and current_time >= child_spawn.
     #[allow(dead_code)]
     pub fn flatten(&self, parent_spawn: f32) -> Vec<(Shape, f32)> {
@@ -309,7 +305,7 @@ inventory::collect!(ShapeParserFactory);
 /// }
 /// ```
 pub struct CreateDefaultFactory {
-    /// DSL keyword, e.g. `"circle"`.
+    /// DSL keyword, e.g. `"rect"`.
     pub kind: &'static str,
     /// Produce a default `Shape` with the given name.
     pub constructor: fn(String) -> Shape,
@@ -340,7 +336,7 @@ pub fn keyword_color(keyword: &str) -> Option<egui::Color32> {
 /// Try to parse a collected DSL `block` using the registered shape parsers.
 pub fn parse_shape_block(block: &[String]) -> Option<Shape> {
     let header = block.first()?;
-    // first identifier in the header is the keyword (e.g. "circle")
+    // first identifier in the header is the keyword (e.g. "rect")
     let mut ident = String::new();
     for ch in header.chars() {
         if ch.is_alphanumeric() || ch == '_' {
@@ -397,12 +393,13 @@ impl crate::shapes::ShapeDescriptor for Shape {
     where
         Self: Sized,
     {
-        // not very meaningful at the enum level, but provide a circle
-        let c = crate::shapes::circle::Circle {
+        // provide a default rectangle instead of a circle now that circles
+        // have been removed
+        let r = crate::shapes::rect::Rect {
             name,
             ..Default::default()
         };
-        Shape::Circle(c)
+        Shape::Rect(r)
     }
     fn animations(&self) -> &[crate::scene::Animation] {
         self.descriptor().map_or(&[], |d| d.animations())
@@ -512,16 +509,6 @@ pub fn find_hit_path(
         }
 
         match shape {
-            Shape::Circle(c) => {
-                let center = composition_rect.left_top()
-                    + eframe::egui::vec2(
-                        c.x * composition_rect.width(),
-                        c.y * composition_rect.height(),
-                    );
-                if pos.distance(center) <= c.radius * composition_rect.width() {
-                    return Some(vec![i]);
-                }
-            }
             Shape::Rect(r) => {
                 // GPU rendering treats the rectangle's `x`/`y` as the centre
                 // of mass (see `shapes/rect.rs::append_gpu_shapes`).  Hit
@@ -577,7 +564,7 @@ pub fn find_hit_path(
     None
 }
 
-/// Draw highlight rectangle/circle for a shape (recurses into groups).
+/// Draw highlight rectangle for a shape (recurses into groups).
 pub fn draw_highlight_recursive(
     painter: &eframe::egui::Painter,
     shape: &Shape,
@@ -592,14 +579,6 @@ pub fn draw_highlight_recursive(
         return;
     }
     match shape {
-        Shape::Circle(c) => {
-            let center = composition_rect.left_top()
-                + eframe::egui::vec2(
-                    c.x * composition_rect.width(),
-                    c.y * composition_rect.height(),
-                );
-            painter.circle_stroke(center, c.radius * composition_rect.width(), stroke);
-        }
         Shape::Rect(r) => {
             // rectangle coordinates are centred, so compute centre and draw
             // highlight around it rather than treating `x`/`y` as top-left.

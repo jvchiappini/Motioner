@@ -28,7 +28,7 @@ timeline(fps = 30, duration = 5.0)
 
 Scene / element declaration
 
-- `circle { ... }`, `rect { ... }`, and `group { ... }` declare scene shapes.
+-- `rect { ... }` and `group { ... }` declare scene shapes.
 - Shapes accept properties (position, size, color, spawn_time) and an `animations { ... }` block.
 
 Example (full DSL):
@@ -36,7 +36,7 @@ Example (full DSL):
 ```
 timeline(fps = 30, duration = 5.0)
 
-circle(name = "Circle", x = 0.1, y = 0.5, radius = 0.1, color = [255,255,255,255]) {
+rect(name = "Rect", x = 0.1, y = 0.5, width = 0.1, height = 0.1, color = [255,255,255,255]) {
   animations {
     move(to_x = 0.8, to_y = 0.5, start = 0.0, end = 2.0, ease = sine)
     fade(start = 0.0, end = 1.0, from = 0.0, to = 1.0)

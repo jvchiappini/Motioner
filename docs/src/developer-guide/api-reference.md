@@ -226,7 +226,7 @@ Example (DSL):
 
 ```
 on_time {
-    move_element(name = "Circle", x = seconds * 0.1, y = 0.5)
+    move_element(name = "Rect", x = seconds * 0.1, y = 0.5)
 }
 ```
 
@@ -241,20 +241,20 @@ Additional DSL features (variables & control flow):
 on_time {
     // numeric and string variables
     let speed = seconds * 0.1
-    let id = "Circle"
+    let id = "Rect"
 
     // lists
     let steps = [0.0, 0.25, 0.5]
 
     // for-loop over a numeric range
     for i in 0..3 {
-        move_element(name = "Circle", x = i * speed, y = 0.2)
+        move_element(name = "Rect", x = i * speed, y = 0.2)
     }
 
     // iterate a list and conditional
     for t in steps {
         if t > 0.2 {
-            move_element(name = "Circle", x = t, y = 0.4)
+            move_element(name = "Rect", x = t, y = 0.4)
         }
     }
 }

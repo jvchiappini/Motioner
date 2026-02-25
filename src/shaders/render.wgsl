@@ -116,11 +116,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // When adding a new shape: implement `shape_<name>` in a WGSL file and
 // add the Rust-side include so it becomes part of the shader module.
 fn eval_shape(in: VertexOutput, snapped_uv: vec2<f32>, raw_uv: vec2<f32>) -> vec4<f32> {
+    // with circle removed we renumber: 0=rect,1=text
     if (in.shape_type == 0) {
-        return shape_circle(in, raw_uv);
-    } else if (in.shape_type == 1) {
         return shape_rect(in, raw_uv);
-    } else if (in.shape_type == 2) {
+    } else if (in.shape_type == 1) {
         return shape_text(in, snapped_uv, raw_uv);
     }
     // fallback: opaque solid color

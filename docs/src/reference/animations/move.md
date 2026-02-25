@@ -71,16 +71,17 @@ Example — top-level move block (exact form accepted by parser)
 size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
-circle "Circle" {
+rect "Box" {
   x = 0.500,
   y = 0.500,
-  radius = 0.100,
+  width = 0.100,
+  height = 0.100,
   fill = "#78c8ff",
   spawn = 0.00
 }
 
 move {
-  element = "Circle",
+  element = "Box",
   to = (0.700, 0.500),
   during = 0.000 -> 5.000,
   ease = ease_in_out(power = 1.000)

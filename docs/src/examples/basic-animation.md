@@ -12,31 +12,23 @@ the UI.
 size(1280, 720)
 timeline(fps = 60, duration = 5.00)
 
-circle "Circle" {
-    x = 0.500,
-    y = 0.500,
-    radius = 0.100,
-    fill = "#78c8ff",
-    spawn = 0.00
+rect "Rect" {
+  x = 0.500,
+  y = 0.500,
+  width = 0.100,
+  height = 0.100,
+  fill = "#78c8ff",
+  spawn = 0.00,
+  animations {
+    fade(start = 0.0, end = 1.5, from = 0.0, to = 1.0, ease = expo)
+  }
 }
 
 move {
-    element = "Circle",
-    to = (0.700, 0.500),
-    during = 0.000 -> 5.000,
-    ease = ease_in_out(power = 1.000)
-}
-
-/* fade can be nested or top-level similarly */
-circle "Dot" {
-    x = 0.200,
-    y = 0.500,
-    radius = 0.050,
-    fill = "#ffcc88",
-    spawn = 0.00,
-    animations {
-        fade(start = 0.0, end = 1.5, from = 0.0, to = 1.0, ease = expo)
-    }
+  element = "Rect",
+  to = (0.700, 0.500),
+  during = 0.000 -> 5.000,
+  ease = ease_in_out(power = 1.000)
 }
 ```
 

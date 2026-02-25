@@ -48,21 +48,22 @@ impl GpuResources {
             let mut final_combined_h: u32 = 0;
             // Construir descriptores en orden de dibujado (inverso)
             for (scene_idx, ek) in scene.iter().enumerate().rev() {
-                let mut desc = GpuElementDesc {
-                    x_offset: 0,
-                    x_len: 0,
-                    y_offset: 0,
-                    y_len: 0,
-                    radius_offset: 0,
-                    radius_len: 0,
-                    w_offset: 0,
-                    w_len: 0,
-                    h_offset: 0,
-                    h_len: 0,
-                    shape_type: match ek.kind.as_str() {
-                        "circle" => 0,
-                        "rect" => 1,
-                        "text" => 2,
+                    let mut desc = GpuElementDesc {
+                        x_offset: 0,
+                        x_len: 0,
+                        y_offset: 0,
+                        y_len: 0,
+                        radius_offset: 0,
+                        radius_len: 0,
+                        w_offset: 0,
+                        w_len: 0,
+                        h_offset: 0,
+                        h_len: 0,
+                        // renumber shape types now that circles are removed
+                        // 0 = rect, 1 = text
+                        shape_type: match ek.kind.as_str() {
+                        "rect" => 0,
+                        "text" => 1,
                         _ => 0,
                     },
                     spawn_frame: ek.spawn_frame as u32,
