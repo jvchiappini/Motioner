@@ -1,3 +1,8 @@
+// Module moved into a directory for better organization. The original
+// `timeline.rs` file was relocated here and renamed to `mod.rs` so that
+// other submodules (if any) can live alongside it in the `timeline/`
+// directory. The logic is unchanged.
+
 use crate::app_state::AppState;
 use eframe::egui;
 
