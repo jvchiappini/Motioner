@@ -1,7 +1,9 @@
 /// Motioner DSL - public module facade.
 pub mod ast;
 pub mod generator;
-pub mod lexer;
+// lexer is currently unused (extract_balanced was only required by the
+// parser); drop the module until the parser is restored.
+// pub mod lexer;
 pub mod parser;
 pub mod utils;
 pub mod validator;
@@ -15,13 +17,12 @@ use crate::scene::Shape;
 /// Parse DSL source and return a scene as a `Vec<Shape>`.
 pub fn parse_dsl(src: &str) -> Vec<Shape> {
     let stmts = parser::parse(src);
-    let mut shapes: Vec<Shape> = Vec::new();
-
-    for stmt in stmts {
-        if let ast::Statement::Shape(s) = stmt {
-            shapes.push(s);
-        }
-    }
-
-    shapes
+    // since the only Statement variant is `Shape`, we can directly
+    // convert the list to shapes
+    stmts
+        .into_iter()
+        .map(|stmt| match stmt {
+            ast::Statement::Shape(s) => s,
+        })
+        .collect()
 }

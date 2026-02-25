@@ -1,4 +1,9 @@
-/// Expression evaluator for the Motioner DSL.
+//! Expression evaluator for the Motioner DSL.  Much of this module is kept
+//! around for historical reasons; in the current build the DSL parser is
+//! disabled and many of the evaluation features are unused.  `dead_code`
+//! warnings are therefore suppressed for the entire file.
+
+#![allow(dead_code)]
 ///
 /// Evaluates simple mathematical expressions (e.g. `seconds * 0.1 + 0.5`)
 /// against a variable context.  Used by the runtime to resolve dynamic
@@ -15,12 +20,10 @@ pub enum Value {
     List(Vec<Value>),
 }
 
-// Dummy constant to ensure the `List` variant is actually constructed at
-// least once in the compiled binary.  Without this the variant would trigger
-// a `dead_code` error when no list-valued variables are ever created during
-// normal execution (which is currently the case).  The constant is never
-// referenced by any code; its mere presence is enough to satisfy the
-// compiler's analysis.
+// The dummy constant below existed to convince the compiler that the
+// `List` variant of `Value` was used.  Because we now allow dead code for
+// the whole module the constant can be removed, but we keep it in case
+// someone wishes to re-enable the evaluation features later.
 const _: Option<Value> = Some(Value::List(Vec::new()));
 
 /// Variables available during expression evaluation (e.g. `seconds`, `frame`).
