@@ -41,7 +41,14 @@ impl Shape {
 
     pub fn to_dsl(&self, indent: &str) -> String {
         match self {
-            Shape::Rect { name, x, y, w, h, color } => {
+            Shape::Rect {
+                name,
+                x,
+                y,
+                w,
+                h,
+                color,
+            } => {
                 format!(
                     "{}rect \"{}\" {{\n\t{}x = {:.3},\n\t{}y = {:.3},\n\t{}w = {:.3},\n\t{}h = {:.3},\n\t{}color = \"#{:02x}{:02x}{:02x}\",\n{}}}\n",
                     indent, name, indent, x, indent, y, indent, w, indent, h, indent, color[0], color[1], color[2], indent

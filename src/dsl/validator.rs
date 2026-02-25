@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::parser;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
@@ -106,7 +106,10 @@ fn check_balanced_delimiters(src: &str, diags: &mut Vec<Diagnostic>) {
 
 fn check_header_config(src: &str, diags: &mut Vec<Diagnostic>) {
     if let Err(msg) = parser::parse_config(src) {
-        let pos = src.find("size").or_else(|| src.find("timeline")).unwrap_or(0);
+        let pos = src
+            .find("size")
+            .or_else(|| src.find("timeline"))
+            .unwrap_or(0);
         let (ln, col) = byte_to_line_col(src, pos);
         diags.push(Diagnostic {
             message: msg,
@@ -142,11 +145,20 @@ fn check_top_level_blocks(src: &str, diags: &mut Vec<Diagnostic>) {
 
         let mut in_str = false;
         for ch in line.chars() {
-            if ch == '"' { in_str = !in_str; continue; }
-            if in_str { continue; }
+            if ch == '"' {
+                in_str = !in_str;
+                continue;
+            }
+            if in_str {
+                continue;
+            }
             match ch {
                 '{' => brace_depth += 1,
-                '}' => if brace_depth > 0 { brace_depth -= 1; },
+                '}' => {
+                    if brace_depth > 0 {
+                        brace_depth -= 1;
+                    }
+                }
                 _ => {}
             }
         }
@@ -159,9 +171,16 @@ pub fn byte_to_line_col(src: &str, byte_idx: usize) -> (usize, usize) {
     let mut col = 1;
     let mut seen = 0;
     for ch in src.chars() {
-        if seen >= byte_idx { break; }
+        if seen >= byte_idx {
+            break;
+        }
         seen += ch.len_utf8();
-        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
     }
     (line, col)
 }

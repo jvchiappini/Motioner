@@ -2,7 +2,7 @@
 use super::ast::{HeaderConfig, MoveBlock, Statement};
 use super::lexer::extract_balanced;
 use crate::dsl::utils;
-use crate::scene::{Shape, Easing};
+use crate::scene::{Easing, Shape};
 
 pub fn parse(src: &str) -> Vec<Statement> {
     let mut stmts = Vec::new();
@@ -100,7 +100,9 @@ pub fn parse_move_block_lines(block: &[String]) -> Option<MoveBlock> {
 
     for line in body_lines(block) {
         let line = line.trim();
-        let Some((key, val)) = split_kv(line) else { continue };
+        let Some((key, val)) = split_kv(line) else {
+            continue;
+        };
 
         match key.as_str() {
             "element" => element = Some(val.trim_matches('"').to_string()),
@@ -134,7 +136,9 @@ fn parse_rect_block(block: &[String]) -> Option<Shape> {
 
     for line in body_lines(block) {
         let line = line.trim();
-        let Some((key, val)) = split_kv(line) else { continue };
+        let Some((key, val)) = split_kv(line) else {
+            continue;
+        };
         match key.as_str() {
             "x" => x = val.parse().unwrap_or(x),
             "y" => y = val.parse().unwrap_or(y),
@@ -149,7 +153,14 @@ fn parse_rect_block(block: &[String]) -> Option<Shape> {
         }
     }
 
-    Some(Shape::Rect { name, x, y, w, h, color })
+    Some(Shape::Rect {
+        name,
+        x,
+        y,
+        w,
+        h,
+        color,
+    })
 }
 
 fn collect_block<'a, I>(header: &str, lines: &mut std::iter::Peekable<I>) -> Vec<String>
@@ -180,8 +191,13 @@ pub(crate) fn body_lines(block: &[String]) -> Vec<String> {
     for line in block {
         for ch in line.chars() {
             match ch {
-                '{' => { in_body = true; depth += 1; }
-                '}' => { depth -= 1; }
+                '{' => {
+                    in_body = true;
+                    depth += 1;
+                }
+                '}' => {
+                    depth -= 1;
+                }
                 _ => {}
             }
         }
@@ -201,11 +217,15 @@ pub(crate) fn extract_name(header: &str) -> Option<String> {
 }
 
 fn first_ident(s: &str) -> String {
-    s.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect()
+    s.chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect()
 }
 
 pub(crate) fn split_kv(s: &str) -> Option<(String, String)> {
     utils::split_kv(s)
 }
 
-pub fn method_color(_name: &str) -> Option<[u8; 4]> { None }
+pub fn method_color(_name: &str) -> Option<[u8; 4]> {
+    None
+}

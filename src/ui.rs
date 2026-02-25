@@ -15,11 +15,12 @@ pub fn create_app(cc: &eframe::CreationContext<'_>) -> MyApp {
     state.folder_dialog_rx = Some(rx);
 
     // Initialize logo texture
-    if let Some(logo_image) = crate::logo::color_image_from_svg(include_str!("../assets/logo.svg")) {
+    if let Some(logo_image) = crate::logo::color_image_from_svg(include_str!("../assets/logo.svg"))
+    {
         state.logo_texture = Some(cc.egui_ctx.load_texture(
             "logo_texture",
             logo_image,
-            Default::default()
+            Default::default(),
         ));
     }
 
@@ -32,7 +33,7 @@ impl eframe::App for MyApp {
         let now = ctx.input(|i| i.time);
         let _ = state.tick(now);
 
-        let is_modal_open = state.show_welcome;
+        let is_modal_open = state.show_welcome || state.show_settings;
 
         // Sidebar Toolbar (Far Left)
         egui::SidePanel::left("toolbar_panel")
@@ -52,13 +53,32 @@ impl eframe::App for MyApp {
                 timeline::show(ui, state);
             });
 
-        egui::SidePanel::left("code_panel")
-            .resizable(true)
-            .default_width(400.0)
-            .show(ctx, |ui| {
-                ui.set_enabled(!is_modal_open);
-                code_panel::show(ui, state);
-            });
+        if let Some(tab) = state.active_tab {
+            let panel_res = egui::SidePanel::left("left_panel")
+                .resizable(true)
+                .default_width(state.left_panel_width)
+                .min_width(200.0)
+                .frame(egui::Frame::none().fill(egui::Color32::from_rgb(30, 30, 30)))
+                .show(ctx, |ui| {
+                    ui.set_enabled(!is_modal_open);
+                    match tab {
+                        crate::app_state::PanelTab::Code => {
+                            code_panel::show(ui, state);
+                        }
+                        crate::app_state::PanelTab::SceneGraph => {
+                            ui.vertical(|ui| {
+                                ui.set_min_size(ui.available_size());
+                                ui.add_space(8.0);
+                                ui.heading("Scene Graph");
+                                ui.label("Coming soon...");
+                            });
+                        }
+                    }
+                });
+            
+            // Update the width so if the user resizes it, we remember it.
+            state.left_panel_width = panel_res.response.rect.width();
+        }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(egui::Color32::from_rgb(15, 15, 17)))
@@ -73,8 +93,10 @@ impl eframe::App for MyApp {
             ctx.request_repaint();
         }
 
-        if is_modal_open {
+        if state.show_welcome {
             crate::modals::welcome_modal::show(ctx, state);
+        } else if state.show_settings {
+            crate::modals::project_settings::show(ctx, state);
         }
     }
 }

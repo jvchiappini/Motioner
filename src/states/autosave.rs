@@ -26,7 +26,7 @@ pub fn tick(state: &mut crate::app_state::AppState, now: f64) {
         if now - last_edit > state.autosave.cooldown_secs as f64 {
             let diagnostics = crate::dsl::utils::validate_and_normalize(&mut state.dsl_code);
             apply_diagnostics(state, diagnostics);
-            
+
             // In factory state, "saving" is just clearing the dirty flag
             state.autosave.pending = false;
             state.autosave.last_success_time = Some(now);

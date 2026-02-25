@@ -61,8 +61,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         });
 
     // 4. Draw the Centered Modal Window
-    let window_width = 500.0;
-    let window_height = 650.0; // Taller for better spacing
+    let window_width = 460.0;
+    let window_height = 420.0; // Optimized for two sections
 
     // Calculate centered position
     // We apply the slide offset to Y for the animation
@@ -83,12 +83,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             // Window Shadow & Frame
             // We use a separate frame for the detailed styling
             let frame = egui::Frame::none()
-                .fill(egui::Color32::from_rgb(24, 24, 27)) // Very dark grey/almost black, modern matte
-                .rounding(16.0)
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(20)))
+                .fill(egui::Color32::from_rgb(20, 20, 22)) 
+                .rounding(20.0)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(15)))
                 .shadow(egui::epaint::Shadow {
-                    extrusion: 40.0,
-                    color: egui::Color32::from_black_alpha(120),
+                    extrusion: 60.0,
+                    color: egui::Color32::from_black_alpha(160),
                 });
 
             frame.show(ui, |ui| {
@@ -127,9 +127,9 @@ fn render_header(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(24.0); // Left padding
         ui.heading(
             egui::RichText::new("Project Settings")
-                .size(24.0)
+                .size(20.0)
                 .strong()
-                .color(egui::Color32::from_gray(240)),
+                .color(egui::Color32::from_white_alpha(240)),
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -137,7 +137,7 @@ fn render_header(ui: &mut egui::Ui, state: &mut AppState) {
 
             // Modern "X" close button
             let close_btn = ui.add(
-                egui::Button::new(egui::RichText::new("✕").size(18.0))
+                egui::Button::new(egui::RichText::new("✕").size(16.0).color(egui::Color32::from_gray(180)))
                     .frame(false)
                     .fill(egui::Color32::TRANSPARENT),
             );
@@ -153,229 +153,152 @@ fn render_header(ui: &mut egui::Ui, state: &mut AppState) {
 }
 
 fn render_body(ui: &mut egui::Ui, state: &mut AppState) {
-    // Style settings
-    let section_header_color = egui::Color32::from_rgb(100, 160, 255); // A nice accent blue
-    let label_color = egui::Color32::from_gray(180);
+    let accent_color = egui::Color32::from_rgb(100, 150, 255);
+    let label_color = egui::Color32::from_gray(170);
 
     let mut section =
         |ui: &mut egui::Ui, title: &str, content: &dyn Fn(&mut egui::Ui, &mut AppState)| {
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(24.0);
                 ui.label(
                     egui::RichText::new(title)
                         .strong()
-                        .color(section_header_color)
-                        .size(15.0),
+                        .color(egui::Color32::WHITE)
+                        .size(16.0),
                 );
             });
-            ui.add_space(8.0);
+            ui.add_space(12.0);
 
-            // Indented content
+            // Indented content inside a nice rounded frame for each section
             egui::Frame::none()
-                .inner_margin(egui::Margin {
-                    left: 24.0,
-                    right: 24.0,
-                    top: 0.0,
-                    bottom: 0.0,
-                })
+                .fill(egui::Color32::from_rgb(32, 32, 36))
+                .rounding(12.0)
+                .inner_margin(egui::Margin::symmetric(20.0, 16.0))
                 .show(ui, |ui| {
                     content(ui, state);
                 });
 
-            ui.add_space(24.0); // Space between sections
+            ui.add_space(8.0);
         };
 
-    // 1. Animation Section
-    section(ui, "Animation Timeline", &|ui, state| {
-        egui::Grid::new("anim_grid")
-            .num_columns(2)
-            .spacing([40.0, 12.0])
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("Frame Rate").color(label_color));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut state.fps)
-                            .clamp_range(1..=240)
-                            .speed(1),
+    ui.vertical_centered(|ui| {
+        ui.set_width(ui.available_width() - 48.0);
+
+        // 1. Animation Section
+        section(ui, "Animation Timeline", &|ui, state| {
+            egui::Grid::new("anim_grid")
+                .num_columns(2)
+                .spacing([40.0, 16.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Frame Rate").color(label_color));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.fps)
+                                .clamp_range(1..=240)
+                                .speed(1),
+                        );
+                        ui.label(egui::RichText::new("FPS").color(label_color));
+                    });
+                    ui.end_row();
+
+                    ui.label(egui::RichText::new("Duration").color(label_color));
+
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut state.duration_input_buffer)
+                            .desired_width(80.0),
                     );
-                    ui.label("FPS");
-                });
-                ui.end_row();
 
-                ui.label(egui::RichText::new("Duration").color(label_color));
-
-                // Allow direct keyboard editing using a TextEdit bound to duration_input_buffer
-                // but sync it with duration_secs when not focused.
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut state.duration_input_buffer)
-                        .desired_width(80.0),
-                );
-
-                if response.changed() {
-                    // Try to parse the input
-                    if let Ok(val) = state.duration_input_buffer.parse::<f32>() {
-                        let clamped = val.clamp(0.1, 3600.0);
-                        state.duration_secs = clamped;
-                        // position cache removed — no-op
-                    }
-                } else if !response.has_focus() {
-                    // If not typing, keep the buffer in sync with the actual float value
-                    // Avoid constant string reallocation if the value hasn't changed significantly.
-                    // We use a simple check.
-                    let current_str = format!("{:.1}", state.duration_secs);
-                    if state.duration_input_buffer != current_str {
-                        // Check if buffer is just a valid representation (e.g. "5.00" vs "5.0")
+                    if response.changed() {
                         if let Ok(val) = state.duration_input_buffer.parse::<f32>() {
-                            if (val - state.duration_secs).abs() > 0.001 {
+                            state.duration_secs = val.clamp(0.1, 3600.0);
+                        }
+                    } else if !response.has_focus() {
+                        let current_str = format!("{:.1}", state.duration_secs);
+                        if state.duration_input_buffer != current_str {
+                            if let Ok(val) = state.duration_input_buffer.parse::<f32>() {
+                                if (val - state.duration_secs).abs() > 0.001 {
+                                    state.duration_input_buffer = current_str;
+                                }
+                            } else {
                                 state.duration_input_buffer = current_str;
                             }
-                        } else {
-                            state.duration_input_buffer = current_str;
                         }
                     }
-                }
 
-                ui.label("sec");
-                ui.end_row();
-            });
-    });
-
-    ui.separator();
-    ui.add_space(16.0);
-
-    // 2. Output & Resolution
-    section(ui, "Output Resolution", &|ui, state| {
-        egui::Grid::new("res_grid")
-            .num_columns(2)
-            .spacing([40.0, 12.0])
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("Dimensions").color(label_color));
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(egui::DragValue::new(&mut state.render_width).prefix("W: "))
-                        .changed()
-                    {
-                        // position cache removed — no-op
-                    }
-                    ui.label("x");
-                    if ui
-                        .add(egui::DragValue::new(&mut state.render_height).prefix("H: "))
-                        .changed()
-                    {
-                        // position cache removed — no-op
-                    }
+                    ui.label(egui::RichText::new("sec").color(label_color));
+                    ui.end_row();
                 });
-                ui.end_row();
-
-                ui.label(egui::RichText::new("Presets").color(label_color));
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let presets = [
-                        ("720p", 1280, 720),
-                        ("1080p", 1920, 1080),
-                        ("2K", 2560, 1440),
-                        ("4K", 3840, 2160),
-                    ];
-                    for (name, w, h) in presets {
-                        let is_active = state.render_width == w && state.render_height == h;
-
-                        // We need to style it manually or use add_enabled
-                        let btn = if is_active {
-                            ui.add(
-                                egui::Button::new(
-                                    egui::RichText::new(name).color(egui::Color32::WHITE),
-                                )
-                                .fill(egui::Color32::from_rgb(60, 60, 80)),
-                            )
-                        } else {
-                            ui.button(name)
-                        };
-
-                        if btn.clicked() {
-                            state.render_width = w;
-                            state.render_height = h;
-                            // position cache removed — no-op
-                        }
-                    }
-                });
-                ui.end_row();
-            });
-    });
-
-    ui.separator();
-    ui.add_space(16.0);
-
-    // 3. Caching & Performance
-    section(ui, "Cache & Performance", &|ui, state| {
-        // Position Prediction removed — legacy caching disabled.
-        ui.label(
-            egui::RichText::new("Position Prediction — not available")
-                .italics()
-                .color(egui::Color32::YELLOW),
-        );
+        });
 
         ui.add_space(12.0);
-        ui.label(
-            egui::RichText::new("Preview Rendering")
-                .strong()
-                .color(egui::Color32::WHITE),
-        );
-        ui.checkbox(
-            &mut state.preview_worker_use_gpu,
-            "Use GPU for background previews",
-        );
 
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Preview Scale:");
-            egui::ComboBox::from_id_source("preview_scale")
-                .selected_text(format!("{}x", state.preview_multiplier))
-                .show_ui(ui, |ui| {
-                    for m in [0.125, 0.25, 0.5, 1.0, 1.5, 2.0] {
-                        ui.selectable_value(&mut state.preview_multiplier, m, format!("{}x", m));
-                    }
+        // 2. Output & Resolution
+        section(ui, "Output Resolution", &|ui, state| {
+            egui::Grid::new("res_grid")
+                .num_columns(2)
+                .spacing([40.0, 16.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Dimensions").color(label_color));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut state.render_width).prefix("W: "));
+                        ui.label(egui::RichText::new("x").color(label_color));
+                        ui.add(egui::DragValue::new(&mut state.render_height).prefix("H: "));
+                    });
+                    ui.end_row();
+
+                    ui.label(egui::RichText::new("Presets").color(label_color));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let presets = [
+                            ("720p", 1280, 720),
+                            ("1080p", 1920, 1080),
+                            ("2K", 2560, 1440),
+                            ("4K", 3840, 2160),
+                        ];
+                        for (name, w, h) in presets {
+                            let is_active = state.render_width == w && state.render_height == h;
+
+                            let mut btn = egui::Button::new(
+                                egui::RichText::new(name).size(13.0).color(if is_active {
+                                    egui::Color32::WHITE
+                                } else {
+                                    egui::Color32::from_gray(180)
+                                }),
+                            )
+                            .rounding(6.0);
+
+                            if is_active {
+                                btn = btn.fill(accent_color).stroke(egui::Stroke::NONE);
+                            } else {
+                                btn = btn.fill(egui::Color32::from_white_alpha(10));
+                            }
+
+                            if ui.add(btn).clicked() {
+                                state.render_width = w;
+                                state.render_height = h;
+                            }
+                        }
+                    });
+                    ui.end_row();
                 });
         });
-
-        // GPU cache management
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Clear GPU cache").clicked() {
-                if let Some(render_state) = &state.wgpu_render_state {
-                    for (_t, id, _tex) in state.preview_gpu_cache.drain(..) {
-                        render_state.renderer.write().free_texture(&id);
-                    }
-                }
-                state.preview_native_texture_id = None;
-                if cfg!(feature = "wgpu") {
-                    state.preview_native_texture_resource = None;
-                }
-            }
-            ui.label(
-                egui::RichText::new("(release all cached preview textures)")
-                    .italics()
-                    .size(10.0),
-            );
-        });
-
-        // With the new GPU-only preview pipeline there is no longer any
-        // CPU-side frame cache to clean; all rendering happens in VRAM.  The
-        // previous controls for inspecting/clearing the RAM cache have been
-        // removed accordingly.
     });
 }
 
 fn render_footer(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.add_space(10.0);
+    ui.add_space(8.0);
     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
         let btn = egui::Button::new(
-            egui::RichText::new("Close Settings")
-                .size(16.0)
+            egui::RichText::new("Done")
+                .size(15.0)
+                .strong()
                 .color(egui::Color32::WHITE),
         )
-        .min_size(egui::vec2(200.0, 40.0))
-        .fill(egui::Color32::from_rgb(50, 50, 50))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(30)));
+        .min_size(egui::vec2(160.0, 36.0))
+        .fill(egui::Color32::from_rgb(100, 150, 255))
+        .rounding(8.0)
+        .stroke(egui::Stroke::NONE);
 
         if ui.add(btn).clicked() {
             close_settings(state);
