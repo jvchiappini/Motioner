@@ -31,3 +31,4 @@ desktop.ini
 
 # Logs and local artifacts
 *.log
+/out/

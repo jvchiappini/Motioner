@@ -8,6 +8,9 @@ members = [
     "crates/motioner_app",
     "crates/motioner_testkit",
 ]
+# FerrousEngine is a pinned submodule with its own workspace; its crates are
+# consumed as path dependencies by `motioner_render` only.
+exclude = ["engine"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,6 +25,16 @@ motioner_eval = { path = "crates/motioner_eval" }
 motioner_render = { path = "crates/motioner_render" }
 motioner_io = { path = "crates/motioner_io" }
 motioner_testkit = { path = "crates/motioner_testkit" }
+
+# FerrousEngine (pinned submodule, see engine/README.md). Only
+# `motioner_render` may depend on these.
+ferrous_2d = { path = "engine/ferrous/crates/ferrous_2d" }
+ferrous_font = { path = "engine/ferrous/crates/ferrous_font" }
+ferrous_renderer = { path = "engine/ferrous/crates/ferrous_renderer" }
+# Must match the engine's wgpu major version.
+wgpu = "23.0"
+glam = "0.29"
+pollster = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

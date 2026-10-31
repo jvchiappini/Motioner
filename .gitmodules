@@ -1,0 +1,4 @@
+[submodule "engine/ferrous"]
+	path = engine/ferrous
+	url = https://github.com/jvchiappini/FerrousEngine
+	shallow = true

@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  CARGO_INCREMENTAL: 0
   RUSTDOCFLAGS: -D warnings
 
 jobs:
@@ -20,6 +20,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -29,7 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
-        run: cargo fmt --all -- --check
+        run: cargo fmt -- --check
 
       - name: Dependency boundaries
         run: python scripts/check_boundaries.py
@@ -37,7 +39,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-machete
 
       - name: Unused dependencies
-        run: cargo machete
+        run: cargo machete crates
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
