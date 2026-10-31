@@ -1,6 +1,29 @@
 //! Core document model for Motioner.
 //!
-//! This crate owns the editable project representation: persistent IDs,
-//! the node hierarchy, animatable values, typed commands and undo. It is
-//! the root of the dependency graph and must never depend on graphics,
-//! UI, AI or platform crates.
+//! This crate owns the compiled project representation: persistent node
+//! IDs, the node hierarchy, animatable values and keyframes, colors and
+//! the rational time base. It is the root of the dependency graph and must
+//! never depend on graphics, UI, AI or platform crates.
+//!
+//! The document is produced by executing an MDF program (see
+//! `motioner_dsl`); every mutation goes through the [`Document`] API so
+//! there is one validated path into the model.
+
+mod animation;
+mod color;
+mod document;
+mod error;
+mod math;
+mod node;
+mod time;
+
+pub use animation::{Animatable, Ease, Keyframe};
+pub use color::{Color, ColorParseError};
+pub use document::{Composition, Document, MAX_CANVAS_SIZE};
+pub use error::CoreError;
+pub use math::Vec2;
+pub use node::{
+    BlendMode, Node, NodeContent, NodeId, Paint, Property, PropertyValue, Stroke, TextAlign,
+    TextContent, Transform,
+};
+pub use time::{Frame, FrameRate};
