@@ -67,13 +67,14 @@ T-ARCH-0001 captured its reusable ideas (DSL structure, code panel).
 ## Perceived status
 
 Solid foundation. The architecture is approved, the repository identity
-is fixed, and the workspace builds cleanly with lint, test, docs and
-boundary checks passing locally. Remaining Phase 1 work: finish CI
-verification (T-ARCH-0006), specify MDF v0 (T-FORMAT-0001), pin the
-engine and GUIMaker (T-ARCH-0005, blocked), and prove deterministic
-still-frame rendering (T-RENDER-0001, blocked on the engine).
+is fixed, and the workspace builds cleanly. CI is green on Windows and
+Linux with format, boundary, unused-dependency, clippy, test, build and
+rustdoc gates (T-ARCH-0006 done). Remaining Phase 1 work: specify MDF v0
+(T-FORMAT-0001), pin the engine and GUIMaker (T-ARCH-0005, blocked), and
+prove deterministic still-frame rendering (T-RENDER-0001, blocked on the
+engine).
 
 ## Last relevant session
 
-S-2026-10-31-002 - accepted all ADRs, replaced the GitHub repository,
-scaffolded the Cargo workspace, CI and boundary checks.
+S-2026-10-31-003 - finished CI gates, fixed unused scaffold dependencies,
+verified green runs on both operating systems.

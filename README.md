@@ -86,6 +86,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
+cargo machete
 python scripts/check_boundaries.py
 ```
 

@@ -1,7 +1,7 @@
 ---
 id: T-ARCH-0006
 titulo: Set up CI, format and lint gates
-estado: in_progress
+estado: done
 prioridad: alta
 tipo: chore
 creado_por: agente
@@ -41,4 +41,7 @@ seconds each (run 41199553252).
 dependencies. They were removed from the empty crates instead of being
 ignored, so the gate now passes locally and the dependency graph will
 grow only when code needs it.
+
+Final run 41199819701: green on Windows and Linux with fmt, boundaries,
+machete, clippy, tests, build and rustdoc.
 
