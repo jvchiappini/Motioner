@@ -71,8 +71,13 @@ NVIDIA adapter. RAM and VRAM are the main constraints.
   provenance.
 - The override/bake model is the hardest part of the editor. Orphans must
   be reported, never dropped.
-- `spec/mdf-v0.md` is a draft; the grammar and scene API can still
-  change. Review before implementing the interpreter.
+- `spec/mdf-v0.md` is frozen for the v0 subset. `while`, `use`,
+  overrides and LaTeX are deferred to v0.1 and must not block the first
+  MP4.
+- The first implementation prompt is `prompts/implement-milestone-1.md`.
+- The engine repository is available and compiles, but only 18 GB are
+  free on C:. Use a shallow/sparse engine checkout and release builds;
+  stop below 8 GB free.
 - `origin` is `jvchiappini/Motioner`, not PCS. PCS `update.py` expects the
   PCS repo in `origin`; temporarily point it at a `pcs` remote.
 - The old repo remains public as `Motioner-legacy` until deleted manually
@@ -92,14 +97,19 @@ NVIDIA adapter. RAM and VRAM are the main constraints.
 ## Perceived status
 
 Product and licensing decisions are closed, the roadmap has 22
-initiatives, and the first draft of the language spec exists at
-`spec/mdf-v0.md`. The next critical design step is reviewing that spec
-and resolving override/bake semantics. Implementation still waits for
-FerrousEngine and GUIMaker; meanwhile MDF v0 and project/format specs can
-advance without the engine.
+initiatives, and the MDF v0 subset is frozen. The first implementation
+prompt is ready at `prompts/implement-milestone-1.md`: MDF program ->
+headless FerrousEngine 2D render -> 5-second 1080p60 H.264 MP4.
+
+The engine repository is available and compiles. The main risks are the
+engine 2D/headless API and disk space (about 18 GB free). GUIMaker is
+not needed for the first MP4 and is not cloned yet.
+
+Next: hand the prompt to the implementation agent, or implement the
+MDF parser/interpreter now if working without the engine. Override/bake
+semantics remain deferred to v0.1.
 
 ## Last relevant session
 
-S-2026-10-31-006 - confirmed program-first MDF, custom DSL, LaTeX,
-revenue channels and 1.0 defaults; wrote the MDF v0 draft spec and
-updated all references.
+S-2026-10-31-007 - froze the MDF v0 subset, created the first MP4 tasks
+and wrote the implementation prompt.

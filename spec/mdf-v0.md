@@ -1,6 +1,12 @@
 # MDF v0 specification
 
-Status: draft, pending review.
+Status: frozen v0 subset (2026-10-31). The first implementation covers
+numbers, strings, booleans, lists, variables, functions, conditionals,
+`for` loops, arithmetic, comparisons, calls, attribute access, the 2D
+scene API, keyframes and linear/eased interpolation. `while`, `use`,
+overrides and LaTeX are deferred to v0.1 and must not block the first
+render milestone.
+
 Language: Motioner Document Format (MDF).
 Runtime: deterministic, sandboxed, program-first.
 
@@ -297,12 +303,15 @@ for i in range(5):
     dot.key("scale", 1.2 + i * 0.1, 1.0, ease="back_out")
 ```
 
-## 17. Open questions
+## 17. Deferred to v0.1
 
-1. `use` modules in v0 versus a later revision.
-2. Exact override syntax and orphan reporting.
-3. Whether `while` is needed in 1.0 or only `for`.
-4. F-string support and formatting helpers.
-5. The LaTeX command subset and error policy.
-6. The final resource-limit defaults.
-7. The formatter and comment-preservation rules.
+1. `use` modules and shared helper files.
+2. Override syntax, orphan reporting and bake behavior.
+3. `while` loops.
+4. F-strings and advanced formatting helpers.
+5. LaTeX math commands and error policy.
+6. Final resource-limit defaults.
+7. Formatter and comment-preservation rules.
+
+The v0 subset is frozen; these items have specifications in this
+document but are not required for the first MP4 milestone.

@@ -66,8 +66,11 @@ Key considerations:
 
 ## Tasks
 
-- T-DSL-0001 - Review and freeze the MDF v0 specification
+- T-DSL-0001 - Review and freeze the MDF v0 specification (done)
 - T-DSL-0002 - Define provenance, override and bake semantics
+- T-DSL-0003 - Implement the MDF v0 lexer, parser and AST
+- T-DSL-0004 - Implement the MDF v0 interpreter and 2D scene API
+- T-RENDER-0002 - Render the first MDF-driven MP4 through FerrousEngine
 
 ## Acceptance criteria
 
