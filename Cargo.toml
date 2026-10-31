@@ -32,11 +32,14 @@ motioner_testkit = { path = "crates/motioner_testkit" }
 # `motioner_render` may depend on these.
 ferrous_2d = { path = "engine/ferrous/crates/ferrous_2d" }
 ferrous_font = { path = "engine/ferrous/crates/ferrous_font" }
-ferrous_renderer = { path = "engine/ferrous/crates/ferrous_renderer" }
+ferrous_renderer = { path = "engine/ferrous/crates/ferrous_renderer", default-features = false }
 # Must match the engine's wgpu major version.
 wgpu = "23.0"
 glam = "0.29"
-pollster = "0.3"
+
+anyhow = "1.0"
+png = "0.17"
+sha2 = "0.10"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

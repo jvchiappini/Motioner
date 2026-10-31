@@ -7,5 +7,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+motioner_core.workspace = true
+motioner_eval.workspace = true
+ferrous_2d.workspace = true
+ferrous_font.workspace = true
+ferrous_renderer.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+motioner_dsl.workspace = true
+sha2.workspace = true
+
 [lints]
 workspace = true

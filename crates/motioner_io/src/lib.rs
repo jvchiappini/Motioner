@@ -4,3 +4,16 @@
 //! asset store, project migrations, autosave and the ffmpeg export
 //! pipeline. MDF is shared with the code layer; this crate does not
 //! define a second serialization format.
+//!
+//! This crate's export path operates on plain RGBA8 bytes and never depends
+//! on the renderer. [`write_png`] stores a single still as an 8-bit sRGB PNG,
+//! and [`Mp4Encoder`] streams frames to `ffmpeg` for H.264 MP4 output.
+
+mod encode;
+mod error;
+mod frame;
+mod png_writer;
+
+pub use encode::{EncodeSummary, FfmpegLocation, Mp4Encoder, VideoSettings};
+pub use error::ExportError;
+pub use png_writer::write_png;

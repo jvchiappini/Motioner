@@ -7,5 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "motioner"
+path = "src/main.rs"
+
+[dependencies]
+motioner_core.workspace = true
+motioner_dsl.workspace = true
+motioner_eval.workspace = true
+motioner_io.workspace = true
+motioner_render.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+
 [lints]
 workspace = true
