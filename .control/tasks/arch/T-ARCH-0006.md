@@ -34,6 +34,7 @@ workspace lints. Duplication is reviewed in code review, not assumed.
 
 CI added on 2026-10-31 in `.github/workflows/ci.yml`: Windows and Linux,
 fmt, boundary check, clippy, tests, build and rustdoc with warnings
-denied. Not yet executed on GitHub. The unused-dependency gate
-(`cargo machete`) is still missing.
+denied. The first run passed on both operating systems in about 40
+seconds each (run 41199553252). The unused-dependency gate
+(`cargo machete`) was added after that run and needs a final green run.
 
