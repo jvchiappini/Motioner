@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::node::{NodeId, Property};
+use crate::time::{Frame, MAX_ABS_FRAME};
 
 /// An invalid operation on the document model.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +40,24 @@ pub enum CoreError {
     NonFiniteValue {
         /// The property being written.
         property: Property,
+    },
+    /// A finite number outside the allowed magnitude of a property.
+    ValueOutOfRange {
+        /// The property being written.
+        property: Property,
+        /// The rejected value.
+        value: f64,
+    },
+    /// Authored seconds that do not convert to a frame within
+    /// `[-MAX_ABS_FRAME, MAX_ABS_FRAME]`.
+    TimeOutOfRange {
+        /// The authored time in seconds.
+        seconds: f64,
+    },
+    /// A keyframe frame outside `[-MAX_ABS_FRAME, MAX_ABS_FRAME]`.
+    FrameOutOfRange {
+        /// The rejected frame.
+        frame: Frame,
     },
     /// Negative or non-finite geometry, or a zero text size.
     InvalidGeometry {
@@ -80,6 +99,26 @@ impl fmt::Display for CoreError {
             Self::NonFiniteValue { property } => {
                 write!(f, "property '{}' must be a finite number", property.name())
             }
+            Self::ValueOutOfRange { property, value } => {
+                let bounds = crate::bounds::property_bounds(*property);
+                write!(
+                    f,
+                    "property '{}' value {value} is out of range: it must be between {} and {}",
+                    property.name(),
+                    bounds.min,
+                    bounds.max
+                )
+            }
+            Self::TimeOutOfRange { seconds } => write!(
+                f,
+                "time {seconds} s is out of range: the frame must be between {} and {}",
+                -MAX_ABS_FRAME, MAX_ABS_FRAME
+            ),
+            Self::FrameOutOfRange { frame } => write!(
+                f,
+                "frame {frame} is out of range: it must be between {} and {}",
+                -MAX_ABS_FRAME, MAX_ABS_FRAME
+            ),
             Self::InvalidGeometry { field } => {
                 write!(f, "'{field}' must be a finite, non-negative number")
             }

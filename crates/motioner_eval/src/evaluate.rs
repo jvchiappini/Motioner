@@ -37,12 +37,17 @@ impl Evaluator {
     /// children, and siblings in their stored order. Opacity multiplies
     /// down the hierarchy; a subtree whose accumulated opacity is zero is
     /// skipped. Groups transform their children and draw nothing.
+    ///
+    /// A node whose resolved transform or accumulated opacity is not finite
+    /// is skipped together with its subtree, because no renderer can draw
+    /// it; each such skip increments [`RenderPlan::non_finite_items`].
     pub fn evaluate(&mut self, document: &Document, frame: Frame, plan: &mut RenderPlan) {
         let composition = document.composition();
         plan.width = composition.width();
         plan.height = composition.height();
         plan.background = Some(composition.background());
         plan.items.clear();
+        plan.non_finite_items = 0;
 
         self.stack.clear();
         self.push_children(document.roots(), Affine2::IDENTITY, 1.0);
@@ -59,6 +64,10 @@ impl Evaluator {
             );
             let transform = pending.parent_transform.then(local);
             let opacity = pending.parent_opacity * sample(&props.opacity, frame).clamp(0.0, 1.0);
+            if !transform.is_finite() || !opacity.is_finite() {
+                plan.non_finite_items = plan.non_finite_items.saturating_add(1);
+                continue;
+            }
             if opacity <= 0.0 {
                 continue;
             }
@@ -112,7 +121,7 @@ fn item_shape(content: &NodeContent) -> Option<ItemShape> {
 mod tests {
     use super::*;
     use motioner_core::{
-        Color, Composition, Ease, FrameRate, Paint, Property, PropertyValue, Vec2,
+        Color, Composition, Ease, FrameRate, Paint, Property, PropertyValue, Vec2, MAX_ABS_FRAME,
     };
 
     fn document() -> Document {
@@ -137,6 +146,31 @@ mod tests {
         let mut plan = RenderPlan::new();
         Evaluator::new().evaluate(doc, frame, &mut plan);
         plan
+    }
+
+    /// Wraps `leaf` in `levels` groups, each scaled by `MAX_SCALE`, and
+    /// returns the outermost group.
+    fn nested_scaled_groups(doc: &mut Document, levels: usize, leaf: NodeId) -> NodeId {
+        let mut current = doc.add_node(NodeContent::Group).unwrap();
+        doc.set_property(
+            current,
+            Property::Scale,
+            PropertyValue::Scalar(motioner_core::bounds::MAX_SCALE),
+        )
+        .unwrap();
+        doc.reparent(leaf, current).unwrap();
+        for _ in 1..levels {
+            let outer = doc.add_node(NodeContent::Group).unwrap();
+            doc.set_property(
+                outer,
+                Property::Scale,
+                PropertyValue::Scalar(motioner_core::bounds::MAX_SCALE),
+            )
+            .unwrap();
+            doc.reparent(current, outer).unwrap();
+            current = outer;
+        }
+        current
     }
 
     #[test]
@@ -231,5 +265,61 @@ mod tests {
         evaluator.evaluate(&doc, 3, &mut second);
         evaluator.evaluate(&doc, 17, &mut second);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn keyframes_at_frame_limits_sample_finite() {
+        let mut doc = document();
+        let id = square(&mut doc);
+        doc.add_keyframe(
+            id,
+            Property::Position,
+            -MAX_ABS_FRAME,
+            PropertyValue::Vec2(Vec2::new(-motioner_core::bounds::MAX_POSITION, 0.0)),
+            Ease::Linear,
+        )
+        .unwrap();
+        doc.add_keyframe(
+            id,
+            Property::Position,
+            MAX_ABS_FRAME,
+            PropertyValue::Vec2(Vec2::new(motioner_core::bounds::MAX_POSITION, 0.0)),
+            Ease::Linear,
+        )
+        .unwrap();
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.non_finite_items(), 0);
+        assert_eq!(plan.items().len(), 1);
+        let item = plan.items()[0];
+        assert!(item.transform.is_finite());
+        assert!(item.opacity.is_finite());
+    }
+
+    #[test]
+    fn sixty_four_scale_levels_stay_finite() {
+        let mut doc = document();
+        let leaf = square(&mut doc);
+        nested_scaled_groups(&mut doc, 64, leaf);
+        let plan = evaluate(&doc, 0);
+        // MAX_SCALE^64 is about 1e256, below f64::MAX (~1.8e308).
+        assert_eq!(plan.non_finite_items(), 0);
+        assert_eq!(plan.items().len(), 1);
+        assert!(plan.items()[0].transform.is_finite());
+    }
+
+    #[test]
+    fn deep_scale_nesting_skips_non_finite_items() {
+        let mut doc = document();
+        let leaf = square(&mut doc);
+        // MAX_SCALE^80 is about 1e320, above f64::MAX, so the chain
+        // overflows around level 78; 80 leaves a safety margin.
+        nested_scaled_groups(&mut doc, 80, leaf);
+        let plan = evaluate(&doc, 0);
+        assert!(plan.non_finite_items() > 0);
+        assert!(plan.items().is_empty());
+        assert!(plan
+            .items()
+            .iter()
+            .all(|item| item.transform.is_finite() && item.opacity.is_finite()));
     }
 }

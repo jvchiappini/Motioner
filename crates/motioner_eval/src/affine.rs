@@ -102,6 +102,20 @@ impl Affine2 {
     pub fn determinant(self) -> f64 {
         self.a * self.d - self.b * self.c
     }
+
+    /// Whether every matrix component is finite.
+    ///
+    /// A non-finite matrix cannot be rendered; the evaluator uses this to
+    /// drop items produced by overflowing scale chains.
+    #[must_use]
+    pub fn is_finite(self) -> bool {
+        self.a.is_finite()
+            && self.b.is_finite()
+            && self.c.is_finite()
+            && self.d.is_finite()
+            && self.tx.is_finite()
+            && self.ty.is_finite()
+    }
 }
 
 #[cfg(test)]

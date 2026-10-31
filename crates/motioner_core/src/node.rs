@@ -252,7 +252,7 @@ pub struct Transform {
     pub rotation: Animatable<f64>,
     /// Anchor point in local space.
     pub anchor: Animatable<Vec2>,
-    /// Opacity in `0.0..=1.0` (clamped on evaluation).
+    /// Opacity in `0.0..=1.0` (validated on write, clamped on evaluation).
     pub opacity: Animatable<f64>,
 }
 

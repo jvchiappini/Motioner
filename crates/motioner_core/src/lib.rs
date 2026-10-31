@@ -17,6 +17,8 @@ mod math;
 mod node;
 mod time;
 
+pub mod bounds;
+
 pub use animation::{Animatable, Ease, Keyframe};
 pub use color::{Color, ColorParseError};
 pub use document::{Composition, Document, MAX_CANVAS_SIZE};
@@ -26,4 +28,4 @@ pub use node::{
     BlendMode, Node, NodeContent, NodeId, Paint, Property, PropertyValue, Stroke, TextAlign,
     TextContent, Transform,
 };
-pub use time::{Frame, FrameRate};
+pub use time::{Frame, FrameRate, MAX_ABS_FRAME};

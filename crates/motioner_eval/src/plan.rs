@@ -63,6 +63,10 @@ pub struct RenderPlan {
     pub(crate) height: u32,
     pub(crate) background: Option<Color>,
     pub(crate) items: Vec<RenderItem>,
+    /// Nodes skipped during the last evaluation because their resolved
+    /// transform or opacity was not finite. Their subtrees were skipped
+    /// too and are not counted individually.
+    pub(crate) non_finite_items: u32,
 }
 
 impl RenderPlan {
@@ -94,5 +98,14 @@ impl RenderPlan {
     #[must_use]
     pub fn items(&self) -> &[RenderItem] {
         &self.items
+    }
+
+    /// Number of nodes skipped by the last [`crate::Evaluator::evaluate`]
+    /// call because their resolved transform or accumulated opacity was
+    /// not finite. Skipping a node also skips its subtree, so descendants
+    /// are not counted. Reset to zero at the start of every evaluation.
+    #[must_use]
+    pub fn non_finite_items(&self) -> u32 {
+        self.non_finite_items
     }
 }

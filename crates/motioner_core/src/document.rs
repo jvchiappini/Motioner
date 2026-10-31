@@ -1,11 +1,12 @@
 //! The composition and its node tree, plus the validated mutation API.
 
 use crate::animation::{Animatable, Ease, Keyframe};
+use crate::bounds;
 use crate::color::Color;
 use crate::error::CoreError;
 use crate::math::Vec2;
 use crate::node::{BlendMode, Node, NodeContent, NodeId, Property, PropertyValue, Transform};
-use crate::time::{Frame, FrameRate};
+use crate::time::{frame_within_bounds, Frame, FrameRate};
 
 /// Largest accepted canvas side in pixels.
 pub const MAX_CANVAS_SIZE: u32 = 8192;
@@ -210,8 +211,9 @@ impl Document {
     ///
     /// # Errors
     ///
-    /// Fails for an unknown node, a value of the wrong shape, or a
-    /// non-finite number.
+    /// Fails for an unknown node, a value of the wrong shape, a non-finite
+    /// number, or a finite value outside the allowed range of the property
+    /// (see [`crate::bounds`]).
     pub fn set_property(
         &mut self,
         id: NodeId,
@@ -226,7 +228,9 @@ impl Document {
     ///
     /// # Errors
     ///
-    /// Same as [`Document::set_property`].
+    /// Same as [`Document::set_property`], plus
+    /// [`CoreError::FrameOutOfRange`] when `frame` falls outside
+    /// `[-MAX_ABS_FRAME, MAX_ABS_FRAME]`.
     pub fn add_keyframe(
         &mut self,
         id: NodeId,
@@ -235,6 +239,9 @@ impl Document {
         value: PropertyValue,
         ease: Ease,
     ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
         self.write_property(id, property, value, Write::Key(frame, ease))
     }
 
@@ -292,17 +299,9 @@ fn apply<T: Copy>(target: &mut Animatable<T>, value: T, write: Write) {
     }
 }
 
-fn finite(property: Property, value: f64) -> Result<f64, CoreError> {
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(CoreError::NonFiniteValue { property })
-    }
-}
-
 fn scalar(property: Property, value: PropertyValue) -> Result<f64, CoreError> {
     match value {
-        PropertyValue::Scalar(v) => finite(property, v),
+        PropertyValue::Scalar(v) => bounds::check_value(property, v),
         PropertyValue::Vec2(_) => Err(CoreError::PropertyType {
             property,
             expected: "a number",
@@ -312,7 +311,10 @@ fn scalar(property: Property, value: PropertyValue) -> Result<f64, CoreError> {
 
 fn vector(property: Property, value: PropertyValue) -> Result<Vec2, CoreError> {
     match value {
-        PropertyValue::Vec2(v) => Ok(Vec2::new(finite(property, v.x)?, finite(property, v.y)?)),
+        PropertyValue::Vec2(v) => Ok(Vec2::new(
+            bounds::check_value(property, v.x)?,
+            bounds::check_value(property, v.y)?,
+        )),
         PropertyValue::Scalar(_) => Err(CoreError::PropertyType {
             property,
             expected: "an (x, y) pair",
@@ -322,7 +324,7 @@ fn vector(property: Property, value: PropertyValue) -> Result<Vec2, CoreError> {
 
 fn scale(value: PropertyValue) -> Result<Vec2, CoreError> {
     match value {
-        PropertyValue::Scalar(v) => Ok(Vec2::splat(finite(Property::Scale, v)?)),
+        PropertyValue::Scalar(v) => Ok(Vec2::splat(bounds::check_value(Property::Scale, v)?)),
         PropertyValue::Vec2(_) => vector(Property::Scale, value),
     }
 }
@@ -331,6 +333,7 @@ fn scale(value: PropertyValue) -> Result<Vec2, CoreError> {
 mod tests {
     use super::*;
     use crate::node::Paint;
+    use crate::MAX_ABS_FRAME;
 
     fn document() -> Document {
         let fps = FrameRate::new(60, 1).unwrap();
@@ -422,5 +425,138 @@ mod tests {
         )
         .unwrap();
         assert_eq!(doc.node(id).unwrap().transform().opacity.keys().len(), 1);
+    }
+
+    #[test]
+    fn add_keyframe_rejects_out_of_range_frames() {
+        let mut doc = document();
+        let id = doc.add_node(dot()).unwrap();
+        for frame in [
+            MAX_ABS_FRAME + 1,
+            -(MAX_ABS_FRAME + 1),
+            Frame::MAX,
+            Frame::MIN,
+        ] {
+            assert_eq!(
+                doc.add_keyframe(
+                    id,
+                    Property::Rotation,
+                    frame,
+                    PropertyValue::Scalar(0.0),
+                    Ease::Linear,
+                ),
+                Err(CoreError::FrameOutOfRange { frame })
+            );
+        }
+        doc.add_keyframe(
+            id,
+            Property::Rotation,
+            MAX_ABS_FRAME,
+            PropertyValue::Scalar(0.0),
+            Ease::Linear,
+        )
+        .unwrap();
+        doc.add_keyframe(
+            id,
+            Property::Rotation,
+            -MAX_ABS_FRAME,
+            PropertyValue::Scalar(0.0),
+            Ease::Linear,
+        )
+        .unwrap();
+        assert_eq!(doc.node(id).unwrap().transform().rotation.keys().len(), 2);
+    }
+
+    #[test]
+    fn write_property_accepts_exact_bounds() {
+        let mut doc = document();
+        let id = doc.add_node(dot()).unwrap();
+        let pos = Vec2::new(bounds::MAX_POSITION, -bounds::MAX_POSITION);
+        doc.set_property(id, Property::Position, PropertyValue::Vec2(pos))
+            .unwrap();
+        doc.set_property(id, Property::Anchor, PropertyValue::Vec2(pos))
+            .unwrap();
+        doc.set_property(
+            id,
+            Property::Rotation,
+            PropertyValue::Scalar(bounds::MAX_ROTATION),
+        )
+        .unwrap();
+        let scale = Vec2::new(bounds::MAX_SCALE, -bounds::MAX_SCALE);
+        doc.set_property(id, Property::Scale, PropertyValue::Vec2(scale))
+            .unwrap();
+        doc.set_property(
+            id,
+            Property::Opacity,
+            PropertyValue::Scalar(bounds::MIN_OPACITY),
+        )
+        .unwrap();
+        doc.set_property(
+            id,
+            Property::Opacity,
+            PropertyValue::Scalar(bounds::MAX_OPACITY),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn write_property_rejects_out_of_bounds_values() {
+        let mut doc = document();
+        let id = doc.add_node(dot()).unwrap();
+        let too_far = bounds::MAX_POSITION + 1.0;
+        let cases = [
+            (
+                Property::Position,
+                PropertyValue::Vec2(Vec2::new(too_far, 0.0)),
+            ),
+            (
+                Property::Anchor,
+                PropertyValue::Vec2(Vec2::new(too_far, 0.0)),
+            ),
+            (
+                Property::Rotation,
+                PropertyValue::Scalar(bounds::MAX_ROTATION + 1.0),
+            ),
+            (
+                Property::Scale,
+                PropertyValue::Vec2(Vec2::new(bounds::MAX_SCALE + 1.0, 0.0)),
+            ),
+            (
+                Property::Opacity,
+                PropertyValue::Scalar(bounds::MAX_OPACITY + 0.5),
+            ),
+            (
+                Property::Opacity,
+                PropertyValue::Scalar(bounds::MIN_OPACITY - 0.5),
+            ),
+        ];
+        for (property, value) in cases {
+            assert!(
+                matches!(
+                    doc.set_property(id, property, value),
+                    Err(CoreError::ValueOutOfRange { property: p, .. }) if p == property
+                ),
+                "{property:?} should reject {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_property_rejects_out_of_bounds_keyframes() {
+        let mut doc = document();
+        let id = doc.add_node(dot()).unwrap();
+        assert!(matches!(
+            doc.add_keyframe(
+                id,
+                Property::Scale,
+                0,
+                PropertyValue::Scalar(bounds::MAX_SCALE + 1.0),
+                Ease::Linear,
+            ),
+            Err(CoreError::ValueOutOfRange {
+                property: Property::Scale,
+                ..
+            })
+        ));
     }
 }

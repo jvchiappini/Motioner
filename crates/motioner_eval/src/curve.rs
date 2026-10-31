@@ -76,7 +76,9 @@ pub fn sample<T: Interpolate>(value: &Animatable<T>, frame: Frame) -> T {
     // first key because of the range checks above.
     let next = keys.partition_point(|k| k.frame <= frame);
     let (a, b) = (&keys[next - 1], &keys[next]);
-    // Frame spans are far below 2^53, so the conversion is exact.
+    // Keyframes are validated against `MAX_ABS_FRAME`, so the span
+    // `b.frame - a.frame` is at most 2^32, far below 2^53: the conversion
+    // to f64 is exact.
     #[allow(clippy::cast_precision_loss)]
     let t = (frame - a.frame) as f64 / (b.frame - a.frame) as f64;
     T::interpolate(a.value, b.value, ease(b.ease, t))
