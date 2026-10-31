@@ -19,7 +19,7 @@
 | Initiative | Phase | Status | Priority | Milestones | File |
 |---|---|---|---|---|---|
 | INITIATIVE-0001 | PHASE-0001 | in_progress | critica | 1 | initiatives/INITIATIVE-0001.md |
-| INITIATIVE-0002 | PHASE-0001 | backlog | alta | 0 | initiatives/INITIATIVE-0002.md |
+| INITIATIVE-0002 | PHASE-0001 | in_progress | alta | 0 | initiatives/INITIATIVE-0002.md |
 | INITIATIVE-0003 | PHASE-0001 | backlog | alta | 1 | initiatives/INITIATIVE-0003.md |
 | INITIATIVE-0004 | PHASE-0002 | backlog | alta | 0 | initiatives/INITIATIVE-0004.md |
 | INITIATIVE-0005 | PHASE-0002 | backlog | alta | 1 | initiatives/INITIATIVE-0005.md |

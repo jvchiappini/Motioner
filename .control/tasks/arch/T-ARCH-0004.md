@@ -1,7 +1,7 @@
 ---
 id: T-ARCH-0004
 titulo: Scaffold the Cargo workspace and crate skeleton
-estado: backlog
+estado: done
 prioridad: alta
 tipo: chore
 creado_por: agente
@@ -12,7 +12,6 @@ depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 Create the Cargo workspace and only the crates Phase 1 needs:
@@ -26,9 +25,22 @@ lightweight check that fails the build if the core dependency graph is
 violated.
 
 ## Criterios de aceptacion
-- [ ] `cargo build` and `cargo test` pass on a clean checkout.
-- [ ] The core crate has no graphics, UI or AI dependency.
-- [ ] Each crate has a one-line purpose in its README or lib docs.
+- [x] `cargo build` and `cargo test` pass on a clean checkout.
+- [x] The core crate has no graphics, UI or AI dependency.
+- [x] Each crate has a one-line purpose in its README or lib docs.
 
 ## Notas del agente
+
+Workspace scaffolded on 2026-10-31:
+
+- Crates: `motioner_core`, `motioner_eval`, `motioner_render`,
+  `motioner_io`, `motioner_app`, `motioner_testkit`. UI, AI and DSL are
+  deferred to their phases, per REF-0001 section 3.
+- `rust-toolchain.toml` pins 1.96.0; `rustfmt.toml` sets the style.
+- Workspace lints: `unsafe_code` denied, `missing_docs` warned, clippy
+  `all` and `pedantic` warned, warnings denied in CI.
+- `scripts/check_boundaries.py` enforces the dependency rules from
+  REF-0001 and is wired into `.github/workflows/ci.yml`.
+- Verified locally: fmt, clippy with `-D warnings`, tests, build, docs
+  and boundary check all pass.
 

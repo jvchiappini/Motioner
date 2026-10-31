@@ -2,9 +2,6 @@
 
 (generado por `pctl reindex` — no editar a mano)
 
-- **T-ARCH-0004** — Scaffold the Cargo workspace and crate skeleton `[alta]` (actualizado 2026-10-31)
-- **T-ARCH-0005** — Pin FerrousEngine and document the update flow `[alta]` (actualizado 2026-10-31)
-- **T-ARCH-0006** — Set up CI, format and lint gates `[alta]` (actualizado 2026-10-31)
 - **T-ARCH-0007** — Run UI toolkit spike for dock, virtualized list and bezier editor `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0001** — Specify project format v0 `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0002** — Implement project load and save round-trip `[alta]` (actualizado 2026-10-31)

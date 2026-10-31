@@ -8,10 +8,11 @@ export.
 
 ## Status
 
-**Pre-code design phase.** The architecture gate is closed; no
-application code exists yet. The next step is the Cargo workspace
-scaffold plus the first deterministic frame spike. FerrousEngine and
-GUIMaker are not vendored into this repository yet.
+**Foundation phase.** The architecture gate is closed and the Cargo
+workspace is scaffolded with six core crates. There are no editor
+features yet. Next up: the MDF format specification and the first
+deterministic frame spike. FerrousEngine and GUIMaker are not vendored
+into this repository yet.
 
 ## What it will do
 
@@ -40,22 +41,23 @@ GUIMaker are not vendored into this repository yet.
 
 Full details: [system blueprint](.control/docs/reference/REF-0001.md).
 
-## Planned repository layout
+## Repository layout
 
 ```
 crates/
   motioner_core/      document model, IDs, commands, undo
   motioner_eval/      time, curves, flattening into render plans
   motioner_render/    FerrousEngine adapter, compositor, effects
-  motioner_ui/        editor shell and panels on GUIMaker
   motioner_io/        MDF project format, assets, ffmpeg export
-  motioner_dsl/       grammar, parser, printer, sandbox runtime
-  motioner_ai/        providers, tools, context builder
   motioner_app/       application binary and wiring
   motioner_testkit/   fixtures, golden frames, benchmarks
+  motioner_ui/        editor shell and panels on GUIMaker (Phase 3)
+  motioner_dsl/       grammar, parser, printer, sandbox (Phase 5)
+  motioner_ai/        providers, tools, context builder (Phase 5)
 .control/             project control system (source of truth for state)
 .opencode/            agent configuration
-engine/               FerrousEngine, pinned later
+engine/               FerrousEngine and GUIMaker, pinned later
+scripts/              repository checks
 ```
 
 ## Project control
@@ -79,14 +81,16 @@ Then open http://localhost:8420.
 
 ## Development
 
-The Cargo workspace is not scaffolded yet, so there is no build command.
-Planned checks once it exists:
+```
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace
+python scripts/check_boundaries.py
+```
 
-```
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-```
+The toolchain is pinned in `rust-toolchain.toml` (1.96.0). The same
+checks run in `.github/workflows/ci.yml` on Windows and Linux.
 
 ## Conventions
 

@@ -4,3 +4,4 @@
 
 - **T-ARCH-0002** — Approve ADR set and resolve open decisions `[critica]` (actualizado 2026-10-31)
 - **T-ARCH-0001** — Review legacy Motioner for reusable ideas `[alta]` (actualizado 2026-10-31)
+- **T-ARCH-0004** — Scaffold the Cargo workspace and crate skeleton `[alta]` (actualizado 2026-10-31)

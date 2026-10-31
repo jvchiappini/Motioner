@@ -1,7 +1,7 @@
 ---
 id: T-ARCH-0006
 titulo: Set up CI, format and lint gates
-estado: backlog
+estado: in_progress
 prioridad: alta
 tipo: chore
 creado_por: agente
@@ -12,7 +12,6 @@ depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 Set up automated checks so the tree stays healthy from the first commit:
@@ -32,4 +31,9 @@ workspace lints. Duplication is reviewed in code review, not assumed.
 - [ ] The pipeline is cached and finishes in a reasonable time.
 
 ## Notas del agente
+
+CI added on 2026-10-31 in `.github/workflows/ci.yml`: Windows and Linux,
+fmt, boundary check, clippy, tests, build and rustdoc with warnings
+denied. Not yet executed on GitHub. The unused-dependency gate
+(`cargo machete`) is still missing.
 

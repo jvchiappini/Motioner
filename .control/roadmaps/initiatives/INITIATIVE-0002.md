@@ -1,15 +1,14 @@
 ---
 id: INITIATIVE-0002
-nombre: "Workspace, engine integration and CI"
+nombre: Workspace, engine integration and CI
 phase: PHASE-0001
-estado: backlog
+estado: in_progress
 prioridad: alta
 tamano_estimado: medium
-depende_de: ["INITIATIVE-0001"]
+depende_de: [INITIATIVE-0001]
 creado: 2026-10-31
 responsable: agente
 ---
-
 # Initiative: Workspace, engine integration and CI
 
 ## Description
