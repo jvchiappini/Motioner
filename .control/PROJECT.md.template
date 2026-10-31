@@ -1,0 +1,17 @@
+# Project: <name>
+
+## Description
+(one sentence: what this project is)
+
+## Type
+(web app / API / library / mobile / etc)
+
+## Main stack
+(languages, frameworks, relevant infrastructure)
+
+## ID convention
+(simple: T-0001, T-0002... | monorepo: T-PREFIX-0001 per domain)
+
+## General status
+(under development / maintenance / paused — 1 line, updated occasionally,
+not every session)
