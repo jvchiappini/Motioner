@@ -5,12 +5,6 @@ version = 4
 [[package]]
 name = "motioner_app"
 version = "0.1.0"
-dependencies = [
- "motioner_core",
- "motioner_eval",
- "motioner_io",
- "motioner_render",
-]
 
 [[package]]
 name = "motioner_core"
@@ -19,30 +13,15 @@ version = "0.1.0"
 [[package]]
 name = "motioner_eval"
 version = "0.1.0"
-dependencies = [
- "motioner_core",
-]
 
 [[package]]
 name = "motioner_io"
 version = "0.1.0"
-dependencies = [
- "motioner_core",
-]
 
 [[package]]
 name = "motioner_render"
 version = "0.1.0"
-dependencies = [
- "motioner_core",
- "motioner_eval",
-]
 
 [[package]]
 name = "motioner_testkit"
 version = "0.1.0"
-dependencies = [
- "motioner_core",
- "motioner_eval",
- "motioner_io",
-]

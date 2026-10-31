@@ -25,16 +25,20 @@ rustdoc warnings, unused dependencies, clippy warnings denied and the
 workspace lints. Duplication is reviewed in code review, not assumed.
 
 ## Criterios de aceptacion
-- [ ] CI runs fmt, clippy, rustdoc, tests and build on Windows and Linux.
-- [ ] A dependency-boundary check runs in CI.
-- [ ] Unused dependencies and rustdoc warnings fail the build.
-- [ ] The pipeline is cached and finishes in a reasonable time.
+- [x] CI runs fmt, clippy, rustdoc, tests and build on Windows and Linux.
+- [x] A dependency-boundary check runs in CI.
+- [x] Unused dependencies and rustdoc warnings fail the build.
+- [x] The pipeline is cached and finishes in a reasonable time.
 
 ## Notas del agente
 
 CI added on 2026-10-31 in `.github/workflows/ci.yml`: Windows and Linux,
 fmt, boundary check, clippy, tests, build and rustdoc with warnings
 denied. The first run passed on both operating systems in about 40
-seconds each (run 41199553252). The unused-dependency gate
-(`cargo machete`) was added after that run and needs a final green run.
+seconds each (run 41199553252).
+
+`cargo machete` initially flagged the scaffolded-but-unused workspace
+dependencies. They were removed from the empty crates instead of being
+ignored, so the gate now passes locally and the dependency graph will
+grow only when code needs it.
 

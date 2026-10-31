@@ -6,9 +6,5 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-[dependencies]
-motioner_core.workspace = true
-motioner_eval.workspace = true
-
 [lints]
 workspace = true
