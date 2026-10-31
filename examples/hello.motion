@@ -1,0 +1,37 @@
+# mdf: 0.1
+#
+# Milestone 1 example: animated text and shapes, 5 s at 1080p60.
+# Render with:
+#   cargo run --release -p motioner_app -- render examples/hello.motion --out out/hello.mp4
+
+comp(name="Hello", width=1920, height=1080, fps=60, duration=5.0,
+     background="#0b0b12")
+
+title = text("Motioner", size=160, color="#ffffff", align="center")
+title.pos = (960, 480)
+title.opacity = 0.0
+title.key("opacity", 0.0, 0.0)
+title.key("opacity", 0.8, 1.0, ease="quad_out")
+title.key("pos", 0.0, (960, 520))
+title.key("pos", 0.8, (960, 480), ease="cubic_out")
+
+for i in range(5):
+    dot = circle(radius=24, fill="#ff3366")
+    dot.pos = (480 + i * 240, 820)
+    dot.key("scale", 0.2 + i * 0.1, 0.0)
+    dot.key("scale", 1.2 + i * 0.1, 1.0, ease="back_out")
+
+def spinner(x, y, size, delay):
+    holder = group()
+    holder.pos = (x, y)
+    square = rect(size, size, radius=12, fill="#2a2a40", stroke="#9ad1ff",
+                  stroke_width=4)
+    holder.add(square)
+    holder.key("rotation", delay, 0.0)
+    holder.key("rotation", delay + 2.5, 180.0, ease="cubic_in_out")
+    holder.key("opacity", delay, 0.0)
+    holder.key("opacity", delay + 0.5, 1.0)
+    return holder
+
+spinner(240, 220, 96, 1.0)
+spinner(1680, 220, 96, 1.3)
