@@ -68,7 +68,7 @@ drive the editor viewport and the video exporter.
 
 - D-0001: FerrousEngine as the rendering foundation.
 - D-0002: deterministic frame evaluation shared by preview and export.
-- D-0003: document as source of truth, code as a lossless projection.
+- D-0011: program-first executable MDF (supersedes D-0003).
 - D-0004: editor UI toolkit.
 - D-0005: project format and asset storage.
 - D-0006: document/runtime separation and caching model.

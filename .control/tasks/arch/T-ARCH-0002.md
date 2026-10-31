@@ -38,3 +38,6 @@ Confirmed by the user:
 Consequences recorded: MDF replaces RON/JSON; GUIMaker is a separate
 project that will be pinned; the blueprint and roadmap were updated.
 
+Later note: D-0003 was superseded by D-0011 on the same day when the
+user chose program-first executable MDF.
+

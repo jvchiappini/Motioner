@@ -75,4 +75,4 @@ Key considerations:
 ## Notes
 
 Two decisions block most of the work: document-as-truth vs code-as-truth
-(D-0003), and Ferrous UI vs egui (D-0004).
+(D-0011), and Ferrous UI vs egui (D-0004).

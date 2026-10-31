@@ -16,9 +16,10 @@ headless renderer.
   rendering, scene/ECS and the editor host.
 - Ferrous UI plus GUIMaker (separate project, engine-native) for editor
   chrome. No egui.
-- Native Motioner Document Format (MDF): text-based, owned by the
-  project, shared by the on-disk format and the code layer. No RON/JSON
-  as canonical format.
+- Native Motioner Document Format (MDF): a program-first, Python-like
+  executable language owned by the project, shared by the on-disk files,
+  the code panel and the AI. The compiled document carries provenance
+  and overrides. LaTeX math typesetting is included in 1.0.
 - ffmpeg for video/audio decode and encode.
 - Audio engine and mixer, physics and particle systems (libraries to be
   decided by spike).
@@ -56,9 +57,12 @@ iteration with human approval, Python-like executable MDF code, public
 free distribution under Apache-2.0 with a revenue path. Video upload is
 manual; Motioner exports a YouTube-ready MP4.
 
-Still open: code semantics (program-first versus document with scripts),
-actual Python versus a custom DSL, LaTeX/math support, revenue model,
-iteration budgets and packaging. See `docs/reference/REF-0003.md`.
+Resolved on 2026-10-31: program-first custom Python-like DSL, LaTeX
+math in 1.0, Apache-2.0, revenue from donations/sponsors plus paid cloud
+rendering and AI credits, iteration budget 10/10/configurable, English
+UI, MSI/NSIS plus portable ZIP, no auto-update, no YouTube upload.
+Remaining items are implementation details listed in REF-0003 section 9.
+The draft language spec is `spec/mdf-v0.md`.
 
 FerrousEngine and GUIMaker are not vendored in this repository yet and
 will be pinned when provided. The reference machine is a Ryzen 5 8645HS

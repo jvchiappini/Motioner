@@ -25,9 +25,10 @@ animation. The confirmed 1.0 scope is in
       inspects them and iterates automatically within a budget, with
       every change undoable and visible as code; the final render needs
       human approval.
-- [ ] Python-like MDF code with variables, functions, conditionals and
-      loops executes deterministically and round-trips with the editable
-      document.
+- [ ] Python-like MDF programs with variables, functions, conditionals
+      and loops execute deterministically and build the composition;
+      UI edits survive as provenance-keyed overrides.
+- [ ] LaTeX math renders in text layers in preview and export.
 - [ ] AE-style editing features are covered except AE project import:
       keyframes and curves, masks, mattes, precomps, adjustment layers,
       expressions, effects and a basic node graph.

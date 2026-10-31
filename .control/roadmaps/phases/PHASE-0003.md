@@ -43,6 +43,7 @@ to a video that matches the preview.
 - Viewport with pan/zoom, selection, snapping and picking.
 - Timeline with layers, keyframes, easing editor and playhead.
 - 2D layers: solid, shape, path, text, image, precomp placeholder.
+- LaTeX math typesetting in text layers.
 - Basic effects: transform, opacity, blur, glow, color correction.
 - NLE: import, cut, trim, slip, slide and transitions.
 - Audio: stereo mixer, volume, pan, fades, EQ, compressor and limiter.
@@ -91,6 +92,7 @@ to a video that matches the preview.
 - INITIATIVE-0009 - 2D compositor, typography and MP4 export
 - INITIATIVE-0016 - NLE timeline and media editing
 - INITIATIVE-0017 - Audio engine and mixer
+- INITIATIVE-0022 - LaTeX and math typesetting
 
 ## Notes
 

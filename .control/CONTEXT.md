@@ -10,47 +10,48 @@ version_schema: 1
 
 Motioner is a brand-new codebase started from an empty directory. It is
 an AI-first motion-graphics editor and NLE: prompt-driven creation plus
-an After Effects-style editor, node graph, audio mixer, 3D, Python-like
-code (MDF) and automatic AI iteration. It renders on the custom Rust
-FerrousEngine and uses Ferrous UI plus GUIMaker for editor chrome.
-Neither engine nor GUIMaker is in the repository yet; they are pinned
-when the user provides them.
+an After Effects-style editor, node graph, audio mixer, 3D, program-first
+Python-like code (MDF), LaTeX math and automatic AI iteration. It renders
+on the custom Rust FerrousEngine and uses Ferrous UI plus GUIMaker for
+editor chrome. Neither engine nor GUIMaker is in the repository yet; they
+are pinned when the user provides them.
 
-The architecture gate is closed (D-0001..D-0009 accepted). The Cargo
-workspace is scaffolded with six crates (core, eval, render, io, app,
-testkit) and green CI. No product features exist yet.
+The architecture gate is closed, the workspace has six crates (core,
+eval, render, io, app, testkit), and CI is green. No product features
+exist yet.
 
-## Confirmed product decisions (2026-10-31)
+## Confirmed decisions (2026-10-31)
 
-1.0 is Windows-only and 1080p-first, approved in D-0010 and REF-0003:
-
-- 2D motion graphics, AE-style timeline, masks, mattes, precomps.
-- NLE: cut, trim, arrange, transitions and sync for video and audio.
-- Audio: stereo mixer with volume, pan, fades, EQ, compressor and
-  limiter; no advanced mastering.
-- 3D: glTF, cameras, lights, PBR, skeletal animation, GPU particles.
-- Physics staged: rigid bodies after 1.0; cloth and fluids later.
-- Node graph as an alternate view over the same document.
-- Python-like executable MDF with loops and control flow; the exact
-  semantics are still open (D-0011).
-- AI: Anthropic, OpenRouter, Google; cloud data allowed; previews and
-  visual critique; automatic iteration; human approval for final render.
-- No YouTube API and no upload from the app: the user downloads the
-  MP4 and uploads manually.
-- MP4 and PNG output; 1080p primary; 4K/HDR/color grading later.
-- Apache-2.0, public and free; versioned LICENSE and NOTICE added.
-- Revenue model still open (D-0015): donations/sponsors/paid services.
-- Solo developer; CI has no GPU.
-- Bundled assets must be permissive; users are responsible for imports.
-
-Engine and GUIMaker are absent. Do not download them early.
+- 1.0 is Windows-only and 1080p-first (D-0010, D-0014).
+- 2D, AE-style timeline, masks, mattes, precomps, NLE, audio mixer,
+  node graph, 3D glTF/skeletal/GPU particles (D-0010).
+- Program-first MDF: a custom Python-like DSL with loops, functions,
+  conditionals and LaTeX; the program is the truth; the document is
+  compiled with provenance and overrides (D-0011, supersedes D-0003).
+- LaTeX math typesetting in 1.0, self-contained and deterministic
+  (D-0016).
+- AI: Anthropic, OpenRouter and Google; cloud data allowed; previews and
+  visual critique; 10 iterations / 10 minutes / configurable cost cap;
+  human approval for the final render (D-0012, D-0017).
+- No YouTube API and no upload from the app; the user downloads the MP4
+  (D-0012, D-0017).
+- Apache-2.0; public and free; bundled assets permissive; users
+  responsible for imports (D-0013).
+- Revenue: donations/sponsors, paid cloud rendering, paid AI credits
+  (D-0015).
+- Audio 1.0: volume, pan, fades, EQ, compressor, limiter; no reverb or
+  delay (D-0017).
+- UI English only; MSI/NSIS plus portable ZIP; no auto-update (D-0017).
+- Physics staged: particles in 1.0, rigid bodies post-1.0, cloth/fluids
+  later (D-0010, D-0017).
+- Solo developer; CI has no GPU (REF-0002, D-0017).
 
 ## Reference machine
 
 AMD Ryzen 5 8645HS (6C/12T), 8 GB RAM (7.3 usable), NVIDIA RTX 4050
 Laptop 6 GB VRAM, AMD Radeon 760M iGPU, Windows 11 build 26200, 512 GB
-NVMe, 1920x1080 display. Hybrid graphics: the app must request the
-high-performance adapter. RAM and VRAM are the main constraints.
+NVMe, 1920x1080 display. Hybrid graphics: request the high-performance
+NVIDIA adapter. RAM and VRAM are the main constraints.
 
 ## Tacit conventions detected
 
@@ -60,17 +61,20 @@ high-performance adapter. RAM and VRAM are the main constraints.
 - Prefixed task IDs by domain (`T-ARCH`, `T-CORE`, `T-NLE`, ...).
 - Determinism: integer frames, rational fps, pure evaluation.
 - Every mutation goes through typed commands.
-- Full parity is the north star; the 1.0 scope is a staged subset.
-- The user wants to surpass Manim with executable code, not only
-  declarative descriptions.
+- Program-first: MDF is the source; UI edits are overrides or bakes.
+- The user wants to surpass Manim with executable code and LaTeX.
 
 ## Things to watch out for (gotchas)
 
-- D-0003 says the document is the truth and code is a projection, but
-  D-0011 requires executable loops and logic. This is an unresolved
-  architectural conflict; resolve it before implementing MDF.
-- `origin` is `jvchiappini/Motioner`, not PCS. PCS `update.py` expects
-  the PCS repo in `origin`; temporarily point it at a `pcs` remote.
+- D-0003 is superseded by D-0011. Do not reintroduce "document is the
+  truth"; the program is the truth and the document is compiled with
+  provenance.
+- The override/bake model is the hardest part of the editor. Orphans must
+  be reported, never dropped.
+- `spec/mdf-v0.md` is a draft; the grammar and scene API can still
+  change. Review before implementing the interpreter.
+- `origin` is `jvchiappini/Motioner`, not PCS. PCS `update.py` expects the
+  PCS repo in `origin`; temporarily point it at a `pcs` remote.
 - The old repo remains public as `Motioner-legacy` until deleted manually
   or with `delete_repo` scope.
 - `rust-toolchain.toml` pins 1.96.0; do not reintroduce nightly features.
@@ -87,19 +91,15 @@ high-performance adapter. RAM and VRAM are the main constraints.
 
 ## Perceived status
 
-Architecture, licensing and 1.0 scope are solid. The roadmap now has 21
-initiatives covering NLE, audio, node graph, particles and 1.0 delivery.
-The critical unresolved item is MDF semantics: program-first executable
-code versus document-with-scripts, and custom DSL versus embedded
-Python. That decision blocks the language spec and part of the core
-model.
-
-Phase 1 is still open: MDF v0 spec (T-FORMAT-0001) is unblocked; engine
-pinning and deterministic frame (T-ARCH-0005, T-RENDER-0001) wait for
-the FerrousEngine and GUIMaker repositories.
+Product and licensing decisions are closed, the roadmap has 22
+initiatives, and the first draft of the language spec exists at
+`spec/mdf-v0.md`. The next critical design step is reviewing that spec
+and resolving override/bake semantics. Implementation still waits for
+FerrousEngine and GUIMaker; meanwhile MDF v0 and project/format specs can
+advance without the engine.
 
 ## Last relevant session
 
-S-2026-10-31-005 - confirmed 1.0 scope, added Apache-2.0 license,
-recorded AI/no-upload policy, revised roadmap with NLE/audio/node
-graph/particles/AI iteration/1.0 delivery initiatives.
+S-2026-10-31-006 - confirmed program-first MDF, custom DSL, LaTeX,
+revenue channels and 1.0 defaults; wrote the MDF v0 draft spec and
+updated all references.

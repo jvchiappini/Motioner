@@ -2,6 +2,8 @@
 
 (generado por `pctl reindex` — no editar a mano)
 
+- **T-DSL-0001** — Review and freeze the MDF v0 specification `[critica]` (actualizado 2026-10-31)
+- **T-DSL-0002** — Define provenance, override and bake semantics `[critica]` (actualizado 2026-10-31)
 - **T-ARCH-0007** — Run UI toolkit spike for dock, virtualized list and bezier editor `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0001** — Specify project format v0 `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0002** — Implement project load and save round-trip `[alta]` (actualizado 2026-10-31)

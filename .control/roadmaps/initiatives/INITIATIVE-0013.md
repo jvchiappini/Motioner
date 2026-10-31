@@ -1,6 +1,6 @@
 ---
 id: INITIATIVE-0013
-nombre: "Bidirectional motion language"
+nombre: "Program-first MDF language"
 phase: PHASE-0005
 estado: backlog
 prioridad: critica
@@ -10,51 +10,53 @@ creado: 2026-10-31
 responsable: agente
 ---
 
-# Initiative: Bidirectional motion language
+# Initiative: Program-first MDF language
 
 ## Description
 
-Deliver the code side of Motioner: a readable language that fully
-describes a composition and can be edited by a human or an AI, while
-remaining a lossless projection of the document. Round-trip fidelity and
-actionable diagnostics are the hard requirements.
+Deliver the code side of Motioner: a Python-like executable language
+with variables, functions, conditionals, loops and LaTeX that builds a
+composition when it runs. The program is the source of truth; the
+document is a compiled result with provenance, plus structured
+overrides for editor edits.
 
 ## Scope
 
 ### Deliverables
-- Grammar and AST for compositions, layers, properties, keyframes,
-  effects, assets and precomps.
-- Parser, printer and formatter with stable output.
-- Validator with precise spans and error messages.
-- Document-to-code and code-to-document conversion.
-- Sandboxed expression and generator runtime with fuel and time limits.
-- Editor code panel with syntax highlighting, diagnostics and go-to
-  definition.
-- Round-trip and fuzz test suites.
+- Python-like grammar and AST, including `def`, `if`, `for`, `while`,
+  expressions, collections and calls.
+- Scene API for compositions, layers, properties, keyframes, effects,
+  assets, precomps and LaTeX math.
+- Deterministic sandboxed interpreter with fuel, time and cost limits.
+- Provenance from compiled elements back to source spans.
+- Override and bake model for UI edits, with orphan detection.
+- Formatter, diagnostics with spans and a code panel with highlighting.
+- Grammar, round-trip, property and fuzz test suites.
 
 ### Non-goals
-- General-purpose programming language.
-- Arbitrary filesystem or network access from scripts.
-- Full IDE features such as refactoring across files.
+- Embedded CPython or access to Python packages in 1.0.
+- Arbitrary filesystem, network or process access.
+- Full LaTeX documents; math typesetting only.
+- A general-purpose programming language outside the scene domain.
 
 ## Technical approach
 
-The document remains the source of truth. The language is generated
-deterministically from the document and parsed back into document
-commands; semantic equality is asserted by tests, not by textual
-equality. Formatting is idempotent. Scripts are compiled to a
-deterministic bytecode or interpreted with limits and no I/O.
+MDF is program-first (D-0011). Running a program produces a document
+snapshot with provenance. The editor displays that snapshot; edits
+become overrides keyed by stable identity or bake an element, and are
+written back to the program. Execution is deterministic: no ambient
+time, no unseeded randomness, no I/O, bounded resources.
 
 Key considerations:
-- Stable ordering and IDs so diffs stay small.
-- Preserve enough structure to map diagnostics to source spans.
-- Decide early whether user comments survive round-trips; if not,
-  document the limitation.
+- The language and the on-disk format are the same.
+- Stable identity and source spans survive formatting.
+- LaTeX rendering is integrated through the text pipeline (D-0016).
+- Comments and formatting are preserved for human-authored code.
 
 ## Dependencies
 
 - INITIATIVE-0012: complete document feature set.
-- D-0003 and D-0009 approved.
+- D-0011, D-0016 and D-0009 approved.
 
 ## Milestones
 
@@ -64,16 +66,18 @@ Key considerations:
 
 ## Tasks
 
-No tasks yet. Create them when this initiative starts.
+- T-DSL-0001 - Review and freeze the MDF v0 specification
+- T-DSL-0002 - Define provenance, override and bake semantics
 
 ## Acceptance criteria
 
-- [ ] Every supported document round-trips without semantic loss.
-- [ ] Formatting is idempotent and diffs are stable.
+- [ ] Python-like programs with loops and functions build compositions.
+- [ ] Execution is deterministic, sandboxed and resource-limited.
+- [ ] Provenance and overrides survive edit, save and reload.
+- [ ] LaTeX math renders through the text pipeline.
 - [ ] Invalid code produces actionable diagnostics with spans.
-- [ ] Scripts cannot perform I/O or exceed resource limits.
 
 ## Notes
 
-This is the highest-risk initiative. Prototype the round-trip on the
-full document model before investing in editor polish.
+This is the highest-risk initiative. Prototype the language, provenance
+and override model on a small scene before editor polish.

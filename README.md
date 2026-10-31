@@ -21,7 +21,8 @@ into this repository yet.
 - Edit video and audio on an NLE timeline, with a stereo mixer and
   effects.
 - Describe compositions as Python-like executable code (MDF, the
-  Motioner Document Format) with loops, functions and conditionals.
+  Motioner Document Format) with loops, functions, conditionals and
+  LaTeX math.
 - Let an AI agent create and edit compositions through typed tools,
   render previews, critique them and iterate until the result is good.
 - Mix 2D motion graphics and 3D scenes, including skeletal animation and
@@ -46,7 +47,8 @@ into this repository yet.
 - 1.0 targets Windows and 1080p; 4K, HDR, color grading, rigid-body
   physics and cloth/fluids are post-1.0.
 
-Full details: [system blueprint](.control/docs/reference/REF-0001.md).
+Full details: [system blueprint](.control/docs/reference/REF-0001.md) and
+the [MDF v0 specification](spec/mdf-v0.md).
 
 ## Repository layout
 
@@ -65,6 +67,7 @@ crates/
 .opencode/            agent configuration
 engine/               FerrousEngine and GUIMaker, pinned later
 scripts/              repository checks
+spec/                 language and format specifications
 ```
 
 ## Project control

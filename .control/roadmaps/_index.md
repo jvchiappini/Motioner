@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | PHASE-0001 | in_progress | 2026-10-31 -  | 3 | phases/PHASE-0001.md |
 | PHASE-0002 | not_started | 2026-10-31 -  | 3 | phases/PHASE-0002.md |
-| PHASE-0003 | not_started | 2026-10-31 -  | 5 | phases/PHASE-0003.md |
+| PHASE-0003 | not_started | 2026-10-31 -  | 6 | phases/PHASE-0003.md |
 | PHASE-0004 | not_started | 2026-10-31 -  | 5 | phases/PHASE-0004.md |
 | PHASE-0005 | not_started | 2026-10-31 -  | 5 | phases/PHASE-0005.md |
 
@@ -39,6 +39,7 @@
 | INITIATIVE-0019 | PHASE-0004 | backlog | media | 0 | initiatives/INITIATIVE-0019.md |
 | INITIATIVE-0020 | PHASE-0005 | backlog | critica | 0 | initiatives/INITIATIVE-0020.md |
 | INITIATIVE-0021 | PHASE-0005 | backlog | alta | 1 | initiatives/INITIATIVE-0021.md |
+| INITIATIVE-0022 | PHASE-0003 | backlog | alta | 0 | initiatives/INITIATIVE-0022.md |
 
 ## Milestone overview
 

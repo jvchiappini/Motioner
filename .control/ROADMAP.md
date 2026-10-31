@@ -72,7 +72,7 @@ render queue and performance hardening.
 |---|---|---|---|---|
 | FerrousEngine API churn | 1-5 | High | High | Pin a revision; isolate with an adapter crate; upstream small patches |
 | GUIMaker lacks editor widgets | 1, 3 | High | High | Gap analysis and spike on docking, rows and bezier graph first |
-| Code and document diverge | 2, 5 | High | High | Document is truth; code is a lossless projection with round-trip tests |
+| Code and document diverge | 2, 5 | High | High | Program-first MDF with provenance, overrides and round-trip tests |
 | Determinism breaks on real GPUs | 1-4 | Medium | High | Golden frames, CPU oracle, documented tolerance |
 | Scope creep into a full NLE or game engine | 2-5 | Medium | High | Non-goals in GOALS.md; phase gates |
 | Real-time target missed | 3-5 | Medium | High | Budgets from Phase 1, proxies, caches, benchmarks |
@@ -97,29 +97,33 @@ render queue and performance hardening.
 
 - D-0001: FerrousEngine is the rendering foundation.
 - D-0002: deterministic frame-based evaluation.
-- D-0003: the document is the truth; code is a lossless projection.
+- D-0003 superseded by D-0011: program-first executable MDF.
 - D-0004: engine-native Ferrous UI plus GUIMaker; no egui.
 - D-0005: native Motioner Document Format (MDF); no RON/JSON.
 - D-0006: document and runtime are separate; compiled render plans.
 - D-0007: all mutations through typed commands.
 - D-0008: unified 2D/3D layer ordering.
 - D-0009: sandboxed deterministic script runtime.
+- D-0010: confirmed 1.0 scope (Windows, 1080p, NLE, audio, node graph, particles, AI iteration).
+- D-0011: program-first Python-like MDF; custom DSL; provenance and overrides.
+- D-0012: AI providers, cloud data, budgets and human approval.
+- D-0013: Apache-2.0 license and permissive asset policy.
+- D-0014: 1080p-first reference performance.
+- D-0015: revenue from donations/sponsors, paid cloud rendering and AI credits.
+- D-0016: LaTeX math typesetting in 1.0.
+- D-0017: 1.0 delivery defaults.
 
-## Remaining decisions
+## Remaining implementation details
 
-- MDF semantics: program-first versus document with script blocks
-  (D-0011).
-- Custom Python-like DSL versus embedded Python.
-- LaTeX/math typesetting to surpass Manim.
-- Revenue model details (D-0015).
-- Automatic iteration budgets: iterations, time and cost.
-- Audio effects included in 1.0 beyond volume/pan/fades.
-- UI language and packaging.
-- Rigid-body physics strictly post-1.0.
-- Node graph depth in 1.0.
-- Engine and GUIMaker pinning mechanism.
+- Engine and GUIMaker pinning mechanism and update process.
 - GUIMaker revision and widget contribution boundary.
-- Script runtime implementation for D-0009.
+- MDF interpreter implementation and performance budget.
+- Override and bake semantics; orphan reporting.
+- LaTeX renderer choice and supported command set.
+- Installer technology (MSI versus NSIS).
+- Audio effect parameter ranges and presets.
+- Cloud pricing and cost display.
+- Shared module (`use`) semantics.
 
 ## How to use
 

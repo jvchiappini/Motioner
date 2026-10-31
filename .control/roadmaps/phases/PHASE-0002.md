@@ -63,7 +63,7 @@ evaluate a composition from tests.
 ## Key decisions
 
 - D-0002: deterministic frame evaluation.
-- D-0003: document as source of truth.
+- D-0011: program-first executable MDF (supersedes D-0003).
 - D-0006: document/runtime separation and caching model.
 
 ## Success criteria

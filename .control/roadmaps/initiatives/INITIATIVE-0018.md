@@ -47,7 +47,7 @@ Key considerations:
 ## Dependencies
 
 - INITIATIVE-0011: compositing effects and color.
-- D-0019 node graph decision.
+- D-0008 unified 2D/3D layer ordering and D-0011 program-first document.
 
 ## Milestones
 
