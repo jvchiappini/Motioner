@@ -18,9 +18,8 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
   prompts for opencode, reviews diffs, runs checks, and only makes small
   fixes. Conversation with the user is in Spanish.
 - Prompts live in `.control/prompts/opencode/opencode-prompt-NN-*.md`
-  (03 is the last one); the old external `motioner-prompts` folder was
-  deleted. Work only inside the Motioner, FerrousEngine and GUIMaker
-  folders.
+  (05 is the last one). Work only inside the Motioner, FerrousEngine and
+  GUIMaker folders.
 - The user wants LONG multi-phase prompts (several verifiable phases,
   subagents on disjoint files, one final report) and a visible result
   (PNG/MP4) as soon as possible.
@@ -29,40 +28,37 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
 
 ## Current state (branch feat/m1-foundations, pushed to origin)
 
-- Commits after 757c0b5 (`main` untouched): engine pin 61da7f9 (D-0018),
-  core 1e515ea, eval 1462319, dsl 43e31ab, example 1f78243, control
-  014ddfc, hardening 480191e (core/eval) and e77a524 (dsl).
-- Hardening landed: MAX_ABS_FRAME and `bounds` policy in core, non-finite
-  skip in eval, MAX_EXPR_DEPTH 4096, acyclic lists with iterative drop,
-  max_value_depth, and a deterministic step budget (`Limits::max_steps`,
-  `crates/motioner_dsl/src/limits.rs`) charging statements and all bulk
-  work. 91 tests; all gates green.
-- Uncommitted on purpose: `crates/motioner_render/Cargo.toml` engine deps,
-  `anyhow`/`png`/`sha2` workspace deps and the matching `Cargo.lock`. They
-  land with the adapter/CLI so `cargo machete crates` stays green.
-- T-DSL-0003/0004 done. T-DSL-0005 backlog (minor findings, memory
-  budget). T-RENDER-0002 in_progress: adapter, ffmpeg export and CLI.
-  T-ARCH-0007 backlog (GUIMaker architecture proposal pending).
+- FIRST RENDER WORKS: `cargo run --release -p motioner_app -- render
+  examples/hello.motion --out out/hello.mp4` gives 300 frames 1920x1080
+  60/1 yuv420p in 2.75 s (RTX 4050). CLI: `motioner render|still|info`.
+- Commits after 757c0b5 (`main` untouched): D-0018 pin 61da7f9, core,
+  eval, dsl, example, hardening 480191e/e77a524, control a8a34a5, engine
+  pin bump 0b0737b (D-0019), first render 3fea9e3.
+- Crates: `motioner_render` (Pure2D adapter: flip F, text F*A*S, strictly
+  increasing z, linear colour, centred strokes, engine MSDF text,
+  `read_pixels_into`), `motioner_io` (PNG, streaming ffmpeg H.264 BT.709),
+  `motioner_app` (CLI), `motioner_testkit` golden
+  `crates/motioner_testkit/golden/hello_f120.png`. 131 tests; all gates
+  green incl. `cargo machete crates`. `ferrous_renderer` is built with
+  `default-features = false`.
+- Done: T-DSL-0003/0004, T-RENDER-0002, T-RENDER-0003. Backlog:
+  T-RENDER-0004 (engine polish), T-DSL-0005, T-ARCH-0007 (GUIMaker
+  architecture proposal pending).
 
-## FerrousEngine improvement candidates (upstream patches)
+## FerrousEngine state
 
-Verified at 02e6d48:
-- `OffscreenTarget::read_rgba8` (`engine/ferrous/crates/ferrous_renderer/src/headless.rs:107`)
-  allocates a GPU buffer and a Vec per call and panics on map failure.
-  Proposed: `read_rgba8_into(&mut Vec<u8>)` with a persistent staging
-  buffer, typed errors, and double-buffered async readback.
-- Text: `ferrous_font` already has a font parser and MSDF atlas
-  (`engine/ferrous/crates/ferrous_font/src/msdf_gen.rs:227`). Pure2D text
-  should reuse it upstream instead of a Motioner-side CPU rasterizer
-  (supersedes the earlier CPU-coverage plan; avoids duplicate font code).
-- Blending is straight `ALPHA_BLENDING` only (`engine/ferrous/crates/ferrous_2d/src/render/pipeline.rs:102`);
-  Motioner needs premultiplied alpha, blend modes and offscreen layers for
-  group opacity.
-- `render_to_view` requires the default `gui` feature; headless 2D pulls
-  GUI/winit. `Pure2dHarness::new` returns `Result<_, String>`.
-- `static mut` counters in `engine/ferrous/crates/ferrous_ui_core/src/render_collector.rs:13`
-  (unsound), SSAO uses `thread_rng` (non-deterministic 3D), many warnings,
-  fmt not clean, no test/clippy CI in the engine repo.
+- Pin `32aea8a` = head of engine branch `feat/pure2d-text-and-readback`
+  (pushed, NOT merged to engine main). Adds Pure2D MSDF text, font
+  metrics/kerning/layout, typed buffer-reusing readback, HarnessError,
+  headless without `gui`, engine CI (`.github/workflows/ci.yml`).
+- Open (T-RENDER-0004): readback ring does not overlap work; hard-edge
+  band in `shape_2d.wgsl` can leave 1-px holes; FontId2d without
+  generations; 8 warnings without default features; measure allocates.
+- Still missing for Motioner: premultiplied alpha, blend modes and
+  offscreen layers (straight `ALPHA_BLENDING` only); per-axis ring
+  thickness. SSAO uses `thread_rng` (3D only).
+- Engine repo stores 25 files with CRLF in the index; keep their CRLF
+  when committing (core.autocrlf=true).
 
 ## GUIMaker facts (read via GitHub API, not cloned, 2026-10-31)
 
@@ -104,7 +100,8 @@ Verified at 02e6d48:
 - Git Bash rewrites '/x' args: use `MSYS_NO_PATHCONV=1` for
   `git sparse-checkout`.
 - Bash heredocs with mixed quotes broke; write files with the editor.
-- Disk: ~20 GB free on C: (2026-10-31). Stop below 8 GB. Use CARGO_INCREMENTAL=0.
+- Disk: only ~9.3 GB free on C: (2026-10-31, after first render). Stop
+  below 8 GB; avoid release builds until space is freed. CARGO_INCREMENTAL=0.
 - D-0003 superseded by D-0011; MDF v0 subset frozen; `while`, `use`,
   dicts, overrides and LaTeX deferred to v0.1.
 - `origin` is jvchiappini/Motioner; do not touch Motioner-legacy; no
@@ -116,6 +113,6 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-S-2026-10-31-010 (open) - approved hardening and step budget, committed
-480191e and e77a524, closed T-DSL-0003/0004, pushed the branch, issued the
-first-render prompt.
+S-2026-10-31-010 (closed) - engine prompt 05 reviewed, engine 32aea8a
+pushed, pin bumped (D-0019), prompt 04 rev 2 executed by opencode,
+reviewed, first render committed 3fea9e3 and pushed.
