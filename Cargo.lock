@@ -11,6 +11,13 @@ name = "motioner_core"
 version = "0.1.0"
 
 [[package]]
+name = "motioner_dsl"
+version = "0.1.0"
+dependencies = [
+ "motioner_core",
+]
+
+[[package]]
 name = "motioner_eval"
 version = "0.1.0"
 dependencies = [

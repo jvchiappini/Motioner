@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/motioner_core",
     "crates/motioner_eval",
+    "crates/motioner_dsl",
     "crates/motioner_render",
     "crates/motioner_io",
     "crates/motioner_app",
@@ -22,6 +23,7 @@ repository = "https://github.com/jvchiappini/Motioner"
 [workspace.dependencies]
 motioner_core = { path = "crates/motioner_core" }
 motioner_eval = { path = "crates/motioner_eval" }
+motioner_dsl = { path = "crates/motioner_dsl" }
 motioner_render = { path = "crates/motioner_render" }
 motioner_io = { path = "crates/motioner_io" }
 motioner_testkit = { path = "crates/motioner_testkit" }
