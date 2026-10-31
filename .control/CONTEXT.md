@@ -3,113 +3,82 @@ actualizado: 2026-10-31
 actualizado_por: agente
 version_schema: 1
 ---
-
 # Context memory (maintained by the agent)
 
 ## What this project is, in practice
 
-Motioner is a brand-new codebase started from an empty directory. It is
-an AI-first motion-graphics editor and NLE: prompt-driven creation plus
-an After Effects-style editor, node graph, audio mixer, 3D, program-first
-Python-like code (MDF), LaTeX math and automatic AI iteration. It renders
-on the custom Rust FerrousEngine and uses Ferrous UI plus GUIMaker for
-editor chrome. Neither engine nor GUIMaker is in the repository yet; they
-are pinned when the user provides them.
+Motioner is an AI-first motion-graphics editor and NLE in Rust on the
+custom FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds
+the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
 
-The architecture gate is closed, the workspace has six crates (core,
-eval, render, io, app, testkit), and CI is green. No product features
-exist yet.
+## Working model (from 2026-10-31, session 008)
 
-## Confirmed decisions (2026-10-31)
+- Code is written by opencode with DeepSeek V4.1 Flash.
+- Claude acts as architect and auditor: writes self-contained English
+  prompts for opencode, reviews diffs, runs checks, and only makes small
+  fixes. Conversation with the user is in Spanish.
+- Goals include improving FerrousEngine and GUIMaker upstream with small
+  patches, then bumping the pin in Motioner with an ADR.
 
-- 1.0 is Windows-only and 1080p-first (D-0010, D-0014).
-- 2D, AE-style timeline, masks, mattes, precomps, NLE, audio mixer,
-  node graph, 3D glTF/skeletal/GPU particles (D-0010).
-- Program-first MDF: a custom Python-like DSL with loops, functions,
-  conditionals and LaTeX; the program is the truth; the document is
-  compiled with provenance and overrides (D-0011, supersedes D-0003).
-- LaTeX math typesetting in 1.0, self-contained and deterministic
-  (D-0016).
-- AI: Anthropic, OpenRouter and Google; cloud data allowed; previews and
-  visual critique; 10 iterations / 10 minutes / configurable cost cap;
-  human approval for the final render (D-0012, D-0017).
-- No YouTube API and no upload from the app; the user downloads the MP4
-  (D-0012, D-0017).
-- Apache-2.0; public and free; bundled assets permissive; users
-  responsible for imports (D-0013).
-- Revenue: donations/sponsors, paid cloud rendering, paid AI credits
-  (D-0015).
-- Audio 1.0: volume, pan, fades, EQ, compressor, limiter; no reverb or
-  delay (D-0017).
-- UI English only; MSI/NSIS plus portable ZIP; no auto-update (D-0017).
-- Physics staged: particles in 1.0, rigid bodies post-1.0, cloth/fluids
-  later (D-0010, D-0017).
-- Solo developer; CI has no GPU (REF-0002, D-0017).
+## Current state (branch feat/m1-foundations, not pushed)
+
+- Committed on `feat/m1-foundations` (5 commits after 757c0b5): engine pin
+  (61da7f9, D-0018, `engine/README.md`), `motioner_core`, `motioner_eval`,
+  `motioner_dsl`, `examples/hello.motion`. `main` is untouched; fast-forward
+  when the user approves.
+- Uncommitted on purpose: `crates/motioner_render/Cargo.toml` engine deps,
+  `anyhow`/`png`/`sha2` workspace deps and the matching `Cargo.lock`. They
+  land with the adapter/CLI so `cargo machete crates` stays green.
+- All gates green: fmt (no `--all`), clippy -D warnings, 52 tests, doc,
+  boundaries, machete scoped to `crates`.
+- T-ARCH-0005 done. T-DSL-0003/0004 stay in_progress until the hardening
+  pass fixes the review blockers/majors (clamp NaN panic, unbounded flat
+  expression depth, value cycles/depth, string iteration limit, i64 frame
+  overflow, non-finite values). Minor findings live in T-DSL-0005.
+- T-RENDER-0002 in_progress: adapter, ffmpeg export (motioner_io) and CLI
+  (motioner_app) not started.
+
+## FerrousEngine improvement candidates (upstream patches)
+
+Verified at 02e6d48:
+- `OffscreenTarget::read_rgba8` (`engine/ferrous/crates/ferrous_renderer/src/headless.rs:107`)
+  allocates a GPU buffer and a Vec per call and panics on map failure.
+  Proposed: `read_rgba8_into(&mut Vec<u8>)` with a persistent staging
+  buffer, typed errors, and double-buffered async readback.
+- Text: `ferrous_font` already has a font parser and MSDF atlas
+  (`engine/ferrous/crates/ferrous_font/src/msdf_gen.rs:227`). Pure2D text
+  should reuse it upstream instead of a Motioner-side CPU rasterizer
+  (supersedes the earlier CPU-coverage plan; avoids duplicate font code).
+- Blending is straight `ALPHA_BLENDING` only (`engine/ferrous/crates/ferrous_2d/src/render/pipeline.rs:102`);
+  Motioner needs premultiplied alpha, blend modes and offscreen layers for
+  group opacity.
+- `render_to_view` requires the default `gui` feature; headless 2D pulls
+  GUI/winit. `Pure2dHarness::new` returns `Result<_, String>`.
+- `static mut` counters in `engine/ferrous/crates/ferrous_ui_core/src/render_collector.rs:13`
+  (unsound), SSAO uses `thread_rng` (non-deterministic 3D), many warnings,
+  fmt not clean, no test/clippy CI in the engine repo.
+
+## Gotchas
+
+- CI `RUSTFLAGS=-D warnings` will fail on engine path deps; use
+  `submodules: true` and rely on `clippy -D warnings` instead.
+- `scripts/check_boundaries.py` bans ferrous/wgpu prefixes everywhere:
+  exempt motioner_render and add a motioner_dsl rule.
+- Git Bash rewrites '/x' args: use `MSYS_NO_PATHCONV=1` for
+  `git sparse-checkout`.
+- Bash heredocs with mixed quotes broke; write files with the editor.
+- Disk: ~20 GB free on C: (2026-10-31). Stop below 8 GB. Use CARGO_INCREMENTAL=0.
+- D-0003 superseded by D-0011; MDF v0 subset frozen; `while`, `use`,
+  dicts, overrides and LaTeX deferred to v0.1.
+- `origin` is jvchiappini/Motioner; do not touch Motioner-legacy; no
+  push without permission.
 
 ## Reference machine
 
-AMD Ryzen 5 8645HS (6C/12T), 8 GB RAM (7.3 usable), NVIDIA RTX 4050
-Laptop 6 GB VRAM, AMD Radeon 760M iGPU, Windows 11 build 26200, 512 GB
-NVMe, 1920x1080 display. Hybrid graphics: request the high-performance
-NVIDIA adapter. RAM and VRAM are the main constraints.
-
-## Tacit conventions detected
-
-- The user writes Spanish; all repository content is English.
-- Code quality is a hard requirement (REF-0002): no duplication, named
-  helpers, rustdoc, measured optimization.
-- Prefixed task IDs by domain (`T-ARCH`, `T-CORE`, `T-NLE`, ...).
-- Determinism: integer frames, rational fps, pure evaluation.
-- Every mutation goes through typed commands.
-- Program-first: MDF is the source; UI edits are overrides or bakes.
-- The user wants to surpass Manim with executable code and LaTeX.
-
-## Things to watch out for (gotchas)
-
-- D-0003 is superseded by D-0011. Do not reintroduce "document is the
-  truth"; the program is the truth and the document is compiled with
-  provenance.
-- The override/bake model is the hardest part of the editor. Orphans must
-  be reported, never dropped.
-- `spec/mdf-v0.md` is frozen for the v0 subset. `while`, `use`,
-  overrides and LaTeX are deferred to v0.1 and must not block the first
-  MP4.
-- The first implementation prompt is `prompts/implement-milestone-1.md`.
-- The engine repository is available and compiles, but only 18 GB are
-  free on C:. Use a shallow/sparse engine checkout and release builds;
-  stop below 8 GB free.
-- `origin` is `jvchiappini/Motioner`, not PCS. PCS `update.py` expects the
-  PCS repo in `origin`; temporarily point it at a `pcs` remote.
-- The old repo remains public as `Motioner-legacy` until deleted manually
-  or with `delete_repo` scope.
-- `rust-toolchain.toml` pins 1.96.0; do not reintroduce nightly features.
-- Workspace lints deny `unsafe_code`, warn on `missing_docs`, run clippy
-  `all` and `pedantic`; CI denies warnings.
-- `scripts/check_boundaries.py` must be updated for every new workspace
-  crate, or CI fails by design.
-- CI has no GPU: rendering needs a CPU oracle plus manual GPU golden
-  frames on the reference machine.
-- 8 GB RAM / 6 GB VRAM: 1080p-first, proxies, pooling and budgets.
-- Python bytecode (`__pycache__`) is ignored; do not commit it.
-- `pctl` section names/commands are fixed Spanish framework strings;
-  project content stays English.
-
-## Perceived status
-
-Product and licensing decisions are closed, the roadmap has 22
-initiatives, and the MDF v0 subset is frozen. The first implementation
-prompt is ready at `prompts/implement-milestone-1.md`: MDF program ->
-headless FerrousEngine 2D render -> 5-second 1080p60 H.264 MP4.
-
-The engine repository is available and compiles. The main risks are the
-engine 2D/headless API and disk space (about 18 GB free). GUIMaker is
-not needed for the first MP4 and is not cloned yet.
-
-Next: hand the prompt to the implementation agent, or implement the
-MDF parser/interpreter now if working without the engine. Override/bake
-semantics remain deferred to v0.1.
+Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-S-2026-10-31-007 - froze the MDF v0 subset, created the first MP4 tasks
-and wrote the implementation prompt.
+S-2026-10-31-009 (open) - audited opencode's green-CI pass, committed the
+foundations on feat/m1-foundations, closed T-ARCH-0005, created T-DSL-0005,
+reviewed FerrousEngine and issued the hardening prompt.

@@ -1,7 +1,7 @@
 ---
 id: T-RENDER-0002
 titulo: Render the first MDF-driven MP4 through FerrousEngine
-estado: backlog
+estado: in_progress
 prioridad: critica
 tipo: feature
 creado_por: agente
@@ -12,7 +12,6 @@ depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 First visual milestone: execute an MDF program, render a 5-second
@@ -38,3 +37,5 @@ frames to ffmpeg. The result must be deterministic and playable.
 
 ## Notas del agente
 
+
+2026-10-31 (S-2026-10-31-008): not started in code. Engine API investigated (headless Pure2D path exists, no 2D text: plan is CPU glyph coverage from ferrous_font into sprites). Pending: motioner_render adapter, ffmpeg export in motioner_io, CLI in motioner_app, CI and boundary-script updates. Implementation moves to opencode; Claude audits.
