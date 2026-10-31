@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# Python (Project Control System tooling)
+__pycache__/
+*.py[cod]
+
 # Motioner project runtime
 *.motioner/cache/
 *.motioner/backups/
