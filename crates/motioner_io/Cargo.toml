@@ -4,6 +4,7 @@ description = "Native MDF project format, asset store and ffmpeg export for Moti
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [lints]

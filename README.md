@@ -1,10 +1,10 @@
 # Motioner
 
-A code-driven motion-graphics editor with an After Effects-style
-timeline and an AI agent, built on the custom Rust **FerrousEngine**
-renderer. Motioner turns prompts and code into professional 2D/3D motion
-design videos, with a deterministic pipeline shared by preview and
-export.
+A code-driven motion-graphics editor and NLE with an After Effects-style
+timeline, a node graph, audio mixing and an AI agent, built on the
+custom Rust **FerrousEngine** renderer. Motioner turns prompts and
+Python-like code into professional 2D/3D videos, with a deterministic
+pipeline shared by preview and export.
 
 ## Status
 
@@ -16,13 +16,18 @@ into this repository yet.
 
 ## What it will do
 
-- Author compositions with a timeline, viewport and inspector.
-- Describe every composition as readable code (MDF, the Motioner
-  Document Format).
+- Author compositions with a timeline, viewport, inspector and node
+  graph.
+- Edit video and audio on an NLE timeline, with a stereo mixer and
+  effects.
+- Describe compositions as Python-like executable code (MDF, the
+  Motioner Document Format) with loops, functions and conditionals.
 - Let an AI agent create and edit compositions through typed tools,
-  with preview, review and undo.
-- Mix 2D motion graphics and 3D scenes in one ordered layer stack.
-- Preview in real time and export frame-accurate video with ffmpeg.
+  render previews, critique them and iterate until the result is good.
+- Mix 2D motion graphics and 3D scenes, including skeletal animation and
+  GPU particles, in one ordered layer stack.
+- Preview at 1080p 60 fps and export frame-accurate MP4 and PNG with
+  ffmpeg.
 
 ## Architecture at a glance
 
@@ -38,6 +43,8 @@ into this repository yet.
   egui.
 - Projects are folder-based, use a native text format and store assets
   by content hash.
+- 1.0 targets Windows and 1080p; 4K, HDR, color grading, rigid-body
+  physics and cloth/fluids are post-1.0.
 
 Full details: [system blueprint](.control/docs/reference/REF-0001.md).
 
@@ -102,4 +109,5 @@ carry rustdoc, and performance changes are measured. See
 
 ## License
 
-To be defined.
+Motioner is free and open source under the
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
