@@ -90,11 +90,12 @@ const FRAGMENTS: &[&str] = &[
 
 fn small_limits() -> Limits {
     Limits {
-        max_statements: 5_000,
+        max_steps: 5_000,
         max_call_depth: 32,
         max_nodes: 100,
         max_string_len: 4_096,
         max_list_len: 256,
+        max_value_depth: 100,
     }
 }
 
@@ -155,5 +156,107 @@ fn random_bytes_never_panic() {
             .map(|_| (rng.next() & 0x7f) as u8)
             .collect();
         exercise(&String::from_utf8_lossy(&bytes));
+    }
+}
+
+/// Names that a hostile program can feed arithmetic results into. They
+/// cover every implemented builtin, every builtin named by the spec (an
+/// unimplemented name still has to fail cleanly) and the scene
+/// constructors.
+const BUILTIN_NAMES: &[&str] = &[
+    "len",
+    "range",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "min",
+    "max",
+    "abs",
+    "round",
+    "sorted",
+    "reversed",
+    "enumerate",
+    "zip",
+    "seed",
+    "rand",
+    "sin",
+    "cos",
+    "tan",
+    "radians",
+    "degrees",
+    "lerp",
+    "clamp",
+    "comp",
+    "group",
+    "rect",
+    "circle",
+    "text",
+];
+
+/// Hostile values written only with literals and arithmetic: NaN, +inf,
+/// -inf, a huge finite number and a tiny subnormal.
+const HOSTILE_VALUES: &[&str] = &[
+    "(1e308 * 1e308) - (1e308 * 1e308)",
+    "1e308 * 1e308",
+    "-(1e308 * 1e308)",
+    "1e308",
+    "1e-308",
+    "0 - (1e308 * 1e308)",
+];
+
+fn flat_expression(terms: usize) -> String {
+    let mut source = String::with_capacity(4 * terms);
+    source.push('1');
+    for _ in 1..terms {
+        source.push_str(" + 1");
+    }
+    source
+}
+
+#[test]
+fn seeded_hostile_values_cycles_and_long_expressions_never_panic() {
+    let mut programs: Vec<String> = Vec::new();
+
+    // Deep acyclic values: display and equality must stop at the depth
+    // limit instead of recursing, and the values must drop iteratively.
+    programs.push("l = [0]\nfor i in range(300):\n    l = [l]\ns = str(l)\n".to_owned());
+    programs.push("t = (0,)\nfor i in range(300):\n    t = (t,)\ns = str(t)\n".to_owned());
+    programs.push(
+        "a = [0]\nb = [0]\nfor i in range(300):\n    a = [a]\n    b = [b]\nx = a == b\n".to_owned(),
+    );
+
+    // Cyclic assignments through lists, tuples and augmented assignment.
+    for program in [
+        "a = [0]\na[0] = a\n",
+        "a = [0]\nb = (a,)\na[0] = b\n",
+        "a = [0]\nb = [a]\na[0] = b\n",
+        "a = [[0]]\na[0] += [a]\n",
+    ] {
+        programs.push(program.to_owned());
+    }
+
+    // Long flat expressions: past MAX_EXPR_DEPTH they are rejected by the
+    // parser before a huge tree can exist.
+    programs.push(format!("x = {}\n", flat_expression(5_000)));
+    programs.push(format!("x = {} and 1\n", flat_expression(5_000)));
+
+    // Deterministic seeded combinations of NaN/inf arithmetic and every
+    // builtin name. A fixed table plus a seeded generator keeps failures
+    // reproducible while covering argument shapes that the table misses.
+    let mut rng = Rng(0x6a09_e667_f3bc_c909);
+    for _ in 0..200 {
+        let name = BUILTIN_NAMES[rng.below(BUILTIN_NAMES.len())];
+        let value = HOSTILE_VALUES[rng.below(HOSTILE_VALUES.len())];
+        programs.push(format!("x = {name}({value})\n"));
+    }
+    for name in BUILTIN_NAMES {
+        for value in HOSTILE_VALUES {
+            programs.push(format!("x = {name}({value}, {value})\n"));
+        }
+    }
+
+    for program in &programs {
+        exercise(program);
     }
 }

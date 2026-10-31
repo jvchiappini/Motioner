@@ -106,7 +106,9 @@ impl Scene {
             side(1, 1920)?,
             side(2, 1080)?,
             frame_rate,
-            frame_rate.seconds_to_frame(duration),
+            frame_rate
+                .seconds_to_frame(duration)
+                .map_err(|error| core_error(&error))?,
             bound.color_or(5, Color::BLACK)?,
         )
         .map_err(|error| core_error(&error))?;
@@ -240,7 +242,11 @@ impl Scene {
             ))
         })?;
         let document = self.document_mut()?;
-        let frame = document.composition().frame_rate().seconds_to_frame(time);
+        let frame = document
+            .composition()
+            .frame_rate()
+            .seconds_to_frame(time)
+            .map_err(|error| core_error(&error))?;
         document
             .add_keyframe(id, property, frame, value, ease)
             .map_err(|error| core_error(&error))?;

@@ -197,15 +197,14 @@ pub(crate) fn as_vec2(value: &Value) -> Option<Vec2> {
         _ => None,
     };
     match value {
-        Value::Tuple(items) => pair(items),
-        Value::List(items) => pair(&items.borrow()),
+        Value::Tuple(items) | Value::List(items) => pair(&items.borrow()),
         _ => None,
     }
 }
 
 /// Converts a 2D vector to an MDF tuple.
 pub(crate) fn vec2_value(v: Vec2) -> Value {
-    Value::Tuple(Rc::from(vec![Value::Number(v.x), Value::Number(v.y)]))
+    Value::tuple(vec![Value::Number(v.x), Value::Number(v.y)])
 }
 
 /// Largest integer that every `f64` below it represents exactly.

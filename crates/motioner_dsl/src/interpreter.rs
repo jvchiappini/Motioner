@@ -15,10 +15,10 @@ use crate::ast::{
     Argument, AssignOp, BinaryOp, CompareOp, Expr, ExprKind, FunctionDef, LogicalOp, Program, Stmt,
     StmtKind, Target, UnaryOp,
 };
-use crate::builtins::{self, check_list_len, check_string_len};
+use crate::builtins;
 use crate::diagnostic::{Diagnostic, ErrorCategory, Span, StackFrame};
 use crate::host::{as_integer, bind, f64_from_i64, CallArgs, HostError, HostResult};
-use crate::limits::Limits;
+use crate::limits::{Budget, Limits};
 use crate::scene::Scene;
 use crate::value::{Builtin, Value};
 
@@ -34,7 +34,7 @@ pub fn execute(program: &Program, limits: &Limits) -> Result<Document, Diagnosti
         limits,
         globals: HashMap::new(),
         frames: Vec::new(),
-        statements: 0,
+        budget: Budget::new(limits),
         scene: Scene::new(limits.max_nodes),
     };
     interpreter.exec_block(&program.body)?;
@@ -70,7 +70,7 @@ struct Interpreter<'l> {
     limits: &'l Limits,
     globals: HashMap<Rc<str>, Value>,
     frames: Vec<CallFrame>,
-    statements: u64,
+    budget: Budget,
     scene: Scene,
 }
 
@@ -138,16 +138,8 @@ impl Interpreter<'_> {
     }
 
     fn exec(&mut self, statement: &Stmt) -> Exec<Flow> {
-        self.statements += 1;
-        if self.statements > self.limits.max_statements {
-            return Err(self.diagnostic(
-                ErrorCategory::Limit,
-                statement.span,
-                format!(
-                    "statement limit of {} exceeded; check for runaway loops",
-                    self.limits.max_statements
-                ),
-            ));
+        if let Err(error) = self.budget.charge(1) {
+            return Err(self.host_error(statement.span, error));
         }
         match &statement.kind {
             StmtKind::Expr(expr) => {
@@ -198,7 +190,7 @@ impl Interpreter<'_> {
             let values = (0..range.len()).map(|i| Value::Number(f64_from_i64(range.at(i))));
             return self.run_loop(variable, body, values);
         }
-        let items = builtins::items(&sequence, self.limits)
+        let items = builtins::items(&sequence, self.limits, &mut self.budget)
             .map_err(|e| self.host_error(iterable.span, e))?;
         self.run_loop(variable, body, items.into_iter())
     }
@@ -222,12 +214,13 @@ impl Interpreter<'_> {
 
     fn assign(&mut self, target: &Target, op: AssignOp, value: &Expr, span: Span) -> Exec<()> {
         let value = self.eval(value)?;
-        let combine = |this: &Self, current: Value, value: Value| -> Exec<Value> {
+        let combine = |this: &mut Self, current: Value, value: Value| -> Exec<Value> {
             match augmented(op) {
                 None => Ok(value),
-                Some(binary) => this
-                    .binary(binary, &current, &value)
-                    .map_err(|e| this.host_error(span, e)),
+                Some(binary) => match this.binary(binary, &current, &value) {
+                    Ok(value) => Ok(value),
+                    Err(error) => Err(this.host_error(span, error)),
+                },
             }
         };
         match target {
@@ -274,6 +267,11 @@ impl Interpreter<'_> {
                 let slot = resolve_index(&index, len).map_err(|e| self.host_error(span, e))?;
                 let current = items.borrow()[slot].clone();
                 let new = combine(self, current, value)?;
+                let cycle = new.contains_shared_list(&items, &mut self.budget);
+                if cycle.map_err(|e| self.host_error(span, e))? {
+                    return Err(self
+                        .host_error(span, HostError::value_error("a list cannot contain itself")));
+                }
                 items.borrow_mut()[slot] = new;
             }
         }
@@ -288,19 +286,41 @@ impl Interpreter<'_> {
             |this: &Self, result: HostResult<Value>| result.map_err(|e| this.host_error(span, e));
         match &expr.kind {
             ExprKind::Number(n) => Ok(Value::Number(*n)),
-            ExprKind::Str(s) => Ok(Value::Str(s.clone())),
+            ExprKind::Str(s) => {
+                host(
+                    self,
+                    self.limits.check_string_len(s.len()).map(|()| Value::None),
+                )?;
+                Ok(Value::Str(s.clone()))
+            }
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::None => Ok(Value::None),
             ExprKind::Name(name) => self.lookup(name, span),
             ExprKind::List(items) => {
                 host(
                     self,
-                    check_list_len(items.len(), self.limits).map(|()| Value::None),
+                    self.limits
+                        .check_list_len(items.len())
+                        .map(|()| Value::None),
                 )?;
+                if let Err(error) = self.budget.charge_items(items.len()) {
+                    return Err(self.host_error(span, error));
+                }
                 let values = self.eval_all(items)?;
                 Ok(Value::list(values))
             }
-            ExprKind::Tuple(items) => Ok(Value::Tuple(Rc::from(self.eval_all(items)?))),
+            ExprKind::Tuple(items) => {
+                host(
+                    self,
+                    self.limits
+                        .check_list_len(items.len())
+                        .map(|()| Value::None),
+                )?;
+                if let Err(error) = self.budget.charge_items(items.len()) {
+                    return Err(self.host_error(span, error));
+                }
+                Ok(Value::tuple(self.eval_all(items)?))
+            }
             ExprKind::Unary { op, operand } => {
                 let value = self.eval(operand)?;
                 let Value::Number(n) = value else {
@@ -315,12 +335,14 @@ impl Interpreter<'_> {
             ExprKind::Binary { op, left, right } => {
                 let left = self.eval(left)?;
                 let right = self.eval(right)?;
-                host(self, self.binary(*op, &left, &right))
+                let result = self.binary(*op, &left, &right);
+                host(self, result)
             }
             ExprKind::Compare { op, left, right } => {
                 let left = self.eval(left)?;
                 let right = self.eval(right)?;
-                host(self, compare(*op, &left, &right))
+                let result = compare(*op, &left, &right, self.limits, &mut self.budget);
+                host(self, result)
             }
             ExprKind::Logical { op, left, right } => {
                 let left = self.eval(left)?;
@@ -350,7 +372,8 @@ impl Interpreter<'_> {
             ExprKind::Index { object, index } => {
                 let object = self.eval(object)?;
                 let index = self.eval(index)?;
-                host(self, index_value(&object, &index))
+                let result = index_value(&object, &index, &mut self.budget);
+                host(self, result)
             }
         }
     }
@@ -359,26 +382,38 @@ impl Interpreter<'_> {
         exprs.iter().map(|expr| self.eval(expr)).collect()
     }
 
-    fn binary(&self, op: BinaryOp, left: &Value, right: &Value) -> HostResult<Value> {
+    fn binary(&mut self, op: BinaryOp, left: &Value, right: &Value) -> HostResult<Value> {
         match (op, left, right) {
             (_, Value::Number(a), Value::Number(b)) => arithmetic(op, *a, *b),
             (BinaryOp::Add, Value::Str(a), Value::Str(b)) => {
-                check_string_len(a.len() + b.len(), self.limits)?;
+                let bytes = combined_len(a.len(), b.len())?;
+                self.limits.check_string_len(bytes)?;
+                self.budget.charge_string(bytes)?;
                 Ok(Value::Str(Rc::from(format!("{a}{b}"))))
             }
             (BinaryOp::Add, Value::List(a), Value::List(b)) => {
+                let len = combined_len(a.borrow().len(), b.borrow().len())?;
+                self.limits.check_list_len(len)?;
+                self.budget.charge_items(len)?;
                 let joined: Vec<Value> = a
                     .borrow()
                     .iter()
                     .chain(b.borrow().iter())
                     .cloned()
                     .collect();
-                check_list_len(joined.len(), self.limits)?;
                 Ok(Value::list(joined))
             }
             (BinaryOp::Add, Value::Tuple(a), Value::Tuple(b)) => {
-                check_list_len(a.len() + b.len(), self.limits)?;
-                Ok(Value::Tuple(a.iter().chain(b.iter()).cloned().collect()))
+                let len = combined_len(a.borrow().len(), b.borrow().len())?;
+                self.limits.check_list_len(len)?;
+                self.budget.charge_items(len)?;
+                Ok(Value::tuple(
+                    a.borrow()
+                        .iter()
+                        .chain(b.borrow().iter())
+                        .cloned()
+                        .collect(),
+                ))
             }
             _ => Err(HostError::type_error(format!(
                 "unsupported operand types for {}: {} and {}",
@@ -408,7 +443,9 @@ impl Interpreter<'_> {
                 | Builtin::Circle
                 | Builtin::Text),
             ) => self.scene.call(builtin, call_args),
-            Value::Builtin(builtin) => builtins::call(builtin, call_args, self.limits),
+            Value::Builtin(builtin) => {
+                builtins::call(builtin, call_args, self.limits, &mut self.budget)
+            }
             Value::Method(id, method) => self.scene.call_method(id, method, call_args),
             other => Err(HostError::type_error(format!(
                 "a {} is not callable",
@@ -472,6 +509,12 @@ fn augmented(op: AssignOp) -> Option<BinaryOp> {
     }
 }
 
+/// Adds two lengths as `usize`, failing instead of overflowing.
+fn combined_len(a: usize, b: usize) -> HostResult<usize> {
+    a.checked_add(b)
+        .ok_or_else(|| HostError::limit("collection length limit exceeded"))
+}
+
 fn arithmetic(op: BinaryOp, a: f64, b: f64) -> HostResult<Value> {
     let needs_divisor = matches!(op, BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod);
     if needs_divisor && b == 0.0 {
@@ -489,15 +532,20 @@ fn arithmetic(op: BinaryOp, a: f64, b: f64) -> HostResult<Value> {
     Ok(Value::Number(result))
 }
 
-fn compare(op: CompareOp, left: &Value, right: &Value) -> HostResult<Value> {
-    let ordered = |test: fn(std::cmp::Ordering) -> bool| builtins::compare(left, right).map(test);
+fn compare(
+    op: CompareOp,
+    left: &Value,
+    right: &Value,
+    limits: &Limits,
+    budget: &mut Budget,
+) -> HostResult<Value> {
     let result = match op {
-        CompareOp::Eq => left.equals(right),
-        CompareOp::NotEq => !left.equals(right),
-        CompareOp::Lt => ordered(std::cmp::Ordering::is_lt)?,
-        CompareOp::Le => ordered(std::cmp::Ordering::is_le)?,
-        CompareOp::Gt => ordered(std::cmp::Ordering::is_gt)?,
-        CompareOp::Ge => ordered(std::cmp::Ordering::is_ge)?,
+        CompareOp::Eq => left.equals(right, limits, budget)?,
+        CompareOp::NotEq => !left.equals(right, limits, budget)?,
+        CompareOp::Lt => builtins::compare(left, right, budget)?.is_lt(),
+        CompareOp::Le => builtins::compare(left, right, budget)?.is_le(),
+        CompareOp::Gt => builtins::compare(left, right, budget)?.is_gt(),
+        CompareOp::Ge => builtins::compare(left, right, budget)?.is_ge(),
     };
     Ok(Value::Bool(result))
 }
@@ -521,14 +569,14 @@ fn resolve_index(index: &Value, len: usize) -> HostResult<usize> {
         })
 }
 
-fn index_value(object: &Value, index: &Value) -> HostResult<Value> {
+fn index_value(object: &Value, index: &Value, budget: &mut Budget) -> HostResult<Value> {
     match object {
-        Value::List(items) => {
+        Value::List(items) | Value::Tuple(items) => {
             let items = items.borrow();
             Ok(items[resolve_index(index, items.len())?].clone())
         }
-        Value::Tuple(items) => Ok(items[resolve_index(index, items.len())?].clone()),
         Value::Str(s) => {
+            budget.charge_items(s.len())?;
             let count = s.chars().count();
             let i = resolve_index(index, count)?;
             Ok(Value::Str(Rc::from(

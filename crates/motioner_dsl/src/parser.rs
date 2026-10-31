@@ -16,7 +16,71 @@ use crate::token::{Keyword, Op, Token, TokenKind};
 
 /// Maximum nesting of blocks and expressions. Bounds parser recursion so
 /// hostile input cannot overflow the stack.
-const MAX_NESTING: u32 = 100;
+///
+/// This is a *syntactic* limit: it counts blocks, parentheses and unary or
+/// `not` prefixes while the parser recurses. It does not bound the depth of
+/// the tree built by the left-associative operator loops or by postfix
+/// chains, because those loops are iterative; [`MAX_EXPR_DEPTH`] bounds the
+/// resulting tree instead.
+///
+/// The value is a recursion budget, not a language feature: each level of
+/// parentheses walks the whole precedence chain in a debug build, so a
+/// larger value would risk the parser's own stack on threads with a small
+/// stack. Sixty-four levels are far beyond any hand-written or generated
+/// MDF program.
+const MAX_NESTING: u32 = 64;
+
+/// Maximum depth of an expression tree, counted in AST nodes.
+///
+/// A node's depth is one plus the depth of its deepest child; leaves have
+/// depth 1 and parentheses add no node. This is an *AST* limit, separate
+/// from the parser-recursion limit `MAX_NESTING`: a flat
+/// `1 + 1 + ...` chain or a long `f()()()` chain grows this depth without
+/// growing parser recursion, so the parser checks it before inserting a new
+/// node and rejects deeper trees with an [`ErrorCategory::Limit`]
+/// diagnostic.
+///
+/// The value is chosen so that a tree exactly this deep parses, evaluates
+/// and drops on the interpreter thread created by [`crate::run`], which has
+/// a 64 MiB stack (`INTERPRETER_STACK_BYTES` in `lib.rs`). A debug build
+/// was verified to accept exactly this depth and to recurse no further:
+/// `tests/deep_syntax.rs` runs a 4096-node `+` chain through the public
+/// [`crate::run`] API, and the next deeper tree is rejected before it is
+/// built, so no evaluation or drop can ever see more than this many levels.
+pub const MAX_EXPR_DEPTH: u32 = 4096;
+
+/// An expression under construction together with the depth of its subtree.
+///
+/// Kept private so the public [`Expr`] shape does not change.
+struct ParsedExpr {
+    expr: Expr,
+    depth: u32,
+}
+
+/// Builds an expression node after checking its subtree depth.
+///
+/// `child_depths` are the depths of the node's direct children; an empty
+/// slice means the node is a leaf of depth 1. `error_span` must be the
+/// operator or closing token of the construction, never a default span.
+fn expression_node(
+    span: Span,
+    kind: ExprKind,
+    child_depths: &[u32],
+    error_span: Span,
+) -> ParseResult<ParsedExpr> {
+    let depth = 1 + child_depths.iter().copied().max().unwrap_or(0);
+    if depth > MAX_EXPR_DEPTH {
+        return Err(Diagnostic::new(
+            ErrorCategory::Limit,
+            error_span,
+            format!("expression is too deeply nested; the limit is {MAX_EXPR_DEPTH}"),
+        ));
+    }
+    Ok(ParsedExpr {
+        expr: Expr { kind, span },
+        depth,
+    })
+}
 
 /// Parses MDF source into a [`Program`].
 ///
@@ -178,9 +242,9 @@ impl Parser {
                     return Ok(keyword_stmt(StmtKind::Return(None)));
                 }
                 let value = self.expression()?;
-                let span = start.to(value.span);
+                let span = start.to(value.expr.span);
                 return Ok(Stmt {
-                    kind: StmtKind::Return(Some(value)),
+                    kind: StmtKind::Return(Some(value.expr)),
                     span,
                 });
             }
@@ -208,18 +272,22 @@ impl Parser {
 
         let expr = self.expression()?;
         let Some(op) = self.assign_op() else {
-            let span = expr.span;
+            let span = expr.expr.span;
             return Ok(Stmt {
-                kind: StmtKind::Expr(expr),
+                kind: StmtKind::Expr(expr.expr),
                 span,
             });
         };
         self.advance();
-        let target = into_target(expr)?;
+        let target = into_target(expr.expr)?;
         let value = self.expression()?;
-        let span = start.to(value.span);
+        let span = start.to(value.expr.span);
         Ok(Stmt {
-            kind: StmtKind::Assign { target, op, value },
+            kind: StmtKind::Assign {
+                target,
+                op,
+                value: value.expr,
+            },
             span,
         })
     }
@@ -288,12 +356,12 @@ impl Parser {
 
     fn if_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance().span;
-        let mut branches = vec![(self.expression()?, self.block()?)];
+        let mut branches = vec![(self.expression()?.expr, self.block()?)];
         let mut otherwise = Vec::new();
         loop {
             if self.check_keyword(Keyword::Elif) {
                 self.advance();
-                branches.push((self.expression()?, self.block()?));
+                branches.push((self.expression()?.expr, self.block()?));
             } else if self.check_keyword(Keyword::Else) {
                 self.advance();
                 otherwise = self.block()?;
@@ -322,7 +390,7 @@ impl Parser {
         Ok(Stmt {
             kind: StmtKind::For {
                 variable,
-                iterable,
+                iterable: iterable.expr,
                 body: body?,
             },
             span: start,
@@ -331,49 +399,74 @@ impl Parser {
 
     // ---- expressions --------------------------------------------------
 
-    fn expression(&mut self) -> ParseResult<Expr> {
+    fn expression(&mut self) -> ParseResult<ParsedExpr> {
         self.nested(Self::or_expr)
     }
 
-    fn or_expr(&mut self) -> ParseResult<Expr> {
+    fn or_expr(&mut self) -> ParseResult<ParsedExpr> {
         let mut left = self.and_expr()?;
         while self.check_keyword(Keyword::Or) {
-            self.advance();
+            let operator = self.advance().span;
             let right = self.and_expr()?;
-            left = logical(LogicalOp::Or, left, right);
+            let child_depths = [left.depth, right.depth];
+            let span = left.expr.span.to(right.expr.span);
+            left = expression_node(
+                span,
+                ExprKind::Logical {
+                    op: LogicalOp::Or,
+                    left: Box::new(left.expr),
+                    right: Box::new(right.expr),
+                },
+                &child_depths,
+                operator,
+            )?;
         }
         Ok(left)
     }
 
-    fn and_expr(&mut self) -> ParseResult<Expr> {
+    fn and_expr(&mut self) -> ParseResult<ParsedExpr> {
         let mut left = self.not_expr()?;
         while self.check_keyword(Keyword::And) {
-            self.advance();
+            let operator = self.advance().span;
             let right = self.not_expr()?;
-            left = logical(LogicalOp::And, left, right);
+            let child_depths = [left.depth, right.depth];
+            let span = left.expr.span.to(right.expr.span);
+            left = expression_node(
+                span,
+                ExprKind::Logical {
+                    op: LogicalOp::And,
+                    left: Box::new(left.expr),
+                    right: Box::new(right.expr),
+                },
+                &child_depths,
+                operator,
+            )?;
         }
         Ok(left)
     }
 
-    fn not_expr(&mut self) -> ParseResult<Expr> {
+    fn not_expr(&mut self) -> ParseResult<ParsedExpr> {
         if !self.check_keyword(Keyword::Not) {
             return self.comparison();
         }
         let start = self.advance().span;
         let operand = self.nested(Self::not_expr)?;
-        let span = start.to(operand.span);
-        Ok(Expr {
-            kind: ExprKind::Not(Box::new(operand)),
+        let span = start.to(operand.expr.span);
+        let child_depths = [operand.depth];
+        expression_node(
             span,
-        })
+            ExprKind::Not(Box::new(operand.expr)),
+            &child_depths,
+            start,
+        )
     }
 
-    fn comparison(&mut self) -> ParseResult<Expr> {
+    fn comparison(&mut self) -> ParseResult<ParsedExpr> {
         let left = self.additive()?;
         let Some(op) = self.compare_op() else {
             return Ok(left);
         };
-        self.advance();
+        let operator = self.advance().span;
         let right = self.additive()?;
         if self.compare_op().is_some() {
             return Err(unsupported(
@@ -381,15 +474,18 @@ impl Parser {
                 "chained comparisons are not supported; combine them with 'and'",
             ));
         }
-        let span = left.span.to(right.span);
-        Ok(Expr {
-            kind: ExprKind::Compare {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            },
+        let child_depths = [left.depth, right.depth];
+        let span = left.expr.span.to(right.expr.span);
+        expression_node(
             span,
-        })
+            ExprKind::Compare {
+                op,
+                left: Box::new(left.expr),
+                right: Box::new(right.expr),
+            },
+            &child_depths,
+            operator,
+        )
     }
 
     fn compare_op(&self) -> Option<CompareOp> {
@@ -404,7 +500,7 @@ impl Parser {
         }
     }
 
-    fn additive(&mut self) -> ParseResult<Expr> {
+    fn additive(&mut self) -> ParseResult<ParsedExpr> {
         let mut left = self.multiplicative()?;
         loop {
             let op = match self.peek().kind {
@@ -412,13 +508,24 @@ impl Parser {
                 TokenKind::Op(Op::Minus) => BinaryOp::Sub,
                 _ => return Ok(left),
             };
-            self.advance();
+            let operator = self.advance().span;
             let right = self.multiplicative()?;
-            left = binary(op, left, right);
+            let child_depths = [left.depth, right.depth];
+            let span = left.expr.span.to(right.expr.span);
+            left = expression_node(
+                span,
+                ExprKind::Binary {
+                    op,
+                    left: Box::new(left.expr),
+                    right: Box::new(right.expr),
+                },
+                &child_depths,
+                operator,
+            )?;
         }
     }
 
-    fn multiplicative(&mut self) -> ParseResult<Expr> {
+    fn multiplicative(&mut self) -> ParseResult<ParsedExpr> {
         let mut left = self.unary()?;
         loop {
             let op = match self.peek().kind {
@@ -428,13 +535,24 @@ impl Parser {
                 TokenKind::Op(Op::Percent) => BinaryOp::Mod,
                 _ => return Ok(left),
             };
-            self.advance();
+            let operator = self.advance().span;
             let right = self.unary()?;
-            left = binary(op, left, right);
+            let child_depths = [left.depth, right.depth];
+            let span = left.expr.span.to(right.expr.span);
+            left = expression_node(
+                span,
+                ExprKind::Binary {
+                    op,
+                    left: Box::new(left.expr),
+                    right: Box::new(right.expr),
+                },
+                &child_depths,
+                operator,
+            )?;
         }
     }
 
-    fn unary(&mut self) -> ParseResult<Expr> {
+    fn unary(&mut self) -> ParseResult<ParsedExpr> {
         let op = match self.peek().kind {
             TokenKind::Op(Op::Minus) => UnaryOp::Neg,
             TokenKind::Op(Op::Plus) => UnaryOp::Pos,
@@ -442,85 +560,106 @@ impl Parser {
         };
         let start = self.advance().span;
         let operand = self.nested(Self::unary)?;
-        let span = start.to(operand.span);
-        Ok(Expr {
-            kind: ExprKind::Unary {
-                op,
-                operand: Box::new(operand),
-            },
+        let span = start.to(operand.expr.span);
+        let child_depths = [operand.depth];
+        expression_node(
             span,
-        })
+            ExprKind::Unary {
+                op,
+                operand: Box::new(operand.expr),
+            },
+            &child_depths,
+            start,
+        )
     }
 
-    fn postfix(&mut self) -> ParseResult<Expr> {
+    fn postfix(&mut self) -> ParseResult<ParsedExpr> {
         let mut expr = self.primary()?;
         loop {
             if self.eat_op(Op::Dot) {
                 let (name, end) = self.expect_name("an attribute name")?;
-                let span = expr.span.to(end);
-                expr = Expr {
-                    kind: ExprKind::Attribute {
-                        object: Box::new(expr),
+                let span = expr.expr.span.to(end);
+                let child_depths = [expr.depth];
+                expr = expression_node(
+                    span,
+                    ExprKind::Attribute {
+                        object: Box::new(expr.expr),
                         name,
                     },
-                    span,
-                };
+                    &child_depths,
+                    end,
+                )?;
             } else if self.eat_op(Op::LBracket) {
                 let index = self.expression()?;
                 let end = self.expect_op(Op::RBracket, "']'")?;
-                let span = expr.span.to(end);
-                expr = Expr {
-                    kind: ExprKind::Index {
-                        object: Box::new(expr),
-                        index: Box::new(index),
-                    },
+                let span = expr.expr.span.to(end);
+                let child_depths = [expr.depth, index.depth];
+                expr = expression_node(
                     span,
-                };
+                    ExprKind::Index {
+                        object: Box::new(expr.expr),
+                        index: Box::new(index.expr),
+                    },
+                    &child_depths,
+                    end,
+                )?;
             } else if self.eat_op(Op::LParen) {
                 let args = self.arguments()?;
                 let end = self.expect_op(Op::RParen, "')'")?;
-                let span = expr.span.to(end);
-                expr = Expr {
-                    kind: ExprKind::Call {
-                        callee: Box::new(expr),
-                        args,
-                    },
+                let span = expr.expr.span.to(end);
+                let mut child_depths = Vec::with_capacity(args.len() + 1);
+                child_depths.push(expr.depth);
+                child_depths.extend(args.iter().map(|(_, value)| value.depth));
+                let arguments = args
+                    .into_iter()
+                    .map(|(name, value)| Argument {
+                        name,
+                        value: value.expr,
+                    })
+                    .collect();
+                expr = expression_node(
                     span,
-                };
+                    ExprKind::Call {
+                        callee: Box::new(expr.expr),
+                        args: arguments,
+                    },
+                    &child_depths,
+                    end,
+                )?;
             } else {
                 return Ok(expr);
             }
         }
     }
 
-    fn arguments(&mut self) -> ParseResult<Vec<Argument>> {
-        let mut args: Vec<Argument> = Vec::new();
+    fn arguments(&mut self) -> ParseResult<Vec<(Option<Rc<str>>, ParsedExpr)>> {
+        let mut args: Vec<(Option<Rc<str>>, ParsedExpr)> = Vec::new();
         while !self.check_op(Op::RParen) {
             let is_keyword = matches!(self.peek().kind, TokenKind::Name(_))
                 && self.peek_kind_at(1) == Some(&TokenKind::Op(Op::Assign));
             if is_keyword {
                 let (name, span) = self.expect_name("an argument name")?;
                 self.advance();
-                if args.iter().any(|a| a.name.as_ref() == Some(&name)) {
+                if args
+                    .iter()
+                    .any(|(existing, _)| existing.as_ref() == Some(&name))
+                {
                     return Err(parse_error(
                         span,
                         format!("keyword argument '{name}' repeated"),
                     ));
                 }
                 let value = self.expression()?;
-                args.push(Argument {
-                    name: Some(name),
-                    value,
-                });
+                args.push((Some(name), value));
             } else {
                 let value = self.expression()?;
-                if args.iter().any(|a| a.name.is_some()) {
+                if args.iter().any(|(name, _)| name.is_some()) {
                     return Err(parse_error(
-                        value.span,
+                        value.expr.span,
                         "positional argument follows keyword argument",
                     ));
                 }
-                args.push(Argument { name: None, value });
+                args.push((None, value));
             }
             if !self.eat_op(Op::Comma) {
                 break;
@@ -529,12 +668,15 @@ impl Parser {
         Ok(args)
     }
 
-    fn primary(&mut self) -> ParseResult<Expr> {
+    fn primary(&mut self) -> ParseResult<ParsedExpr> {
         let token = self.peek().clone();
         let literal = |kind| {
-            Ok(Expr {
-                kind,
-                span: token.span,
+            Ok(ParsedExpr {
+                expr: Expr {
+                    kind,
+                    span: token.span,
+                },
+                depth: 1,
             })
         };
         match &token.kind {
@@ -567,10 +709,10 @@ impl Parser {
                 self.advance();
                 let items = self.expression_list(Op::RBracket)?;
                 let end = self.expect_op(Op::RBracket, "']'")?;
-                Ok(Expr {
-                    kind: ExprKind::List(items),
-                    span: token.span.to(end),
-                })
+                let span = token.span.to(end);
+                let child_depths: Vec<u32> = items.iter().map(|item| item.depth).collect();
+                let values = items.into_iter().map(|item| item.expr).collect();
+                expression_node(span, ExprKind::List(values), &child_depths, end)
             }
             TokenKind::Op(Op::LBrace) => Err(unsupported(
                 token.span,
@@ -585,34 +727,40 @@ impl Parser {
     }
 
     /// Parses `()`, `(expr)` or a tuple `(a, b, ...)`.
-    fn parenthesized(&mut self) -> ParseResult<Expr> {
+    fn parenthesized(&mut self) -> ParseResult<ParsedExpr> {
         let start = self.advance().span;
         if let Ok(end) = self.expect_op(Op::RParen, "')'") {
-            return Ok(Expr {
-                kind: ExprKind::Tuple(Vec::new()),
-                span: start.to(end),
+            return Ok(ParsedExpr {
+                expr: Expr {
+                    kind: ExprKind::Tuple(Vec::new()),
+                    span: start.to(end),
+                },
+                depth: 1,
             });
         }
         let first = self.expression()?;
         if !self.eat_op(Op::Comma) {
             let end = self.expect_op(Op::RParen, "')'")?;
-            return Ok(Expr {
-                span: start.to(end),
-                ..first
+            return Ok(ParsedExpr {
+                expr: Expr {
+                    span: start.to(end),
+                    ..first.expr
+                },
+                depth: first.depth,
             });
         }
         let mut items = vec![first];
         items.extend(self.expression_list(Op::RParen)?);
         let end = self.expect_op(Op::RParen, "')'")?;
-        Ok(Expr {
-            kind: ExprKind::Tuple(items),
-            span: start.to(end),
-        })
+        let span = start.to(end);
+        let child_depths: Vec<u32> = items.iter().map(|item| item.depth).collect();
+        let values = items.into_iter().map(|item| item.expr).collect();
+        expression_node(span, ExprKind::Tuple(values), &child_depths, end)
     }
 
     /// Parses comma-separated expressions up to (not including) `close`,
     /// allowing a trailing comma.
-    fn expression_list(&mut self, close: Op) -> ParseResult<Vec<Expr>> {
+    fn expression_list(&mut self, close: Op) -> ParseResult<Vec<ParsedExpr>> {
         let mut items = Vec::new();
         while !self.check_op(close) {
             items.push(self.expression()?);
@@ -639,30 +787,6 @@ fn into_target(expr: Expr) -> ParseResult<Target> {
             expr.span,
             "cannot assign to this expression; assign to a name, attribute or item",
         )),
-    }
-}
-
-fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    let span = left.span.to(right.span);
-    Expr {
-        kind: ExprKind::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        },
-        span,
-    }
-}
-
-fn logical(op: LogicalOp, left: Expr, right: Expr) -> Expr {
-    let span = left.span.to(right.span);
-    Expr {
-        kind: ExprKind::Logical {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        },
-        span,
     }
 }
 
@@ -853,11 +977,35 @@ x[0] = 1
         }
     }
 
+    fn flat_add(terms: u32) -> String {
+        let mut source = String::from("1");
+        for _ in 1..terms {
+            source.push_str(" + 1");
+        }
+        source
+    }
+
     #[test]
     fn deep_nesting_is_a_limit_error() {
         let source = format!("x = {}1{}", "(".repeat(500), ")".repeat(500));
-        assert_eq!(parse(&source).unwrap_err().category, ErrorCategory::Limit);
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.category, ErrorCategory::Limit);
+        assert!(error.message.contains("nested more than"), "{error}");
         let source = format!("x = {}1", "-".repeat(500));
-        assert_eq!(parse(&source).unwrap_err().category, ErrorCategory::Limit);
+        let error = parse(&source).unwrap_err();
+        assert_eq!(error.category, ErrorCategory::Limit);
+        assert!(error.message.contains("nested more than"), "{error}");
+    }
+
+    #[test]
+    fn expression_depth_limit_is_enforced() {
+        let at_limit = format!("x = {}\n", flat_add(MAX_EXPR_DEPTH));
+        assert!(parse(&at_limit).is_ok());
+
+        let past_limit = format!("x = {}\n", flat_add(MAX_EXPR_DEPTH + 1));
+        let error = parse(&past_limit).unwrap_err();
+        assert_eq!(error.category, ErrorCategory::Limit);
+        assert!(error.message.contains("too deeply nested"), "{error}");
+        assert!(error.span.line >= 1 && error.span.column >= 1, "{error}");
     }
 }

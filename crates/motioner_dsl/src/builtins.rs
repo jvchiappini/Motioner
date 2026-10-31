@@ -7,30 +7,46 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 use crate::host::{as_integer, bind, f64_from_i64, CallArgs, HostError, HostResult};
-use crate::limits::Limits;
+use crate::limits::{Budget, Limits};
 use crate::value::{Builtin, RangeValue, Value};
 
 /// Calls a pure builtin. Scene builtins must not be passed here.
-pub(crate) fn call(builtin: Builtin, args: CallArgs, limits: &Limits) -> HostResult<Value> {
+///
+/// Bulk builtins charge one step per item processed and `str()` charges
+/// the produced string bytes, so their work is covered by the budget.
+///
+/// # Errors
+///
+/// Returns a type, value or limit error from the builtin.
+pub(crate) fn call(
+    builtin: Builtin,
+    args: CallArgs,
+    limits: &Limits,
+    budget: &mut Budget,
+) -> HostResult<Value> {
     match builtin {
         Builtin::Range => range(args),
         Builtin::Len => {
             let bound = bind("len", &["value"], 1, args)?;
-            let length = length(bound.get(0).unwrap_or(&Value::None))?;
+            let length = length(bound.get(0).unwrap_or(&Value::None), budget)?;
             Ok(Value::Number(f64_from_i64(length)))
         }
-        Builtin::Min => extreme("min", args, limits, Ordering::Less),
-        Builtin::Max => extreme("max", args, limits, Ordering::Greater),
+        Builtin::Min => extreme("min", args, limits, budget, Ordering::Less),
+        Builtin::Max => extreme("max", args, limits, budget, Ordering::Greater),
         Builtin::Abs => unary_math("abs", args, f64::abs),
         Builtin::Round => round(args),
         Builtin::Str => {
             let bound = bind("str", &["value"], 1, args)?;
-            let text = bound.get(0).map_or_else(String::new, Value::display);
-            check_string_len(text.len(), limits)?;
+            let text = match bound.get(0) {
+                Some(value) => value.display(limits, budget)?,
+                None => String::new(),
+            };
+            limits.check_string_len(text.len())?;
+            budget.charge_string(text.len())?;
             Ok(Value::Str(Rc::from(text)))
         }
-        Builtin::Int => convert_number("int", args, f64::trunc),
-        Builtin::Float => convert_number("float", args, |v| v),
+        Builtin::Int => convert_number("int", args, budget, f64::trunc),
+        Builtin::Float => convert_number("float", args, budget, |v| v),
         Builtin::Sin => unary_math("sin", args, f64::sin),
         Builtin::Cos => unary_math("cos", args, f64::cos),
         Builtin::Lerp => {
@@ -41,6 +57,9 @@ pub(crate) fn call(builtin: Builtin, args: CallArgs, limits: &Limits) -> HostRes
         Builtin::Clamp => {
             let bound = bind("clamp", &["value", "low", "high"], 3, args)?;
             let (value, low, high) = (bound.number(0)?, bound.number(1)?, bound.number(2)?);
+            if low.is_nan() || high.is_nan() {
+                return Err(HostError::value_error("clamp(): bounds must not be NaN"));
+            }
             if low > high {
                 return Err(HostError::value_error(
                     "clamp(): 'low' must not exceed 'high'",
@@ -54,32 +73,21 @@ pub(crate) fn call(builtin: Builtin, args: CallArgs, limits: &Limits) -> HostRes
     }
 }
 
-/// Fails when a string would exceed the configured length limit.
-pub(crate) fn check_string_len(bytes: usize, limits: &Limits) -> HostResult<()> {
-    if bytes > limits.max_string_len {
-        return Err(HostError::limit(format!(
-            "string length limit of {} bytes exceeded",
-            limits.max_string_len
-        )));
-    }
-    Ok(())
-}
-
-/// Fails when a list would exceed the configured length limit.
-pub(crate) fn check_list_len(items: usize, limits: &Limits) -> HostResult<()> {
-    if items > limits.max_list_len {
-        return Err(HostError::limit(format!(
-            "list length limit of {} items exceeded",
-            limits.max_list_len
-        )));
-    }
-    Ok(())
-}
-
 /// Number of items in a string (characters), list, tuple or range.
-pub(crate) fn length(value: &Value) -> HostResult<i64> {
+///
+/// Counting the characters of a string scans its bytes, so that scan
+/// charges one step per byte before it runs.
+///
+/// # Errors
+///
+/// Returns a type error for values without a length or a limit error when
+/// the step budget cannot cover the scan.
+pub(crate) fn length(value: &Value, budget: &mut Budget) -> HostResult<i64> {
     let count = match value {
-        Value::Str(s) => s.chars().count(),
+        Value::Str(s) => {
+            budget.charge_items(s.len())?;
+            s.chars().count()
+        }
         Value::List(items) => items.borrow().len(),
         Value::Tuple(items) => items.len(),
         Value::Range(range) => return Ok(range.len()),
@@ -94,17 +102,33 @@ pub(crate) fn length(value: &Value) -> HostResult<i64> {
 }
 
 /// Materializes an iterable into its items, in iteration order.
-pub(crate) fn items(value: &Value, limits: &Limits) -> HostResult<Vec<Value>> {
+///
+/// The number of items is charged before the vector is allocated.
+///
+/// # Errors
+///
+/// Returns a type error for non-iterables or a limit error when a cap or
+/// the step budget is exceeded.
+pub(crate) fn items(value: &Value, limits: &Limits, budget: &mut Budget) -> HostResult<Vec<Value>> {
     match value {
-        Value::List(items) => Ok(items.borrow().clone()),
-        Value::Tuple(items) => Ok(items.to_vec()),
-        Value::Str(s) => Ok(s
-            .chars()
-            .map(|c| Value::Str(Rc::from(c.to_string())))
-            .collect()),
+        Value::List(items) | Value::Tuple(items) => {
+            let items = items.borrow();
+            budget.charge_items(items.len())?;
+            Ok(items.clone())
+        }
+        Value::Str(s) => {
+            let count = s.chars().count();
+            limits.check_list_len(count)?;
+            budget.charge_items(count)?;
+            Ok(s.chars()
+                .map(|c| Value::Str(Rc::from(c.to_string())))
+                .collect())
+        }
         Value::Range(range) => {
             let len = range.len();
-            check_list_len(usize::try_from(len).unwrap_or(usize::MAX), limits)?;
+            let count = usize::try_from(len).unwrap_or(usize::MAX);
+            limits.check_list_len(count)?;
+            budget.charge_items(count)?;
             Ok((0..len)
                 .map(|i| Value::Number(f64_from_i64(range.at(i))))
                 .collect())
@@ -161,21 +185,34 @@ fn round(args: CallArgs) -> HostResult<Value> {
     // `digits` is within +/-308, so the exponent conversion is exact.
     #[allow(clippy::cast_possible_truncation)]
     let scale = 10f64.powi(digits as i32);
-    Ok(Value::Number((x * scale).round_ties_even() / scale))
+    let scaled = x * scale;
+    if !scaled.is_finite() {
+        // Python returns the input unchanged when scaling overflows.
+        return Ok(Value::Number(x));
+    }
+    Ok(Value::Number(scaled.round_ties_even() / scale))
 }
 
 /// `int()` and `float()`: numbers, booleans and numeric strings.
-fn convert_number(name: &str, args: CallArgs, finish: impl Fn(f64) -> f64) -> HostResult<Value> {
+/// `int()` and `float()` conversion; parsing a string charges its bytes.
+fn convert_number(
+    name: &str,
+    args: CallArgs,
+    budget: &mut Budget,
+    finish: impl Fn(f64) -> f64,
+) -> HostResult<Value> {
     let bound = bind(name, &["value"], 1, args)?;
     let number = match bound.get(0) {
         Some(Value::Number(n)) => *n,
         Some(Value::Bool(b)) => f64::from(u8::from(*b)),
-        Some(Value::Str(s)) => s
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite())
-            .ok_or_else(|| HostError::value_error(format!("{name}(): {s:?} is not a number")))?,
+        Some(Value::Str(s)) => {
+            budget.charge_string(s.len())?;
+            s.trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| HostError::value_error(format!("{name}(): {s:?} is not a number")))?
+        }
         Some(other) => {
             return Err(HostError::type_error(format!(
                 "{name}() cannot convert a {}",
@@ -188,22 +225,31 @@ fn convert_number(name: &str, args: CallArgs, finish: impl Fn(f64) -> f64) -> Ho
 }
 
 /// `min()` / `max()` over arguments or a single iterable.
-fn extreme(name: &str, args: CallArgs, limits: &Limits, wanted: Ordering) -> HostResult<Value> {
+///
+/// Each candidate processed charges one step.
+fn extreme(
+    name: &str,
+    args: CallArgs,
+    limits: &Limits,
+    budget: &mut Budget,
+    wanted: Ordering,
+) -> HostResult<Value> {
     if !args.keywords.is_empty() {
         return Err(HostError::type_error(format!(
             "{name}() takes no keyword arguments"
         )));
     }
     let candidates = match args.positional.as_slice() {
-        [single] => items(single, limits)?,
+        [single] => items(single, limits, budget)?,
         _ => args.positional,
     };
     let mut best: Option<Value> = None;
     for candidate in candidates {
+        budget.charge(1)?;
         best = Some(match best {
             None => candidate,
             Some(current) => {
-                if compare(&candidate, &current)? == wanted {
+                if compare(&candidate, &current, budget)? == wanted {
                     candidate
                 } else {
                     current
@@ -214,13 +260,17 @@ fn extreme(name: &str, args: CallArgs, limits: &Limits, wanted: Ordering) -> Hos
     best.ok_or_else(|| HostError::value_error(format!("{name}() of an empty sequence")))
 }
 
-/// Orders two numbers or two strings.
-pub(crate) fn compare(a: &Value, b: &Value) -> HostResult<Ordering> {
+/// Orders two numbers or two strings; comparing strings charges the
+/// bytes it may scan.
+pub(crate) fn compare(a: &Value, b: &Value, budget: &mut Budget) -> HostResult<Ordering> {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x
             .partial_cmp(y)
             .ok_or_else(|| HostError::value_error("cannot order NaN")),
-        (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),
+        (Value::Str(x), Value::Str(y)) => {
+            budget.charge_string(x.len().min(y.len()))?;
+            Ok(x.cmp(y))
+        }
         _ => Err(HostError::type_error(format!(
             "cannot compare {} with {}",
             a.type_name(),

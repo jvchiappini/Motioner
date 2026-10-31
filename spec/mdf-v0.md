@@ -70,6 +70,8 @@ there is no separate integer division rule: `/` always produces a float,
 - Expression statement: a call or property assignment.
 - Property assignment: `handle.property = expression`.
 - Indexed assignment: `list[index] = expression`, `dict[key] = expression`.
+  A list may never contain itself, directly or indirectly; such an
+  assignment is rejected with a value error.
 - `def name(params):` followed by an indented block.
 - `return expression` or `return`.
 - `if condition:` / `elif` / `else`.
@@ -204,10 +206,15 @@ conflicts with the project's DRY standard.
 
 Configurable defaults for v0:
 
-- Maximum statements executed: 10,000,000.
+- Maximum execution steps: 10,000,000. One step is charged for each
+  executed statement, each collection item visited, copied or materialized,
+  and each 64 bytes of string produced.
 - Maximum function call depth: 256.
 - Maximum nodes created: 1,000,000.
 - Maximum string length: 16 MiB.
+- Maximum list length: 1,000,000 items.
+- Maximum value nesting depth: 100 levels.
+- Maximum expression depth: 4096 levels (`MAX_EXPR_DEPTH`).
 - Maximum script wall time: 5 seconds.
 - Maximum memory: 256 MiB.
 

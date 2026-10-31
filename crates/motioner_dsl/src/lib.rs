@@ -34,7 +34,7 @@ pub use diagnostic::{Diagnostic, ErrorCategory, Span, StackFrame};
 pub use interpreter::execute;
 pub use lexer::tokenize;
 pub use limits::Limits;
-pub use parser::parse;
+pub use parser::{parse, MAX_EXPR_DEPTH};
 pub use token::{Keyword, Op, Token, TokenKind};
 
 use motioner_core::Document;

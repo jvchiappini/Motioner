@@ -244,14 +244,15 @@ fn programs_must_create_a_composition_first() {
 #[test]
 fn limits_stop_runaway_programs() {
     let tight = Limits {
-        max_statements: 1_000,
+        max_steps: 1_000,
         max_call_depth: 16,
         max_nodes: 10,
         max_string_len: 64,
         max_list_len: 8,
+        max_value_depth: 100,
     };
     for (body, needle) in [
-        ("for i in range(1000000):\n    x = i\n", "statement limit"),
+        ("for i in range(1000000):\n    x = i\n", "step limit"),
         ("def f(n):\n    return f(n + 1)\nf(0)\n", "call depth"),
         ("for i in range(20):\n    rect(1, 1)\n", "node limit"),
         (
