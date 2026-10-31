@@ -1,0 +1,14 @@
+[package]
+name = "motioner_render"
+description = "FerrousEngine adapter, compositor and render graph for Motioner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_eval.workspace = true
+
+[lints]
+workspace = true

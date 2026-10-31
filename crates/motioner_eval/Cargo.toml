@@ -1,0 +1,13 @@
+[package]
+name = "motioner_eval"
+description = "Deterministic timeline evaluation and render-plan compilation for Motioner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+
+[lints]
+workspace = true

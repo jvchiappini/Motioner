@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/motioner_core",
+    "crates/motioner_eval",
+    "crates/motioner_render",
+    "crates/motioner_io",
+    "crates/motioner_app",
+    "crates/motioner_testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+repository = "https://github.com/jvchiappini/Motioner"
+
+[workspace.dependencies]
+motioner_core = { path = "crates/motioner_core" }
+motioner_eval = { path = "crates/motioner_eval" }
+motioner_render = { path = "crates/motioner_render" }
+motioner_io = { path = "crates/motioner_io" }
+motioner_testkit = { path = "crates/motioner_testkit" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unused = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

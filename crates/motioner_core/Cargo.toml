@@ -1,0 +1,10 @@
+[package]
+name = "motioner_core"
+description = "Document model, stable IDs, typed commands and undo for Motioner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

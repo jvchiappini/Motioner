@@ -1,0 +1,13 @@
+[package]
+name = "motioner_io"
+description = "Native MDF project format, asset store and ffmpeg export for Motioner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "motioner_testkit"
+description = "Fixtures, golden frames, benchmarks and mocks for Motioner tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_eval.workspace = true
+motioner_io.workspace = true
+
+[lints]
+workspace = true

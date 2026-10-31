@@ -1,0 +1,16 @@
+[package]
+name = "motioner_app"
+description = "Motioner desktop application binary and wiring."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_eval.workspace = true
+motioner_io.workspace = true
+motioner_render.workspace = true
+
+[lints]
+workspace = true
