@@ -10,9 +10,9 @@
 |---|---|---|---|---|
 | PHASE-0001 | in_progress | 2026-10-31 -  | 3 | phases/PHASE-0001.md |
 | PHASE-0002 | not_started | 2026-10-31 -  | 3 | phases/PHASE-0002.md |
-| PHASE-0003 | not_started | 2026-10-31 -  | 3 | phases/PHASE-0003.md |
-| PHASE-0004 | not_started | 2026-10-31 -  | 3 | phases/PHASE-0004.md |
-| PHASE-0005 | not_started | 2026-10-31 -  | 3 | phases/PHASE-0005.md |
+| PHASE-0003 | not_started | 2026-10-31 -  | 5 | phases/PHASE-0003.md |
+| PHASE-0004 | not_started | 2026-10-31 -  | 5 | phases/PHASE-0004.md |
+| PHASE-0005 | not_started | 2026-10-31 -  | 5 | phases/PHASE-0005.md |
 
 ## Initiative overview
 
@@ -33,6 +33,12 @@
 | INITIATIVE-0013 | PHASE-0005 | backlog | critica | 0 | initiatives/INITIATIVE-0013.md |
 | INITIATIVE-0014 | PHASE-0005 | backlog | critica | 1 | initiatives/INITIATIVE-0014.md |
 | INITIATIVE-0015 | PHASE-0005 | backlog | alta | 1 | initiatives/INITIATIVE-0015.md |
+| INITIATIVE-0016 | PHASE-0003 | backlog | alta | 0 | initiatives/INITIATIVE-0016.md |
+| INITIATIVE-0017 | PHASE-0003 | backlog | alta | 0 | initiatives/INITIATIVE-0017.md |
+| INITIATIVE-0018 | PHASE-0004 | backlog | alta | 0 | initiatives/INITIATIVE-0018.md |
+| INITIATIVE-0019 | PHASE-0004 | backlog | media | 0 | initiatives/INITIATIVE-0019.md |
+| INITIATIVE-0020 | PHASE-0005 | backlog | critica | 0 | initiatives/INITIATIVE-0020.md |
+| INITIATIVE-0021 | PHASE-0005 | backlog | alta | 1 | initiatives/INITIATIVE-0021.md |
 
 ## Milestone overview
 
@@ -46,4 +52,5 @@
 | M-0006 | INITIATIVE-0011 |  | backlog | milestones/M-0006.md |
 | M-0007 | INITIATIVE-0014 |  | backlog | milestones/M-0007.md |
 | M-0008 | INITIATIVE-0015 |  | backlog | milestones/M-0008.md |
+| M-0009 | INITIATIVE-0021 |  | backlog | milestones/M-0009.md |
 

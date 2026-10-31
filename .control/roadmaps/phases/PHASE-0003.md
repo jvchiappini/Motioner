@@ -1,6 +1,6 @@
 ---
 id: PHASE-0003
-nombre: "Editor UI and 2D motion graphics"
+nombre: "Editor, NLE and audio"
 orden: 3
 estado: not_started
 inicio: 2026-10-31
@@ -21,9 +21,13 @@ inspector and transport controls. On the rendering side, deliver the 2D
 motion-graphics feature set (shapes, text, images, solids, basic effects)
 and the first MP4 export.
 
-The phase ends when a 10-second 1080p 2D composition can be authored in
-the UI, previewed interactively and exported to a video that matches the
-preview.
+The phase also adds NLE editing and audio: video and audio clips can be
+imported, cut, trimmed and arranged, and stereo tracks can be mixed with
+basic effects.
+
+The phase ends when a 10-second 1080p composition can be authored in
+the UI, previewed interactively, edited as NLE with audio, and exported
+to a video that matches the preview.
 
 ## Goals
 
@@ -40,6 +44,8 @@ preview.
 - Timeline with layers, keyframes, easing editor and playhead.
 - 2D layers: solid, shape, path, text, image, precomp placeholder.
 - Basic effects: transform, opacity, blur, glow, color correction.
+- NLE: import, cut, trim, slip, slide and transitions.
+- Audio: stereo mixer, volume, pan, fades, EQ, compressor and limiter.
 - MP4 export via ffmpeg from the same evaluated frames.
 
 ### Out of scope
@@ -74,6 +80,8 @@ preview.
       undoable.
 - [ ] Exported MP4 frames match the preview frames within the agreed
       tolerance.
+- [ ] Video and audio clips can be cut, trimmed and arranged in sync.
+- [ ] The audio mixer applies volume, pan, fades and basic effects.
 - [ ] The editor opens a project and restores its workspace layout.
 
 ## Initiatives
@@ -81,6 +89,8 @@ preview.
 - INITIATIVE-0007 - Editor shell and panels
 - INITIATIVE-0008 - Viewport, timeline and real-time preview
 - INITIATIVE-0009 - 2D compositor, typography and MP4 export
+- INITIATIVE-0016 - NLE timeline and media editing
+- INITIATIVE-0017 - Audio engine and mixer
 
 ## Notes
 

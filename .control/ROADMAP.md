@@ -9,22 +9,23 @@ Strategy: ship a deterministic 2D vertical slice first, then add 3D and
 compositing, then the code and AI layers that define the product. Every
 phase keeps preview and export on the same evaluator.
 
-## Scope expansion (2026-10-31)
+## 1.0 scope (confirmed 2026-10-31)
 
-The product scope grew beyond the original five phases. Confirmed work
-that still needs roadmap placement after the 1.0 scope is agreed
-(REF-0003):
+Windows-only and 1080p-first:
 
-- NLE editing: cut, trim and arrange video and audio.
-- Full audio mixer with effects.
-- Node graph compositing.
-- Advanced 3D: skeletal animation, GPU particles, physics.
-- AI automatic iteration on rendered previews.
-- YouTube upload and delivery.
-- Public/free distribution with a revenue path.
+- 2D motion graphics, AE-style timeline, masks, mattes, precomps.
+- NLE: cut, trim, arrange, transitions and sync for video and audio.
+- Audio: stereo mixer with volume, pan, fades and basic effects.
+- 3D: glTF, cameras, lights, PBR, skeletal animation, GPU particles.
+- Node graph as an alternate compositing view.
+- Python-like executable MDF code with loops and control flow.
+- AI chat with preview rendering, visual critique and automatic
+  iteration; human approval for the final render.
+- MP4 and PNG export; the user downloads and uploads to YouTube manually.
 
-The phase table below is the original plan and will be revised. Do not
-treat it as the final sequence for the new scope.
+Post-1.0: 1440p/4K, rigid-body physics, cloth/fluids, color grading,
+advanced audio mastering, HDR, macOS/Linux, plugin API, collaboration,
+cloud rendering.
 
 ---
 
@@ -34,9 +35,9 @@ treat it as the final sequence for the new scope.
 |---|---|---|---|
 | PHASE-0001 | in_progress | Foundations and contracts | [details](roadmaps/phases/PHASE-0001.md) |
 | PHASE-0002 | not_started | Core document and animation engine | [details](roadmaps/phases/PHASE-0002.md) |
-| PHASE-0003 | not_started | Editor UI and 2D motion graphics | [details](roadmaps/phases/PHASE-0003.md) |
-| PHASE-0004 | not_started | 3D, effects and compositing | [details](roadmaps/phases/PHASE-0004.md) |
-| PHASE-0005 | not_started | Code, AI and production pipeline | [details](roadmaps/phases/PHASE-0005.md) |
+| PHASE-0003 | not_started | Editor, NLE and audio | [details](roadmaps/phases/PHASE-0003.md) |
+| PHASE-0004 | not_started | 3D, node graph and simulation | [details](roadmaps/phases/PHASE-0004.md) |
+| PHASE-0005 | not_started | Code, AI and 1.0 delivery | [details](roadmaps/phases/PHASE-0005.md) |
 
 ### Phase 1: Foundations and contracts
 
@@ -88,6 +89,7 @@ render queue and performance hardening.
 | M-0006 | 4 | 3D layer composited over 2D with effects | [details](roadmaps/milestones/M-0006.md) |
 | M-0007 | 5 | AI creates a composition from a prompt | [details](roadmaps/milestones/M-0007.md) |
 | M-0008 | 5 | Thirty-second 1080p render with caching | [details](roadmaps/milestones/M-0008.md) |
+| M-0009 | 5 | 1.0 release candidate | [details](roadmaps/milestones/M-0009.md) |
 
 ---
 
@@ -105,16 +107,16 @@ render queue and performance hardening.
 
 ## Remaining decisions
 
-- 1.0 scope staging versus full parity (REF-0003 section 7).
-- License and revenue model.
-- Asset and AI-provider licensing policy.
-- MDF syntax, visible IDs and comment preservation.
-- Node graph role and its relation to the layer timeline.
-- AI privacy, key storage and automatic iteration budgets.
-- NLE and audio depth.
-- Physics and particle engine choices.
-- YouTube direct upload versus manual upload.
+- MDF semantics: program-first versus document with script blocks
+  (D-0011).
+- Custom Python-like DSL versus embedded Python.
+- LaTeX/math typesetting to surpass Manim.
+- Revenue model details (D-0015).
+- Automatic iteration budgets: iterations, time and cost.
+- Audio effects included in 1.0 beyond volume/pan/fades.
 - UI language and packaging.
+- Rigid-body physics strictly post-1.0.
+- Node graph depth in 1.0.
 - Engine and GUIMaker pinning mechanism.
 - GUIMaker revision and widget contribution boundary.
 - Script runtime implementation for D-0009.

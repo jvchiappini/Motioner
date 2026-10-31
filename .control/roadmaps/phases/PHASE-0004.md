@@ -1,6 +1,6 @@
 ---
 id: PHASE-0004
-nombre: "3D, effects and compositing"
+nombre: "3D, node graph and simulation"
 orden: 4
 estado: not_started
 inicio: 2026-10-31
@@ -20,9 +20,13 @@ plugging FerrousEngine's scene, PBR renderer, cameras and lights into the
 composition pipeline, and by adding a real compositing graph with layer
 buffers, masks, mattes and effects.
 
+It also adds the node graph as an alternate view of the composition,
+GPU particles, and the foundation for physics. Rigid-body physics ships
+after 1.0; cloth and fluids come later.
+
 The phase ends when a 3D layer with a camera and a light composites
 correctly over 2D layers, with at least one GPU effect and color-managed
-output.
+output, and the composition can be edited through the node graph.
 
 ## Goals
 
@@ -40,6 +44,8 @@ output.
 - Depth, alpha and HDR intermediate buffers.
 - Render graph with 2D/3D passes, downsample/blur chains and post.
 - Masks, track mattes, blend modes, adjustment layers.
+- Node graph as an alternate view over the same document.
+- GPU particles with deterministic seeds; rigid-body foundation.
 - Color management: linear workspace, tonemapping, display transforms.
 
 ### Out of scope
@@ -74,6 +80,8 @@ output.
 - [ ] At least five compositing effects run through the render graph
       with quality presets.
 - [ ] Masks and track mattes work in preview and export identically.
+- [ ] The layer stack and node graph stay in sync.
+- [ ] GPU particles render deterministically from a seed.
 - [ ] The compositor stays within the documented VRAM budget.
 
 ## Initiatives
@@ -81,6 +89,8 @@ output.
 - INITIATIVE-0010 - 3D scene integration
 - INITIATIVE-0011 - Compositing effects and color
 - INITIATIVE-0012 - Masks, mattes and precomps
+- INITIATIVE-0018 - Node graph compositing
+- INITIATIVE-0019 - GPU particles and rigid-body physics
 
 ## Notes
 

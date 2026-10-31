@@ -1,6 +1,6 @@
 ---
 id: PHASE-0005
-nombre: "Code, AI and production pipeline"
+nombre: "Code, AI and 1.0 delivery"
 orden: 5
 estado: not_started
 inicio: 2026-10-31
@@ -22,7 +22,8 @@ compositions, caching and background rendering practical.
 
 The phase ends when an AI prompt produces a complete animated
 composition that a user can inspect as code, edit, preview and render to
-a 30-second 1080p video with caching.
+a 30-second 1080p video with caching, and 1.0 ships as a signed Windows
+release.
 
 ## Goals
 
@@ -35,10 +36,12 @@ a 30-second 1080p video with caching.
 ## Scope
 
 ### In scope
-- Motioner Language: parser, printer, validation, formatting.
-- Expressions and procedural generators as sandboxed escape hatches.
+- Python-like Motioner Language with loops, functions and control flow.
+- Parser, printer, validation, formatting and sandboxed execution.
 - AI provider abstraction, chat panel, tool schema and change review.
+- Automatic render-critique-iterate loop with cost and time budgets.
 - Frame cache, proxies, background render queue, progress and recovery.
+- Windows installer, portable build, licensing and release automation.
 - Benchmarks, profiling, memory and VRAM budgets.
 
 ### Out of scope
@@ -62,7 +65,10 @@ a 30-second 1080p video with caching.
 
 ## Key decisions
 
-- D-0003: document as source of truth, code as lossless projection.
+- D-0011: Python-like executable MDF with control flow (proposed).
+- D-0012: AI providers, cloud data and human approval.
+- D-0013: Apache-2.0 license and asset policy.
+- D-0015: revenue model (proposed).
 - D-0007: AI edits only through commands and tools.
 - D-0009: sandboxed deterministic script runtime.
 
@@ -70,17 +76,25 @@ a 30-second 1080p video with caching.
 
 - [ ] Any composition round-trips document -> code -> document without
       semantic loss.
-- [ ] An AI prompt creates a multi-layer animated comp with preview,
-      undo and readable code.
+- [ ] An AI prompt creates a multi-layer animated comp and iterates on
+      rendered previews within budget, with human approval for the final
+      render.
+- [ ] Python-like code with loops and conditionals round-trips with the
+      document.
 - [ ] A 30-second 1080p render completes with caching and a progress
       report on the reference machine.
-- [ ] Real-time preview meets the fps target at proxy resolution.
+- [ ] A signed Windows installer and portable ZIP are published under
+      Apache-2.0.
+- [ ] Real-time preview meets 1080p 60 fps at full quality on the
+      reference machine.
 
 ## Initiatives
 
 - INITIATIVE-0013 - Bidirectional motion language
 - INITIATIVE-0014 - AI agent and tool protocol
 - INITIATIVE-0015 - Caching, render queue and performance
+- INITIATIVE-0020 - AI automatic iteration and critique loop
+- INITIATIVE-0021 - 1.0 packaging, distribution and monetization
 
 ## Notes
 

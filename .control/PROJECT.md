@@ -23,7 +23,8 @@ headless renderer.
 - Audio engine and mixer, physics and particle systems (libraries to be
   decided by spike).
 - AI providers: Anthropic, OpenRouter and Google over HTTPS.
-- YouTube Data API for direct upload.
+- Manual export for YouTube; no YouTube API integration.
+- Apache License 2.0.
 - Windows first; the reference machine is documented in REF-0003.
 
 ## Engineering conventions
@@ -48,12 +49,18 @@ repository is a brand-new Motioner project that replaces the legacy
 Motioner repository. The Cargo workspace is scaffolded with six core
 crates and green CI; no product features exist yet.
 
-Product scope expanded on 2026-10-31: NLE video/audio editing, full
-audio mixer, node graph, advanced 3D (particles/physics), AI automatic
-iteration, YouTube upload, public free distribution with a revenue path.
-See `docs/reference/REF-0003.md`. The 1.0 staging, license, MDF syntax,
-AI privacy and asset policy are still open.
+Product scope expanded on 2026-10-31 and 1.0 approved: NLE video/audio
+editing, full audio mixer (no advanced mastering), bidirectional node
+graph, 3D with particles (rigid-body physics after 1.0), AI automatic
+iteration with human approval, Python-like executable MDF code, public
+free distribution under Apache-2.0 with a revenue path. Video upload is
+manual; Motioner exports a YouTube-ready MP4.
+
+Still open: code semantics (program-first versus document with scripts),
+actual Python versus a custom DSL, LaTeX/math support, revenue model,
+iteration budgets and packaging. See `docs/reference/REF-0003.md`.
 
 FerrousEngine and GUIMaker are not vendored in this repository yet and
 will be pinned when provided. The reference machine is a Ryzen 5 8645HS
-with 8 GB RAM and an RTX 4050 Laptop (6 GB VRAM) on Windows 11.
+with 8 GB RAM and an RTX 4050 Laptop (6 GB VRAM) on Windows 11; 1080p is
+the primary target and 4K is deferred.
