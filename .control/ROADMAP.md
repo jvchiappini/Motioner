@@ -9,6 +9,23 @@ Strategy: ship a deterministic 2D vertical slice first, then add 3D and
 compositing, then the code and AI layers that define the product. Every
 phase keeps preview and export on the same evaluator.
 
+## Scope expansion (2026-10-31)
+
+The product scope grew beyond the original five phases. Confirmed work
+that still needs roadmap placement after the 1.0 scope is agreed
+(REF-0003):
+
+- NLE editing: cut, trim and arrange video and audio.
+- Full audio mixer with effects.
+- Node graph compositing.
+- Advanced 3D: skeletal animation, GPU particles, physics.
+- AI automatic iteration on rendered previews.
+- YouTube upload and delivery.
+- Public/free distribution with a revenue path.
+
+The phase table below is the original plan and will be revised. Do not
+treat it as the final sequence for the new scope.
+
 ---
 
 ## Phases
@@ -86,12 +103,21 @@ render queue and performance hardening.
 - D-0008: unified 2D/3D layer ordering.
 - D-0009: sandboxed deterministic script runtime.
 
-## Remaining setup decisions
+## Remaining decisions
 
-- Engine and GUIMaker pinning mechanism (submodule vs fork branch).
+- 1.0 scope staging versus full parity (REF-0003 section 7).
+- License and revenue model.
+- Asset and AI-provider licensing policy.
+- MDF syntax, visible IDs and comment preservation.
+- Node graph role and its relation to the layer timeline.
+- AI privacy, key storage and automatic iteration budgets.
+- NLE and audio depth.
+- Physics and particle engine choices.
+- YouTube direct upload versus manual upload.
+- UI language and packaging.
+- Engine and GUIMaker pinning mechanism.
 - GUIMaker revision and widget contribution boundary.
 - Script runtime implementation for D-0009.
-- GitHub repository replacement and remote layout.
 
 ## How to use
 
