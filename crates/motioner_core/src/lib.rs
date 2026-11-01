@@ -16,6 +16,7 @@ mod error;
 mod math;
 mod node;
 mod overrides;
+mod path;
 mod time;
 
 pub mod bounds;
@@ -33,5 +34,9 @@ pub use node::{
 pub use overrides::{
     format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,
     OverrideSet, OverrideValue, LOCKED, NAME, VISIBLE,
+};
+pub use path::{
+    DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,
+    FLATTEN_TOLERANCE,
 };
 pub use time::{Frame, FrameRate, MAX_ABS_FRAME};

@@ -17,6 +17,7 @@ use ferrous_renderer::headless::{HarnessError, Pure2dHarness, DEFAULT_FORMAT};
 use motioner_core::{Color, Document, NodeContent, NodeId, TextAlign};
 use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan};
 
+use crate::paths::PathCache;
 use crate::space::{self, to_f32};
 use crate::{shapes, text, Canvas2d, FrameRenderer, FrameStats, PaintStats, RenderError, ROBOTO};
 
@@ -39,6 +40,7 @@ pub(crate) fn create(width: u32, height: u32) -> Result<FrameRenderer, RenderErr
         adapter_name,
         clear: None,
         missing_glyphs: HashMap::new(),
+        path_cache: PathCache::default(),
     })
 }
 
@@ -81,6 +83,7 @@ pub(crate) fn render(
         flip,
         renderer.font,
         &mut renderer.missing_glyphs,
+        &mut renderer.path_cache,
     );
 
     let report = renderer.harness.render_frame();
@@ -113,13 +116,11 @@ pub(crate) fn paint_plan(
     flip: Affine2,
     font: FontId2d,
     missing_glyphs: &mut HashMap<NodeId, u32>,
+    path_cache: &mut PathCache,
 ) -> PaintStats {
     let mut total = 0u32;
     for item in plan.items() {
-        total += match item.shape {
-            ItemShape::Text { .. } => 1,
-            _ => shapes::draw_count(&item.shape),
-        };
+        total += shapes::draw_layers(plan, &item.shape);
     }
 
     let mut z_index = 0u32;
@@ -148,7 +149,8 @@ pub(crate) fn paint_plan(
                 }
             }
             _ => {
-                stats.shape_draws += shapes::draw_item(canvas, item, flip, &mut z_index, total);
+                stats.shape_draws +=
+                    shapes::draw_item(canvas, plan, path_cache, item, flip, &mut z_index, total);
             }
         }
     }

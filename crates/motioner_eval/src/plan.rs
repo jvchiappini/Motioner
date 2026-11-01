@@ -1,6 +1,6 @@
 //! The render plan: a flat, ordered list of resolved draw items.
 
-use motioner_core::{BlendMode, Color, NodeId, Paint, TextAlign};
+use motioner_core::{BlendMode, Color, DashSpec, NodeId, Paint, PathGeometry, TextAlign, TrimSpec};
 
 use crate::affine::Affine2;
 
@@ -36,6 +36,26 @@ pub enum ItemShape {
         /// Horizontal alignment.
         align: TextAlign,
     },
+    /// A vector path; the geometry and trim values are in the plan's path
+    /// arena at this index (D-0029).
+    Path {
+        /// Index into [`RenderPlan::paths`].
+        index: usize,
+    },
+}
+
+/// One path item resolved for a frame: authored geometry, trim, dash and
+/// paint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPath {
+    /// Authored points, closed flag, cap and join.
+    pub geometry: PathGeometry,
+    /// Trim window sampled at the frame.
+    pub trim: TrimSpec,
+    /// Dash pattern sampled at the frame.
+    pub dash: DashSpec,
+    /// Resolved fill and stroke.
+    pub paint: Paint,
 }
 
 /// One resolved draw for a frame.
@@ -63,6 +83,8 @@ pub struct RenderPlan {
     pub(crate) height: u32,
     pub(crate) background: Option<Color>,
     pub(crate) items: Vec<RenderItem>,
+    /// Path geometry referenced by [`ItemShape::Path`] items.
+    pub(crate) paths: Vec<ResolvedPath>,
     /// Nodes skipped during the last evaluation because their resolved
     /// transform or opacity was not finite. Their subtrees were skipped
     /// too and are not counted individually.
@@ -98,6 +120,18 @@ impl RenderPlan {
     #[must_use]
     pub fn items(&self) -> &[RenderItem] {
         &self.items
+    }
+
+    /// The resolved path at `index`, when the item references one.
+    #[must_use]
+    pub fn path(&self, index: usize) -> Option<&ResolvedPath> {
+        self.paths.get(index)
+    }
+
+    /// Every resolved path of the frame, in item order.
+    #[must_use]
+    pub fn paths(&self) -> &[ResolvedPath] {
+        &self.paths
     }
 
     /// Number of nodes skipped by the last [`crate::Evaluator::evaluate`]

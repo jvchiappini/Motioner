@@ -61,11 +61,15 @@ pub(crate) enum Builtin {
     Rect,
     Circle,
     Text,
+    Path,
+    Polygon,
+    Star,
+    Arc,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 18] = [
+    pub const ALL: [(Self, &'static str); 22] = [
         (Self::Range, "range"),
         (Self::Len, "len"),
         (Self::Min, "min"),
@@ -84,6 +88,10 @@ impl Builtin {
         (Self::Rect, "rect"),
         (Self::Circle, "circle"),
         (Self::Text, "text"),
+        (Self::Path, "path"),
+        (Self::Polygon, "polygon"),
+        (Self::Star, "star"),
+        (Self::Arc, "arc"),
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {

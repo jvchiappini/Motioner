@@ -5,6 +5,7 @@ use std::fmt;
 use crate::animation::{Animatable, AnimatableVec2};
 use crate::color::Color;
 use crate::math::Vec2;
+use crate::path::{LineCap, LineJoin, PathGeometry};
 use crate::time::Frame;
 
 /// Persistent identity of a node within one document.
@@ -104,6 +105,16 @@ pub enum ContentField {
     Stroke,
     /// Outline width in pixels; `0` clears the stroke.
     StrokeWidth,
+    /// Start of the drawn fraction of a path (`0.0..=1.0`).
+    TrimStart,
+    /// End of the drawn fraction of a path (`0.0..=1.0`).
+    TrimEnd,
+    /// Shifts the trimmed window along the path (`0.0..=1.0`, wraps).
+    TrimOffset,
+    /// Dash on-length in local pixels; the gap is equal. `0` means solid.
+    Dash,
+    /// Shifts the dash pattern along the path, in local pixels.
+    DashOffset,
     /// Text characters.
     Text,
     /// Text em size in pixels.
@@ -112,30 +123,41 @@ pub enum ContentField {
     Color,
     /// Text horizontal alignment.
     Align,
+    /// Path stroke cap style (discrete).
+    Cap,
+    /// Path stroke join style (discrete).
+    Join,
 }
 
 impl ContentField {
     /// Every field with its override property name.
-    pub const ALL: [(Self, &'static str); 10] = [
+    pub const ALL: [(Self, &'static str); 17] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
         (Self::Fill, "fill"),
         (Self::Stroke, "stroke"),
         (Self::StrokeWidth, "stroke_width"),
+        (Self::TrimStart, "trim_start"),
+        (Self::TrimEnd, "trim_end"),
+        (Self::TrimOffset, "trim_offset"),
+        (Self::Dash, "dash"),
+        (Self::DashOffset, "dash_offset"),
         (Self::Text, "text"),
         (Self::Size, "size"),
         (Self::Color, "color"),
         (Self::Align, "align"),
+        (Self::Cap, "cap"),
+        (Self::Join, "join"),
     ];
 
     /// Whether the field has keyframes (D-0028).
     ///
-    /// Content fields are scalar channels: none of them has axes. Text and
-    /// alignment are discrete and cannot be animated.
+    /// Content fields are scalar channels: none of them has axes. Text,
+    /// alignment, cap and join are discrete and cannot be animated.
     #[must_use]
     pub const fn is_animatable(self) -> bool {
-        !matches!(self, Self::Text | Self::Align)
+        !matches!(self, Self::Text | Self::Align | Self::Cap | Self::Join)
     }
 
     /// Looks up a field by its override property name.
@@ -168,6 +190,10 @@ pub enum ContentValue {
     Text(String),
     /// Alignment for `align`.
     Align(TextAlign),
+    /// Stroke cap for `cap`.
+    Cap(LineCap),
+    /// Stroke join for `join`.
+    Join(LineJoin),
 }
 
 impl NodeId {
@@ -422,6 +448,23 @@ pub enum NodeContent {
         /// Fill and stroke channels.
         paint: PaintSpec,
     },
+    /// A vector path in the node's local space (D-0029).
+    Path {
+        /// Authored points, closed flag, cap and join.
+        geometry: PathGeometry,
+        /// Fill and stroke channels.
+        paint: PaintSpec,
+        /// Start of the drawn fraction (`trim_start`, `0.0..=1.0`).
+        trim_start: Animatable<f64>,
+        /// End of the drawn fraction (`trim_end`, `0.0..=1.0`).
+        trim_end: Animatable<f64>,
+        /// Shift of the trimmed window (`trim_offset`, wraps).
+        trim_offset: Animatable<f64>,
+        /// Dash on-length in local pixels (`dash`; `0` means solid).
+        dash: Animatable<f64>,
+        /// Dash pattern shift in local pixels (`dash_offset`).
+        dash_offset: Animatable<f64>,
+    },
     /// A text line whose baseline passes through the node origin.
     Text(TextContent),
 }
@@ -447,13 +490,28 @@ impl NodeContent {
         }
     }
 
-    /// Human name of the node kind ("group", "rect", "circle", "text").
+    /// A path from static values: fully drawn, solid, untrimmed.
+    #[must_use]
+    pub fn path(geometry: PathGeometry, paint: Paint) -> Self {
+        Self::Path {
+            geometry,
+            paint: PaintSpec::from_paint(paint),
+            trim_start: Animatable::new(0.0),
+            trim_end: Animatable::new(1.0),
+            trim_offset: Animatable::new(0.0),
+            dash: Animatable::new(0.0),
+            dash_offset: Animatable::new(0.0),
+        }
+    }
+
+    /// Human name of the node kind ("group", "rect", "circle", "path", "text").
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
         match self {
             Self::Group => "group",
             Self::Rect { .. } => "rect",
             Self::Circle { .. } => "circle",
+            Self::Path { .. } => "path",
             Self::Text(_) => "text",
         }
     }
@@ -479,6 +537,19 @@ impl NodeContent {
                     | ContentField::Stroke
                     | ContentField::StrokeWidth
             ),
+            Self::Path { .. } => matches!(
+                field,
+                ContentField::Fill
+                    | ContentField::Stroke
+                    | ContentField::StrokeWidth
+                    | ContentField::TrimStart
+                    | ContentField::TrimEnd
+                    | ContentField::TrimOffset
+                    | ContentField::Dash
+                    | ContentField::DashOffset
+                    | ContentField::Cap
+                    | ContentField::Join
+            ),
             Self::Text(_) => matches!(
                 field,
                 ContentField::Text | ContentField::Size | ContentField::Color | ContentField::Align
@@ -501,6 +572,25 @@ impl NodeContent {
                 number(radius)
             }
             (Self::Rect { paint, .. } | Self::Circle { paint, .. }, field) => paint.channel(field),
+            (
+                Self::Path {
+                    trim_start,
+                    trim_end,
+                    trim_offset,
+                    dash,
+                    dash_offset,
+                    paint,
+                    ..
+                },
+                field,
+            ) => match field {
+                ContentField::TrimStart => number(trim_start),
+                ContentField::TrimEnd => number(trim_end),
+                ContentField::TrimOffset => number(trim_offset),
+                ContentField::Dash => number(dash),
+                ContentField::DashOffset => number(dash_offset),
+                _ => paint.channel(field),
+            },
             (Self::Text(text), ContentField::Size) => number(&text.size),
             (Self::Text(text), ContentField::Color) => Some(ContentChannel::Color(&text.color)),
             _ => None,
@@ -520,15 +610,39 @@ impl NodeContent {
             (Self::Rect { radius, .. } | Self::Circle { radius, .. }, ContentField::Radius) => {
                 Some(ContentValue::Number(radius.value()))
             }
-            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, ContentField::Fill) => {
-                Some(ContentValue::Color(paint.fill.value()))
-            }
-            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, ContentField::Stroke) => {
-                Some(ContentValue::Color(paint.stroke.value()))
-            }
-            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, ContentField::StrokeWidth) => {
-                Some(ContentValue::Number(paint.stroke_width.value()))
-            }
+            (
+                Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. },
+                ContentField::Fill,
+            ) => Some(ContentValue::Color(paint.fill.value())),
+            (
+                Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. },
+                ContentField::Stroke,
+            ) => Some(ContentValue::Color(paint.stroke.value())),
+            (
+                Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. },
+                ContentField::StrokeWidth,
+            ) => Some(ContentValue::Number(paint.stroke_width.value())),
+            (
+                Self::Path {
+                    trim_start,
+                    trim_end,
+                    trim_offset,
+                    dash,
+                    dash_offset,
+                    geometry,
+                    ..
+                },
+                field,
+            ) => match field {
+                ContentField::TrimStart => Some(ContentValue::Number(trim_start.value())),
+                ContentField::TrimEnd => Some(ContentValue::Number(trim_end.value())),
+                ContentField::TrimOffset => Some(ContentValue::Number(trim_offset.value())),
+                ContentField::Dash => Some(ContentValue::Number(dash.value())),
+                ContentField::DashOffset => Some(ContentValue::Number(dash_offset.value())),
+                ContentField::Cap => Some(ContentValue::Cap(geometry.cap())),
+                ContentField::Join => Some(ContentValue::Join(geometry.join())),
+                _ => None,
+            },
             (Self::Text(text), ContentField::Text) => Some(ContentValue::Text(text.text.clone())),
             (Self::Text(text), ContentField::Size) => Some(ContentValue::Number(text.size.value())),
             (Self::Text(text), ContentField::Color) => {
@@ -573,6 +687,30 @@ impl NodeContent {
                 } else {
                     None
                 }
+            }
+            Self::Path {
+                trim_start,
+                trim_end,
+                trim_offset,
+                dash,
+                dash_offset,
+                paint,
+                ..
+            } => {
+                let in_range = |value: &Animatable<f64>, max: f64| {
+                    let ok = |number: f64| number.is_finite() && number >= 0.0 && number <= max;
+                    !ok(value.value()) || value.keys().iter().any(|key| !ok(key.value))
+                };
+                [
+                    (in_range(trim_start, 1.0), "trim_start"),
+                    (in_range(trim_end, 1.0), "trim_end"),
+                    (in_range(trim_offset, 1.0), "trim_offset"),
+                    (in_range(dash, f64::INFINITY), "dash"),
+                    (in_range(dash_offset, f64::INFINITY), "dash_offset"),
+                    (bad_paint(paint), "stroke_width"),
+                ]
+                .into_iter()
+                .find_map(|(is_bad, name)| is_bad.then_some(name))
             }
             Self::Text(text) => {
                 let size = text.size.value();

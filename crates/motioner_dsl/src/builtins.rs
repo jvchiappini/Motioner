@@ -67,9 +67,18 @@ pub(crate) fn call(
             }
             Ok(Value::Number(value.clamp(low, high)))
         }
-        Builtin::Comp | Builtin::Group | Builtin::Rect | Builtin::Circle | Builtin::Text => Err(
-            HostError::type_error(format!("{}() is a scene constructor", builtin.name())),
-        ),
+        Builtin::Comp
+        | Builtin::Group
+        | Builtin::Rect
+        | Builtin::Circle
+        | Builtin::Text
+        | Builtin::Path
+        | Builtin::Polygon
+        | Builtin::Star
+        | Builtin::Arc => Err(HostError::type_error(format!(
+            "{}() is a scene constructor",
+            builtin.name()
+        ))),
     }
 }
 

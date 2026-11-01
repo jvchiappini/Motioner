@@ -763,7 +763,12 @@ fn content_text(
         | motioner_core::ContentField::Width
         | motioner_core::ContentField::Height
         | motioner_core::ContentField::Radius
-        | motioner_core::ContentField::Size => {
+        | motioner_core::ContentField::Size
+        | motioner_core::ContentField::TrimStart
+        | motioner_core::ContentField::TrimEnd
+        | motioner_core::ContentField::TrimOffset
+        | motioner_core::ContentField::Dash
+        | motioner_core::ContentField::DashOffset => {
             crate::editor::channels::sampled_number(document, node, field, frame)
                 .map_or_else(|| "n/a".to_owned(), round)
         }
@@ -773,7 +778,10 @@ fn content_text(
                 _ => String::new(),
             }
         }
-        motioner_core::ContentField::Text | motioner_core::ContentField::Align => {
+        motioner_core::ContentField::Text
+        | motioner_core::ContentField::Align
+        | motioner_core::ContentField::Cap
+        | motioner_core::ContentField::Join => {
             match document
                 .node(node)
                 .and_then(|node| node.content().static_value(field))
@@ -785,6 +793,8 @@ fn content_text(
                     motioner_core::TextAlign::Right => "right",
                 }
                 .to_owned(),
+                Some(motioner_core::ContentValue::Cap(cap)) => cap.name().to_owned(),
+                Some(motioner_core::ContentValue::Join(join)) => join.name().to_owned(),
                 _ => "n/a".to_owned(),
             }
         }

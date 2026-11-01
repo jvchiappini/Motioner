@@ -1,10 +1,12 @@
 //! Frame evaluation: document plus frame to render plan.
 
-use motioner_core::{Document, Frame, NodeContent, NodeId, Paint, PaintSpec, Stroke};
+use motioner_core::{
+    DashSpec, Document, Frame, NodeContent, NodeId, Paint, PaintSpec, Stroke, TrimSpec,
+};
 
 use crate::affine::Affine2;
 use crate::curve::{sample, sample_vec2};
-use crate::plan::{ItemShape, RenderItem, RenderPlan};
+use crate::plan::{ItemShape, RenderItem, RenderPlan, ResolvedPath};
 
 /// A node waiting to be visited, with its parent's resolved state.
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +78,7 @@ impl Evaluator {
             if opacity <= 0.0 {
                 continue;
             }
-            if let Some(shape) = item_shape(node.content(), frame) {
+            if let Some(shape) = item_shape(node.content(), frame, plan) {
                 plan.items.push(RenderItem {
                     node: node.id(),
                     transform,
@@ -99,7 +101,7 @@ impl Evaluator {
     }
 }
 
-fn item_shape(content: &NodeContent, frame: Frame) -> Option<ItemShape> {
+fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Option<ItemShape> {
     match content {
         NodeContent::Group => None,
         NodeContent::Rect {
@@ -117,6 +119,31 @@ fn item_shape(content: &NodeContent, frame: Frame) -> Option<ItemShape> {
             radius: sample(radius, frame),
             paint: resolved_paint(paint, frame),
         }),
+        NodeContent::Path {
+            geometry,
+            paint,
+            trim_start,
+            trim_end,
+            trim_offset,
+            dash,
+            dash_offset,
+        } => {
+            let index = plan.paths.len();
+            plan.paths.push(ResolvedPath {
+                geometry: geometry.clone(),
+                trim: TrimSpec {
+                    start: sample(trim_start, frame),
+                    end: sample(trim_end, frame),
+                    offset: sample(trim_offset, frame),
+                },
+                dash: DashSpec {
+                    length: sample(dash, frame),
+                    offset: sample(dash_offset, frame),
+                },
+                paint: resolved_paint(paint, frame),
+            });
+            Some(ItemShape::Path { index })
+        }
         NodeContent::Text(text) => Some(ItemShape::Text {
             size: sample(&text.size, frame),
             color: sample(&text.color, frame),
@@ -363,5 +390,67 @@ mod tests {
             .items()
             .iter()
             .all(|item| item.transform.is_finite() && item.opacity.is_finite()));
+    }
+
+    #[test]
+    fn paths_are_sampled_into_the_plan_arena() {
+        use motioner_core::{
+            ContentField, ContentValue, LineCap, LineJoin, PathGeometry, PathPoint,
+        };
+        let mut doc = document();
+        let geometry = PathGeometry::new(
+            vec![
+                PathPoint::corner(Vec2::new(0.0, 0.0)),
+                PathPoint::corner(Vec2::new(50.0, 0.0)),
+                PathPoint::corner(Vec2::new(50.0, 50.0)),
+            ],
+            false,
+            LineCap::Round,
+            LineJoin::Round,
+        )
+        .unwrap();
+        let id = doc
+            .add_node(NodeContent::path(
+                geometry,
+                Paint {
+                    fill: Some(Color::WHITE),
+                    stroke: Some(Stroke {
+                        color: Color::WHITE,
+                        width: 4.0,
+                    }),
+                },
+            ))
+            .unwrap();
+        for (frame, value) in [(0, 0.0), (10, 1.0)] {
+            doc.add_content_keyframe(
+                id,
+                ContentField::TrimEnd,
+                frame,
+                ContentValue::Number(value),
+                Ease::Linear,
+            )
+            .unwrap();
+        }
+        doc.add_content_keyframe(
+            id,
+            ContentField::Dash,
+            0,
+            ContentValue::Number(8.0),
+            Ease::Linear,
+        )
+        .unwrap();
+
+        let plan = evaluate(&doc, 5);
+        assert_eq!(plan.items().len(), 1);
+        assert_eq!(plan.paths().len(), 1);
+        let ItemShape::Path { index } = plan.items()[0].shape else {
+            panic!("a path item");
+        };
+        let path = plan.path(index).unwrap();
+        assert!((path.trim.start - 0.0).abs() < 1e-9);
+        assert!((path.trim.end - 0.5).abs() < 1e-9);
+        assert!((path.dash.length - 8.0).abs() < 1e-9);
+        assert_eq!(path.geometry.cap(), LineCap::Round);
+        assert_eq!(path.paint.stroke.map(|stroke| stroke.width), Some(4.0));
     }
 }

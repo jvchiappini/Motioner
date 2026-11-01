@@ -39,6 +39,8 @@ pub enum Icon {
     Circle,
     /// Rectangle layer.
     Rect,
+    /// Vector path layer.
+    Path,
     /// Group layer.
     Group,
     /// Expanded disclosure.
@@ -67,6 +69,7 @@ impl Icon {
             NodeKind::Group => Self::Group,
             NodeKind::Rect => Self::Rect,
             NodeKind::Circle => Self::Circle,
+            NodeKind::Path => Self::Path,
             NodeKind::Text => Self::Text,
         }
     }
@@ -223,6 +226,14 @@ fn layer(
             color,
         ),
         Icon::Rect => p.stroke_rounded(g.r(2.5, 2.5, 11.0, 11.0), color, g.len(2.0), stroke),
+        Icon::Path => {
+            p.circle(g.x + g.len(3.0), g.y + g.len(12.0), g.len(1.4), color);
+            p.hline(g.x + g.len(3.0), g.x + g.len(7.0), g.y + g.len(12.0), color);
+            p.vline(g.x + g.len(7.0), g.y + g.len(12.0), g.y + g.len(5.0), color);
+            p.hline(g.x + g.len(7.0), g.x + g.len(11.0), g.y + g.len(5.0), color);
+            p.vline(g.x + g.len(11.0), g.y + g.len(5.0), g.y + g.len(9.0), color);
+            p.circle(g.x + g.len(13.0), g.y + g.len(9.0), g.len(1.4), color);
+        }
         Icon::Group => {
             p.fill_rounded(g.r(2.0, 3.5, 5.5, 3.0), color, g.len(1.0));
             p.stroke_rounded(g.r(2.0, 5.0, 12.0, 8.5), color, g.len(1.5), stroke);

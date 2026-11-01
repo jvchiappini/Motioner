@@ -68,6 +68,7 @@ impl<F: Fn(&str, f64) -> Option<TextExtent>> MeasureText for F {
 /// The local `[x0, y0, x1, y1]` box of one item (y down, origin at the node).
 fn local_box(
     document: &Document,
+    plan: &RenderPlan,
     item: &RenderItem,
     measure: &impl MeasureText,
 ) -> Option<[f64; 4]> {
@@ -76,6 +77,7 @@ fn local_box(
             Some([-width * 0.5, -height * 0.5, width * 0.5, height * 0.5])
         }
         ItemShape::Circle { radius, .. } => Some([-radius, -radius, radius, radius]),
+        ItemShape::Path { index } => motioner_render::path_bounds(plan.path(index)?),
         ItemShape::Text { size, align, .. } => {
             let NodeContent::Text(content) = document.node(item.node)?.content() else {
                 return None;
@@ -120,7 +122,7 @@ pub fn node_bounds(
         if !descends_from(document, item.node, node) {
             continue;
         }
-        let Some([x0, y0, x1, y1]) = local_box(document, item, measure) else {
+        let Some([x0, y0, x1, y1]) = local_box(document, plan, item, measure) else {
             continue;
         };
         for (x, y) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)] {
@@ -173,12 +175,18 @@ pub fn hit_node_where(
         if item.opacity <= 0.0 || !allow(item.node) {
             return None;
         }
-        let [x0, y0, x1, y1] = local_box(document, item, measure)?;
+        let [x0, y0, x1, y1] = local_box(document, plan, item, measure)?;
         let local = inverse(item.transform)?.apply(point);
         let inside = match item.shape {
             ItemShape::Circle { radius, .. } => {
                 local.x * local.x + local.y * local.y <= radius * radius
             }
+            ItemShape::Path { index } => plan.path(index).is_some_and(|path| {
+                path.geometry.contains(local)
+                    || path.paint.stroke.is_some_and(|stroke| {
+                        stroke.width > 0.0 && path.geometry.near(local, stroke.width * 0.5 + 2.0)
+                    })
+            }),
             _ => local.x >= x0 && local.x <= x1 && local.y >= y0 && local.y <= y1,
         };
         inside.then_some(item.node)
@@ -313,5 +321,39 @@ mod tests {
             ty: 1.0
         })
         .is_none());
+    }
+
+    const PATHS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/paths.motion"
+    ));
+
+    #[test]
+    fn path_bounds_and_hits_follow_the_outline() {
+        let document = motioner_dsl::run(PATHS, &motioner_dsl::Limits::default()).unwrap();
+        let mut plan = RenderPlan::new();
+        motioner_eval::Evaluator::new().evaluate(&document, 45, &mut plan);
+        let star = document.find("star").unwrap();
+        let bounds = node_bounds(&document, &plan, star, &measure).unwrap();
+        // The star's outer radius is 170 px around (200, 270).
+        assert!(bounds.min_x < 60.0 && bounds.max_x > 340.0, "{bounds:?}");
+        assert!(bounds.min_y < 130.0 && bounds.max_y > 410.0, "{bounds:?}");
+        assert_eq!(
+            hit_node(&document, &plan, Vec2::new(200.0, 270.0), &measure),
+            Some(star)
+        );
+        // A corner of the bounding box lies between two spikes: no hit. The
+        // full-canvas backdrop is excluded because it is behind everything.
+        let backdrop = document.roots()[0];
+        assert_eq!(
+            hit_node_where(
+                &document,
+                &plan,
+                Vec2::new(355.0, 115.0),
+                &measure,
+                |node| node != backdrop,
+            ),
+            None
+        );
     }
 }

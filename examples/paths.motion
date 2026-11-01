@@ -1,0 +1,40 @@
+# Vector paths and trim paths (D-0029).
+#
+# A star, a self-drawing arc, a cubic ribbon that draws itself and a dashed
+# hexagon whose dash pattern marches. Every path animates a content channel:
+# rotation, trim and dash offset.
+
+comp("Paths", 960, 540, 60, 2.0, "#101418")
+
+backdrop = rect(960, 540, 0, "#161C22")
+backdrop.pos = (480, 270)
+
+star = star(5, 70, 170, fill="#FFB347", stroke="#FFE0A3", stroke_width=5)
+star.id("star")
+star.pos = (200, 270)
+star.key("rotation", 0.0, -14, ease="back_out")
+star.key("rotation", 2.0, 10, ease="cubic_in_out")
+
+arc = arc(120, -140, 60, fill=None, stroke="#5CDBC5", stroke_width=14, cap="round")
+arc.id("arc")
+arc.pos = (480, 250)
+arc.key("trim_end", 0.0, 0.0, ease="linear")
+arc.key("trim_end", 1.5, 1.0, ease="cubic_in_out")
+arc.key("stroke_width", 0.9, 7, ease="quad_out")
+
+ribbon = path([(0, 120), (150, -120, 0, 0, 90, 0), (300, 120)],
+              closed=False, fill=None, stroke="#FF5A6E", stroke_width=11,
+              cap="round", join="round")
+ribbon.id("ribbon")
+ribbon.pos = (650, 190)
+ribbon.key("trim_start", 0.0, 0.0, ease="linear")
+ribbon.key("trim_start", 1.2, 0.65, ease="cubic_in_out")
+ribbon.key("trim_end", 0.0, 0.25, ease="linear")
+ribbon.key("trim_end", 1.2, 1.0, ease="cubic_in_out")
+
+ring = polygon(6, 92, fill=None, stroke="#A78BFA", stroke_width=11, cap="round", join="round")
+ring.id("ring")
+ring.pos = (480, 430)
+ring.dash = 30
+ring.key("dash_offset", 0.0, 0.0, ease="linear")
+ring.key("dash_offset", 2.0, 96, ease="linear")

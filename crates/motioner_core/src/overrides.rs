@@ -16,6 +16,7 @@ use crate::color::Color;
 use crate::document::Document;
 use crate::math::Vec2;
 use crate::node::{ContentField, ContentValue, Property, PropertyValue, TextAlign};
+use crate::path::{LineCap, LineJoin};
 use crate::time::{Frame, FrameRate};
 
 /// The property name used by visibility overrides.
@@ -412,7 +413,12 @@ fn content_value(field: ContentField, value: &OverrideValue) -> Result<ContentVa
             | ContentField::Height
             | ContentField::Radius
             | ContentField::StrokeWidth
-            | ContentField::Size,
+            | ContentField::Size
+            | ContentField::TrimStart
+            | ContentField::TrimEnd
+            | ContentField::TrimOffset
+            | ContentField::Dash
+            | ContentField::DashOffset,
             OverrideValue::Number(n),
         ) => Ok(ContentValue::Number(*n)),
         (ContentField::Fill | ContentField::Stroke, OverrideValue::Text(text)) => {
@@ -432,10 +438,17 @@ fn content_value(field: ContentField, value: &OverrideValue) -> Result<ContentVa
         (ContentField::Align, OverrideValue::Text(text)) => TextAlign::from_name(text)
             .map(ContentValue::Align)
             .ok_or("\"left\", \"center\" or \"right\""),
+        (ContentField::Cap, OverrideValue::Text(text)) => LineCap::from_name(text)
+            .map(ContentValue::Cap)
+            .ok_or("\"butt\", \"round\" or \"square\""),
+        (ContentField::Join, OverrideValue::Text(text)) => LineJoin::from_name(text)
+            .map(ContentValue::Join)
+            .ok_or("\"miter\", \"bevel\" or \"round\""),
         (ContentField::Fill | ContentField::Stroke, OverrideValue::Number(_)) => {
             Err("expected a colour string")
         }
         (ContentField::Align, _) => Err("expected an align name"),
+        (ContentField::Cap | ContentField::Join, _) => Err("expected a style name"),
         _ => Err("expected a number"),
     }
 }
@@ -878,5 +891,89 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(set.len(), 1, "the override is kept");
         let _ = id;
+    }
+
+    #[test]
+    fn path_channels_are_overridable_and_round_trip() {
+        let mut doc = document();
+        let geometry = crate::path::PathGeometry::new(
+            vec![
+                crate::path::PathPoint::corner(Vec2::new(0.0, 0.0)),
+                crate::path::PathPoint::corner(Vec2::new(40.0, 0.0)),
+                crate::path::PathPoint::corner(Vec2::new(40.0, 40.0)),
+            ],
+            false,
+            crate::path::LineCap::Butt,
+            crate::path::LineJoin::Miter,
+        )
+        .unwrap();
+        let id = doc
+            .add_node_with_identity(
+                NodeContent::path(
+                    geometry,
+                    Paint {
+                        fill: None,
+                        stroke: Some(crate::node::Stroke {
+                            color: Color::WHITE,
+                            width: 2.0,
+                        }),
+                    },
+                ),
+                crate::node::NodeIdentity::explicit("p").unwrap(),
+            )
+            .unwrap();
+        let mut set = OverrideSet::new();
+        set.insert(OverrideEntry::new(
+            "p",
+            "trim_end",
+            OverrideAction::Set(OverrideValue::Number(0.5)),
+        ));
+        set.insert(OverrideEntry::new(
+            "p",
+            "trim_start",
+            OverrideAction::Key {
+                frame: 30,
+                value: OverrideValue::Number(0.25),
+                ease: Ease::QuadOut,
+            },
+        ));
+        set.insert(OverrideEntry::new(
+            "p",
+            "cap",
+            OverrideAction::Set(OverrideValue::Text("round".to_owned())),
+        ));
+        set.insert(OverrideEntry::new(
+            "p",
+            "dash",
+            OverrideAction::Set(OverrideValue::Number(6.0)),
+        ));
+        assert!(set.apply(&mut doc).is_empty());
+        let NodeContent::Path {
+            geometry,
+            trim_start,
+            trim_end,
+            dash,
+            ..
+        } = doc.node(id).unwrap().content()
+        else {
+            panic!("a path");
+        };
+        assert_eq!(geometry.cap(), crate::path::LineCap::Round);
+        assert!((trim_end.value() - 0.5).abs() < 1e-9);
+        assert_eq!(trim_start.keys().len(), 1);
+        assert!((dash.value() - 6.0).abs() < 1e-9);
+        let text = set.to_mdf(rate());
+        assert!(
+            text.contains("override(\"p\", \"trim_end\", 0.5)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("override_key(\"p\", \"trim_start\", 0.5, 0.25, ease=\"quad_out\")"),
+            "{text}"
+        );
+        assert!(
+            text.contains("override(\"p\", \"cap\", \"round\")"),
+            "{text}"
+        );
     }
 }

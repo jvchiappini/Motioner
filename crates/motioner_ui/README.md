@@ -32,7 +32,7 @@ timeline. Edits are **overrides** (D-0022) stored next to the program; the
   one row per **parameter** (Position X, Position Y, Scale X, Scale Y,
   Rotation, Anchor X, Anchor Y, Opacity) with its own stopwatch and keys, and
   content fields (size, radius, fill, stroke, width / text, size, colour,
-  align).
+  align / path trim, dash, cap, join).
   Numeric fields scrub horizontally (Shift ×10, Alt ×0.1) or type on click with
   a visible focus ring; colour fields accept `#RRGGBB[AA]`; align is a
   three-state control. Each animatable row starts with a fixed key column: the
@@ -52,9 +52,11 @@ timeline. Edits are **overrides** (D-0022) stored next to the program; the
   sub-row has a stopwatch, the value at the playhead, the previous/next/add-key
   buttons, its diamonds and a solid line between keys whose rise follows the
   segment's easing. X and Y keyframes are independent. Content fields are
-  channels too (D-0028): `fill`, `stroke`, `stroke_width`, `width`, `height`,
-  `radius`, `size` and `color` get the same stopwatch, diamonds and eased
-  lines, and the inspector keys them at the playhead. The timeline is 320 px
+  channels too (D-0028, D-0029): `fill`, `stroke`, `stroke_width`, `width`,
+  `height`, `radius`, `size`, `color`, `trim_start`, `trim_end`,
+  `trim_offset`, `dash` and `dash_offset` get the same stopwatch, diamonds
+  and eased lines, and the inspector keys them at the playhead; path `cap`
+  and `join` are static fields. The timeline is 320 px
   tall by default, its splitter is draggable and it scrolls to a new selection
   and to newly selected keys.
 

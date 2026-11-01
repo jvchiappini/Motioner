@@ -625,6 +625,7 @@ fn apply<T: Copy>(target: &mut Animatable<T>, value: T, write: Write) {
 }
 
 /// Writes a static content value into the matching animatable channel.
+#[allow(clippy::too_many_lines)] // one arm per content field, kept together
 fn content_static_write(
     content: &mut NodeContent,
     field: ContentField,
@@ -646,7 +647,9 @@ fn content_static_write(
             _ => Err(wrong_kind(content, field)),
         },
         (ContentField::StrokeWidth, ContentValue::Number(v)) => match content {
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => {
                 set_number(&mut paint.stroke_width, field, v, false)
             }
             _ => Err(wrong_kind(content, field)),
@@ -655,15 +658,60 @@ fn content_static_write(
             NodeContent::Text(text) => set_number(&mut text.size, field, v, true),
             _ => Err(wrong_kind(content, field)),
         },
+        (
+            ContentField::TrimStart
+            | ContentField::TrimEnd
+            | ContentField::TrimOffset
+            | ContentField::Dash
+            | ContentField::DashOffset,
+            ContentValue::Number(v),
+        ) => match content {
+            NodeContent::Path {
+                trim_start,
+                trim_end,
+                trim_offset,
+                dash,
+                dash_offset,
+                ..
+            } => {
+                let channel = match field {
+                    ContentField::TrimStart => trim_start,
+                    ContentField::TrimEnd => trim_end,
+                    ContentField::TrimOffset => trim_offset,
+                    ContentField::Dash => dash,
+                    _ => dash_offset,
+                };
+                set_number(channel, field, v, false)
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Cap, ContentValue::Cap(cap)) => match content {
+            NodeContent::Path { geometry, .. } => {
+                geometry.set_cap(cap);
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Join, ContentValue::Join(join)) => match content {
+            NodeContent::Path { geometry, .. } => {
+                geometry.set_join(join);
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
         (ContentField::Fill, ContentValue::Color(color)) => match content {
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => {
                 paint.fill.set_value(color);
                 Ok(())
             }
             _ => Err(wrong_kind(content, field)),
         },
         (ContentField::Stroke, ContentValue::Color(color)) => match content {
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => {
                 paint.stroke.set_value(color);
                 Ok(())
             }
@@ -725,7 +773,9 @@ fn content_key_write(
             _ => return Err(wrong_kind(content, field)),
         },
         (ContentField::StrokeWidth, ContentValue::Number(v)) => match content {
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => {
                 paint.stroke_width.insert_key(key(v, false)?);
             }
             _ => return Err(wrong_kind(content, field)),
@@ -734,8 +784,37 @@ fn content_key_write(
             NodeContent::Text(text) => text.size.insert_key(key(v, true)?),
             _ => return Err(wrong_kind(content, field)),
         },
+        (
+            ContentField::TrimStart
+            | ContentField::TrimEnd
+            | ContentField::TrimOffset
+            | ContentField::Dash
+            | ContentField::DashOffset,
+            ContentValue::Number(v),
+        ) => match content {
+            NodeContent::Path {
+                trim_start,
+                trim_end,
+                trim_offset,
+                dash,
+                dash_offset,
+                ..
+            } => {
+                let channel = match field {
+                    ContentField::TrimStart => trim_start,
+                    ContentField::TrimEnd => trim_end,
+                    ContentField::TrimOffset => trim_offset,
+                    ContentField::Dash => dash,
+                    _ => dash_offset,
+                };
+                channel.insert_key(key(v, false)?);
+            }
+            _ => return Err(wrong_kind(content, field)),
+        },
         (ContentField::Fill, ContentValue::Color(color)) => match content {
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => {
                 paint.fill.insert_key(Keyframe {
                     frame,
                     value: color,
@@ -745,7 +824,9 @@ fn content_key_write(
             _ => return Err(wrong_kind(content, field)),
         },
         (ContentField::Stroke, ContentValue::Color(color)) => match content {
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => {
                 paint.stroke.insert_key(Keyframe {
                     frame,
                     value: color,
@@ -785,18 +866,48 @@ fn content_key_remove(content: &mut NodeContent, field: ContentField, frame: Fra
             ContentField::Radius,
         ) => remove(radius),
         (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. },
             ContentField::StrokeWidth,
         ) => remove(&mut paint.stroke_width),
         (NodeContent::Text(text), ContentField::Size) => remove(&mut text.size),
         (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            NodeContent::Path {
+                trim_start,
+                trim_end,
+                trim_offset,
+                dash,
+                dash_offset,
+                ..
+            },
+            ContentField::TrimStart
+            | ContentField::TrimEnd
+            | ContentField::TrimOffset
+            | ContentField::Dash
+            | ContentField::DashOffset,
+        ) => {
+            let channel = match field {
+                ContentField::TrimStart => trim_start,
+                ContentField::TrimEnd => trim_end,
+                ContentField::TrimOffset => trim_offset,
+                ContentField::Dash => dash,
+                _ => dash_offset,
+            };
+            remove(channel);
+        }
+        (
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. },
             ContentField::Fill,
         ) => {
             paint.fill.remove_key(frame);
         }
         (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. },
             ContentField::Stroke,
         ) => {
             paint.stroke.remove_key(frame);
@@ -821,15 +932,29 @@ fn set_number(
 }
 
 fn check_number(field: ContentField, value: f64, positive: bool) -> Result<(), CoreError> {
-    let ok = value.is_finite() && if positive { value > 0.0 } else { value >= 0.0 };
+    let (ok, reason) = if matches!(
+        field,
+        ContentField::TrimStart | ContentField::TrimEnd | ContentField::TrimOffset
+    ) {
+        (
+            value.is_finite() && (0.0..=1.0).contains(&value),
+            "must be a finite number from 0 to 1",
+        )
+    } else if positive {
+        (
+            value.is_finite() && value > 0.0,
+            "must be a finite number above zero",
+        )
+    } else {
+        (
+            value.is_finite() && value >= 0.0,
+            "must be a finite number zero or above",
+        )
+    };
     if !ok {
         return Err(CoreError::InvalidContentValue {
             field: field.name(),
-            reason: if positive {
-                "must be a finite number above zero"
-            } else {
-                "must be a finite number zero or above"
-            },
+            reason,
         });
     }
     Ok(())

@@ -20,11 +20,13 @@
 
 mod fit;
 mod frame;
+mod paths;
 mod shapes;
 mod space;
 mod text;
 
 pub use fit::ViewFit;
+pub use paths::path_bounds;
 pub use space::{linear_rgba, srgb_to_linear};
 
 use std::collections::HashMap;
@@ -142,6 +144,7 @@ pub struct FrameRenderer {
     adapter_name: String,
     clear: Option<wgpu::Color>,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
+    path_cache: paths::PathCache,
 }
 
 /// Counters returned by one plan paint into a drawing surface.
@@ -293,6 +296,7 @@ impl FrameRenderer {
 pub struct LivePainter {
     font: FontId2d,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
+    path_cache: paths::PathCache,
 }
 
 #[cfg(feature = "live")]
@@ -311,6 +315,7 @@ impl LivePainter {
         Ok(Self {
             font,
             missing_glyphs: HashMap::new(),
+            path_cache: paths::PathCache::default(),
         })
     }
 
@@ -322,6 +327,7 @@ impl LivePainter {
     /// reported [`PaintStats::missing_glyphs`] would be stale.
     pub fn clear_cache(&mut self) {
         self.missing_glyphs.clear();
+        self.path_cache = paths::PathCache::default();
     }
 
     /// Measures one text line of the embedded font at `size` composition
@@ -367,6 +373,7 @@ impl LivePainter {
             flip,
             self.font,
             &mut self.missing_glyphs,
+            &mut self.path_cache,
         )
     }
 }

@@ -131,7 +131,7 @@ impl Editor {
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
             j.key(field.name());
-            content_value(j, document, node, field, frame);
+            content_value(j, document, node, field);
         }
         j.end_object();
         j.end_object();
@@ -299,20 +299,17 @@ fn value_or_null(j: &mut Json, value: Option<OverrideValue>) {
     }
 }
 
+/// The authored static value of one content field.
+///
+/// The sampled value and its keys live in the `channels` object; `content`
+/// reports what the program authored, so a reader sees the document's static
+/// values even when the field is animated.
 fn content_value(
     j: &mut Json,
     document: &Document,
     node: NodeId,
     field: motioner_core::ContentField,
-    frame: Frame,
 ) {
-    if field.is_animatable() {
-        value_or_null(
-            j,
-            channels::sampled(document, node, channels::Channel::Content(field), frame),
-        );
-        return;
-    }
     match document
         .node(node)
         .and_then(|node| node.content().static_value(field))
@@ -329,6 +326,12 @@ fn content_value(
         }
         Some(motioner_core::ContentValue::Number(number)) => {
             j.number(number);
+        }
+        Some(motioner_core::ContentValue::Cap(cap)) => {
+            j.string(cap.name());
+        }
+        Some(motioner_core::ContentValue::Join(join)) => {
+            j.string(join.name());
         }
         Some(motioner_core::ContentValue::Color(color)) => {
             j.opt_string(color.map(motioner_core::Color::to_hex).as_deref());

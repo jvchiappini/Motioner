@@ -11,8 +11,9 @@
 
 use ferrous_2d::render::ShapeInstance;
 use motioner_core::Color;
-use motioner_eval::{Affine2, ItemShape, RenderItem};
+use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan};
 
+use crate::paths::{self, PathCache};
 use crate::{space, Canvas2d};
 
 /// Colour, opacity and depth shared by one shape instance.
@@ -23,19 +24,28 @@ struct Style {
     z: f32,
 }
 
-/// Number of shape instances a shape item will submit.
+/// Number of draw layers an item contributes, for depth spreading.
 ///
-/// A rectangle or circle submits one instance per present fill/stroke; text
-/// items submit none here (they are handled by [`crate::text`]).
-pub(crate) fn draw_count(shape: &ItemShape) -> u32 {
+/// A rectangle or circle draws one layer per present fill/stroke; a path
+/// draws its fill batch and its stroke batch; text is one layer.
+pub(crate) fn draw_layers(plan: &RenderPlan, shape: &ItemShape) -> u32 {
     match shape {
         ItemShape::Rect { paint, .. } | ItemShape::Circle { paint, .. } => {
             u32::from(paint.fill.is_some()) + u32::from(has_visible_stroke(paint))
         }
-        ItemShape::Text { .. } => 0,
+        ItemShape::Path { index } => {
+            let Some(path) = plan.path(*index) else {
+                return 0;
+            };
+            u32::from(path.paint.fill.is_some())
+                + u32::from(path.paint.stroke.is_some_and(|stroke| stroke.width > 0.0))
+        }
+        ItemShape::Text { .. } => 1,
     }
 }
 
+/// Number of shape instances an item will submit.
+///
 /// Whether a paint has a stroke that can leave ink.
 ///
 /// A zero-width stroke is treated as absent: the engine's inside ring would
@@ -51,6 +61,8 @@ fn has_visible_stroke(paint: &motioner_core::Paint) -> bool {
 /// submitted instance so the caller's draw ordering matches [`draw_count`].
 pub(crate) fn draw_item(
     canvas: &mut impl Canvas2d,
+    plan: &RenderPlan,
+    cache: &mut PathCache,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -120,8 +132,60 @@ pub(crate) fn draw_item(
             }
             draws
         }
+        ItemShape::Path { index } => {
+            draw_path(canvas, plan, cache, item, model, index, z_index, total)
+        }
         ItemShape::Text { .. } => 0,
     }
+}
+
+/// Submits one path's fill and stroke triangles; `z_index` advances once per
+/// present layer, not once per triangle.
+#[allow(clippy::too_many_arguments)] // the item's resolved state, kept flat
+fn draw_path(
+    canvas: &mut impl Canvas2d,
+    plan: &RenderPlan,
+    cache: &mut PathCache,
+    item: &RenderItem,
+    model: Affine2,
+    index: usize,
+    z_index: &mut u32,
+    total: u32,
+) -> u32 {
+    let Some(path) = plan.path(index) else {
+        return 0;
+    };
+    let meshes = cache.meshes(item.node, path);
+    let mut draws = 0;
+    if let Some(fill) = path.paint.fill.filter(|_| !meshes.fill.is_empty()) {
+        let color = space::linear_rgba(fill, item.opacity);
+        let z = space::z_for(*z_index, total);
+        for triangle in &meshes.fill {
+            canvas.shape(paths::instance(model, triangle, color, z));
+        }
+        *z_index += 1;
+        #[allow(clippy::cast_possible_truncation)] // triangle counts fit u32
+        {
+            draws += meshes.fill.len() as u32;
+        }
+    }
+    if let Some(stroke) = path
+        .paint
+        .stroke
+        .filter(|stroke| stroke.width > 0.0 && !meshes.stroke.is_empty())
+    {
+        let color = space::linear_rgba(stroke.color, item.opacity);
+        let z = space::z_for(*z_index, total);
+        for triangle in &meshes.stroke {
+            canvas.shape(paths::instance(model, triangle, color, z));
+        }
+        *z_index += 1;
+        #[allow(clippy::cast_possible_truncation)] // triangle counts fit u32
+        {
+            draws += meshes.stroke.len() as u32;
+        }
+    }
+    draws
 }
 
 fn fill_rect(
@@ -309,7 +373,7 @@ mod tests {
                 }),
             ),
         };
-        assert_eq!(draw_count(&shape), 0);
+        assert_eq!(draw_layers(&RenderPlan::new(), &shape), 0);
     }
 
     #[test]
@@ -321,7 +385,8 @@ mod tests {
     }
 
     #[test]
-    fn draw_count_matches_present_paint() {
+    fn draw_layers_match_present_paint() {
+        let plan = RenderPlan::new();
         let both = ItemShape::Rect {
             width: 1.0,
             height: 1.0,
@@ -334,11 +399,11 @@ mod tests {
                 }),
             ),
         };
-        assert_eq!(draw_count(&both), 2);
+        assert_eq!(draw_layers(&plan, &both), 2);
         let fill_only = ItemShape::Circle {
             radius: 1.0,
             paint: rect_paint(Some(Color::WHITE), None),
         };
-        assert_eq!(draw_count(&fill_only), 1);
+        assert_eq!(draw_layers(&plan, &fill_only), 1);
     }
 }

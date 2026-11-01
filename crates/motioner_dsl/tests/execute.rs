@@ -344,3 +344,107 @@ fn content_attribute_reads_and_writes_use_the_channels() {
         Some(motioner_core::ContentValue::Number(2.0))
     );
 }
+
+#[test]
+fn path_constructors_build_closed_and_open_geometry() {
+    let document = build(
+        "p = path([(0, 0), (100, 0, 0, 0, 60, -40), (200, 0)], closed=False,\n\
+         \x20        stroke=\"#FF5A6E\", stroke_width=8, cap=\"square\", join=\"miter\")\n\
+         p.id(\"p\")\n\
+         tri = polygon(3, 40, fill=\"#00FF00\")\n\
+         tri.id(\"tri\")\n\
+         star = star(5, 20, 50, stroke=\"#FFFFFF\")\n\
+         star.id(\"star\")\n\
+         a = arc(30, 0, 90, stroke=\"#5CDBC5\", cap=\"butt\")\n\
+         a.id(\"arc\")\n\
+         d = path([(0, 0), (10, 10)], closed=True)\n\
+         d.id(\"d\")\n",
+    );
+    let p = document.find("p").unwrap();
+    let NodeContent::Path {
+        geometry, paint, ..
+    } = document.node(p).unwrap().content()
+    else {
+        panic!("p is a path");
+    };
+    assert_eq!(geometry.points().len(), 3);
+    assert!(!geometry.closed());
+    assert_eq!(geometry.cap(), motioner_core::LineCap::Square);
+    assert_eq!(geometry.join(), motioner_core::LineJoin::Miter);
+    assert!(geometry.points()[1].has_handles());
+    assert!((paint.stroke_width.value() - 8.0).abs() < 1e-9);
+
+    let tri = document.find("tri").unwrap();
+    let NodeContent::Path { geometry, .. } = document.node(tri).unwrap().content() else {
+        panic!("tri is a path");
+    };
+    assert!(geometry.closed());
+    assert_eq!(geometry.points().len(), 3);
+
+    let star = document.find("star").unwrap();
+    let NodeContent::Path { geometry, .. } = document.node(star).unwrap().content() else {
+        panic!("star is a path");
+    };
+    assert_eq!(geometry.points().len(), 10);
+
+    let arc = document.find("arc").unwrap();
+    let NodeContent::Path { geometry, .. } = document.node(arc).unwrap().content() else {
+        panic!("arc is a path");
+    };
+    assert!(!geometry.closed());
+    assert!(geometry.points().len() >= 2);
+    assert_eq!(geometry.cap(), motioner_core::LineCap::Butt);
+
+    let d = document.find("d").unwrap();
+    let NodeContent::Path { geometry, .. } = document.node(d).unwrap().content() else {
+        panic!("d is a path");
+    };
+    assert!(geometry.closed());
+}
+
+#[test]
+fn path_trim_and_dash_are_animatable_channels() {
+    let document = build(
+        "p = path([(0, 0), (200, 0)], stroke=\"#FFFFFF\")\n\
+         p.id(\"p\")\n\
+         p.key(\"trim_end\", 0.0, 0.0)\n\
+         p.key(\"trim_end\", 1.0, 1.0, ease=\"cubic_out\")\n\
+         p.key(\"trim_start\", 0.5, 0.25)\n\
+         p.key(\"dash\", 0.0, 10)\n\
+         p.key(\"dash_offset\", 0.0, 0)\n\
+         p.dash_offset = 12\n",
+    );
+    let p = document.find("p").unwrap();
+    let content = document.node(p).unwrap().content();
+    for (field, frames) in [
+        (motioner_core::ContentField::TrimEnd, vec![0, 60]),
+        (motioner_core::ContentField::TrimStart, vec![30]),
+        (motioner_core::ContentField::Dash, vec![0]),
+    ] {
+        assert_eq!(
+            content.channel(field).unwrap().key_frames(),
+            frames,
+            "{field:?}"
+        );
+    }
+    assert_eq!(
+        content.static_value(motioner_core::ContentField::DashOffset),
+        Some(motioner_core::ContentValue::Number(12.0))
+    );
+    assert_eq!(
+        content.static_value(motioner_core::ContentField::TrimEnd),
+        Some(motioner_core::ContentValue::Number(1.0))
+    );
+}
+
+#[test]
+fn path_rejects_bad_points_and_discrete_keys() {
+    let error = fail("p = path([(0, 0)])\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("two points"), "{error}");
+    let error = fail("p = path([(0, 0, 1, 2)])\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    let error = fail("p = polygon(4, 10)\np.key(\"cap\", 0.0, \"round\")\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("discrete"), "{error}");
+}

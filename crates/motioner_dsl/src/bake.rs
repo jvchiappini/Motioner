@@ -1050,4 +1050,40 @@ mod tests {
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
         assert_eq!(semantics(&actual), semantics(&before));
     }
+
+    #[test]
+    fn a_path_trim_key_is_baked_in_place() {
+        let source = "comp(\"P\", 100, 100, 60, 2.0, \"#000000\")\n\
+                      p = path([(0, 0), (50, 0)], stroke=\"#FFFFFF\")\n\
+                      p.id(\"p\")\n\
+                      p.key(\"trim_end\", 0.0, 0.0)\n\
+                      p.key(\"trim_end\", 1.0, 1.0, ease=\"cubic_out\")\n";
+        let compiled = compile(source);
+        let set = overrides(&[(
+            "p",
+            "trim_end",
+            OverrideAction::Key {
+                frame: 0,
+                value: OverrideValue::Number(0.25),
+                ease: Ease::Linear,
+            },
+        )]);
+        let before = expected(&compiled, &set);
+        let baked = bake(
+            source,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.overrides.is_empty(), "{baked:?}");
+        assert!(
+            baked.program.contains("key(\"trim_end\", 0.0, 0.25"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(semantics(&actual), semantics(&before));
+    }
 }

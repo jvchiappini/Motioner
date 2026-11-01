@@ -1775,6 +1775,7 @@ dependencies = [
  "ferrous_font",
  "ferrous_renderer",
  "glam 0.29.3",
+ "lyon_tessellation",
  "motioner_core",
  "motioner_dsl",
  "motioner_eval",

@@ -5,6 +5,7 @@ use motioner_core::{Ease, OverrideAction, OverrideValue, Vec2};
 
 use super::{Editor, Effect};
 use crate::command::{parse_commands, Command, ErrorKind};
+use crate::timeline_model::RowKind;
 
 const HELLO: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -356,5 +357,69 @@ fn query_reports_content_channels() {
     assert!(
         json.contains("\"content\":{\"text\":\"Motioner\""),
         "{json}"
+    );
+}
+
+const PATHS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../examples/paths.motion"
+));
+
+/// An editor with the vector-path example loaded.
+pub(crate) fn paths_editor(name: &str) -> (Editor, TempDir) {
+    let dir = std::env::temp_dir().join(format!("motioner_paths_{}_{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("paths.motion");
+    std::fs::write(&path, PATHS).unwrap();
+    (Editor::open(&path).unwrap(), TempDir(dir))
+}
+
+#[test]
+fn path_layers_have_channels_rows_and_stopwatches() {
+    let (mut editor, _dir) = paths_editor("path_channels");
+    run(&mut editor, "select(\"ring\")");
+    let inspector = editor.inspector();
+    for label in ["Trim Start", "Trim End", "Dash", "Dash Offset", "Cap"] {
+        assert!(
+            inspector.rows.iter().any(|row| row.label == label),
+            "the inspector shows {label}"
+        );
+    }
+    // The ring animates dash_offset, so the timeline has a content row with
+    // keys for it.
+    let dash_row = editor
+        .timeline()
+        .rows()
+        .iter()
+        .find(|row| {
+            matches!(
+                row.kind,
+                RowKind::Content {
+                    field: motioner_core::ContentField::DashOffset,
+                    ..
+                }
+            )
+        })
+        .expect("a dash offset row");
+    assert!(dash_row.animated);
+    assert!(!dash_row.keys.is_empty());
+
+    run(&mut editor, "seek(30)\nstopwatch(\"ring\", \"trim_end\")");
+    let entry = editor
+        .session()
+        .overrides()
+        .get("ring", "trim_end", Some(30))
+        .expect("the stopwatch keys trim_end");
+    assert!(matches!(entry.action, OverrideAction::Key { .. }));
+
+    run(&mut editor, "key(\"ribbon\", \"trim_start\", 1.0, 0.9)");
+    let json = editor.query_json(Some("ribbon")).unwrap();
+    assert!(json.contains("\"trim_start\":{\"value\":0.45"), "{json}");
+    assert!(json.contains("\"kind\":\"path\""), "{json}");
+    // Cap and join are discrete and cannot be keyed.
+    assert_eq!(
+        error(&mut editor, "key(\"ring\", \"cap\", 1.0, \"butt\")"),
+        ErrorKind::UnknownProperty
     );
 }

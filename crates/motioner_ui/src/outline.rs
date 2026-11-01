@@ -20,6 +20,8 @@ pub enum NodeKind {
     Rect,
     /// A circle.
     Circle,
+    /// A vector path.
+    Path,
     /// A text line.
     Text,
 }
@@ -32,6 +34,7 @@ impl NodeKind {
             Self::Group => "Group",
             Self::Rect => "Rect",
             Self::Circle => "Circle",
+            Self::Path => "Path",
             Self::Text => "Text",
         }
     }
@@ -41,6 +44,7 @@ impl NodeKind {
             NodeContent::Group => Self::Group,
             NodeContent::Rect { .. } => Self::Rect,
             NodeContent::Circle { .. } => Self::Circle,
+            NodeContent::Path { .. } => Self::Path,
             NodeContent::Text(_) => Self::Text,
         }
     }
@@ -72,7 +76,7 @@ pub struct OutlineRow {
 #[must_use]
 pub fn outline_rows(document: &Document) -> Vec<OutlineRow> {
     let mut rows = Vec::with_capacity(document.len());
-    let mut counters = [0u32; 4];
+    let mut counters = [0u32; 5];
     let roots = document.roots();
     for (index, &root) in roots.iter().enumerate() {
         push_rows(
@@ -92,7 +96,7 @@ fn push_rows(
     id: NodeId,
     depth: u32,
     has_next_sibling: bool,
-    counters: &mut [u32; 4],
+    counters: &mut [u32; 5],
     rows: &mut Vec<OutlineRow>,
 ) {
     let Some(node) = document.node(id) else {
@@ -135,6 +139,14 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
         NodeContent::Circle { radius, .. } => (
             format!("Circle {ordinal}"),
             format!("r{}", number(radius.value())),
+        ),
+        NodeContent::Path { geometry, .. } => (
+            format!("Path {ordinal}"),
+            format!(
+                "{} pts{}",
+                geometry.points().len(),
+                if geometry.closed() { ", closed" } else { "" }
+            ),
         ),
         NodeContent::Text(text) => {
             let single_line = text.text.replace('\n', " ");

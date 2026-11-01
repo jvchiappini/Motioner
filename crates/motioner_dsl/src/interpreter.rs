@@ -529,7 +529,11 @@ impl Interpreter<'_> {
                 | Builtin::Group
                 | Builtin::Rect
                 | Builtin::Circle
-                | Builtin::Text),
+                | Builtin::Text
+                | Builtin::Path
+                | Builtin::Polygon
+                | Builtin::Star
+                | Builtin::Arc),
             ) => self.scene.call(builtin, call_args, &self.site(span)),
             Value::Builtin(builtin) => {
                 builtins::call(builtin, call_args, self.limits, &mut self.budget)

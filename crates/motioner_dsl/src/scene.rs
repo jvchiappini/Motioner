@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use motioner_core::{
     BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease,
-    FrameRate, NodeContent, NodeId, NodeIdentity, Paint, Property, PropertyValue, Stroke,
-    TextAlign, TextContent, MAX_CANVAS_SIZE,
+    FrameRate, LineCap, LineJoin, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry,
+    PathPoint, Property, PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -164,6 +164,10 @@ impl Scene {
                 Ok(node)
             }
             Builtin::Text => self.text(args, site),
+            Builtin::Path => self.path(args, site),
+            Builtin::Polygon => self.polygon(args, site),
+            Builtin::Star => self.star(args, site),
+            Builtin::Arc => self.arc(args, site),
             _ => Err(HostError::type_error(format!(
                 "{}() is not a scene constructor",
                 builtin.name()
@@ -229,6 +233,161 @@ impl Scene {
         let node = self.create(content, site)?;
         if let Value::Node(id) = node {
             for (index, property) in [(0, "text"), (2, "size"), (3, "color"), (4, "align")] {
+                self.record(id, property, bound.source(index));
+            }
+        }
+        Ok(node)
+    }
+
+    /// `path(points, closed=False, ...)` (D-0029).
+    fn path(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "points",
+            "closed",
+            "fill",
+            "stroke",
+            "stroke_width",
+            "cap",
+            "join",
+            "trim_start",
+            "trim_end",
+            "trim_offset",
+            "dash",
+            "dash_offset",
+        ];
+        let bound = bind("path", &params, 1, args)?;
+        let points = path_points(bound.get(0).unwrap_or(&Value::None))?;
+        let closed = match bound.get(1) {
+            None | Some(Value::None) => false,
+            Some(Value::Bool(closed)) => *closed,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "path(): 'closed' expects True or False, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let geometry = PathGeometry::new(points, closed, LineCap::Round, LineJoin::Round)
+            .map_err(|error| core_error(&error))?;
+        let node = self.path_node(geometry, &bound, 2, 5, 6, site)?;
+        if let Value::Node(id) = node {
+            let channels = [
+                (ContentField::TrimStart, 7, 0.0),
+                (ContentField::TrimEnd, 8, 1.0),
+                (ContentField::TrimOffset, 9, 0.0),
+                (ContentField::Dash, 10, 0.0),
+                (ContentField::DashOffset, 11, 0.0),
+            ];
+            for (field, index, default) in channels {
+                let value = bound.number_or(index, default)?;
+                self.document_mut()?
+                    .set_content(id, field, ContentValue::Number(value))
+                    .map_err(|error| core_error(&error))?;
+                self.record(id, field.name(), bound.source(index));
+            }
+        }
+        Ok(node)
+    }
+
+    /// `polygon(sides, radius, ...)`.
+    fn polygon(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "sides",
+            "radius",
+            "fill",
+            "stroke",
+            "stroke_width",
+            "cap",
+            "join",
+        ];
+        let bound = bind("polygon", &params, 2, args)?;
+        let sides = bound.integer_in(0, 3, 3, 1000)?;
+        let sides = u32::try_from(sides)
+            .map_err(|_| HostError::value_error("polygon(): 'sides' is out of range"))?;
+        let geometry =
+            PathGeometry::polygon(sides, bound.number(1)?).map_err(|error| core_error(&error))?;
+        self.path_node(geometry, &bound, 2, 5, 6, site)
+    }
+
+    /// `star(points, inner, outer, ...)`.
+    fn star(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "points",
+            "inner",
+            "outer",
+            "fill",
+            "stroke",
+            "stroke_width",
+            "cap",
+            "join",
+        ];
+        let bound = bind("star", &params, 3, args)?;
+        let spikes = bound.integer_in(0, 5, 2, 1000)?;
+        let spikes = u32::try_from(spikes)
+            .map_err(|_| HostError::value_error("star(): 'points' is out of range"))?;
+        let geometry = PathGeometry::star(spikes, bound.number(1)?, bound.number(2)?)
+            .map_err(|error| core_error(&error))?;
+        self.path_node(geometry, &bound, 3, 6, 7, site)
+    }
+
+    /// `arc(radius, start=0, end=360, ...)`.
+    fn arc(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "radius",
+            "start",
+            "end",
+            "fill",
+            "stroke",
+            "stroke_width",
+            "cap",
+            "join",
+        ];
+        let bound = bind("arc", &params, 1, args)?;
+        let geometry = PathGeometry::arc(
+            bound.number(0)?,
+            bound.number_or(1, 0.0)?,
+            bound.number_or(2, 360.0)?,
+        )
+        .map_err(|error| core_error(&error))?;
+        self.path_node(geometry, &bound, 3, 6, 7, site)
+    }
+
+    /// Creates a path node from a geometry and the paint/cap/join arguments
+    /// starting at `paint_at`.
+    #[allow(clippy::too_many_arguments)] // the constructor's flat argument slots
+    fn path_node(
+        &mut self,
+        mut geometry: PathGeometry,
+        bound: &Bound<'_>,
+        paint_at: usize,
+        cap_at: usize,
+        join_at: usize,
+        site: &CreationSite,
+    ) -> HostResult<Value> {
+        let cap_name = bound.string_or(cap_at, "round")?;
+        let cap = LineCap::from_name(&cap_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "unknown cap {cap_name:?}; use \"butt\", \"round\" or \"square\""
+            ))
+        })?;
+        let join_name = bound.string_or(join_at, "round")?;
+        let join = LineJoin::from_name(&join_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "unknown join {join_name:?}; use \"miter\", \"bevel\" or \"round\""
+            ))
+        })?;
+        geometry.set_cap(cap);
+        geometry.set_join(join);
+        let paint = path_paint(bound, paint_at)?;
+        let node = self.create(NodeContent::path(geometry, paint), site)?;
+        if let Value::Node(id) = node {
+            for (index, property) in [
+                (paint_at, "fill"),
+                (paint_at + 1, "stroke"),
+                (paint_at + 2, "stroke_width"),
+                (cap_at, "cap"),
+                (join_at, "join"),
+            ] {
                 self.record(id, property, bound.source(index));
             }
         }
@@ -552,6 +711,65 @@ fn paint(bound: &Bound<'_>, first: usize) -> HostResult<Paint> {
     Ok(Paint { fill, stroke })
 }
 
+/// Reads `path()` points: each is `(x, y)` or
+/// `(x, y, in_dx, in_dy, out_dx, out_dy)`.
+fn path_points(value: &Value) -> HostResult<Vec<PathPoint>> {
+    let items: Vec<Value> = match value {
+        Value::List(items) | Value::Tuple(items) => items.borrow().clone(),
+        other => {
+            return Err(HostError::type_error(format!(
+                "path(): 'points' must be a list of (x, y) points, got {}",
+                other.type_name()
+            )))
+        }
+    };
+    if items.len() < 2 {
+        return Err(HostError::value_error("path(): needs at least two points"));
+    }
+    items
+        .iter()
+        .map(|item| {
+            let numbers: Vec<f64> = match item {
+                Value::List(values) | Value::Tuple(values) => values
+                    .borrow()
+                    .iter()
+                    .map_while(|value| match value {
+                        Value::Number(number) => Some(*number),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            match numbers.as_slice() {
+                [x, y] => Ok(PathPoint::corner(Vec2::new(*x, *y))),
+                [x, y, in_x, in_y, out_x, out_y] => Ok(PathPoint::curved(
+                    Vec2::new(*x, *y),
+                    Vec2::new(*in_x, *in_y),
+                    Vec2::new(*out_x, *out_y),
+                )),
+                _ => Err(HostError::value_error(
+                    "path(): a point is (x, y) or (x, y, in_dx, in_dy, out_dx, out_dy)",
+                )),
+            }
+        })
+        .collect()
+}
+
+/// Reads optional `fill`, `stroke` and `stroke_width` starting at `first`,
+/// with the path defaults (no fill, white 2 px stroke).
+fn path_paint(bound: &Bound<'_>, first: usize) -> HostResult<Paint> {
+    let fill = bound.optional_color(first, None)?;
+    let stroke_color = bound.optional_color(first + 1, Some(Color::WHITE))?;
+    let stroke_width = bound.number_or(first + 2, 2.0)?;
+    let stroke = stroke_color
+        .filter(|_| stroke_width != 0.0)
+        .map(|color| Stroke {
+            color,
+            width: stroke_width,
+        });
+    Ok(Paint { fill, stroke })
+}
+
 /// Maps a decimal or integer fps to an exact rational frame rate.
 fn frame_rate(fps: f64) -> HostResult<FrameRate> {
     let integer = as_integer(fps)
@@ -617,6 +835,8 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
             TextAlign::Center => "center",
             TextAlign::Right => "right",
         })),
+        ContentValue::Cap(cap) => Value::Str(Rc::from(cap.name())),
+        ContentValue::Join(join) => Value::Str(Rc::from(join.name())),
     })
 }
 
@@ -637,7 +857,12 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::Height
         | ContentField::Radius
         | ContentField::StrokeWidth
-        | ContentField::Size => number(value),
+        | ContentField::Size
+        | ContentField::TrimStart
+        | ContentField::TrimEnd
+        | ContentField::TrimOffset
+        | ContentField::Dash
+        | ContentField::DashOffset => number(value),
         ContentField::Fill | ContentField::Stroke | ContentField::Color => match value {
             Value::None if field != ContentField::Color => Ok(ContentValue::Color(None)),
             Value::Str(text) => Color::parse_hex(text)
@@ -666,6 +891,32 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
                 }),
             other => Err(HostError::type_error(format!(
                 "'align' expects a string, got {}",
+                other.type_name()
+            ))),
+        },
+        ContentField::Cap => match value {
+            Value::Str(text) => LineCap::from_name(text)
+                .map(ContentValue::Cap)
+                .ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "'cap' must be \"butt\", \"round\" or \"square\", got {text:?}"
+                    ))
+                }),
+            other => Err(HostError::type_error(format!(
+                "'cap' expects a string, got {}",
+                other.type_name()
+            ))),
+        },
+        ContentField::Join => match value {
+            Value::Str(text) => LineJoin::from_name(text)
+                .map(ContentValue::Join)
+                .ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "'join' must be \"miter\", \"bevel\" or \"round\", got {text:?}"
+                    ))
+                }),
+            other => Err(HostError::type_error(format!(
+                "'join' expects a string, got {}",
                 other.type_name()
             ))),
         },

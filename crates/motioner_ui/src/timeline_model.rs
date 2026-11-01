@@ -251,6 +251,18 @@ pub fn content_fields(content: &NodeContent) -> Vec<ContentField> {
             ContentField::Stroke,
             ContentField::StrokeWidth,
         ],
+        NodeContent::Path { .. } => vec![
+            ContentField::Fill,
+            ContentField::Stroke,
+            ContentField::StrokeWidth,
+            ContentField::TrimStart,
+            ContentField::TrimEnd,
+            ContentField::TrimOffset,
+            ContentField::Dash,
+            ContentField::DashOffset,
+            ContentField::Cap,
+            ContentField::Join,
+        ],
         NodeContent::Text(_) => vec![
             ContentField::Text,
             ContentField::Size,

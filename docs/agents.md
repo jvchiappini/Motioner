@@ -31,11 +31,14 @@ Every one of them prints **one JSON object per line** on stdout.
   axis mean both axes (`(x, y)` values). Scale and opacity are factors (`1` =
   100 %); rotation is degrees; positions are composition pixels.
 - **Content fields**: `width`, `height`, `radius`, `fill`, `stroke`,
-  `stroke_width` (rect/circle); `text`, `size`, `color`, `align` (text).
-  Colours are `"#RRGGBB"` or `"#RRGGBBAA"`; `fill`/`stroke` also take
-  `"none"`. `align` is `"left"`, `"center"` or `"right"`.
-- **Animatable content fields** (D-0028): every field above except `text`
-  and `align` is a channel with no axes. `key(id, "fill", t, "#FF0000")`,
+  `stroke_width` (rect/circle/path); `trim_start`, `trim_end`,
+  `trim_offset`, `dash`, `dash_offset`, `cap`, `join` (path); `text`,
+  `size`, `color`, `align` (text). Colours are `"#RRGGBB"` or
+  `"#RRGGBBAA"`; `fill`/`stroke` also take `"none"`. `align` is `"left"`,
+  `"center"` or `"right"`; `cap` is `"butt"`, `"round"` or `"square"`;
+  `join` is `"miter"`, `"bevel"` or `"round"`.
+- **Animatable content fields** (D-0028): every field above except `text`,
+  `align`, `cap` and `join` is a channel with no axes. `key(id, "fill", t, "#FF0000")`,
   `stopwatch(id, "size")` and `edit(id, "width", 420)` work exactly like
   transform channels; the timeline and inspector show the same stopwatch and
   diamonds. Colours interpolate in linear-light sRGB, so a keyed red→green

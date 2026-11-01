@@ -398,8 +398,67 @@ fn content_rows(
         NodeContent::Group => Vec::new(),
         NodeContent::Rect { .. } => rect_rows(document, node, frame),
         NodeContent::Circle { .. } => circle_rows(document, node, frame),
+        NodeContent::Path { geometry, .. } => path_rows(document, node, geometry, frame),
         NodeContent::Text(text) => text_rows(document, node, text, frame),
     }
+}
+
+fn path_rows(
+    document: &Document,
+    node: NodeId,
+    geometry: &motioner_core::PathGeometry,
+    frame: Frame,
+) -> Vec<Row> {
+    let mut rows = vec![row(
+        "Path",
+        "Points",
+        RowValue::ReadOnly(format!(
+            "{} pts{}",
+            geometry.points().len(),
+            if geometry.closed() { ", closed" } else { "" }
+        )),
+        None,
+    )];
+    for (content_field, label) in [
+        (ContentField::TrimStart, "Trim Start"),
+        (ContentField::TrimEnd, "Trim End"),
+        (ContentField::TrimOffset, "Trim Offset"),
+        (ContentField::Dash, "Dash"),
+        (ContentField::DashOffset, "Dash Offset"),
+    ] {
+        rows.push(row(
+            "Path",
+            label,
+            RowValue::Single(field(
+                FieldTarget::Content(content_field),
+                "",
+                number_or_zero(document, node, content_field, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, content_field, frame)),
+        ));
+    }
+    rows.push(row(
+        "Path",
+        "Cap",
+        RowValue::Text {
+            target: FieldTarget::Content(ContentField::Cap),
+            text: geometry.cap().name().to_owned(),
+        },
+        None,
+    ));
+    rows.push(row(
+        "Path",
+        "Join",
+        RowValue::Text {
+            target: FieldTarget::Content(ContentField::Join),
+            text: geometry.join().name().to_owned(),
+        },
+        None,
+    ));
+    rows.extend(paint_rows(document, node, frame, true));
+    rows
 }
 
 fn number_or_zero(document: &Document, node: NodeId, field: ContentField, frame: Frame) -> f64 {
@@ -600,6 +659,7 @@ pub const fn kind_label(content: &NodeContent) -> &'static str {
         NodeContent::Group => "Group layer",
         NodeContent::Rect { .. } => "Rectangle layer",
         NodeContent::Circle { .. } => "Circle layer",
+        NodeContent::Path { .. } => "Path layer",
         NodeContent::Text(_) => "Text layer",
     }
 }

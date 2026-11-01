@@ -114,7 +114,10 @@ The v0 surface:
 | `group()` | Empty container |
 | `rect(width, height, radius=0, fill="#ffffff", stroke=None, stroke_width=0)` | Rectangle |
 | `circle(radius, fill="#ffffff", stroke=None, stroke_width=0)` | Circle |
-| `path(points, closed=False, fill=None, stroke="#ffffff", stroke_width=2)` | Vector path |
+| `path(points, closed=False, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round", trim_start=0, trim_end=1, trim_offset=0, dash=0, dash_offset=0)` | Vector path |
+| `polygon(sides, radius, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Regular polygon |
+| `star(points, inner, outer, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Star |
+| `arc(radius, start=0, end=360, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Circular arc |
 | `text(content, font="Inter", size=48, color="#ffffff", align="left")` | Text |
 | `latex(expression, size=48, color="#ffffff", display=False)` | LaTeX math |
 | `image(source, width=None, height=None, fit="contain")` | Image |
@@ -131,15 +134,35 @@ Common node members:
 - `parent`, `children`, `name`, `id`, `enabled`.
 - `pos`, `scale`, `rotation`, `anchor`, `opacity`, `blend`.
 - Content fields: `width`, `height`, `radius`, `fill`, `stroke`,
-  `stroke_width` (rect/circle); `text`, `size`, `color`, `align` (text).
+  `stroke_width` (rect/circle/path); `trim_start`, `trim_end`,
+  `trim_offset`, `dash`, `dash_offset`, `cap`, `join` (path); `text`,
+  `size`, `color`, `align` (text).
 - `clip_in`, `clip_out`, `time_remap`.
 - Methods: `add(*nodes)`, `remove()`, `key(property, time, value, ease="linear")`,
   `ease(name)`, `mask(node)`, `effect(kind, **params)`.
 
-Every content field except `text` and `align` is an **animatable channel**:
-`key("fill", t, "#RRGGBB")`, `key("size", t, 72)`, `key("stroke_width", t,
-8)`. Colours interpolate in linear-light sRGB; a `fill`/`stroke` keyed to
-`None` holds the previous colour until that key (a step). See D-0028.
+Every content field except `text`, `align`, `cap` and `join` is an
+**animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
+`key("stroke_width", t, 8)`, `key("trim_end", t, 1)`. Colours interpolate
+in linear-light sRGB; a `fill`/`stroke` keyed to `None` holds the previous
+colour until that key (a step). See D-0028.
+
+### 7.1 Paths
+
+`path()` takes a list of points. A point is `(x, y)` for a corner, or
+`(x, y, in_dx, in_dy, out_dx, out_dy)` when it has Bézier handles; the
+handles are offsets relative to the point and a zero handle makes that side
+a straight line. The first and last point connect straight when `closed`.
+`polygon` starts at -90 degrees (a triangle points up), `star` takes the
+number of spikes, and `arc` takes degrees clockwise on screen (`0` is +x,
+a zero or full sweep draws a circle).
+
+`trim_start` and `trim_end` are fractions of the path length and
+`trim_offset` shifts that window along the path (wrapping past 1); this is
+the After Effects trim-path model, so `key("trim_end", 0.0, 0.0)` +
+`key("trim_end", 1.0, 1.0)` draws a line on. `dash` is the on-length in
+local pixels (the gap is equal) and `dash_offset` shifts the pattern. Both
+are animatable. See D-0029.
 
 3D nodes add `target`, `fov`, `intensity`, `material`, `cast_shadow` and
 similar properties. NLE nodes add clip points and track assignment.

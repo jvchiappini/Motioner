@@ -71,6 +71,18 @@ impl Editor {
                 Some(NodeContent::Text(text)) => align_name(text.align).to_owned(),
                 _ => String::new(),
             },
+            FieldTarget::Content(ContentField::Cap) => {
+                match document.node(node).map(motioner_core::Node::content) {
+                    Some(NodeContent::Path { geometry, .. }) => geometry.cap().name().to_owned(),
+                    _ => String::new(),
+                }
+            }
+            FieldTarget::Content(ContentField::Join) => {
+                match document.node(node).map(motioner_core::Node::content) {
+                    Some(NodeContent::Path { geometry, .. }) => geometry.join().name().to_owned(),
+                    _ => String::new(),
+                }
+            }
             FieldTarget::Name => self
                 .session
                 .overrides()
@@ -129,6 +141,17 @@ impl Editor {
                     OverrideValue::Text(align_name(align).to_owned()),
                 )
             }
+            FieldTarget::Content(field @ (ContentField::Cap | ContentField::Join)) => {
+                if field == ContentField::Cap {
+                    motioner_core::LineCap::from_name(trimmed)?;
+                } else {
+                    motioner_core::LineJoin::from_name(trimmed)?;
+                }
+                (
+                    field.name().to_owned(),
+                    OverrideValue::Text(trimmed.to_owned()),
+                )
+            }
             FieldTarget::Name => {
                 return Some(Command::Rename {
                     id,
@@ -178,5 +201,10 @@ fn is_numeric_field(field: ContentField) -> bool {
             | ContentField::Radius
             | ContentField::StrokeWidth
             | ContentField::Size
+            | ContentField::TrimStart
+            | ContentField::TrimEnd
+            | ContentField::TrimOffset
+            | ContentField::Dash
+            | ContentField::DashOffset
     )
 }

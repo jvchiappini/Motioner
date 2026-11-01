@@ -147,7 +147,8 @@ alpha, not premultiplied.
 
 Pure2D has no depth buffer. Its painter order is the ascending-`z` sort of the
 unified command stream (ties break shapes, then sprites, then text). The adapter
-counts every draw in the plan first, then assigns
+counts every draw layer in the plan first (one per fill, stroke or text batch),
+then assigns
 
 ```text
 z = -50 + (index + 0.5) * (100 / total)
@@ -171,6 +172,30 @@ one-to-one (`Left`, `Center`, `Right`). Missing glyphs are measured once per
 text node with `measure_text` and cached on the renderer; later frames reuse the
 cached count instead of re-measuring. The cache is keyed by `NodeId` and assumes
 one document per renderer, which is how the CLI uses it.
+
+## Vector paths
+
+A path item (`ItemShape::Path`) references a `ResolvedPath` in the plan's
+arena: the authored `PathGeometry` plus the frame's trim, dash and paint.
+`motioner_core::path` flattens cubics adaptively and cuts the flattened
+polyline into trimmed and dashed pieces; `lyon_tessellation` turns those
+pieces into triangles (fill and stroke with the authored cap/join). Each
+triangle becomes a `ShapeInstance::polygon_triangle`.
+
+The tessellation is cached per node. The key hashes the resolved geometry,
+trim, dash, stroke width and cap/join, and the cache stores local-space
+triangles, so only the model transform runs per frame. Edges shared by two
+triangles are marked hard and only boundary edges get anti-aliasing: without
+that, every internal edge would double-blend and show as a seam.
+
+`path_bounds` returns the local box of a resolved path expanded by half the
+stroke, which the editor uses for selection and hit testing. Hit testing
+also asks the geometry whether the pointer is inside the fill (even-odd) or
+within half the stroke of the outline; it uses the untrimmed geometry so a
+draw-on line stays pickable.
+
+`lyon_tessellation` is the only geometry dependency (D-0029); it is already
+in the engine's build graph and adds no new crate to the lockfile.
 
 ## Radius and stroke approximations
 

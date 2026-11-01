@@ -28,6 +28,24 @@ impl Vec2 {
     pub const fn splat(value: f64) -> Self {
         Self { x: value, y: value }
     }
+
+    /// The Euclidean length of the vector.
+    #[must_use]
+    pub fn length(self) -> f64 {
+        self.x.hypot(self.y)
+    }
+
+    /// The squared length, cheaper when only comparisons are needed.
+    #[must_use]
+    pub fn length_squared(self) -> f64 {
+        self.x * self.x + self.y * self.y
+    }
+
+    /// Whether both components are finite.
+    #[must_use]
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite()
+    }
 }
 
 impl Add for Vec2 {
