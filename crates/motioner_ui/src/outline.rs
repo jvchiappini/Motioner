@@ -9,7 +9,7 @@
 //! number ("Circle 3"); text layers use their text. A short `detail` (size or
 //! radius) is shown beside the name in a dimmer colour.
 
-use motioner_core::{Document, Frame, NodeContent, NodeId, Transform};
+use motioner_core::{Document, Frame, Node, NodeContent, NodeId, Transform};
 
 /// What kind of row an outline entry describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +111,7 @@ fn push_rows(
         kind,
         has_children: !children.is_empty(),
         has_next_sibling,
-        keyframes: keyframe_frames(node.transform()),
+        keyframes: node_keyframes(node),
     });
     for (index, &child) in children.iter().enumerate() {
         push_rows(
@@ -130,11 +130,12 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
         NodeContent::Group => (format!("Group {ordinal}"), String::new()),
         NodeContent::Rect { width, height, .. } => (
             format!("Rect {ordinal}"),
-            format!("{} × {}", number(*width), number(*height)),
+            format!("{} × {}", number(width.value()), number(height.value())),
         ),
-        NodeContent::Circle { radius, .. } => {
-            (format!("Circle {ordinal}"), format!("r{}", number(*radius)))
-        }
+        NodeContent::Circle { radius, .. } => (
+            format!("Circle {ordinal}"),
+            format!("r{}", number(radius.value())),
+        ),
         NodeContent::Text(text) => {
             let single_line = text.text.replace('\n', " ");
             let name = if single_line.trim().is_empty() {
@@ -142,9 +143,22 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
             } else {
                 single_line
             };
-            (name, format!("{} px", number(text.size)))
+            (name, format!("{} px", number(text.size.value())))
         }
     }
+}
+
+/// Every keyframe frame on the node's channels, sorted and unique.
+fn node_keyframes(node: &Node) -> Vec<Frame> {
+    let mut frames = keyframe_frames(node.transform());
+    for (field, _) in motioner_core::ContentField::ALL {
+        if let Some(channel) = node.content().channel(field) {
+            frames.extend(channel.key_frames());
+        }
+    }
+    frames.sort_unstable();
+    frames.dedup();
+    frames
 }
 
 /// Every keyframe frame on the node's transform channels, sorted and unique.

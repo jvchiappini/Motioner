@@ -181,8 +181,8 @@ g.pos = (g.pos[0] + 1, g.pos[1] + 1)
     else {
         panic!("expected rect");
     };
-    assert_eq!(paint.fill.unwrap().a, 0x80);
-    assert_eq!(paint.stroke.unwrap().width, 3.0);
+    assert_eq!(paint.fill.value().unwrap().a, 0x80);
+    assert_eq!(paint.stroke_width.value(), 3.0);
 }
 
 #[test]
@@ -280,4 +280,67 @@ fn default_call_depth_does_not_overflow_the_stack() {
     let error = fail("def f(n):\n    return f(n + 1)\nf(0)\n");
     assert_eq!(error.category, ErrorCategory::Limit);
     assert_eq!(error.stack.len(), Limits::default().max_call_depth);
+}
+
+#[test]
+fn content_fields_are_animatable() {
+    let document = build(
+        "cover = rect(20, 10, 4, fill=\"#FF0000\")\n\
+         cover.id(\"cover\")\n\
+         cover.key(\"fill\", 0.0, \"#FF0000\")\n\
+         cover.key(\"fill\", 1.0, \"#00FF00\", ease=\"cubic_out\")\n\
+         cover.key(\"width\", 1.0, 40)\n\
+         cover.key(\"stroke\", 0.5, \"#0000FF\")\n\
+         cover.key(\"stroke_width\", 0.5, 3)\n",
+    );
+    let cover = document.find("cover").expect("the rect");
+    let content = document.node(cover).unwrap().content();
+    assert_eq!(
+        content
+            .channel(motioner_core::ContentField::Fill)
+            .unwrap()
+            .key_frames(),
+        vec![0, 60]
+    );
+    assert_eq!(
+        content
+            .channel(motioner_core::ContentField::Width)
+            .unwrap()
+            .key_frames(),
+        vec![60]
+    );
+    // Attributes read the static value, untouched by keyframes.
+    assert_eq!(
+        content.static_value(motioner_core::ContentField::Width),
+        Some(motioner_core::ContentValue::Number(20.0))
+    );
+}
+
+#[test]
+fn discrete_content_fields_reject_keys() {
+    let error = fail("t = text(\"hi\")\nt.key(\"text\", 0.0, \"bye\")\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("discrete"), "{error}");
+    let error = fail("c = circle(4)\nc.key(\"width\", 0.0, 9)\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+}
+
+#[test]
+fn content_attribute_reads_and_writes_use_the_channels() {
+    let document = build(
+        "r = rect(10, 20, 3, fill=\"#112233\", stroke=\"#445566\", stroke_width=2)\n\
+         r.fill = \"#ABCDEF\"\n",
+    );
+    let r = document.nodes().next().unwrap();
+    assert_eq!(
+        r.content().static_value(motioner_core::ContentField::Fill),
+        Some(motioner_core::ContentValue::Color(
+            motioner_core::Color::parse_hex("#ABCDEF").ok()
+        ))
+    );
+    assert_eq!(
+        r.content()
+            .static_value(motioner_core::ContentField::StrokeWidth),
+        Some(motioner_core::ContentValue::Number(2.0))
+    );
 }

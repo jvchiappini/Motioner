@@ -51,7 +51,10 @@ timeline. Edits are **overrides** (D-0022) stored next to the program; the
   a darker names column; only the layer row carries the selection colour. Each
   sub-row has a stopwatch, the value at the playhead, the previous/next/add-key
   buttons, its diamonds and a solid line between keys whose rise follows the
-  segment's easing. X and Y keyframes are independent. The timeline is 320 px
+  segment's easing. X and Y keyframes are independent. Content fields are
+  channels too (D-0028): `fill`, `stroke`, `stroke_width`, `width`, `height`,
+  `radius`, `size` and `color` get the same stopwatch, diamonds and eased
+  lines, and the inspector keys them at the playhead. The timeline is 320 px
   tall by default, its splitter is draggable and it scrolls to a new selection
   and to newly selected keys.
 
@@ -219,8 +222,8 @@ error after 30 frames. `out/` is not committed.
 
 ## Known limitations
 
-- Content properties are not animatable in the core, so their timeline rows are
-  static.
+- Content properties are animatable channels (D-0028), so their timeline rows
+  have keys like transform rows; `text` and `align` stay discrete.
 - A rotation gizmo rotates around the selection's centre by the pointer angle;
   the model's anchor is not moved.
 - Snapping to other layers uses shape bounds only (text bounds need the

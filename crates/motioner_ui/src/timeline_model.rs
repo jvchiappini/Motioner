@@ -173,11 +173,12 @@ impl TimelineRows {
                 continue;
             }
             for (property, axis) in CHANNELS {
-                let keys = channels::keys(document, node, property, axis);
+                let channel = channels::Channel::Transform(property, axis);
+                let keys = channels::keys(document, node, channel);
                 if only_animated && keys.is_empty() {
                     continue;
                 }
-                let eases = channels::eases(document, node, property, axis);
+                let eases = channels::eases(document, node, channel);
                 rows.push(TimelineRow {
                     kind: RowKind::Transform {
                         outline: index,
@@ -196,6 +197,20 @@ impl TimelineRows {
             }
             if let Some(content) = document.node(node).map(motioner_core::Node::content) {
                 for field in content_fields(content) {
+                    let channel = channels::Channel::Content(field);
+                    let keys = if field.is_animatable() {
+                        channels::keys(document, node, channel)
+                    } else {
+                        Vec::new()
+                    };
+                    if only_animated && keys.is_empty() {
+                        continue;
+                    }
+                    let eases = if field.is_animatable() {
+                        channels::eases(document, node, channel)
+                    } else {
+                        Vec::new()
+                    };
                     rows.push(TimelineRow {
                         kind: RowKind::Content {
                             outline: index,
@@ -204,9 +219,9 @@ impl TimelineRows {
                         visible: Vec::new(),
                         summary: Vec::new(),
                         inherited: Vec::new(),
-                        keys: Vec::new(),
-                        eases: Vec::new(),
-                        animated: false,
+                        animated: !keys.is_empty(),
+                        keys,
+                        eases,
                         on_key: false,
                         depth: outline_row.depth + 1,
                     });
@@ -247,8 +262,8 @@ pub fn content_fields(content: &NodeContent) -> Vec<ContentField> {
 
 fn summary_keys(document: &Document, node: NodeId) -> Vec<SummaryKey> {
     let mut counts: BTreeMap<Frame, u8> = BTreeMap::new();
-    for (property, axis) in CHANNELS {
-        for frame in channels::keys(document, node, property, axis) {
+    for channel in channels::node_channels(document, node) {
+        for frame in channels::keys(document, node, channel) {
             *counts.entry(frame).or_insert(0) += 1;
         }
     }
@@ -263,7 +278,11 @@ fn inherited_keys(document: &Document, node: NodeId) -> Vec<Frame> {
     let mut current = document.node(node).and_then(motioner_core::Node::parent);
     while let Some(parent) = current {
         for (property, axis) in CHANNELS {
-            frames.extend(channels::keys(document, parent, property, axis));
+            frames.extend(channels::keys(
+                document,
+                parent,
+                channels::Channel::Transform(property, axis),
+            ));
         }
         current = document.node(parent).and_then(motioner_core::Node::parent);
     }
@@ -700,5 +719,65 @@ mod tests {
         // Scrolling shifts every row by the same amount.
         let scrolled = layout(&model, &window, 24.0);
         assert!((scrolled.rows[0].rect.y - (rows.rows[0].rect.y - 24.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn content_rows_carry_keys_and_layer_summary() {
+        let source = "comp(name=\"C\", width=100, height=100, duration=2.0)\n\
+                      r = rect(10, 10, 0, fill=\"#FF0000\")\n\
+                      r.key(\"fill\", 0.0, \"#FF0000\")\n\
+                      r.key(\"fill\", 1.0, \"#00FF00\")\n\
+                      r.key(\"width\", 1.5, 40)\n";
+        let document = motioner_dsl::run(source, &motioner_dsl::Limits::default()).unwrap();
+        let outline = crate::outline_rows(&document);
+        let mut expanded = BTreeSet::new();
+        expanded.insert(0);
+        let rows = TimelineRows::compute(&document, &outline, &expanded, false);
+        let fill = rows
+            .rows()
+            .iter()
+            .find(|row| {
+                row.kind
+                    == RowKind::Content {
+                        outline: 0,
+                        field: ContentField::Fill,
+                    }
+            })
+            .expect("a fill row");
+        assert!(fill.animated);
+        assert_eq!(fill.keys, vec![0, 60]);
+        assert_eq!(fill.eases.len(), 2);
+        let width = rows
+            .rows()
+            .iter()
+            .find(|row| {
+                row.kind
+                    == RowKind::Content {
+                        outline: 0,
+                        field: ContentField::Width,
+                    }
+            })
+            .expect("a width row");
+        assert_eq!(width.keys, vec![90]);
+        // The layer row summarises content keys too; frame 60 has two keys
+        // (fill.y is one channel, and width keys at 90).
+        let layer = &rows.rows()[0];
+        assert_eq!(
+            layer.summary,
+            vec![
+                SummaryKey {
+                    frame: 0,
+                    channels: 1
+                },
+                SummaryKey {
+                    frame: 60,
+                    channels: 1
+                },
+                SummaryKey {
+                    frame: 90,
+                    channels: 1
+                },
+            ]
+        );
     }
 }

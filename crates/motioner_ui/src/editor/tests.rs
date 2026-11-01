@@ -281,3 +281,80 @@ fn state_reports_zoom_and_pan() {
     assert!(state.contains("\"zoom\":0.5"), "{state}");
     assert!(state.contains("\"pan\":[-3,4]"), "{state}");
 }
+
+#[test]
+fn content_fields_get_stopwatches_and_keys() {
+    let (mut editor, _dir) = hello_editor("content_keys");
+    run(&mut editor, "seek(0)\nstopwatch(\"@288\", \"size\")");
+    let entry = editor
+        .session()
+        .overrides()
+        .get(TITLE, "size", Some(0))
+        .expect("the stopwatch keys size at the playhead");
+    assert!(matches!(entry.action, OverrideAction::Key { .. }));
+    // The channel is now animated, so a field edit becomes a key at the
+    // playhead.
+    run(&mut editor, "seek(30)\nedit(\"@288\", \"size\", 200)");
+    assert_eq!(
+        editor
+            .session()
+            .overrides()
+            .get(TITLE, "size", Some(30))
+            .unwrap()
+            .action,
+        OverrideAction::Key {
+            frame: 30,
+            value: OverrideValue::Number(200.0),
+            ease: Ease::Linear,
+        }
+    );
+    run(
+        &mut editor,
+        "key(\"@288\", \"color\", 1.0, \"#00FF88\", ease=\"quad_out\")",
+    );
+    let colour = editor
+        .session()
+        .overrides()
+        .get(TITLE, "color", Some(60))
+        .unwrap();
+    assert_eq!(
+        colour.action,
+        OverrideAction::Key {
+            frame: 60,
+            value: OverrideValue::Text("#00FF88".to_owned()),
+            ease: Ease::QuadOut,
+        }
+    );
+    // The stopwatch again clears the keys and keeps the playhead value.
+    run(&mut editor, "stopwatch(\"@288\", \"size\")");
+    assert!(editor
+        .session()
+        .overrides()
+        .get(TITLE, "size", Some(30))
+        .is_some_and(|entry| matches!(entry.action, OverrideAction::Unkey { .. })));
+    // A discrete field is not an animatable channel.
+    assert_eq!(
+        error(&mut editor, "key(\"@288\", \"text\", 1.0, \"x\")"),
+        ErrorKind::UnknownProperty
+    );
+}
+
+#[test]
+fn query_reports_content_channels() {
+    let (mut editor, _dir) = hello_editor("content_query");
+    run(
+        &mut editor,
+        "key(\"@288\", \"size\", 1.0, 90)\nkey(\"@288\", \"color\", 0.5, \"#FF5A6E\")",
+    );
+    let json = editor.query_json(Some(TITLE)).unwrap();
+    assert!(
+        json.contains("\"size\":{\"value\":90,\"keys\":[{\"frame\":60"),
+        "{json}"
+    );
+    assert!(json.contains("\"color\":{\"value\":\"#FF5A6E\""), "{json}");
+    assert!(json.contains("\"frame\":30"), "{json}");
+    assert!(
+        json.contains("\"content\":{\"text\":\"Motioner\""),
+        "{json}"
+    );
+}

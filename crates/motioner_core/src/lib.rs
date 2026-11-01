@@ -26,8 +26,9 @@ pub use document::{Composition, Document, MAX_CANVAS_SIZE};
 pub use error::CoreError;
 pub use math::Vec2;
 pub use node::{
-    is_valid_identity_name, BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId,
-    NodeIdentity, Paint, Property, PropertyValue, Stroke, TextAlign, TextContent, Transform,
+    is_valid_identity_name, BlendMode, ContentChannel, ContentField, ContentValue, Node,
+    NodeContent, NodeId, NodeIdentity, Paint, PaintSpec, Property, PropertyValue, Stroke,
+    TextAlign, TextContent, Transform,
 };
 pub use overrides::{
     format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,

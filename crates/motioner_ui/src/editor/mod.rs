@@ -20,9 +20,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use motioner_core::{
-    Axis, Document, Ease, Frame, NodeId, OverrideAction, OverrideEntry, OverrideSet, Property,
-};
+use motioner_core::{Document, Ease, Frame, NodeId, OverrideAction, OverrideEntry, OverrideSet};
 
 use crate::command::{Command, CommandError, ErrorKind, Panel};
 use crate::edit::{self, EditCommand, KeyRef, UndoStack};
@@ -31,18 +29,12 @@ use crate::layout::PanelSizes;
 use crate::timeline_model::TimelineRows;
 use crate::{outline_rows, InspectModel, OutlineRow, PreviewSession, Transport};
 
-pub use channels::{channel_name, CHANNELS};
+pub use channels::{channel_name, Channel, CHANNELS};
 
 /// Whether a channel has a key at `frame`.
 #[must_use]
-pub fn channel_has_key(
-    document: &Document,
-    node: NodeId,
-    property: Property,
-    axis: Option<Axis>,
-    frame: Frame,
-) -> bool {
-    channels::keys(document, node, property, axis).contains(&frame)
+pub fn channel_has_key(document: &Document, node: NodeId, channel: Channel, frame: Frame) -> bool {
+    channels::keys(document, node, channel).contains(&frame)
 }
 
 /// Editor view state that is not part of the document.
@@ -552,8 +544,8 @@ impl Editor {
 
     fn key_ease(&self, key: &KeyRef) -> Option<Ease> {
         let document = self.document()?;
-        let (node, property, axis) = channels::resolve(document, &key.id, &key.property).ok()?;
-        channels::key_at(document, node, property, axis, key.frame).map(|(_, ease)| ease)
+        let (node, channel) = channels::resolve(document, &key.id, &key.property).ok()?;
+        channels::key_at(document, node, channel, key.frame).map(|(_, ease)| ease)
     }
 
     fn undo_redo(&mut self, undo: bool) -> Result<Outcome, CommandError> {
@@ -596,8 +588,8 @@ impl Editor {
             .selected_keys
             .iter()
             .filter(|key| {
-                channels::resolve(document, &key.id, &key.property).is_ok_and(|(node, p, a)| {
-                    channels::keys(document, node, p, a).contains(&key.frame)
+                channels::resolve(document, &key.id, &key.property).is_ok_and(|(node, channel)| {
+                    channels::keys(document, node, channel).contains(&key.frame)
                 })
             })
             .cloned()

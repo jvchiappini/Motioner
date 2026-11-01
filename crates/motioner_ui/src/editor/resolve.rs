@@ -7,7 +7,7 @@ use motioner_core::{
     OverrideValue, Property, Vec2,
 };
 
-use super::{channel_name, channels, Editor, Gesture, CHANNELS};
+use super::{channel_name, channels, Channel, Editor, Gesture};
 use crate::command::{Command, CommandError, ErrorKind};
 use crate::edit::{self, EditCommand, KeyRef, MoveKey};
 
@@ -97,15 +97,15 @@ impl Editor {
                 ease,
             } => {
                 let at = time.frame(rate)?;
-                let (node, p, axis) = channels::resolve(document, id, property)?;
-                let value = channel_value(p, axis, value)?;
+                let (node, channel) = channels::resolve(document, id, property)?;
+                let value = channel_value(channel, value)?;
                 let ease = ease
-                    .or_else(|| channels::key_at(document, node, p, axis, at).map(|(_, e)| e))
+                    .or_else(|| channels::key_at(document, node, channel, at).map(|(_, e)| e))
                     .unwrap_or(Ease::Linear);
                 vec![EditCommand::SetKey {
                     id: id.clone(),
-                    property: p.name().to_owned(),
-                    axis,
+                    property: channel.base().to_owned(),
+                    axis: channel.axis(),
                     frame: at,
                     value,
                     ease,
@@ -113,12 +113,12 @@ impl Editor {
             }
             Command::Unkey { id, property, time } => {
                 let at = time.frame(rate)?;
-                let (node, p, axis) = channels::resolve(document, id, property)?;
-                existing_key(document, node, p, axis, at, id, property)?;
+                let (node, channel) = channels::resolve(document, id, property)?;
+                existing_key(document, node, channel, at, id, property)?;
                 vec![EditCommand::RemoveKey {
                     id: id.clone(),
-                    property: p.name().to_owned(),
-                    axis,
+                    property: channel.base().to_owned(),
+                    axis: channel.axis(),
                     frame: at,
                 }]
             }
@@ -129,12 +129,12 @@ impl Editor {
                 to,
             } => {
                 let (from, to) = (from.frame(rate)?, to.frame(rate)?);
-                let (node, p, axis) = channels::resolve(document, id, property)?;
-                let (value, ease) = existing_key(document, node, p, axis, from, id, property)?;
+                let (node, channel) = channels::resolve(document, id, property)?;
+                let (value, ease) = existing_key(document, node, channel, from, id, property)?;
                 vec![EditCommand::MoveKeys(vec![MoveKey {
                     key: KeyRef {
                         id: id.clone(),
-                        property: channel_name(p, axis),
+                        property: channel.name(),
                         frame: from,
                     },
                     to,
@@ -149,12 +149,12 @@ impl Editor {
                 ease,
             } => {
                 let at = time.frame(rate)?;
-                let (node, p, axis) = channels::resolve(document, id, property)?;
-                let (value, _) = existing_key(document, node, p, axis, at, id, property)?;
+                let (node, channel) = channels::resolve(document, id, property)?;
+                let (value, _) = existing_key(document, node, channel, at, id, property)?;
                 vec![EditCommand::MoveKeys(vec![MoveKey {
                     key: KeyRef {
                         id: id.clone(),
-                        property: channel_name(p, axis),
+                        property: channel.name(),
                         frame: at,
                     },
                     to: at,
@@ -190,45 +190,45 @@ impl Editor {
                     .collect()
             }
             Command::Stopwatch { id, property } => {
-                let (node, p, axis) = channels::resolve(document, id, property)?;
+                let (node, channel) = channels::resolve(document, id, property)?;
                 vec![EditCommand::ToggleStopwatch {
                     id: id.clone(),
-                    property: p,
-                    axis,
+                    property: channel.base().to_owned(),
+                    axis: channel.axis(),
                     frame,
-                    value: channels::sampled(document, node, p, axis, frame)
+                    value: channels::sampled(document, node, channel, frame)
                         .unwrap_or(OverrideValue::Number(0.0)),
-                    existing_keys: channels::keys(document, node, p, axis),
+                    existing_keys: channels::keys(document, node, channel),
                 }]
             }
             Command::ToggleKey { id, property } => {
-                let (node, p, axis) = channels::resolve(document, id, property)?;
-                vec![toggle_key(document, id, node, p, axis, frame)]
+                let (node, channel) = channels::resolve(document, id, property)?;
+                vec![toggle_key(document, id, node, channel, frame)]
             }
             Command::AddKeys => {
                 let node = self.require_selection()?;
                 let id = self.node_identity(node);
-                let animated: Vec<(Property, Option<Axis>)> = CHANNELS
+                let animated: Vec<Channel> = channels::node_channels(document, node)
                     .into_iter()
-                    .filter(|(p, a)| !channels::keys(document, node, *p, *a).is_empty())
+                    .filter(|channel| !channels::keys(document, node, *channel).is_empty())
                     .collect();
                 let targets = if animated.is_empty() {
                     vec![
-                        (Property::Position, Some(Axis::X)),
-                        (Property::Position, Some(Axis::Y)),
+                        Channel::Transform(Property::Position, Some(Axis::X)),
+                        Channel::Transform(Property::Position, Some(Axis::Y)),
                     ]
                 } else {
                     animated
                 };
                 targets
                     .into_iter()
-                    .filter(|(p, a)| !channels::keys(document, node, *p, *a).contains(&frame))
-                    .map(|(p, a)| EditCommand::SetKey {
+                    .filter(|channel| !channels::keys(document, node, *channel).contains(&frame))
+                    .map(|channel| EditCommand::SetKey {
                         id: id.clone(),
-                        property: p.name().to_owned(),
-                        axis: a,
+                        property: channel.base().to_owned(),
+                        axis: channel.axis(),
                         frame,
-                        value: channels::sampled(document, node, p, a, frame)
+                        value: channels::sampled(document, node, channel, frame)
                             .unwrap_or(OverrideValue::Number(0.0)),
                         ease: Ease::Linear,
                     })
@@ -323,13 +323,12 @@ fn no_keys() -> CommandError {
 fn existing_key(
     document: &Document,
     node: NodeId,
-    property: Property,
-    axis: Option<Axis>,
+    channel: Channel,
     frame: Frame,
     id: &str,
     name: &str,
 ) -> Result<(OverrideValue, Ease), CommandError> {
-    channels::key_at(document, node, property, axis, frame).ok_or_else(|| {
+    channels::key_at(document, node, channel, frame).ok_or_else(|| {
         CommandError::new(
             ErrorKind::NoKey,
             format!("{id} has no key on {name} at frame {frame}"),
@@ -350,9 +349,9 @@ fn moves(
     }
     keys.iter()
         .map(|key| {
-            let (node, p, axis) = channels::resolve(document, &key.id, &key.property)?;
+            let (node, channel) = channels::resolve(document, &key.id, &key.property)?;
             let (value, own) =
-                existing_key(document, node, p, axis, key.frame, &key.id, &key.property)?;
+                existing_key(document, node, channel, key.frame, &key.id, &key.property)?;
             Ok(MoveKey {
                 key: key.clone(),
                 to: key.frame + delta,
@@ -369,24 +368,23 @@ fn toggle_key(
     document: &Document,
     id: &str,
     node: NodeId,
-    property: Property,
-    axis: Option<Axis>,
+    channel: Channel,
     frame: Frame,
 ) -> EditCommand {
-    if channels::keys(document, node, property, axis).contains(&frame) {
+    if channels::keys(document, node, channel).contains(&frame) {
         EditCommand::RemoveKey {
             id: id.to_owned(),
-            property: property.name().to_owned(),
-            axis,
+            property: channel.base().to_owned(),
+            axis: channel.axis(),
             frame,
         }
     } else {
         EditCommand::SetKey {
             id: id.to_owned(),
-            property: property.name().to_owned(),
-            axis,
+            property: channel.base().to_owned(),
+            axis: channel.axis(),
             frame,
-            value: channels::sampled(document, node, property, axis, frame)
+            value: channels::sampled(document, node, channel, frame)
                 .unwrap_or(OverrideValue::Number(0.0)),
             ease: Ease::Linear,
         }
@@ -394,12 +392,12 @@ fn toggle_key(
 }
 
 /// The value a channel key takes: a number for an axis or scalar, a pair
-/// (or a uniform number for scale) for a whole vector property.
-fn channel_value(
-    property: Property,
-    axis: Option<Axis>,
-    value: &OverrideValue,
-) -> Result<OverrideValue, CommandError> {
+/// (or a uniform number for scale) for a whole vector property, and the value
+/// itself for a content field (validated against the node when it is applied).
+fn channel_value(channel: Channel, value: &OverrideValue) -> Result<OverrideValue, CommandError> {
+    let Channel::Transform(property, axis) = channel else {
+        return Ok(value.clone());
+    };
     let bad = |what: &str| {
         CommandError::new(
             ErrorKind::BadValue,
@@ -443,7 +441,7 @@ fn set_value(
                 format!("{property} expects a number"),
             ));
         };
-        let mut pair = match channels::sampled(document, node, p, None, frame) {
+        let mut pair = match channels::sampled(document, node, Channel::Transform(p, None), frame) {
             Some(OverrideValue::Vec2(pair)) => pair,
             _ => Vec2::ZERO,
         };
@@ -490,48 +488,71 @@ fn edit_value(
     value: &OverrideValue,
     frame: Frame,
 ) -> Result<Vec<EditCommand>, CommandError> {
-    let (base, axis) = split_property(property);
-    let Some(p) = Property::from_name(base) else {
+    if property == motioner_core::NAME {
+        return Ok(vec![set_value(document, id, property, value, frame)?]);
+    }
+    let Some((node, channel)) = resolve_if_animatable(document, id, property)? else {
         return Ok(vec![set_value(document, id, property, value, frame)?]);
     };
-    let node = channels::node_of(document, id)?;
-    if axis.is_some() && !p.is_vector() {
-        return Err(CommandError::new(
-            ErrorKind::UnknownProperty,
-            format!("'{base}' has no axes"),
-        ));
-    }
-    let keyed = !channels::keys(document, node, p, axis).is_empty()
+    let keyed = !channels::keys(document, node, channel).is_empty()
         || set.entries().iter().any(|entry| {
             let (entry_base, entry_axis) = split_property(&entry.property);
             entry.id == id
-                && entry_base == p.name()
+                && entry_base == channel.base()
                 && matches!(entry.action, OverrideAction::Key { .. })
-                && (axis.is_none() || entry_axis.is_none() || entry_axis == axis)
+                && (channel.axis().is_none()
+                    || entry_axis.is_none()
+                    || entry_axis == channel.axis())
         });
     if !keyed {
         return Ok(vec![set_value(document, id, property, value, frame)?]);
     }
-    let value = channel_value(p, axis, value)?;
-    let parts: Vec<(Option<Axis>, OverrideValue)> = match (axis, &value) {
+    let value = channel_value(channel, value)?;
+    let parts: Vec<(Channel, OverrideValue)> = match (channel, &value) {
         // An animated vector is keyed per axis (see `per_axis`).
-        (None, OverrideValue::Vec2(pair)) => vec![
-            (Some(Axis::X), OverrideValue::Number(pair.x)),
-            (Some(Axis::Y), OverrideValue::Number(pair.y)),
+        (Channel::Transform(property, None), OverrideValue::Vec2(pair)) => vec![
+            (
+                Channel::Transform(property, Some(Axis::X)),
+                OverrideValue::Number(pair.x),
+            ),
+            (
+                Channel::Transform(property, Some(Axis::Y)),
+                OverrideValue::Number(pair.y),
+            ),
         ],
-        _ => vec![(axis, value)],
+        _ => vec![(channel, value)],
     };
     Ok(parts
         .into_iter()
-        .map(|(axis, value)| EditCommand::SetKey {
+        .map(|(channel, value)| EditCommand::SetKey {
             id: id.to_owned(),
-            property: p.name().to_owned(),
-            axis,
+            property: channel.base().to_owned(),
+            axis: channel.axis(),
             frame,
             value,
-            ease: channels::key_at(document, node, p, axis, frame).map_or(Ease::Linear, |(_, e)| e),
+            ease: channels::key_at(document, node, channel, frame).map_or(Ease::Linear, |(_, e)| e),
         })
         .collect())
+}
+
+/// Resolves `property` as an animatable channel of `id`, without failing when
+/// the name is a plain (non-animatable) content field such as `text`.
+fn resolve_if_animatable(
+    document: &Document,
+    id: &str,
+    property: &str,
+) -> Result<Option<(NodeId, Channel)>, CommandError> {
+    match channels::resolve(document, id, property) {
+        Ok((node, channel)) => Ok(Some((node, channel))),
+        Err(error)
+            if error.kind == ErrorKind::UnknownProperty
+                && ContentField::from_name(property)
+                    .is_some_and(|field| !field.is_animatable()) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// The per-axis commands a whole-vector key command stands for, or `None`

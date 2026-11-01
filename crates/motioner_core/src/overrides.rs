@@ -286,10 +286,7 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
                 document
                     .add_axis_keyframe(node, property, axis, *frame, *number, *ease)
                     .map_err(|error| error.to_string())
-            } else {
-                let property = Property::from_name(base).ok_or_else(|| {
-                    format!("'{}' cannot be animated with override_key", entry.property)
-                })?;
+            } else if let Some(property) = Property::from_name(base) {
                 let value = property_value(property, value).map_err(|reason| {
                     format!(
                         "'{}' cannot take {}: {reason}",
@@ -300,6 +297,22 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
                 document
                     .add_keyframe(node, property, *frame, value, *ease)
                     .map_err(|error| error.to_string())
+            } else if let Some(field) = ContentField::from_name(base) {
+                let value = content_value(field, value).map_err(|reason| {
+                    format!(
+                        "'{}' cannot take {}: {reason}",
+                        entry.property,
+                        describe(value)
+                    )
+                })?;
+                document
+                    .add_content_keyframe(node, field, *frame, value, *ease)
+                    .map_err(|error| error.to_string())
+            } else {
+                Err(format!(
+                    "'{}' cannot be animated with override_key",
+                    entry.property
+                ))
             }
         }
         OverrideAction::Unkey { frame } => {
@@ -308,12 +321,16 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
                 document
                     .remove_axis_keyframe(node, property, axis, *frame)
                     .map_err(|error| error.to_string())
-            } else {
-                let property = Property::from_name(base)
-                    .ok_or_else(|| format!("'{}' has no keyframes to remove", entry.property))?;
+            } else if let Some(property) = Property::from_name(base) {
                 document
                     .remove_keyframe(node, property, *frame)
                     .map_err(|error| error.to_string())
+            } else if let Some(field) = ContentField::from_name(base) {
+                document
+                    .remove_content_keyframe(node, field, *frame)
+                    .map_err(|error| error.to_string())
+            } else {
+                Err(format!("'{}' has no keyframes to remove", entry.property))
             }
         }
     }
@@ -529,13 +546,13 @@ mod tests {
     }
 
     fn dot(doc: &mut Document, id: &str) -> crate::node::NodeId {
-        let content = NodeContent::Circle {
-            radius: 10.0,
-            paint: Paint {
+        let content = NodeContent::circle(
+            10.0,
+            Paint {
                 fill: Some(Color::WHITE),
                 stroke: None,
             },
-        };
+        );
         doc.add_node_with_identity(content, crate::node::NodeIdentity::explicit(id).unwrap())
             .unwrap()
     }
@@ -589,8 +606,8 @@ mod tests {
         assert!(!node.is_visible());
         match node.content() {
             NodeContent::Circle { radius, paint } => {
-                assert!((*radius - 12.0).abs() < 1e-9);
-                assert_eq!(paint.fill, Color::parse_hex("#112233").ok());
+                assert!((radius.value() - 12.0).abs() < 1e-9);
+                assert_eq!(paint.fill.value(), Color::parse_hex("#112233").ok());
             }
             _ => panic!("wrong kind"),
         }
@@ -758,5 +775,108 @@ mod tests {
             let parsed = format_number(value).parse::<f64>().unwrap();
             assert!((parsed - value).abs() < 1e-6, "{value} -> {parsed}");
         }
+    }
+
+    #[test]
+    fn content_fields_take_keys_and_serialise() {
+        let mut doc = document();
+        let id = dot(&mut doc, "dot");
+        let red = Color::parse_hex("#FF0000").unwrap();
+        let green = Color::parse_hex("#00FF00").unwrap();
+        let mut set = OverrideSet::new();
+        set.insert(OverrideEntry::new(
+            "dot",
+            "fill",
+            OverrideAction::Key {
+                frame: 0,
+                value: OverrideValue::Text("#FF0000".to_owned()),
+                ease: Ease::Linear,
+            },
+        ));
+        set.insert(OverrideEntry::new(
+            "dot",
+            "fill",
+            OverrideAction::Key {
+                frame: 30,
+                value: OverrideValue::Text("#00FF00".to_owned()),
+                ease: Ease::CubicOut,
+            },
+        ));
+        set.insert(OverrideEntry::new(
+            "dot",
+            "radius",
+            OverrideAction::Key {
+                frame: 30,
+                value: OverrideValue::Number(20.0),
+                ease: Ease::Linear,
+            },
+        ));
+        assert!(set.apply(&mut doc).is_empty());
+        let content = doc.node(id).unwrap().content();
+        assert_eq!(
+            content.channel(ContentField::Fill).unwrap().key_frames(),
+            vec![0, 30]
+        );
+        assert_eq!(
+            content.channel(ContentField::Radius).unwrap().key_frames(),
+            vec![30]
+        );
+        let fill_keys = match content.channel(ContentField::Fill).unwrap() {
+            crate::node::ContentChannel::OptionalColor(value) => value.keys(),
+            _ => panic!("fill is an optional colour"),
+        };
+        assert_eq!(fill_keys[0].value, Some(red));
+        assert_eq!(fill_keys[1].value, Some(green));
+        let text = set.to_mdf(rate());
+        assert!(
+            text.contains("override_key(\"dot\", \"fill\", 0, \"#FF0000\", ease=\"linear\")\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "override_key(\"dot\", \"fill\", 0.5, \"#00FF00\", ease=\"cubic_out\")\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("override_key(\"dot\", \"radius\", 0.5, 20, ease=\"linear\")\n"),
+            "{text}"
+        );
+        let mut remove = OverrideSet::new();
+        remove.insert(OverrideEntry::new(
+            "dot",
+            "fill",
+            OverrideAction::Unkey { frame: 30 },
+        ));
+        assert!(remove.apply(&mut doc).is_empty());
+        assert_eq!(
+            doc.node(id)
+                .unwrap()
+                .content()
+                .channel(ContentField::Fill)
+                .unwrap()
+                .key_frames(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn a_discrete_content_field_cannot_be_keyed() {
+        let mut doc = document();
+        let id = dot(&mut doc, "dot");
+        let mut set = OverrideSet::new();
+        set.insert(OverrideEntry::new(
+            "dot",
+            "text",
+            OverrideAction::Key {
+                frame: 0,
+                value: OverrideValue::Text("x".to_owned()),
+                ease: Ease::Linear,
+            },
+        ));
+        let issues = set.apply(&mut doc);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(set.len(), 1, "the override is kept");
+        let _ = id;
     }
 }

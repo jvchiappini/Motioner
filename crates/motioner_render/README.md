@@ -91,8 +91,10 @@ pub fn srgb_to_linear(value: u8) -> f32;
 pub fn linear_rgba(color: motioner_core::Color, opacity: f64) -> [f32; 4];
 ```
 
-`srgb_to_linear` is the workspace's single sRGB → linear conversion; the
-editor theme uses it for every UI colour. `TextExtent` (from
+`srgb_to_linear` is the workspace's single sRGB → linear conversion; it is
+defined in `motioner_core::Color` so the evaluator's colour interpolation and
+this renderer share one transfer function (D-0028), and the editor theme uses
+it for every UI colour. `TextExtent` (from
 `LivePainter::text_extent`) gives the editor selection bounds for text layers.
 
 `render` writes exactly `width * height * 4` bytes and reuses the allocation of
@@ -128,7 +130,9 @@ therefore uses `M_text = F.then(item.transform).then(S)` with `S = diag(1, -1)`.
 Document colours are 8-bit sRGB with straight (non-premultiplied) alpha. The
 engine renders in linear light into an sRGB target, so every RGB channel goes
 through the exact piecewise sRGB EOTF before submission. Alpha is already linear
-coverage and is not transformed.
+coverage and is not transformed. Keyed colours are interpolated by the
+evaluator in the same linear-light space before they reach the plan, so a
+keyed fill and a stacked alpha gradient of the same stops agree (D-0028).
 
 For every fill, stroke and text draw the instance colour is
 

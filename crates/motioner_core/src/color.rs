@@ -72,6 +72,68 @@ impl Color {
             a,
         })
     }
+
+    /// The `#RRGGBB[AA]` text of this colour (alpha omitted when opaque).
+    #[must_use]
+    pub fn to_hex(self) -> String {
+        if self.a == 255 {
+            format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
+        } else {
+            format!("#{:02X}{:02X}{:02X}{:02X}", self.r, self.g, self.b, self.a)
+        }
+    }
+
+    /// Converts one sRGB-encoded channel byte to linear light (the sRGB EOTF).
+    ///
+    /// Alpha is linear coverage and must not go through this function. The
+    /// renderer and colour interpolation share this one transfer function
+    /// (D-0028), so a keyed colour and its alpha blend cannot disagree.
+    #[must_use]
+    pub fn srgb_to_linear(value: u8) -> f32 {
+        let channel = f32::from(value) / 255.0;
+        if channel <= 0.040_45 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// Converts a linear-light channel in `0.0..=1.0` to the nearest sRGB byte.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // The clamp makes the value a valid byte; the cast is the rounding step.
+    pub fn linear_to_srgb(value: f32) -> u8 {
+        let channel = value.clamp(0.0, 1.0);
+        let encoded = if channel <= 0.003_130_8 {
+            channel * 12.92
+        } else {
+            1.055 * channel.powf(1.0 / 2.4) - 0.055
+        };
+        (encoded * 255.0).round() as u8
+    }
+
+    /// Interpolates two colours in linear-light sRGB, alpha included (D-0028).
+    ///
+    /// This is the colour space every keyed colour channel uses, so a midpoint
+    /// matches the linear compositor instead of the naive 8-bit average.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // Every channel is clamped to a byte before the cast.
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
+        let channel = |from: u8, to: u8| {
+            let from = f64::from(Self::srgb_to_linear(from));
+            let to = f64::from(Self::srgb_to_linear(to));
+            let linear = (from + (to - from) * t).clamp(0.0, 1.0);
+            Self::linear_to_srgb(linear as f32)
+        };
+        let alpha = f64::from(a.a) + (f64::from(b.a) - f64::from(a.a)) * t;
+        Self {
+            r: channel(a.r, b.r),
+            g: channel(a.g, b.g),
+            b: channel(a.b, b.b),
+            a: alpha.round().clamp(0.0, 255.0) as u8,
+        }
+    }
 }
 
 #[cfg(test)]

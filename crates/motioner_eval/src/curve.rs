@@ -1,6 +1,6 @@
 //! Easing functions and keyframe sampling.
 
-use motioner_core::{Animatable, Ease, Frame, Vec2};
+use motioner_core::{Animatable, Color, Ease, Frame, Vec2};
 
 /// Overshoot constant of the standard "back" easing (Penner).
 const BACK_OVERSHOOT: f64 = 1.701_58;
@@ -52,6 +52,24 @@ impl Interpolate for f64 {
 impl Interpolate for Vec2 {
     fn interpolate(a: Self, b: Self, t: f64) -> Self {
         a + (b - a) * t
+    }
+}
+
+impl Interpolate for Color {
+    /// Interpolates in linear-light sRGB (D-0028).
+    fn interpolate(a: Self, b: Self, t: f64) -> Self {
+        Color::lerp(a, b, t)
+    }
+}
+
+impl Interpolate for Option<Color> {
+    /// Interpolates when both endpoints are colours; a `none` endpoint holds
+    /// the previous value as a step (D-0028).
+    fn interpolate(a: Self, b: Self, t: f64) -> Self {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(Color::lerp(a, b, t)),
+            _ => a,
+        }
     }
 }
 
@@ -149,5 +167,62 @@ mod tests {
     fn uses_the_ease_of_the_arriving_key() {
         let value = animated(&[(0, 0.0, Ease::Linear), (10, 1.0, Ease::QuadOut)]);
         assert!((sample(&value, 5) - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn colours_interpolate_in_linear_light() {
+        let red = motioner_core::Color::rgb(255, 0, 0);
+        let green = motioner_core::Color::rgb(0, 255, 0);
+        let mid = Color::interpolate(red, green, 0.5);
+        // Linear-light midpoints are much brighter than the 8-bit average
+        // (128, 128, 0); 0.5 linear is sRGB 188.
+        assert_eq!((mid.r, mid.g, mid.b, mid.a), (188, 188, 0, 255));
+        assert_eq!(Color::interpolate(red, green, 0.0), red);
+        assert_eq!(Color::interpolate(red, green, 1.0), green);
+        // Alpha stays linear coverage.
+        let half = motioner_core::Color::parse_hex("#FF000080").unwrap();
+        let clear = motioner_core::Color::parse_hex("#00000000").unwrap();
+        assert_eq!(Color::interpolate(half, clear, 0.5).a, 64);
+    }
+
+    #[test]
+    fn optional_colours_hold_only_when_one_endpoint_is_absent() {
+        let mut value = Animatable::new(None);
+        value.insert_key(Keyframe {
+            frame: 0,
+            value: None,
+            ease: Ease::Linear,
+        });
+        value.insert_key(Keyframe {
+            frame: 10,
+            value: Some(motioner_core::Color::WHITE),
+            ease: Ease::Linear,
+        });
+        value.insert_key(Keyframe {
+            frame: 20,
+            value: None,
+            ease: Ease::Linear,
+        });
+        assert_eq!(sample(&value, 5), None);
+        assert_eq!(sample(&value, 10), Some(motioner_core::Color::WHITE));
+        assert_eq!(sample(&value, 15), Some(motioner_core::Color::WHITE));
+        assert_eq!(sample(&value, 20), None);
+
+        // Two present colours interpolate like a required colour.
+        let mut both = Animatable::new(None);
+        both.insert_key(Keyframe {
+            frame: 0,
+            value: Some(motioner_core::Color::rgb(255, 0, 0)),
+            ease: Ease::Linear,
+        });
+        both.insert_key(Keyframe {
+            frame: 10,
+            value: Some(motioner_core::Color::rgb(0, 255, 0)),
+            ease: Ease::Linear,
+        });
+        assert_eq!(
+            sample(&both, 5),
+            Some(motioner_core::Color::rgb(188, 188, 0))
+        );
     }
 }

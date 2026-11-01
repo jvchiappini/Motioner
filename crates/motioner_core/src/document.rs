@@ -9,7 +9,7 @@ use crate::error::CoreError;
 use crate::math::Vec2;
 use crate::node::{
     BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, Property,
-    PropertyValue, Stroke, Transform,
+    PropertyValue, Transform,
 };
 use crate::time::{frame_within_bounds, Frame, FrameRate};
 
@@ -284,69 +284,79 @@ impl Document {
             });
         }
         let content = &mut self.nodes[id.index()].content;
-        match (field, value) {
-            (ContentField::Width, ContentValue::Number(v)) => match content {
-                NodeContent::Rect { width, .. } => set_number(width, field, v, false),
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Height, ContentValue::Number(v)) => match content {
-                NodeContent::Rect { height, .. } => set_number(height, field, v, false),
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Radius, ContentValue::Number(v)) => match content {
-                NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. } => {
-                    set_number(radius, field, v, false)
-                }
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::StrokeWidth, ContentValue::Number(v)) => set_stroke_width(content, v),
-            (ContentField::Size, ContentValue::Number(v)) => match content {
-                NodeContent::Text(text) => set_number(&mut text.size, field, v, true),
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Fill, ContentValue::Color(color)) => match content {
-                NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
-                    paint.fill = color;
-                    Ok(())
-                }
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Stroke, ContentValue::Color(color)) => match content {
-                NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
-                    paint.stroke = color.map(|color| {
-                        let width = paint.stroke.map_or(0.0, |stroke| stroke.width);
-                        Stroke { color, width }
-                    });
-                    Ok(())
-                }
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Color, ContentValue::Color(Some(color))) => match content {
-                NodeContent::Text(text) => {
-                    text.color = color;
-                    Ok(())
-                }
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Text, ContentValue::Text(text_value)) => match content {
-                NodeContent::Text(text) => {
-                    text.text = text_value;
-                    Ok(())
-                }
-                _ => Err(wrong_kind(content, field)),
-            },
-            (ContentField::Align, ContentValue::Align(align)) => match content {
-                NodeContent::Text(text) => {
-                    text.align = align;
-                    Ok(())
-                }
-                _ => Err(wrong_kind(content, field)),
-            },
-            _ => Err(CoreError::InvalidContentValue {
-                field: field.name(),
-                reason: "wrong value type",
-            }),
+        content_static_write(content, field, value)
+    }
+
+    /// Adds (or replaces) a keyframe on a content field (D-0028).
+    ///
+    /// `text` and `align` are discrete and cannot be keyed; keying them
+    /// returns [`CoreError::WrongContentField`].
+    ///
+    /// # Errors
+    ///
+    /// Fails for an unknown node, a field the node's kind does not have, a
+    /// value of the wrong shape or out of range, and
+    /// [`CoreError::FrameOutOfRange`] when `frame` is outside the allowed
+    /// range.
+    pub fn add_content_keyframe(
+        &mut self,
+        id: NodeId,
+        field: ContentField,
+        frame: Frame,
+        value: ContentValue,
+        ease: Ease,
+    ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
         }
+        let content = self.require(id)?.content.clone();
+        if !content.accepts(field) {
+            return Err(CoreError::WrongContentField {
+                kind: content.kind_name(),
+                field: field.name(),
+            });
+        }
+        if !field.is_animatable() {
+            return Err(CoreError::WrongContentField {
+                kind: content.kind_name(),
+                field: field.name(),
+            });
+        }
+        content_key_write(
+            &mut self.nodes[id.index()].content,
+            field,
+            frame,
+            value,
+            ease,
+        )
+    }
+
+    /// Removes the keyframe at `frame` from a content field, if there is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::WrongContentField`] for a field the kind does not have or
+    /// cannot animate, and [`CoreError::FrameOutOfRange`] for a frame outside
+    /// the allowed range.
+    pub fn remove_content_keyframe(
+        &mut self,
+        id: NodeId,
+        field: ContentField,
+        frame: Frame,
+    ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
+        let content = self.require(id)?.content.clone();
+        if !content.accepts(field) || !field.is_animatable() {
+            return Err(CoreError::WrongContentField {
+                kind: content.kind_name(),
+                field: field.name(),
+            });
+        }
+        content_key_remove(&mut self.nodes[id.index()].content, field, frame);
+        Ok(())
     }
 
     /// Moves `child` to the end of `parent`'s children.
@@ -614,13 +624,203 @@ fn apply<T: Copy>(target: &mut Animatable<T>, value: T, write: Write) {
     }
 }
 
-/// Writes a finite, optionally positive number to a content field.
+/// Writes a static content value into the matching animatable channel.
+fn content_static_write(
+    content: &mut NodeContent,
+    field: ContentField,
+    value: ContentValue,
+) -> Result<(), CoreError> {
+    match (field, value) {
+        (ContentField::Width, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { width, .. } => set_number(width, field, v, false),
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Height, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { height, .. } => set_number(height, field, v, false),
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Radius, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. } => {
+                set_number(radius, field, v, false)
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::StrokeWidth, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                set_number(&mut paint.stroke_width, field, v, false)
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Size, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => set_number(&mut text.size, field, v, true),
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Fill, ContentValue::Color(color)) => match content {
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                paint.fill.set_value(color);
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Stroke, ContentValue::Color(color)) => match content {
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                paint.stroke.set_value(color);
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Color, ContentValue::Color(Some(color))) => match content {
+            NodeContent::Text(text) => {
+                text.color.set_value(color);
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Text, ContentValue::Text(text_value)) => match content {
+            NodeContent::Text(text) => {
+                text.text = text_value;
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Align, ContentValue::Align(align)) => match content {
+            NodeContent::Text(text) => {
+                text.align = align;
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        _ => Err(CoreError::InvalidContentValue {
+            field: field.name(),
+            reason: "wrong value type",
+        }),
+    }
+}
+
+/// Writes one content keyframe into the matching animatable channel.
+fn content_key_write(
+    content: &mut NodeContent,
+    field: ContentField,
+    frame: Frame,
+    value: ContentValue,
+    ease: Ease,
+) -> Result<(), CoreError> {
+    let key = |value: f64, positive: bool| -> Result<Keyframe<f64>, CoreError> {
+        check_number(field, value, positive)?;
+        Ok(Keyframe { frame, value, ease })
+    };
+    match (field, value) {
+        (ContentField::Width, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { width, .. } => width.insert_key(key(v, false)?),
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Height, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { height, .. } => height.insert_key(key(v, false)?),
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Radius, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. } => {
+                radius.insert_key(key(v, false)?);
+            }
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::StrokeWidth, ContentValue::Number(v)) => match content {
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                paint.stroke_width.insert_key(key(v, false)?);
+            }
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Size, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => text.size.insert_key(key(v, true)?),
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Fill, ContentValue::Color(color)) => match content {
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                paint.fill.insert_key(Keyframe {
+                    frame,
+                    value: color,
+                    ease,
+                });
+            }
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Stroke, ContentValue::Color(color)) => match content {
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                paint.stroke.insert_key(Keyframe {
+                    frame,
+                    value: color,
+                    ease,
+                });
+            }
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Color, ContentValue::Color(Some(color))) => match content {
+            NodeContent::Text(text) => text.color.insert_key(Keyframe {
+                frame,
+                value: color,
+                ease,
+            }),
+            _ => return Err(wrong_kind(content, field)),
+        },
+        _ => {
+            return Err(CoreError::InvalidContentValue {
+                field: field.name(),
+                reason: "wrong value type",
+            })
+        }
+    }
+    Ok(())
+}
+
+/// Removes one content keyframe.
+fn content_key_remove(content: &mut NodeContent, field: ContentField, frame: Frame) {
+    let remove = |value: &mut Animatable<f64>| {
+        value.remove_key(frame);
+    };
+    match (content, field) {
+        (NodeContent::Rect { width, .. }, ContentField::Width) => remove(width),
+        (NodeContent::Rect { height, .. }, ContentField::Height) => remove(height),
+        (
+            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. },
+            ContentField::Radius,
+        ) => remove(radius),
+        (
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            ContentField::StrokeWidth,
+        ) => remove(&mut paint.stroke_width),
+        (NodeContent::Text(text), ContentField::Size) => remove(&mut text.size),
+        (
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            ContentField::Fill,
+        ) => {
+            paint.fill.remove_key(frame);
+        }
+        (
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            ContentField::Stroke,
+        ) => {
+            paint.stroke.remove_key(frame);
+        }
+        (NodeContent::Text(text), ContentField::Color) => {
+            text.color.remove_key(frame);
+        }
+        _ => {}
+    }
+}
+
+/// Writes a finite, optionally positive number to a content channel.
 fn set_number(
-    target: &mut f64,
+    target: &mut Animatable<f64>,
     field: ContentField,
     value: f64,
     positive: bool,
 ) -> Result<(), CoreError> {
+    check_number(field, value, positive)?;
+    target.set_value(value);
+    Ok(())
+}
+
+fn check_number(field: ContentField, value: f64, positive: bool) -> Result<(), CoreError> {
     let ok = value.is_finite() && if positive { value > 0.0 } else { value >= 0.0 };
     if !ok {
         return Err(CoreError::InvalidContentValue {
@@ -632,7 +832,6 @@ fn set_number(
             },
         });
     }
-    *target = value;
     Ok(())
 }
 
@@ -640,27 +839,6 @@ fn wrong_kind(content: &NodeContent, field: ContentField) -> CoreError {
     CoreError::WrongContentField {
         kind: content.kind_name(),
         field: field.name(),
-    }
-}
-
-fn set_stroke_width(content: &mut NodeContent, value: f64) -> Result<(), CoreError> {
-    if !value.is_finite() || value < 0.0 {
-        return Err(CoreError::InvalidContentValue {
-            field: ContentField::StrokeWidth.name(),
-            reason: "must be a finite number zero or above",
-        });
-    }
-    match content {
-        NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
-            paint.stroke = paint.stroke.and_then(|stroke| {
-                (value > 0.0).then_some(Stroke {
-                    color: stroke.color,
-                    width: value,
-                })
-            });
-            Ok(())
-        }
-        _ => Err(wrong_kind(content, ContentField::StrokeWidth)),
     }
 }
 
@@ -706,13 +884,13 @@ mod tests {
     }
 
     fn dot() -> NodeContent {
-        NodeContent::Circle {
-            radius: 4.0,
-            paint: Paint {
+        NodeContent::circle(
+            4.0,
+            Paint {
                 fill: Some(Color::WHITE),
                 stroke: None,
             },
-        }
+        )
     }
 
     #[test]
@@ -735,13 +913,13 @@ mod tests {
     #[test]
     fn rejects_negative_geometry() {
         let mut doc = document();
-        let bad = NodeContent::Circle {
-            radius: -1.0,
-            paint: Paint {
+        let bad = NodeContent::circle(
+            -1.0,
+            Paint {
                 fill: None,
                 stroke: None,
             },
-        };
+        );
         assert_eq!(
             doc.add_node(bad),
             Err(CoreError::InvalidGeometry { field: "radius" })
@@ -922,6 +1100,109 @@ mod tests {
                 property: Property::Scale,
                 ..
             })
+        ));
+    }
+
+    fn rect_doc() -> (Document, crate::node::NodeId) {
+        let mut doc = document();
+        let id = doc
+            .add_node(NodeContent::rect(
+                10.0,
+                10.0,
+                0.0,
+                Paint {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                },
+            ))
+            .unwrap();
+        (doc, id)
+    }
+
+    #[test]
+    fn content_channels_key_and_unkey() {
+        let (mut doc, id) = rect_doc();
+        let red = Color::parse_hex("#FF0000").unwrap();
+        let green = Color::parse_hex("#00FF00").unwrap();
+        doc.add_content_keyframe(
+            id,
+            ContentField::Fill,
+            0,
+            ContentValue::Color(Some(red)),
+            Ease::Linear,
+        )
+        .unwrap();
+        doc.add_content_keyframe(
+            id,
+            ContentField::Fill,
+            30,
+            ContentValue::Color(Some(green)),
+            Ease::QuadOut,
+        )
+        .unwrap();
+        doc.add_content_keyframe(
+            id,
+            ContentField::Width,
+            30,
+            ContentValue::Number(40.0),
+            Ease::Linear,
+        )
+        .unwrap();
+        let content = doc.node(id).unwrap().content();
+        assert_eq!(
+            content.channel(ContentField::Fill).unwrap().key_frames(),
+            vec![0, 30]
+        );
+        assert_eq!(
+            content.channel(ContentField::Width).unwrap().key_frames(),
+            vec![30]
+        );
+        assert!(content.channel(ContentField::Text).is_none());
+        doc.remove_content_keyframe(id, ContentField::Fill, 30)
+            .unwrap();
+        assert_eq!(
+            doc.node(id)
+                .unwrap()
+                .content()
+                .channel(ContentField::Fill)
+                .unwrap()
+                .key_frames(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn content_keyframes_reject_invalid_values_and_discrete_fields() {
+        let (mut doc, id) = rect_doc();
+        assert!(matches!(
+            doc.add_content_keyframe(
+                id,
+                ContentField::Width,
+                0,
+                ContentValue::Number(-1.0),
+                Ease::Linear
+            ),
+            Err(CoreError::InvalidContentValue { field: "width", .. })
+        ));
+        assert!(matches!(
+            doc.add_content_keyframe(
+                id,
+                ContentField::Text,
+                0,
+                ContentValue::Text("x".to_owned()),
+                Ease::Linear
+            ),
+            Err(CoreError::WrongContentField { .. })
+        ));
+        assert!(matches!(
+            doc.add_content_keyframe(
+                id,
+                ContentField::Width,
+                MAX_ABS_FRAME + 1,
+                ContentValue::Number(1.0),
+                Ease::Linear
+            ),
+            Err(CoreError::FrameOutOfRange { .. })
         ));
     }
 }

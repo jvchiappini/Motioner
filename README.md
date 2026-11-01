@@ -77,6 +77,7 @@ spec/                 language and format specifications
 ```
 motioner render  examples/hello.motion --out out/hello.mp4
 motioner still   examples/hello.motion --frame 120 --out out/hello.png
+motioner still   examples/animatable.motion --frame 45 --out out/animatable.png
 motioner info    examples/hello.motion [--json]
 motioner bake    examples/hello.motion
 motioner preview examples/hello.motion [--control]
@@ -89,8 +90,12 @@ motioner ctl     'select("@288")' 'screenshot("out/shot.png")'
 letterboxed on a canvas with selection gizmos, an editable properties inspector
 on the right, and a timeline with transport, ruler, visibility strips and
 expandable rows with one lane per parameter (Position X/Y, Scale X/Y, Anchor
-X/Y, Rotation, Opacity, plus content fields). X and Y keyframes are independent
-and are stored as `pos.x`/`pos.y` overrides. The canvas zooms around the
+X/Y, Rotation, Opacity, plus every content field). X and Y keyframes are
+independent and are stored as `pos.x`/`pos.y` overrides. Content fields
+(`fill`, `stroke`, `stroke_width`, `width`, `height`, `radius`, `size`,
+`color`) are animatable channels too: they have stopwatches, diamonds and eased
+lines like transform rows, and their colours interpolate in linear-light sRGB
+(D-0028; see `examples/animatable.motion`). The canvas zooms around the
 pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
 `F` or a click on the zoom pill; zoom and pan are view state and never change
 a rendered frame (D-0026). Selection is shared by the canvas, the lists and

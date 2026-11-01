@@ -8,7 +8,7 @@ use motioner_core::{Frame, OverrideValue, Vec2};
 use super::pointer::{Drag, GizmoDrag, DOUBLE_CLICK};
 use super::PreviewApp;
 use crate::command::{Command, KeySpec, Time};
-use crate::editor::{channel_name, CHANNELS};
+use crate::editor::channel_name;
 use crate::gizmo::{self, Handle};
 use crate::input::Modifiers;
 use crate::inspect::{self, FieldTarget};
@@ -383,20 +383,22 @@ impl PreviewApp {
         };
         let channel = self.editor.inspector().rows.get(*index)?.channel.as_ref()?;
         let id = self.editor.node_identity(self.editor.selected()?);
-        Some((id, channel_name(channel.property, channel.axis)))
+        Some((id, channel.target.name()))
     }
 
-    /// The identity and channel of a timeline property row.
+    /// The identity and channel of a timeline property or content row.
     pub(super) fn timeline_channel(&self, row: usize) -> Option<(String, String)> {
-        let RowKind::Transform {
-            outline,
-            property,
-            axis,
-        } = self.editor.timeline().rows().get(row)?.kind
-        else {
-            return None;
-        };
-        Some((self.row_id(outline)?, channel_name(property, axis)))
+        match self.editor.timeline().rows().get(row)?.kind {
+            RowKind::Transform {
+                outline,
+                property,
+                axis,
+            } => Some((self.row_id(outline)?, channel_name(property, axis))),
+            RowKind::Content { outline, field } => {
+                Some((self.row_id(outline)?, field.name().to_owned()))
+            }
+            RowKind::Layer { .. } => None,
+        }
     }
 
     pub(super) fn press_diamond(&mut self, row: usize, frame: Frame, x: f32, add: bool) {
@@ -414,12 +416,14 @@ impl PreviewApp {
                 let Some(document) = self.editor.session().document() else {
                     return;
                 };
-                CHANNELS
+                crate::editor::channels::node_channels(document, node)
                     .into_iter()
-                    .filter(|(p, a)| crate::editor::channel_has_key(document, node, *p, *a, frame))
-                    .map(|(p, a)| KeySpec {
+                    .filter(|channel| {
+                        crate::editor::channel_has_key(document, node, *channel, frame)
+                    })
+                    .map(|channel| KeySpec {
                         id: id.clone(),
-                        property: channel_name(p, a),
+                        property: channel.name(),
                         time: Time::Frame(frame),
                     })
                     .collect()
@@ -429,7 +433,11 @@ impl PreviewApp {
                 property: channel_name(property, axis),
                 time: Time::Frame(frame),
             }],
-            RowKind::Content { .. } => return,
+            RowKind::Content { field, .. } => vec![KeySpec {
+                id,
+                property: field.name().to_owned(),
+                time: Time::Frame(frame),
+            }],
         };
         if self.run(&Command::SelectKeys { keys, add }) {
             self.editor.begin_gesture();

@@ -5,6 +5,7 @@ use std::fmt;
 use crate::animation::{Animatable, AnimatableVec2};
 use crate::color::Color;
 use crate::math::Vec2;
+use crate::time::Frame;
 
 /// Persistent identity of a node within one document.
 ///
@@ -128,6 +129,15 @@ impl ContentField {
         (Self::Align, "align"),
     ];
 
+    /// Whether the field has keyframes (D-0028).
+    ///
+    /// Content fields are scalar channels: none of them has axes. Text and
+    /// alignment are discrete and cannot be animated.
+    #[must_use]
+    pub const fn is_animatable(self) -> bool {
+        !matches!(self, Self::Text | Self::Align)
+    }
+
     /// Looks up a field by its override property name.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
@@ -220,13 +230,76 @@ pub struct Stroke {
     pub width: f64,
 }
 
-/// Fill and stroke of a shape. Either may be absent.
+/// The resolved fill and stroke of one shape at one frame.
+///
+/// This is the value the render plan carries. The document stores the same
+/// fields as animatable channels in [`PaintSpec`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Paint {
     /// Interior color, if filled.
     pub fill: Option<Color>,
     /// Outline, if stroked.
     pub stroke: Option<Stroke>,
+}
+
+/// The animatable fill and stroke properties of a shape (D-0028).
+///
+/// A stroke is drawn only when its colour is present **and** its width is
+/// positive, so `stroke_width = 0` hides a stroke exactly like `stroke =
+/// "none"` does. Channels need not be animated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaintSpec {
+    /// Interior colour (`fill`).
+    pub fill: Animatable<Option<Color>>,
+    /// Outline colour (`stroke`).
+    pub stroke: Animatable<Option<Color>>,
+    /// Outline width in pixels (`stroke_width`).
+    pub stroke_width: Animatable<f64>,
+}
+
+impl PaintSpec {
+    /// Creates a paint from its static values.
+    #[must_use]
+    pub fn new(fill: Option<Color>, stroke: Option<Color>, stroke_width: f64) -> Self {
+        Self {
+            fill: Animatable::new(fill),
+            stroke: Animatable::new(stroke),
+            stroke_width: Animatable::new(stroke_width),
+        }
+    }
+
+    /// Creates a paint from a resolved value, as constructors receive it.
+    #[must_use]
+    pub fn from_paint(paint: Paint) -> Self {
+        let stroke = paint.stroke;
+        Self {
+            fill: Animatable::new(paint.fill),
+            stroke: Animatable::new(stroke.map(|stroke| stroke.color)),
+            stroke_width: Animatable::new(stroke.map_or(0.0, |stroke| stroke.width)),
+        }
+    }
+
+    /// A solid fill with no stroke.
+    #[must_use]
+    pub fn solid(color: Color) -> Self {
+        Self::new(Some(color), None, 0.0)
+    }
+
+    /// No fill and no stroke.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::new(None, None, 0.0)
+    }
+
+    /// The pointer to the channel of one paint field, if it is one.
+    pub(crate) fn channel(&self, field: ContentField) -> Option<ContentChannel<'_>> {
+        match field {
+            ContentField::Fill => Some(ContentChannel::OptionalColor(&self.fill)),
+            ContentField::Stroke => Some(ContentChannel::OptionalColor(&self.stroke)),
+            ContentField::StrokeWidth => Some(ContentChannel::Number(&self.stroke_width)),
+            _ => None,
+        }
+    }
 }
 
 /// Horizontal alignment of a text block relative to the node origin.
@@ -261,12 +334,69 @@ pub struct TextContent {
     pub text: String,
     /// Requested font family name.
     pub font: String,
-    /// Font size in pixels (em height).
-    pub size: f64,
-    /// Glyph color.
-    pub color: Color,
+    /// Font size in pixels (em height); animatable (`size`).
+    pub size: Animatable<f64>,
+    /// Glyph color; animatable (`color`).
+    pub color: Animatable<Color>,
     /// Horizontal alignment.
     pub align: TextAlign,
+}
+
+impl TextContent {
+    /// Creates a text line from static values.
+    #[must_use]
+    pub fn new(
+        text: impl Into<String>,
+        font: impl Into<String>,
+        size: f64,
+        color: Color,
+        align: TextAlign,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            font: font.into(),
+            size: Animatable::new(size),
+            color: Animatable::new(color),
+            align,
+        }
+    }
+}
+
+/// A reference to one content field's animation channel (D-0028).
+///
+/// This is the one place that maps a [`ContentField`] to the matching
+/// `Animatable` member, so the inspector, the timeline, `query`, the DSL and
+/// the evaluator do not duplicate that table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContentChannel<'a> {
+    /// A scalar channel (`width`, `radius`, `size`, ...).
+    Number(&'a Animatable<f64>),
+    /// A required colour channel (text `color`).
+    Color(&'a Animatable<Color>),
+    /// A colour channel that can also be absent (`fill`, `stroke`).
+    OptionalColor(&'a Animatable<Option<Color>>),
+}
+
+impl ContentChannel<'_> {
+    /// Whether the channel has any keyframe.
+    #[must_use]
+    pub fn is_animated(&self) -> bool {
+        match self {
+            Self::Number(value) => !value.keys().is_empty(),
+            Self::Color(value) => !value.keys().is_empty(),
+            Self::OptionalColor(value) => !value.keys().is_empty(),
+        }
+    }
+
+    /// The keyed frames, sorted by strictly increasing frame.
+    #[must_use]
+    pub fn key_frames(&self) -> Vec<Frame> {
+        match self {
+            Self::Number(value) => value.keys().iter().map(|key| key.frame).collect(),
+            Self::Color(value) => value.keys().iter().map(|key| key.frame).collect(),
+            Self::OptionalColor(value) => value.keys().iter().map(|key| key.frame).collect(),
+        }
+    }
 }
 
 /// What a node draws.
@@ -276,27 +406,47 @@ pub enum NodeContent {
     Group,
     /// A rectangle centered on the node origin.
     Rect {
-        /// Width in pixels.
-        width: f64,
-        /// Height in pixels.
-        height: f64,
-        /// Corner radius in pixels.
-        radius: f64,
-        /// Fill and stroke.
-        paint: Paint,
+        /// Width in pixels (`width`).
+        width: Animatable<f64>,
+        /// Height in pixels (`height`).
+        height: Animatable<f64>,
+        /// Corner radius in pixels (`radius`).
+        radius: Animatable<f64>,
+        /// Fill and stroke channels.
+        paint: PaintSpec,
     },
     /// A circle centered on the node origin.
     Circle {
-        /// Radius in pixels.
-        radius: f64,
-        /// Fill and stroke.
-        paint: Paint,
+        /// Radius in pixels (`radius`).
+        radius: Animatable<f64>,
+        /// Fill and stroke channels.
+        paint: PaintSpec,
     },
     /// A text line whose baseline passes through the node origin.
     Text(TextContent),
 }
 
 impl NodeContent {
+    /// A rectangle from static values.
+    #[must_use]
+    pub fn rect(width: f64, height: f64, radius: f64, paint: Paint) -> Self {
+        Self::Rect {
+            width: Animatable::new(width),
+            height: Animatable::new(height),
+            radius: Animatable::new(radius),
+            paint: PaintSpec::from_paint(paint),
+        }
+    }
+
+    /// A circle from static values.
+    #[must_use]
+    pub fn circle(radius: f64, paint: Paint) -> Self {
+        Self::Circle {
+            radius: Animatable::new(radius),
+            paint: PaintSpec::from_paint(paint),
+        }
+    }
+
     /// Human name of the node kind ("group", "rect", "circle", "text").
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
@@ -336,11 +486,70 @@ impl NodeContent {
         }
     }
 
-    /// Checks that sizes are finite and non-negative and text size is
+    /// The animation channel of `field`, or `None` when the kind has no such
+    /// field or the field is not animatable (`text`, `align`).
+    #[must_use]
+    pub fn channel<'a>(&'a self, field: ContentField) -> Option<ContentChannel<'a>> {
+        if !self.accepts(field) || !field.is_animatable() {
+            return None;
+        }
+        let number = |value: &'a Animatable<f64>| Some(ContentChannel::Number(value));
+        match (self, field) {
+            (Self::Rect { width, .. }, ContentField::Width) => number(width),
+            (Self::Rect { height, .. }, ContentField::Height) => number(height),
+            (Self::Rect { radius, .. } | Self::Circle { radius, .. }, ContentField::Radius) => {
+                number(radius)
+            }
+            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, field) => paint.channel(field),
+            (Self::Text(text), ContentField::Size) => number(&text.size),
+            (Self::Text(text), ContentField::Color) => Some(ContentChannel::Color(&text.color)),
+            _ => None,
+        }
+    }
+
+    /// The static value of `field`, ignoring keyframes.
+    #[must_use]
+    pub fn static_value(&self, field: ContentField) -> Option<ContentValue> {
+        match (self, field) {
+            (Self::Rect { width, .. }, ContentField::Width) => {
+                Some(ContentValue::Number(width.value()))
+            }
+            (Self::Rect { height, .. }, ContentField::Height) => {
+                Some(ContentValue::Number(height.value()))
+            }
+            (Self::Rect { radius, .. } | Self::Circle { radius, .. }, ContentField::Radius) => {
+                Some(ContentValue::Number(radius.value()))
+            }
+            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, ContentField::Fill) => {
+                Some(ContentValue::Color(paint.fill.value()))
+            }
+            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, ContentField::Stroke) => {
+                Some(ContentValue::Color(paint.stroke.value()))
+            }
+            (Self::Rect { paint, .. } | Self::Circle { paint, .. }, ContentField::StrokeWidth) => {
+                Some(ContentValue::Number(paint.stroke_width.value()))
+            }
+            (Self::Text(text), ContentField::Text) => Some(ContentValue::Text(text.text.clone())),
+            (Self::Text(text), ContentField::Size) => Some(ContentValue::Number(text.size.value())),
+            (Self::Text(text), ContentField::Color) => {
+                Some(ContentValue::Color(Some(text.color.value())))
+            }
+            (Self::Text(text), ContentField::Align) => Some(ContentValue::Align(text.align)),
+            _ => None,
+        }
+    }
+
+    /// Checks that static sizes are finite and non-negative and text size is
     /// positive. Returns the name of the first invalid field.
     pub(crate) fn invalid_field(&self) -> Option<&'static str> {
         let bad = |value: f64| !value.is_finite() || value < 0.0;
-        let bad_stroke = |paint: &Paint| paint.stroke.is_some_and(|s| bad(s.width));
+        let bad_paint = |paint: &PaintSpec| {
+            bad(paint.stroke_width.value()) || {
+                // Keyed colours carry no numeric constraint; keyed widths are
+                // validated when they are written.
+                paint.stroke_width.keys().iter().any(|key| bad(key.value))
+            }
+        };
         match self {
             Self::Group => None,
             Self::Rect {
@@ -349,23 +558,26 @@ impl NodeContent {
                 radius,
                 paint,
             } => [
-                (bad(*width), "width"),
-                (bad(*height), "height"),
-                (bad(*radius), "radius"),
-                (bad_stroke(paint), "stroke_width"),
+                (bad(width.value()), "width"),
+                (bad(height.value()), "height"),
+                (bad(radius.value()), "radius"),
+                (bad_paint(paint), "stroke_width"),
             ]
             .into_iter()
             .find_map(|(is_bad, name)| is_bad.then_some(name)),
             Self::Circle { radius, paint } => {
-                if bad(*radius) {
+                if bad(radius.value()) {
                     Some("radius")
-                } else if bad_stroke(paint) {
+                } else if bad_paint(paint) {
                     Some("stroke_width")
                 } else {
                     None
                 }
             }
-            Self::Text(text) => (bad(text.size) || text.size == 0.0).then_some("size"),
+            Self::Text(text) => {
+                let size = text.size.value();
+                (bad(size) || size == 0.0).then_some("size")
+            }
         }
     }
 }

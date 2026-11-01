@@ -1,6 +1,6 @@
 //! Frame evaluation: document plus frame to render plan.
 
-use motioner_core::{Document, Frame, NodeContent, NodeId};
+use motioner_core::{Document, Frame, NodeContent, NodeId, Paint, PaintSpec, Stroke};
 
 use crate::affine::Affine2;
 use crate::curve::{sample, sample_vec2};
@@ -76,7 +76,7 @@ impl Evaluator {
             if opacity <= 0.0 {
                 continue;
             }
-            if let Some(shape) = item_shape(node.content()) {
+            if let Some(shape) = item_shape(node.content(), frame) {
                 plan.items.push(RenderItem {
                     node: node.id(),
                     transform,
@@ -99,26 +99,44 @@ impl Evaluator {
     }
 }
 
-fn item_shape(content: &NodeContent) -> Option<ItemShape> {
+fn item_shape(content: &NodeContent, frame: Frame) -> Option<ItemShape> {
     match content {
         NodeContent::Group => None,
-        &NodeContent::Rect {
+        NodeContent::Rect {
             width,
             height,
             radius,
             paint,
         } => Some(ItemShape::Rect {
-            width,
-            height,
-            radius,
-            paint,
+            width: sample(width, frame),
+            height: sample(height, frame),
+            radius: sample(radius, frame),
+            paint: resolved_paint(paint, frame),
         }),
-        &NodeContent::Circle { radius, paint } => Some(ItemShape::Circle { radius, paint }),
+        NodeContent::Circle { radius, paint } => Some(ItemShape::Circle {
+            radius: sample(radius, frame),
+            paint: resolved_paint(paint, frame),
+        }),
         NodeContent::Text(text) => Some(ItemShape::Text {
-            size: text.size,
-            color: text.color,
+            size: sample(&text.size, frame),
+            color: sample(&text.color, frame),
             align: text.align,
         }),
+    }
+}
+
+/// Samples the fill and stroke channels into the resolved paint of one frame.
+///
+/// A stroke is drawn only when its colour is present and its width is above
+/// zero, the same rule the constructors use for `stroke_width = 0`.
+fn resolved_paint(spec: &PaintSpec, frame: Frame) -> Paint {
+    let width = sample(&spec.stroke_width, frame);
+    let stroke = sample(&spec.stroke, frame)
+        .filter(|_| width > 0.0)
+        .map(|color| Stroke { color, width });
+    Paint {
+        fill: sample(&spec.fill, frame),
+        stroke,
     }
 }
 
@@ -135,15 +153,15 @@ mod tests {
     }
 
     fn square(doc: &mut Document) -> NodeId {
-        doc.add_node(NodeContent::Rect {
-            width: 10.0,
-            height: 10.0,
-            radius: 0.0,
-            paint: Paint {
+        doc.add_node(NodeContent::rect(
+            10.0,
+            10.0,
+            0.0,
+            Paint {
                 fill: Some(Color::WHITE),
                 stroke: None,
             },
-        })
+        ))
         .unwrap()
     }
 

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use motioner_core::NodeId;
 
-use super::{channel_name, channels, on_off, Editor, Effect, Outcome};
+use super::{channels, on_off, Editor, Effect, Outcome};
 use crate::command::{Command, CommandError, ErrorKind, KeySpec, Panel};
 use crate::edit::KeyRef;
 use crate::input::step_selection;
@@ -305,9 +305,9 @@ impl Editor {
         forward: bool,
     ) -> Result<Outcome, CommandError> {
         let document = self.require_document()?;
-        let (node, property, axis) = channels::resolve(document, id, property)?;
+        let (node, channel) = channels::resolve(document, id, property)?;
         let frame = self.frame();
-        let keys = channels::keys(document, node, property, axis);
+        let keys = channels::keys(document, node, channel);
         let target = if forward {
             keys.iter().copied().find(|&key| key > frame)
         } else {
@@ -325,8 +325,8 @@ impl Editor {
         let mut refs = Vec::with_capacity(keys.len());
         for key in keys {
             let frame = key.time.frame(rate)?;
-            let (node, property, axis) = channels::resolve(document, &key.id, &key.property)?;
-            if !channels::keys(document, node, property, axis).contains(&frame) {
+            let (node, channel) = channels::resolve(document, &key.id, &key.property)?;
+            if !channels::keys(document, node, channel).contains(&frame) {
                 return Err(CommandError::new(
                     ErrorKind::NoKey,
                     format!("{} has no key on {} at frame {frame}", key.id, key.property),
@@ -334,7 +334,7 @@ impl Editor {
             }
             refs.push(KeyRef {
                 id: key.id.clone(),
-                property: channel_name(property, axis),
+                property: channel.name(),
                 frame,
             });
         }

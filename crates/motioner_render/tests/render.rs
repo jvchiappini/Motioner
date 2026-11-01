@@ -25,12 +25,7 @@ fn composition(width: u32, height: u32, background: Color) -> Document {
 
 fn add_rect(document: &mut Document, width: f64, height: f64, radius: f64, paint: Paint) -> NodeId {
     document
-        .add_node(NodeContent::Rect {
-            width,
-            height,
-            radius,
-            paint,
-        })
+        .add_node(NodeContent::rect(width, height, radius, paint))
         .unwrap()
 }
 
@@ -42,13 +37,9 @@ fn add_text(
     align: TextAlign,
 ) -> NodeId {
     document
-        .add_node(NodeContent::Text(TextContent {
-            text: text.to_owned(),
-            font: "Roboto".to_owned(),
-            size,
-            color,
-            align,
-        }))
+        .add_node(NodeContent::Text(TextContent::new(
+            text, "Roboto", size, color, align,
+        )))
         .unwrap()
 }
 

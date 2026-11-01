@@ -3,7 +3,7 @@
 //! nodes in outline order and channels in display order, so the same state
 //! always prints the same bytes (D-0024).
 
-use motioner_core::{Document, Frame, NodeContent, NodeId, OverrideValue};
+use motioner_core::{Document, Frame, NodeId, OverrideValue};
 
 use super::channels::{self, channel_name, CHANNELS};
 use super::Editor;
@@ -109,35 +109,29 @@ impl Editor {
         j.key("locked").boolean(self.node_locked(node));
         j.key("channels").begin_object();
         for (property, axis) in CHANNELS {
-            j.key(&channel_name(property, axis)).begin_object();
-            match channels::sampled(document, node, property, axis, frame) {
-                Some(OverrideValue::Number(value)) => j.key("value").number(value),
-                _ => j.key("value").null(),
-            };
-            j.key("keys").begin_array();
-            let frames = channels::keys(document, node, property, axis);
-            let eases = channels::eases(document, node, property, axis);
-            for (index, key) in frames.iter().enumerate() {
-                j.begin_object();
-                j.key("frame").int(*key);
-                j.key("time").number(motioner_core::seconds_of(*key, rate));
-                if let Some((OverrideValue::Number(value), _)) =
-                    channels::key_at(document, node, property, axis, *key)
-                {
-                    j.key("value").number(value);
-                }
-                j.key("ease")
-                    .string(eases.get(index).map_or("linear", |ease| ease.name()));
-                j.end_object();
+            let channel = channels::Channel::Transform(property, axis);
+            channel_json(
+                j,
+                document,
+                node,
+                channel,
+                &channel_name(property, axis),
+                frame,
+                rate,
+            );
+        }
+        for field in content_fields(n.content()) {
+            if !field.is_animatable() {
+                continue;
             }
-            j.end_array();
-            j.end_object();
+            let channel = channels::Channel::Content(field);
+            channel_json(j, document, node, channel, field.name(), frame, rate);
         }
         j.end_object();
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
             j.key(field.name());
-            content_value(j, n.content(), field);
+            content_value(j, document, node, field, frame);
         }
         j.end_object();
         j.end_object();
@@ -256,37 +250,93 @@ fn composition(j: &mut Json, document: &Document) {
     j.end_object();
 }
 
-fn content_value(j: &mut Json, content: &NodeContent, field: motioner_core::ContentField) {
-    use motioner_core::ContentField as F;
-    match (content, field) {
-        (NodeContent::Rect { width, .. }, F::Width) => j.number(*width),
-        (NodeContent::Rect { height, .. }, F::Height) => j.number(*height),
-        (NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. }, F::Radius) => {
-            j.number(*radius)
+/// One channel's value and keys, in the fixed field order of `query`.
+fn channel_json(
+    j: &mut Json,
+    document: &Document,
+    node: NodeId,
+    channel: channels::Channel,
+    name: &str,
+    frame: Frame,
+    rate: motioner_core::FrameRate,
+) {
+    j.key(name).begin_object();
+    value_or_null(j, channels::sampled(document, node, channel, frame));
+    j.key("keys").begin_array();
+    let frames = channels::keys(document, node, channel);
+    let eases = channels::eases(document, node, channel);
+    for (index, key) in frames.iter().enumerate() {
+        j.begin_object();
+        j.key("frame").int(*key);
+        j.key("time").number(motioner_core::seconds_of(*key, rate));
+        if let Some((value, _)) = channels::key_at(document, node, channel, *key) {
+            value_or_null(j, Some(value));
         }
-        (NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. }, F::Fill) => {
-            j.opt_string(paint.fill.map(crate::inspect::hex).as_deref())
+        j.key("ease")
+            .string(eases.get(index).map_or("linear", |ease| ease.name()));
+        j.end_object();
+    }
+    j.end_array();
+    j.end_object();
+}
+
+fn value_or_null(j: &mut Json, value: Option<OverrideValue>) {
+    match value {
+        Some(OverrideValue::Number(value)) => {
+            j.key("value").number(value);
         }
-        (NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. }, F::Stroke) => j
-            .opt_string(
-                paint
-                    .stroke
-                    .map(|stroke| crate::inspect::hex(stroke.color))
-                    .as_deref(),
-            ),
-        (NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. }, F::StrokeWidth) => {
-            j.number(paint.stroke.map_or(0.0, |stroke| stroke.width))
+        Some(OverrideValue::Vec2(value)) => {
+            j.key("value").begin_array();
+            j.number(value.x).number(value.y);
+            j.end_array();
         }
-        (NodeContent::Text(text), F::Text) => j.string(&text.text),
-        (NodeContent::Text(text), F::Size) => j.number(text.size),
-        (NodeContent::Text(text), F::Color) => j.string(&crate::inspect::hex(text.color)),
-        (NodeContent::Text(text), F::Align) => j.string(match text.align {
-            motioner_core::TextAlign::Left => "left",
-            motioner_core::TextAlign::Center => "center",
-            motioner_core::TextAlign::Right => "right",
-        }),
-        _ => j.null(),
-    };
+        Some(OverrideValue::Text(text)) => {
+            j.key("value").string(&text);
+        }
+        None => {
+            j.key("value").null();
+        }
+    }
+}
+
+fn content_value(
+    j: &mut Json,
+    document: &Document,
+    node: NodeId,
+    field: motioner_core::ContentField,
+    frame: Frame,
+) {
+    if field.is_animatable() {
+        value_or_null(
+            j,
+            channels::sampled(document, node, channels::Channel::Content(field), frame),
+        );
+        return;
+    }
+    match document
+        .node(node)
+        .and_then(|node| node.content().static_value(field))
+    {
+        Some(motioner_core::ContentValue::Text(text)) => {
+            j.string(&text);
+        }
+        Some(motioner_core::ContentValue::Align(align)) => {
+            j.string(match align {
+                motioner_core::TextAlign::Left => "left",
+                motioner_core::TextAlign::Center => "center",
+                motioner_core::TextAlign::Right => "right",
+            });
+        }
+        Some(motioner_core::ContentValue::Number(number)) => {
+            j.number(number);
+        }
+        Some(motioner_core::ContentValue::Color(color)) => {
+            j.opt_string(color.map(motioner_core::Color::to_hex).as_deref());
+        }
+        None => {
+            j.null();
+        }
+    }
 }
 
 #[cfg(test)]

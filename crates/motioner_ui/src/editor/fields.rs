@@ -20,8 +20,7 @@ impl Editor {
                 match channels::sampled(
                     document,
                     node,
-                    property,
-                    core_axis(property, axis),
+                    super::Channel::Transform(property, core_axis(property, axis)),
                     self.frame(),
                 )? {
                     OverrideValue::Number(number) => Some(number),
@@ -29,7 +28,9 @@ impl Editor {
                     OverrideValue::Text(_) => None,
                 }
             }
-            FieldTarget::Content(field) => content_number(document.node(node)?.content(), field),
+            FieldTarget::Content(field) => {
+                channels::sampled_number(document, node, field, self.frame())
+            }
             _ => None,
         }
     }
@@ -41,38 +42,43 @@ impl Editor {
             let shown = (value * display_factor(target) * 10.0).round() / 10.0;
             return crate::outline::number(shown);
         }
-        let Some(node) = self.selected.and_then(|n| self.document()?.node(n)) else {
+        let Some(node) = self.selected else {
+            return String::new();
+        };
+        let Some(document) = self.document() else {
             return String::new();
         };
         match target {
-            FieldTarget::Content(ContentField::Fill) => match node.content() {
-                NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
-                    paint.fill.map_or_else(|| "none".to_owned(), inspect::hex)
+            FieldTarget::Content(field @ (ContentField::Fill | ContentField::Stroke)) => {
+                match channels::sampled_colour(document, node, field, self.frame()) {
+                    channels::SampledColour::Colour(color) => inspect::hex(color),
+                    _ => "none".to_owned(),
                 }
-                _ => "none".to_owned(),
-            },
-            FieldTarget::Content(ContentField::Stroke) => match node.content() {
-                NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => paint
-                    .stroke
-                    .map_or_else(|| "none".to_owned(), |stroke| inspect::hex(stroke.color)),
-                _ => "none".to_owned(),
-            },
-            FieldTarget::Content(ContentField::Color) => match node.content() {
-                NodeContent::Text(text) => inspect::hex(text.color),
-                _ => String::new(),
-            },
-            FieldTarget::Content(ContentField::Text) | FieldTarget::Text => match node.content() {
-                NodeContent::Text(text) => text.text.clone(),
-                _ => String::new(),
-            },
-            FieldTarget::Align => match node.content() {
-                NodeContent::Text(text) => align_name(text.align).to_owned(),
+            }
+            FieldTarget::Content(ContentField::Color) => {
+                match channels::sampled_colour(document, node, ContentField::Color, self.frame()) {
+                    channels::SampledColour::Colour(color) => inspect::hex(color),
+                    _ => String::new(),
+                }
+            }
+            FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
+                match document.node(node).map(motioner_core::Node::content) {
+                    Some(NodeContent::Text(text)) => text.text.clone(),
+                    _ => String::new(),
+                }
+            }
+            FieldTarget::Align => match document.node(node).map(motioner_core::Node::content) {
+                Some(NodeContent::Text(text)) => align_name(text.align).to_owned(),
                 _ => String::new(),
             },
             FieldTarget::Name => self
                 .session
                 .overrides()
-                .get(node.identity().as_str(), motioner_core::NAME, None)
+                .get(
+                    document.node(node).map_or("", |n| n.identity().as_str()),
+                    motioner_core::NAME,
+                    None,
+                )
                 .and_then(|entry| match &entry.action {
                     OverrideAction::Set(OverrideValue::Text(text)) => Some(text.clone()),
                     _ => None,
@@ -173,22 +179,4 @@ fn is_numeric_field(field: ContentField) -> bool {
             | ContentField::StrokeWidth
             | ContentField::Size
     )
-}
-
-/// The numeric value a content field holds, when it is a number.
-fn content_number(content: &NodeContent, field: ContentField) -> Option<f64> {
-    match (content, field) {
-        (NodeContent::Rect { width, .. }, ContentField::Width) => Some(*width),
-        (NodeContent::Rect { height, .. }, ContentField::Height) => Some(*height),
-        (
-            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. },
-            ContentField::Radius,
-        ) => Some(*radius),
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            ContentField::StrokeWidth,
-        ) => Some(paint.stroke.map_or(0.0, |stroke| stroke.width)),
-        (NodeContent::Text(text), ContentField::Size) => Some(text.size),
-        _ => None,
-    }
 }

@@ -130,9 +130,16 @@ Common node members:
 
 - `parent`, `children`, `name`, `id`, `enabled`.
 - `pos`, `scale`, `rotation`, `anchor`, `opacity`, `blend`.
+- Content fields: `width`, `height`, `radius`, `fill`, `stroke`,
+  `stroke_width` (rect/circle); `text`, `size`, `color`, `align` (text).
 - `clip_in`, `clip_out`, `time_remap`.
 - Methods: `add(*nodes)`, `remove()`, `key(property, time, value, ease="linear")`,
   `ease(name)`, `mask(node)`, `effect(kind, **params)`.
+
+Every content field except `text` and `align` is an **animatable channel**:
+`key("fill", t, "#RRGGBB")`, `key("size", t, 72)`, `key("stroke_width", t,
+8)`. Colours interpolate in linear-light sRGB; a `fill`/`stroke` keyed to
+`None` holds the previous colour until that key (a step). See D-0028.
 
 3D nodes add `target`, `fov`, `intensity`, `material`, `cast_shadow` and
 similar properties. NLE nodes add clip points and track assignment.
@@ -198,11 +205,18 @@ Transform properties (`pos`, `scale`, `rotation`, `anchor`, `opacity`) and
 their keyframes. Vector properties have independently keyable axes:
 `.key("pos.x", t, v)`, `override_key("id", "pos.x", t, v)` and
 `override_unkey("id", "pos.x", t)` key only that axis, while
-`key("pos", t, (x, y))` keys both. The editor shows one timeline row per axis;
-content fields `width`, `height`, `radius`, `fill`, `stroke`,
-`stroke_width` (rect/circle) and `text`, `size`, `color`, `align` (text);
-`visible` (render) and `locked` (editor only); `name` (display name, no effect
-on identity or rendering).
+`key("pos", t, (x, y))` keys both. The editor shows one timeline row per axis.
+
+Content fields are animatable channels with no axes (D-0028): `width`,
+`height`, `radius`, `fill`, `stroke`, `stroke_width` (rect/circle) and `size`,
+`color` (text). `key("fill", t, value)`, `override_key("id", "fill", t, value)`
+and `override_unkey("id", "fill", t)` work exactly like transform channels.
+Colours are interpolated in linear-light sRGB; an optional colour keyed to
+`None` holds the previous value as a step. `text` and `align` are discrete and
+reject `key`/`override_key`.
+
+`visible` (render) and `locked` (editor only) are not channels; `name`
+(display name, no effect on identity or rendering) is a string override.
 
 ### 9.3 Bake
 

@@ -345,6 +345,10 @@ fn key_replacement(origin: &ValueOrigin, value: &OverrideValue) -> Option<String
     match (origin.literal?, value) {
         (Literal::Number, OverrideValue::Number(number)) => Some(format_number(*number)),
         (Literal::Pair, OverrideValue::Vec2(pair)) => Some(pair_text(*pair)),
+        (Literal::Text, OverrideValue::Text(text)) => Some(optional_none(&origin.property, text)),
+        (Literal::None, OverrideValue::Text(text)) if is_optional(&origin.property) => {
+            Some(optional_none(&origin.property, text))
+        }
         _ => None,
     }
 }
@@ -490,13 +494,18 @@ fn bake_entry(
         )),
         OverrideAction::Key { frame, value, ease } => {
             let (base, axis) = motioner_core::split_property(&entry.property);
-            let Some(property) = Property::from_name(base) else {
+            if Property::from_name(base).is_none()
+                && !motioner_core::ContentField::from_name(base)
+                    .is_some_and(motioner_core::ContentField::is_animatable)
+            {
                 return Err(format!(
-                    "'{}' is not an animatable transform property",
+                    "'{}' is not an animatable transform property or content field",
                     entry.property
                 ));
-            };
-            if axis.is_some() && !property.is_vector() {
+            }
+            if axis.is_some()
+                && !Property::from_name(base).is_some_and(motioner_core::Property::is_vector)
+            {
                 return Err(format!("'{}' has no axes", entry.property));
             }
             let time = format_number(seconds_of(*frame, rate));
@@ -991,5 +1000,54 @@ mod tests {
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
         assert_eq!(semantics(&actual), semantics(&before));
         let _ = rate();
+    }
+
+    #[test]
+    fn content_keys_are_baked_in_place() {
+        let source = "comp(name=\"C\", duration=2.0)\n\
+                      r = rect(10, 10, 0, fill=\"#FF0000\")\n\
+                      r.key(\"fill\", 1.0, \"#00FF00\", ease=\"quad_out\")\n\
+                      r.key(\"width\", 1.0, 40)\n";
+        let compiled = compile(source);
+        let id = id_of(&compiled, compiled.document.roots()[0]);
+        let set = overrides(&[
+            (
+                &id,
+                "fill",
+                OverrideAction::Key {
+                    frame: 60,
+                    value: OverrideValue::Text("#0000FF".to_owned()),
+                    ease: Ease::CubicOut,
+                },
+            ),
+            (
+                &id,
+                "width",
+                OverrideAction::Key {
+                    frame: 60,
+                    value: OverrideValue::Number(80.0),
+                    ease: Ease::Linear,
+                },
+            ),
+        ]);
+        let before = expected(&compiled, &set);
+        let baked = bake(
+            source,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.refused.is_empty(), "{baked:?}");
+        assert!(baked.overrides.is_empty(), "{baked:?}");
+        assert!(baked.program.contains("\"#0000FF\""), "{}", baked.program);
+        assert!(
+            baked.program.contains("key(\"width\", 1.0, 80"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(semantics(&actual), semantics(&before));
     }
 }

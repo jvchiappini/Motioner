@@ -89,14 +89,12 @@ pub(crate) fn z_for(index: u32, total: u32) -> f32 {
 ///
 /// Applies the exact piecewise sRGB EOTF. Alpha is already linear coverage and
 /// must not go through this function.
+///
+/// The transfer function lives in `motioner_core::Color` because colour
+/// interpolation shares it with the renderer (D-0028).
 #[must_use]
 pub fn srgb_to_linear(value: u8) -> f32 {
-    let channel = f32::from(value) / 255.0;
-    if channel <= 0.040_45 {
-        channel / 12.92
-    } else {
-        ((channel + 0.055) / 1.055).powf(2.4)
-    }
+    motioner_core::Color::srgb_to_linear(value)
 }
 
 /// Converts a Motioner colour plus item opacity to a linear RGBA instance

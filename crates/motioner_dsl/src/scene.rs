@@ -53,6 +53,14 @@ impl CreationSite {
     }
 }
 
+/// The frame, ease and ease source of one `key(...)` call.
+#[derive(Debug, Clone)]
+struct KeyTiming {
+    frame: motioner_core::Frame,
+    ease: Ease,
+    ease_origin: Option<EaseOrigin>,
+}
+
 /// Builds the document while a program runs.
 pub(crate) struct Scene {
     document: Option<Document>,
@@ -117,12 +125,12 @@ impl Scene {
                     "stroke_width",
                 ];
                 let bound = bind("rect", &params, 2, args)?;
-                let content = NodeContent::Rect {
-                    width: bound.number(0)?,
-                    height: bound.number(1)?,
-                    radius: bound.number_or(2, 0.0)?,
-                    paint: paint(&bound, 3)?,
-                };
+                let content = NodeContent::rect(
+                    bound.number(0)?,
+                    bound.number(1)?,
+                    bound.number_or(2, 0.0)?,
+                    paint(&bound, 3)?,
+                );
                 let node = self.create(content, site)?;
                 if let Value::Node(id) = node {
                     for (index, property) in [
@@ -141,10 +149,7 @@ impl Scene {
             Builtin::Circle => {
                 let params = ["radius", "fill", "stroke", "stroke_width"];
                 let bound = bind("circle", &params, 1, args)?;
-                let content = NodeContent::Circle {
-                    radius: bound.number(0)?,
-                    paint: paint(&bound, 1)?,
-                };
+                let content = NodeContent::circle(bound.number(0)?, paint(&bound, 1)?);
                 let node = self.create(content, site)?;
                 if let Value::Node(id) = node {
                     for (index, property) in [
@@ -214,13 +219,13 @@ impl Scene {
                 "text(): unknown align {align_name:?}; use \"left\", \"center\" or \"right\""
             ))
         })?;
-        let content = NodeContent::Text(TextContent {
-            text: content.to_string(),
-            font: bound.string_or(1, "Inter")?.to_string(),
-            size: bound.number_or(2, 48.0)?,
-            color: bound.color_or(3, Color::WHITE)?,
+        let content = NodeContent::Text(TextContent::new(
+            content.to_string(),
+            bound.string_or(1, "Inter")?.to_string(),
+            bound.number_or(2, 48.0)?,
+            bound.color_or(3, Color::WHITE)?,
             align,
-        });
+        ));
         let node = self.create(content, site)?;
         if let Value::Node(id) = node {
             for (index, property) in [(0, "text"), (2, "size"), (3, "color"), (4, "align")] {
@@ -356,10 +361,19 @@ impl Scene {
         let bound = bind("key", &["property", "time", "value", "ease"], 3, args)?;
         let property_name = bound.string_or(0, "")?;
         let (base, axis) = split_axis(&property_name);
+        if let Some(field) = ContentField::from_name(base) {
+            return self.key_content(id, field, &property_name, axis, &bound);
+        }
         let property = Property::from_name(base).ok_or_else(|| {
             HostError::value_error(format!(
-                "key(): unknown property {property_name:?}; animatable properties are {} (a vector axis is written \"pos.x\")",
-                quoted_names(Property::ALL.iter().map(|(_, n)| *n))
+                "key(): unknown property {property_name:?}; animatable properties are {} and the content fields {} (a vector axis is written \"pos.x\")",
+                quoted_names(Property::ALL.iter().map(|(_, n)| *n)),
+                quoted_names(
+                    ContentField::ALL
+                        .iter()
+                        .filter(|(field, _)| field.is_animatable())
+                        .map(|(_, n)| *n)
+                )
             ))
         })?;
         if !property.is_vector() && axis.is_some() {
@@ -395,6 +409,58 @@ impl Scene {
                 bound.get(2).unwrap_or(&Value::None),
             )?),
         };
+        let timing = self.key_timing(&bound, time)?;
+        let document = self.document_mut()?;
+        match (axis_value, value) {
+            (Some((axis, number)), _) => document
+                .add_axis_keyframe(id, property, axis, timing.frame, number, timing.ease)
+                .map_err(|error| core_error(&error))?,
+            (None, Some(value)) => document
+                .add_keyframe(id, property, timing.frame, value, timing.ease)
+                .map_err(|error| core_error(&error))?,
+            (None, None) => {}
+        }
+        self.record_key(id, &property_name, &timing, bound.source(2));
+        Ok(Value::None)
+    }
+
+    /// `node.key("fill", time, "#RRGGBB", ease=...)` on a content field.
+    fn key_content(
+        &mut self,
+        id: NodeId,
+        field: ContentField,
+        property_name: &str,
+        axis: Option<motioner_core::Axis>,
+        bound: &Bound<'_>,
+    ) -> HostResult<Value> {
+        if axis.is_some() {
+            return Err(HostError::value_error(format!(
+                "key(): '{property_name}' has no axes"
+            )));
+        }
+        if !field.is_animatable() {
+            return Err(HostError::value_error(format!(
+                "key(): '{}' is discrete and cannot be animated",
+                field.name()
+            )));
+        }
+        let time = bound.number(1)?;
+        if !time.is_finite() {
+            return Err(HostError::value_error(
+                "key(): 'time' must be a finite number of seconds",
+            ));
+        }
+        let value = content_value(field, bound.get(2).unwrap_or(&Value::None))?;
+        let timing = self.key_timing(bound, time)?;
+        self.document_mut()?
+            .add_content_keyframe(id, field, timing.frame, value, timing.ease)
+            .map_err(|error| core_error(&error))?;
+        self.record_key(id, property_name, &timing, bound.source(2));
+        Ok(Value::None)
+    }
+
+    /// The frame and ease of a `key(...)` call, with the ease's source span.
+    fn key_timing(&self, bound: &Bound<'_>, time: f64) -> HostResult<KeyTiming> {
         let ease_name = bound.string_or(3, "linear")?;
         let ease = Ease::from_name(&ease_name).ok_or_else(|| {
             HostError::value_error(format!(
@@ -402,22 +468,12 @@ impl Scene {
                 quoted_names(Ease::ALL.iter().map(|(_, n)| *n))
             ))
         })?;
-        let document = self.document_mut()?;
-        let frame = document
+        let frame = self
+            .document()?
             .composition()
             .frame_rate()
             .seconds_to_frame(time)
             .map_err(|error| core_error(&error))?;
-        match (axis_value, value) {
-            (Some((axis, number)), _) => document
-                .add_axis_keyframe(id, property, axis, frame, number, ease)
-                .map_err(|error| core_error(&error))?,
-            (None, Some(value)) => document
-                .add_keyframe(id, property, frame, value, ease)
-                .map_err(|error| core_error(&error))?,
-            (None, None) => {}
-        }
-        let source = bound.source(2);
         let ease_origin = bound
             .source(3)
             .filter(|(_, literal)| *literal == Some(Literal::Text))
@@ -425,17 +481,31 @@ impl Scene {
                 span,
                 name: ease_name.to_string(),
             });
+        Ok(KeyTiming {
+            frame,
+            ease,
+            ease_origin,
+        })
+    }
+
+    /// Records where a keyed value came from, so bake can edit it in place.
+    fn record_key(
+        &mut self,
+        id: NodeId,
+        property_name: &str,
+        timing: &KeyTiming,
+        source: Option<(Span, Option<Literal>)>,
+    ) {
         if let Some((span, literal)) = source {
             self.origins.record(ValueOrigin {
                 node: id,
                 property: property_name.to_string(),
                 span,
                 literal,
-                kind: OriginKind::Key(frame),
-                ease: ease_origin,
+                kind: OriginKind::Key(timing.frame),
+                ease: timing.ease_origin.clone(),
             });
         }
-        Ok(Value::None)
     }
 
     fn add_children(&mut self, id: NodeId, args: &CallArgs) -> HostResult<Value> {
@@ -537,55 +607,17 @@ fn property_value(property: Property, value: &Value) -> HostResult<PropertyValue
 /// field.
 fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
     let field = ContentField::from_name(name)?;
-    if !content.accepts(field) {
-        return None;
-    }
-    let value = match (content, field) {
-        (NodeContent::Rect { width, .. }, ContentField::Width) => Value::Number(*width),
-        (NodeContent::Rect { height, .. }, ContentField::Height) => Value::Number(*height),
-        (
-            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. },
-            ContentField::Radius,
-        ) => Value::Number(*radius),
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            ContentField::Fill,
-        ) => paint.fill.map_or(Value::None, color_value),
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            ContentField::Stroke,
-        ) => match paint.stroke {
-            Some(stroke) => color_value(stroke.color),
-            None => Value::None,
-        },
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            ContentField::StrokeWidth,
-        ) => Value::Number(paint.stroke.map_or(0.0, |stroke| stroke.width)),
-        (NodeContent::Text(text), ContentField::Text) => Value::Str(Rc::from(text.text.as_str())),
-        (NodeContent::Text(text), ContentField::Size) => Value::Number(text.size),
-        (NodeContent::Text(text), ContentField::Color) => color_value(text.color),
-        (NodeContent::Text(text), ContentField::Align) => Value::Str(Rc::from(match text.align {
+    Some(match content.static_value(field)? {
+        ContentValue::Number(number) => Value::Number(number),
+        ContentValue::Color(Some(color)) => Value::Str(Rc::from(color.to_hex())),
+        ContentValue::Color(None) => Value::None,
+        ContentValue::Text(text) => Value::Str(Rc::from(text)),
+        ContentValue::Align(align) => Value::Str(Rc::from(match align {
             TextAlign::Left => "left",
             TextAlign::Center => "center",
             TextAlign::Right => "right",
         })),
-        _ => return None,
-    };
-    Some(value)
-}
-
-/// A colour as the `#RRGGBB[AA]` string the constructors accept.
-fn color_value(color: Color) -> Value {
-    let text = if color.a == 255 {
-        format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
-    } else {
-        format!(
-            "#{:02X}{:02X}{:02X}{:02X}",
-            color.r, color.g, color.b, color.a
-        )
-    };
-    Value::Str(Rc::from(text))
+    })
 }
 
 /// Converts an MDF value to a content field write.

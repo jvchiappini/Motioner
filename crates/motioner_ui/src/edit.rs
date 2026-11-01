@@ -7,9 +7,7 @@
 
 use std::collections::VecDeque;
 
-use motioner_core::{
-    Axis, Ease, Frame, OverrideAction, OverrideEntry, OverrideSet, OverrideValue, Property,
-};
+use motioner_core::{Axis, Ease, Frame, OverrideAction, OverrideEntry, OverrideSet, OverrideValue};
 
 /// One keyframe of one channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,8 +66,8 @@ pub enum EditCommand {
     ToggleStopwatch {
         /// Node identity.
         id: String,
-        /// Animatable property.
-        property: Property,
+        /// Channel base name (`pos`, `opacity`, `fill`, `size`, ...).
+        property: String,
         /// Axis for vector properties.
         axis: Option<Axis>,
         /// Playhead.
@@ -178,7 +176,7 @@ pub fn apply(command: &EditCommand, set: &mut OverrideSet) {
             frame,
             value,
             existing_keys,
-        } => apply_stopwatch(set, id, *property, *axis, *frame, value, existing_keys),
+        } => apply_stopwatch(set, id, property, *axis, *frame, value, existing_keys),
         EditCommand::SetVisible { id, visible } => set.insert(OverrideEntry::new(
             id.clone(),
             motioner_core::VISIBLE,
@@ -234,13 +232,13 @@ fn property_name(property: &str, axis: Option<Axis>) -> String {
 fn apply_stopwatch(
     set: &mut OverrideSet,
     id: &str,
-    property: Property,
+    property: &str,
     axis: Option<Axis>,
     frame: Frame,
     value: &OverrideValue,
     existing_keys: &[Frame],
 ) {
-    let name = property_name(property.name(), axis);
+    let name = property_name(property, axis);
     if existing_keys.is_empty() {
         set.insert(OverrideEntry::new(
             id.to_owned(),
@@ -516,7 +514,7 @@ mod tests {
         apply(
             &EditCommand::ToggleStopwatch {
                 id: "a".into(),
-                property: Property::Rotation,
+                property: "rotation".into(),
                 axis: None,
                 frame: 5,
                 value: OverrideValue::Number(9.0),
@@ -531,7 +529,7 @@ mod tests {
         apply(
             &EditCommand::ToggleStopwatch {
                 id: "a".into(),
-                property: Property::Rotation,
+                property: "rotation".into(),
                 axis: None,
                 frame: 5,
                 value: OverrideValue::Number(9.0),

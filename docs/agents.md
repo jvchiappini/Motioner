@@ -34,6 +34,13 @@ Every one of them prints **one JSON object per line** on stdout.
   `stroke_width` (rect/circle); `text`, `size`, `color`, `align` (text).
   Colours are `"#RRGGBB"` or `"#RRGGBBAA"`; `fill`/`stroke` also take
   `"none"`. `align` is `"left"`, `"center"` or `"right"`.
+- **Animatable content fields** (D-0028): every field above except `text`
+  and `align` is a channel with no axes. `key(id, "fill", t, "#FF0000")`,
+  `stopwatch(id, "size")` and `edit(id, "width", 420)` work exactly like
+  transform channels; the timeline and inspector show the same stopwatch and
+  diamonds. Colours interpolate in linear-light sRGB, so a keyed red→green
+  midpoint is `#BCBC00`, not `#808000`; keying a colour to `"none"` holds
+  the previous value until that key.
 
 ## Command syntax
 
@@ -155,7 +162,9 @@ Prints the scene at a frame (0 by default):
 
 Nodes are in layer order; `visible` is the eye, `drawn` whether the node is
 actually drawn at that frame (opacity and scale included); a key's `ease` is
-the ease of the segment arriving at it. Each orphan lists the live nodes it
+the ease of the segment arriving at it. Animatable content fields appear in
+the same `channels` object (`"fill"`, `"width"`, `"size"`, ...), so keys and
+eases are read the same way for every property. Each orphan lists the live nodes it
 most likely belongs to, best first (property acceptance, inferred program
 shift, same loop iteration, nearest offset); feed the first one to
 `assign_id`.

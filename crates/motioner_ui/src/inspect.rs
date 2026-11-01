@@ -83,16 +83,35 @@ impl Field {
     }
 }
 
+/// What an animatable channel drives: a transform property or a content
+/// field (D-0028).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelTarget {
+    /// A transform property, with its axis for vector properties.
+    Transform(Property, Option<motioner_core::Axis>),
+    /// A content field.
+    Content(ContentField),
+}
+
+impl ChannelTarget {
+    /// The override name of the channel (`pos.x`, `fill`).
+    #[must_use]
+    pub fn name(self) -> String {
+        match self {
+            Self::Transform(property, axis) => crate::editor::channel_name(property, axis),
+            Self::Content(field) => field.name().to_owned(),
+        }
+    }
+}
+
 /// The state of one animatable channel.
 ///
 /// A vector property has one channel per axis: X and Y are keyed, sampled and
 /// shown independently, like After Effects' "separate dimensions".
 #[derive(Debug, Clone, PartialEq)]
 pub struct Channel {
-    /// The transform property.
-    pub property: Property,
-    /// The axis for vector properties (`None` for rotation and opacity).
-    pub axis: Option<motioner_core::Axis>,
+    /// What the channel drives.
+    pub target: ChannelTarget,
     /// Whether the channel has keyframes.
     pub keyed: bool,
     /// Whether the playhead sits exactly on a key.
@@ -183,14 +202,7 @@ pub struct Header {
 /// Formats a colour as `#RRGGBB`, plus alpha when not opaque.
 #[must_use]
 pub fn hex(color: Color) -> String {
-    if color.a == 255 {
-        format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
-    } else {
-        format!(
-            "#{:02X}{:02X}{:02X}{:02X}",
-            color.r, color.g, color.b, color.a
-        )
-    }
+    color.to_hex()
 }
 
 fn display(value: f64, factor: f64) -> String {
@@ -228,8 +240,24 @@ fn channel(
 ) -> Channel {
     let frames = crate::editor::channels::transform_keys(t, property, axis);
     Channel {
-        property,
-        axis,
+        target: ChannelTarget::Transform(property, axis),
+        keyed: !frames.is_empty(),
+        on_key: frames.contains(&frame),
+        frames,
+    }
+}
+
+/// The inspector channel of a content field.
+fn content_channel(
+    document: &Document,
+    node: NodeId,
+    field: ContentField,
+    frame: Frame,
+) -> Channel {
+    let frames =
+        crate::editor::channels::keys(document, node, crate::editor::Channel::Content(field));
+    Channel {
+        target: ChannelTarget::Content(field),
         keyed: !frames.is_empty(),
         on_key: frames.contains(&frame),
         frames,
@@ -360,21 +388,40 @@ fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
         ),
     ]
 }
-fn content_rows(content: &NodeContent) -> Vec<Row> {
+fn content_rows(
+    document: &Document,
+    node: NodeId,
+    content: &NodeContent,
+    frame: Frame,
+) -> Vec<Row> {
     match content {
         NodeContent::Group => Vec::new(),
-        NodeContent::Rect {
-            width,
-            height,
-            radius,
-            paint,
-        } => rect_rows(*width, *height, *radius, paint),
-        NodeContent::Circle { radius, paint } => circle_rows(*radius, paint),
-        NodeContent::Text(text) => text_rows(text),
+        NodeContent::Rect { .. } => rect_rows(document, node, frame),
+        NodeContent::Circle { .. } => circle_rows(document, node, frame),
+        NodeContent::Text(text) => text_rows(document, node, text, frame),
     }
 }
 
-fn rect_rows(width: f64, height: f64, radius: f64, paint: &motioner_core::Paint) -> Vec<Row> {
+fn number_or_zero(document: &Document, node: NodeId, field: ContentField, frame: Frame) -> f64 {
+    crate::editor::channels::sampled_number(document, node, field, frame).unwrap_or(0.0)
+}
+
+fn colour_of(
+    document: &Document,
+    node: NodeId,
+    field: ContentField,
+    frame: Frame,
+) -> Option<Color> {
+    match crate::editor::channels::sampled_colour(document, node, field, frame) {
+        crate::editor::channels::SampledColour::Colour(color) => Some(color),
+        _ => None,
+    }
+}
+
+fn rect_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
+    let width = number_or_zero(document, node, ContentField::Width, frame);
+    let height = number_or_zero(document, node, ContentField::Height, frame);
+    let radius = number_or_zero(document, node, ContentField::Radius, frame);
     let mut rows = vec![
         row(
             "Shape",
@@ -407,14 +454,15 @@ fn rect_rows(width: f64, height: f64, radius: f64, paint: &motioner_core::Paint)
                 1.0,
                 "",
             )),
-            None,
+            Some(content_channel(document, node, ContentField::Radius, frame)),
         ),
     ];
-    rows.extend(paint_rows(paint, true));
+    rows.extend(paint_rows(document, node, frame, true));
     rows
 }
 
-fn circle_rows(radius: f64, paint: &motioner_core::Paint) -> Vec<Row> {
+fn circle_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
+    let radius = number_or_zero(document, node, ContentField::Radius, frame);
     let mut rows = vec![row(
         "Shape",
         "Radius",
@@ -425,13 +473,18 @@ fn circle_rows(radius: f64, paint: &motioner_core::Paint) -> Vec<Row> {
             1.0,
             "",
         )),
-        None,
+        Some(content_channel(document, node, ContentField::Radius, frame)),
     )];
-    rows.extend(paint_rows(paint, false));
+    rows.extend(paint_rows(document, node, frame, false));
     rows
 }
 
-fn text_rows(text: &motioner_core::TextContent) -> Vec<Row> {
+fn text_rows(
+    document: &Document,
+    node: NodeId,
+    text: &motioner_core::TextContent,
+    frame: Frame,
+) -> Vec<Row> {
     vec![
         row(
             "Text",
@@ -448,21 +501,23 @@ fn text_rows(text: &motioner_core::TextContent) -> Vec<Row> {
             RowValue::Single(field(
                 FieldTarget::Content(ContentField::Size),
                 "",
-                text.size,
+                number_or_zero(document, node, ContentField::Size, frame),
                 1.0,
                 "",
             )),
-            None,
+            Some(content_channel(document, node, ContentField::Size, frame)),
         ),
         row(
             "Text",
             "Colour",
             RowValue::Color {
                 target: FieldTarget::Content(ContentField::Color),
-                color: text.color,
-                text: hex(text.color),
+                color: colour_of(document, node, ContentField::Color, frame)
+                    .unwrap_or(Color::WHITE),
+                text: colour_of(document, node, ContentField::Color, frame)
+                    .map_or_else(String::new, hex),
             },
-            None,
+            Some(content_channel(document, node, ContentField::Color, frame)),
         ),
         row(
             "Text",
@@ -475,10 +530,11 @@ fn text_rows(text: &motioner_core::TextContent) -> Vec<Row> {
         ),
     ]
 }
-fn paint_rows(paint: &motioner_core::Paint, fill: bool) -> Vec<Row> {
+
+fn paint_rows(document: &Document, node: NodeId, frame: Frame, fill: bool) -> Vec<Row> {
     let mut rows = Vec::new();
     if fill {
-        rows.push(match paint.fill {
+        rows.push(match colour_of(document, node, ContentField::Fill, frame) {
             Some(color) => row(
                 "Fill",
                 "Fill",
@@ -487,41 +543,52 @@ fn paint_rows(paint: &motioner_core::Paint, fill: bool) -> Vec<Row> {
                     color,
                     text: hex(color),
                 },
-                None,
+                Some(content_channel(document, node, ContentField::Fill, frame)),
             ),
-            None => row("Fill", "Fill", RowValue::ReadOnly("None".to_owned()), None),
+            None => row(
+                "Fill",
+                "Fill",
+                RowValue::ReadOnly("None".to_owned()),
+                Some(content_channel(document, node, ContentField::Fill, frame)),
+            ),
         });
     }
-    let width = paint.stroke.map_or(0.0, |stroke| stroke.width);
-    rows.push(match paint.stroke {
-        Some(stroke) => row(
-            "Fill",
-            "Stroke",
-            RowValue::Color {
-                target: FieldTarget::Content(ContentField::Stroke),
-                color: stroke.color,
-                text: hex(stroke.color),
-            },
-            None,
-        ),
-        None => row(
-            "Fill",
-            "Stroke",
-            RowValue::ReadOnly("None".to_owned()),
-            None,
-        ),
-    });
+    rows.push(
+        match colour_of(document, node, ContentField::Stroke, frame) {
+            Some(color) => row(
+                "Fill",
+                "Stroke",
+                RowValue::Color {
+                    target: FieldTarget::Content(ContentField::Stroke),
+                    color,
+                    text: hex(color),
+                },
+                Some(content_channel(document, node, ContentField::Stroke, frame)),
+            ),
+            None => row(
+                "Fill",
+                "Stroke",
+                RowValue::ReadOnly("None".to_owned()),
+                Some(content_channel(document, node, ContentField::Stroke, frame)),
+            ),
+        },
+    );
     rows.push(row(
         "Fill",
         "Width",
         RowValue::Single(field(
             FieldTarget::Content(ContentField::StrokeWidth),
             "",
-            width,
+            number_or_zero(document, node, ContentField::StrokeWidth, frame),
             1.0,
             "",
         )),
-        None,
+        Some(content_channel(
+            document,
+            node,
+            ContentField::StrokeWidth,
+            frame,
+        )),
     ));
     rows
 }
@@ -571,7 +638,7 @@ pub fn inspect_node(
 ) -> Option<Model> {
     let n = document.node(node)?;
     let mut rows = transform_rows(n.transform(), frame);
-    rows.extend(content_rows(n.content()));
+    rows.extend(content_rows(document, node, n.content(), frame));
     let name = display_name(document, node, overrides)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| fallback_name.to_owned());

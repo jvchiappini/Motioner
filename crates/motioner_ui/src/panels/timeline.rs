@@ -1,7 +1,7 @@
 //! Timeline: transport strip, ruler, layer rows with visibility strips and
 //! key summaries, and the expanded property sub-rows of the selected layer.
 
-use motioner_core::{Document, Frame, NodeContent, NodeId, Property};
+use motioner_core::{Document, Frame, NodeId, Property};
 use motioner_eval::sample;
 
 use crate::icons::{self, Icon};
@@ -258,7 +258,7 @@ fn rows(p: &mut Painter<'_>, v: &View<'_>) {
                 property_row(p, v, row_rect.row, row, outline, property, axis);
             }
             RowKind::Content { outline, field } => {
-                content_row(p, v, row_rect.row, outline, field);
+                content_row(p, v, row_rect.row, row, outline, field);
             }
         }
     }
@@ -507,20 +507,29 @@ fn property_row(
         .copied()
         .unwrap_or((true, false));
     let dim = !visible || locked;
-    draw_row_controls(p, v, index, row, &row_rect, (property, axis), dim);
-    draw_row_keys(p, v, row, outline, (property, axis), rect, dim);
+    let label = channel_label(property, axis);
+    let name = channel_name(property, axis);
+    let value = v
+        .document
+        .and_then(|document| v.outline.get(outline).map(|row| (document, row.node)))
+        .map_or_else(String::new, |(document, node)| {
+            value_text(document, node, property, axis, v.frame)
+        });
+    draw_row_controls(p, v, index, row, &row_rect, &label, &value, dim);
+    draw_row_keys(p, v, row, outline, &name, rect, dim);
 }
 
+#[allow(clippy::too_many_arguments)] // one row's controls, kept flat
 fn draw_row_controls(
     p: &mut Painter<'_>,
     v: &View<'_>,
     index: usize,
     row: &TimelineRow,
     row_rect: &crate::timeline_model::RowRect,
-    channel: (Property, Option<motioner_core::Axis>),
+    label_text: &str,
+    value: &str,
     dim: bool,
 ) {
-    let (property, axis) = channel;
     let t = *p.theme;
     let rect = row_rect.rect;
     if let Some(stopwatch) = row_rect.stopwatch {
@@ -556,23 +565,19 @@ fn draw_row_controls(
         (label_right - row_rect.name.x - p.m.px(size::GRID)).max(0.0),
         rect.h,
     );
-    p.text_in(&channel_label(property, axis), label, Align::Left, &style);
-    if let (Some(field), Some(document)) = (row_rect.field, v.document) {
-        let node = v.outline.get(row.kind.outline()).map(|row| row.node);
-        if let Some(node) = node {
-            let value = value_text(document, node, property, axis, v.frame);
-            p.fill_rounded(field, t.raised, p.m.px(size::RADIUS_SM));
-            let style = p.style(
-                type_scale::CAPTION,
-                if dim { t.text_disabled } else { t.text_body },
-            );
-            p.text_in(
-                &value,
-                field.inset_xy(p.m.px(size::GRID * 1.5), 0.0),
-                Align::Left,
-                &style,
-            );
-        }
+    p.text_in(label_text, label, Align::Left, &style);
+    if let Some(field) = row_rect.field {
+        p.fill_rounded(field, t.raised, p.m.px(size::RADIUS_SM));
+        let style = p.style(
+            type_scale::CAPTION,
+            if dim { t.text_disabled } else { t.text_body },
+        );
+        p.text_in(
+            value,
+            field.inset_xy(p.m.px(size::GRID * 1.5), 0.0),
+            Align::Left,
+            &style,
+        );
     }
     for (offset, hit) in [
         (0, Hit::TimelinePrevKey(index)),
@@ -619,11 +624,10 @@ fn draw_row_keys(
     v: &View<'_>,
     row: &TimelineRow,
     outline: usize,
-    channel: (Property, Option<motioner_core::Axis>),
+    name: &str,
     rect: Rect,
     dim: bool,
 ) {
-    let (property, axis) = channel;
     let tl = v.layout.timeline;
     let duration = v.duration.max(1);
     let scrub = tl.scrub;
@@ -632,7 +636,6 @@ fn draw_row_keys(
     draw_easing(p, row, x_of, rect, tl.tracks, dim);
     let diamond = p.m.px(10.0);
     let id = layer_identity(v, outline);
-    let name = channel_name(property, axis);
     for frame in &row.keys {
         let marker = Rect::new(
             (x_of(*frame) - diamond * 0.5).round(),
@@ -657,10 +660,10 @@ fn content_row(
     p: &mut Painter<'_>,
     v: &View<'_>,
     index: usize,
+    row: &TimelineRow,
     outline: usize,
     field: motioner_core::ContentField,
 ) {
-    let t = *p.theme;
     let Some(row_rect) = v.timeline_layout.rows.get(index).cloned() else {
         return;
     };
@@ -672,29 +675,15 @@ fn content_row(
         .copied()
         .unwrap_or((true, false));
     let dim = !visible || locked;
-    let style = p.style(
-        type_scale::CAPTION,
-        if dim { t.text_disabled } else { t.text_muted },
-    );
-    let label = Rect::new(
-        row_rect.name.x + p.m.px(20.0),
-        rect.y,
-        rect.w.min(p.m.px(90.0)),
-        rect.h,
-    );
-    p.text_in(field.name(), label, Align::Left, &style);
-    if let Some(document) = v.document {
-        if let Some(node) = v.outline.get(outline).map(|row| row.node) {
-            let text = content_text(document, node, field);
-            let value = Rect::new(
-                row_rect.name.x + p.m.px(96.0),
-                rect.y,
-                (row_rect.field.map_or(rect.right(), Rect::right) - row_rect.name.x - p.m.px(96.0))
-                    .max(0.0),
-                rect.h,
-            );
-            p.text_in(&text, value, Align::Left, &style);
-        }
+    let value = v
+        .document
+        .and_then(|document| v.outline.get(outline).map(|row| (document, row.node)))
+        .map_or_else(String::new, |(document, node)| {
+            content_text(document, node, field, v.frame)
+        });
+    draw_row_controls(p, v, index, row, &row_rect, field.name(), &value, dim);
+    if field.is_animatable() {
+        draw_row_keys(p, v, row, outline, field.name(), rect, dim);
     }
 }
 
@@ -756,41 +745,49 @@ fn channel_label(property: Property, axis: Option<motioner_core::Axis>) -> Strin
     }
 }
 
-fn content_text(document: &Document, node: NodeId, field: motioner_core::ContentField) -> String {
-    let Some(content) = document.node(node).map(motioner_core::Node::content) else {
-        return String::new();
-    };
-    match (content, field) {
-        (NodeContent::Rect { width, .. }, motioner_core::ContentField::Width) => round(*width),
-        (NodeContent::Rect { height, .. }, motioner_core::ContentField::Height) => round(*height),
-        (
-            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. },
-            motioner_core::ContentField::Radius,
-        ) => round(*radius),
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            motioner_core::ContentField::Fill,
-        ) => paint.fill.map_or_else(|| "none".to_owned(), hex),
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            motioner_core::ContentField::Stroke,
-        ) => paint
-            .stroke
-            .map_or_else(|| "none".to_owned(), |stroke| hex(stroke.color)),
-        (
-            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
-            motioner_core::ContentField::StrokeWidth,
-        ) => round(paint.stroke.map_or(0.0, |stroke| stroke.width)),
-        (NodeContent::Text(text), motioner_core::ContentField::Text) => text.text.clone(),
-        (NodeContent::Text(text), motioner_core::ContentField::Size) => round(text.size),
-        (NodeContent::Text(text), motioner_core::ContentField::Color) => hex(text.color),
-        (NodeContent::Text(text), motioner_core::ContentField::Align) => match text.align {
-            motioner_core::TextAlign::Left => "left",
-            motioner_core::TextAlign::Center => "center",
-            motioner_core::TextAlign::Right => "right",
+fn content_text(
+    document: &Document,
+    node: NodeId,
+    field: motioner_core::ContentField,
+    frame: Frame,
+) -> String {
+    match field {
+        motioner_core::ContentField::Fill | motioner_core::ContentField::Stroke => {
+            match crate::editor::channels::sampled_colour(document, node, field, frame) {
+                crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
+                crate::editor::channels::SampledColour::Absent => "none".to_owned(),
+                crate::editor::channels::SampledColour::NotColour => "n/a".to_owned(),
+            }
         }
-        .to_owned(),
-        _ => String::new(),
+        motioner_core::ContentField::StrokeWidth
+        | motioner_core::ContentField::Width
+        | motioner_core::ContentField::Height
+        | motioner_core::ContentField::Radius
+        | motioner_core::ContentField::Size => {
+            crate::editor::channels::sampled_number(document, node, field, frame)
+                .map_or_else(|| "n/a".to_owned(), round)
+        }
+        motioner_core::ContentField::Color => {
+            match crate::editor::channels::sampled_colour(document, node, field, frame) {
+                crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
+                _ => String::new(),
+            }
+        }
+        motioner_core::ContentField::Text | motioner_core::ContentField::Align => {
+            match document
+                .node(node)
+                .and_then(|node| node.content().static_value(field))
+            {
+                Some(motioner_core::ContentValue::Text(text)) => text,
+                Some(motioner_core::ContentValue::Align(align)) => match align {
+                    motioner_core::TextAlign::Left => "left",
+                    motioner_core::TextAlign::Center => "center",
+                    motioner_core::TextAlign::Right => "right",
+                }
+                .to_owned(),
+                _ => "n/a".to_owned(),
+            }
+        }
     }
 }
 
