@@ -4,8 +4,8 @@
 engine Motioner renders with, pinned rather than vendored. Source:
 https://github.com/jvchiappini/FerrousEngine.
 
-Pinned commit: `32aea8af74a510c1d89456e861b6dd8dbaeb167f` (2026-10-31,
-branch `feat/pure2d-text-and-readback`, see D-0019).
+Pinned commit: `c4ae1f24fce51499e2818772d2fd87561e202a86` (2026-11-01,
+branch `feat/pure2d-text-and-readback`, see D-0023).
 
 Only `motioner_render` consumes the engine path dependencies
 (`ferrous_2d`, `ferrous_font`, `ferrous_renderer`). The root

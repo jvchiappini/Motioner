@@ -63,14 +63,15 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0022.
 
 ## FerrousEngine state
 
-- Pin `32aea8a` = head of `feat/pure2d-text-and-readback` (pushed, NOT merged).
-- Dev clone `C:\Users\jvchi\CARPETAS\FerrousEngine` at `0ef6fe6` has the
-  Part A prompt-08 changes **uncommitted**: exact sRGB constructors,
-  border/shadow packing, `draw_text_baseline` with kerning, screenshot hook
-  (COPY_SRC + `Screenshot`/`on_screenshot`). The reviewer commits and bumps
-  the pin.
-- Pre-existing engine clippy warnings block the 4B clippy gate (listed in the
-  prompt-08 report); do not fix unrelated engine code.
+- Pin `c4ae1f2` = head of `feat/pure2d-text-and-readback` (pushed, NOT
+  merged), D-0023. Includes the prompt-08 Part A engine work: exact sRGB
+  constructors, border/shadow packing, `draw_text_baseline` with kerning,
+  in-app screenshot hook (`AppContext::request_screenshot`,
+  `FerrousApp::on_screenshot`). Motioner does not use the screenshot hook
+  yet (prompt 09).
+- Golden `hello_f120.png` regenerated for this pin (14 px of title AA).
+- Pre-existing engine clippy warnings when the engine is linted on its own;
+  do not fix unrelated engine code.
 
 ## GUIMaker facts (read via GitHub API, not cloned, 2026-10-31)
 

@@ -45,11 +45,14 @@ pub(crate) fn create(width: u32, height: u32) -> Result<FrameRenderer, RenderErr
 fn map_harness_error(error: HarnessError) -> RenderError {
     match error {
         HarnessError::DeviceCreation { message } => RenderError::NoAdapter { message },
-        // The only format this crate requests is `DEFAULT_FORMAT`, so this is
-        // unreachable in practice; keep it typed instead of panicking.
-        other @ HarnessError::UnsupportedFormat { .. } => RenderError::Readback {
-            message: other.to_string(),
-        },
+        // The only format this crate requests is `DEFAULT_FORMAT` and it never
+        // resizes the readback ring, so these are unreachable in practice;
+        // keep them typed instead of panicking.
+        other @ (HarnessError::UnsupportedFormat { .. } | HarnessError::ReadbackPending { .. }) => {
+            RenderError::Readback {
+                message: other.to_string(),
+            }
+        }
     }
 }
 
