@@ -4,14 +4,23 @@
 //! command-line front end:
 //!
 //! ```text
-//! motioner render <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
-//! motioner still  <file.motion> --frame N --out <file.png>
-//! motioner info   <file.motion>
+//! motioner render  <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
+//! motioner still   <file.motion> --frame N --out <file.png>
+//! motioner info    <file.motion> [--json]
+//! motioner bake    <file.motion> [--id ID]...
+//! motioner query   <file.motion> [--frame N] [--node ID]
+//! motioner edit    <file.motion> [--frame N] [--dry-run] <command>...
+//! motioner ctl     [--endpoint FILE] <request>...
+//! motioner preview <file.motion> [--control] ...
 //! ```
 //!
 //! MDF diagnostics are printed with their source line and exit with code 2.
-//! Every other failure (rendering, encoding, I/O, bad arguments) exits with
-//! code 1. `anyhow` is allowed here because this is the application edge.
+//! Every other failure (rendering, encoding, I/O, bad arguments, a failed
+//! command) exits with code 1. `query`, `edit` and `ctl` print JSON
+//! (`docs/agents.md`). `anyhow` is allowed here because this is the
+//! application edge.
+
+mod agent;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -34,23 +43,35 @@ Motioner - AI-first motion graphics
 Usage:
   motioner render  <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
   motioner still   <file.motion> --frame N --out <file.png>
-  motioner info    <file.motion>
+  motioner info    <file.motion> [--json]
   motioner bake    <file.motion> [--id ID]...
+  motioner query   <file.motion> [--frame N] [--node ID]
+  motioner edit    <file.motion> [--frame N] [--dry-run] <command>...
+  motioner ctl     [--endpoint FILE] <request>...
   motioner preview <file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--window-size WxH] [--ui-scale F] [--select ROW]
+                   [--screenshot <file.png>] [--control] [--control-file FILE]
   motioner --help
 
 Frames are integer indices. `render` draws the half-open range [from, to) and
 defaults to the whole composition. `still` draws one frame. `preview` opens the
 live editor window; `--exit-after-frames` closes it after N presented frames
 (for smoke runs and CI), `--window-size` sets the window in physical pixels,
-`--ui-scale` overrides the chrome scale (to check other DPI settings) and
-`--select` selects an outline row at startup.
+`--ui-scale` overrides the chrome scale (to check other DPI settings),
+`--select` selects an outline row at startup and `--screenshot` writes the
+window to a PNG after `--exit-after-frames` frames (1 by default) and closes
+it.
 
 `bake` folds <name>.overrides.motion into <name>.motion for nodes bound to a
 top-level variable, appends one generated block and rewrites both files
 atomically. Nodes created inside loops or functions cannot be baked and are
-reported; their overrides stay in the overrides file.";
+reported; their overrides stay in the overrides file.
+
+Agents (docs/agents.md): `query` prints the scene at a frame as JSON. `edit`
+runs commands on the overrides file through the editor's command layer, all
+or nothing, and prints what changed (`--dry-run` writes nothing). `preview
+--control` opens a local control endpoint; `ctl` sends it commands and the
+queries state(), query(node=None) and screenshot(path).";
 
 /// Parsed command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -65,6 +86,12 @@ enum Command {
     Bake(BakeArgs),
     /// Open the live preview window.
     Preview(PreviewArgs),
+    /// Print the scene as JSON.
+    Query(agent::QueryArgs),
+    /// Run commands on the overrides file.
+    Edit(agent::EditArgs),
+    /// Drive a running editor.
+    Ctl(agent::CtlArgs),
     /// Print usage.
     Help,
 }
@@ -100,6 +127,8 @@ struct StillArgs {
 struct InfoArgs {
     /// MDF program.
     input: PathBuf,
+    /// Print JSON instead of text.
+    json: bool,
 }
 
 /// Arguments of the `bake` command.
@@ -128,6 +157,10 @@ struct PreviewArgs {
     ui_scale_milli: Option<u32>,
     /// Outline row selected at startup.
     select: Option<usize>,
+    /// Capture the window to this PNG and close it.
+    screenshot: Option<PathBuf>,
+    /// Endpoint file of the live control endpoint, when it is opened.
+    control: Option<PathBuf>,
 }
 
 /// Why the run stopped and with which exit code.
@@ -174,7 +207,8 @@ impl fmt::Display for Failure {
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::from(1),
         Err(Failure::Diagnostic(report)) => {
             eprintln!("{report}");
             ExitCode::from(2)
@@ -186,18 +220,23 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parses the arguments and dispatches the command.
-fn run(args: &[OsString]) -> Result<(), Failure> {
+/// Parses the arguments and dispatches the command. `Ok(false)` means a
+/// command failed after printing its own (JSON) error.
+fn run(args: &[OsString]) -> Result<bool, Failure> {
+    let status = |status: agent::Status| matches!(status, agent::Status::Ok);
     match parse(args)? {
         Command::Help => {
-            println!("{HELP}");
-            Ok(())
+            println!("{HELP}\n\n{}", agent::command_help());
+            Ok(true)
         }
-        Command::Info(args) => run_info(&args),
-        Command::Bake(args) => run_bake(&args),
-        Command::Still(args) => run_still(&args),
-        Command::Render(args) => run_render(&args),
-        Command::Preview(args) => run_preview(&args),
+        Command::Info(args) => run_info(&args).map(|()| true),
+        Command::Bake(args) => run_bake(&args).map(|()| true),
+        Command::Still(args) => run_still(&args).map(|()| true),
+        Command::Render(args) => run_render(&args).map(|()| true),
+        Command::Preview(args) => run_preview(&args).map(|()| true),
+        Command::Query(args) => Ok(status(agent::run_query(&args))),
+        Command::Edit(args) => Ok(status(agent::run_edit(&args))),
+        Command::Ctl(args) => Ok(status(agent::run_ctl(&args))),
     }
 }
 
@@ -216,6 +255,9 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "info" => parse_info(rest),
         "bake" => parse_bake(rest),
         "preview" => parse_preview(rest),
+        "query" => parse_query(rest),
+        "edit" => parse_edit(rest),
+        "ctl" => parse_ctl(rest),
         other => bail!("unknown command '{other}' (try --help)"),
     }
 }
@@ -309,16 +351,144 @@ fn parse_still(args: &[OsString]) -> Result<Command> {
     }))
 }
 
-/// Parses `info <file>`.
+/// Parses `info <file> [--json]`.
 fn parse_info(args: &[OsString]) -> Result<Command> {
-    let Some(input) = args.first() else {
-        bail!("info needs an input .motion file");
-    };
-    if args.len() > 1 {
+    let parsed = parse_flags("info", args, true, &[], &["--json"])?;
+    if !parsed.rest.is_empty() {
         bail!("info takes exactly one input file");
     }
     Ok(Command::Info(InfoArgs {
-        input: PathBuf::from(input),
+        input: parsed
+            .input
+            .clone()
+            .ok_or_else(|| anyhow!("info needs an input .motion file"))?,
+        json: parsed.switches.contains(&"--json"),
+    }))
+}
+
+/// Flags and positional values of a command line.
+struct Parsed {
+    /// The first positional value, when the command takes an input file.
+    input: Option<PathBuf>,
+    /// Values of flags that take one.
+    values: Vec<(&'static str, String)>,
+    /// Switches that were given.
+    switches: Vec<&'static str>,
+    /// The other positional values, in order.
+    rest: Vec<String>,
+}
+
+/// Splits `args` into the input file, flag values, switches and the
+/// remaining positional values. Unknown `--` flags are errors.
+fn parse_flags(
+    command: &str,
+    args: &[OsString],
+    with_input: bool,
+    value_flags: &[&'static str],
+    switch_flags: &[&'static str],
+) -> Result<Parsed> {
+    let mut parsed = Parsed {
+        input: None,
+        values: Vec::new(),
+        switches: Vec::new(),
+        rest: Vec::new(),
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let Some(arg) = args[index].to_str() else {
+            bail!("arguments must be valid UTF-8");
+        };
+        if let Some(flag) = value_flags.iter().find(|flag| **flag == arg) {
+            let value = flag_value(args, index, flag)?;
+            let value = value
+                .to_str()
+                .ok_or_else(|| anyhow!("the value of {flag} must be valid UTF-8"))?;
+            parsed.values.push((flag, value.to_owned()));
+            index += 2;
+            continue;
+        }
+        if let Some(flag) = switch_flags.iter().find(|flag| **flag == arg) {
+            parsed.switches.push(flag);
+            index += 1;
+            continue;
+        }
+        if arg.starts_with("--") {
+            bail!("unknown flag '{arg}' for {command}");
+        }
+        if with_input && parsed.input.is_none() {
+            parsed.input = Some(PathBuf::from(&args[index]));
+        } else {
+            parsed.rest.push(arg.to_owned());
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
+impl Parsed {
+    /// The last value given for `flag`.
+    fn value(&self, flag: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .rev()
+            .find(|(name, _)| *name == flag)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// The `--frame` value.
+    fn frame(&self) -> Result<Option<i64>> {
+        self.value("--frame")
+            .map(|text| {
+                text.parse::<i64>()
+                    .with_context(|| format!("invalid frame number '{text}' for --frame"))
+            })
+            .transpose()
+    }
+}
+
+/// Parses `query <file> [--frame N] [--node ID]`.
+fn parse_query(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("query", args, true, &["--frame", "--node"], &[])?;
+    if !parsed.rest.is_empty() {
+        bail!("query takes one input file");
+    }
+    Ok(Command::Query(agent::QueryArgs {
+        input: parsed
+            .input
+            .clone()
+            .ok_or_else(|| anyhow!("query needs an input .motion file"))?,
+        frame: parsed.frame()?,
+        node: parsed.value("--node").map(str::to_owned),
+    }))
+}
+
+/// Parses `edit <file> [--frame N] [--dry-run] <command>...`.
+fn parse_edit(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("edit", args, true, &["--frame"], &["--dry-run"])?;
+    let input = parsed
+        .input
+        .clone()
+        .ok_or_else(|| anyhow!("edit needs an input .motion file"))?;
+    if parsed.rest.is_empty() {
+        bail!("edit needs at least one command, for example 'seek(30)'");
+    }
+    Ok(Command::Edit(agent::EditArgs {
+        input,
+        frame: parsed.frame()?,
+        dry_run: parsed.switches.contains(&"--dry-run"),
+        commands: parsed.rest,
+    }))
+}
+
+/// Parses `ctl [--endpoint FILE] <request>...`.
+fn parse_ctl(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("ctl", args, false, &["--endpoint"], &[])?;
+    if parsed.rest.is_empty() {
+        bail!("ctl needs at least one request, for example 'state()'");
+    }
+    Ok(Command::Ctl(agent::CtlArgs {
+        endpoint: parsed.value("--endpoint").map(PathBuf::from),
+        requests: parsed.rest,
     }))
 }
 
@@ -363,6 +533,8 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
     let mut window_size = None;
     let mut ui_scale_milli = None;
     let mut select = None;
+    let mut screenshot = None;
+    let mut control = None;
     let mut index = 0;
     while index < args.len() {
         let Some(arg) = args[index].to_str() else {
@@ -394,6 +566,18 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
                 select = Some(usize::try_from(row).context("--select row is too large")?);
                 index += 2;
             }
+            "--screenshot" => {
+                screenshot = Some(PathBuf::from(flag_value(args, index, "--screenshot")?));
+                index += 2;
+            }
+            "--control" => {
+                control.get_or_insert_with(motioner_ui::default_endpoint_file);
+                index += 1;
+            }
+            "--control-file" => {
+                control = Some(PathBuf::from(flag_value(args, index, "--control-file")?));
+                index += 2;
+            }
             other if other.starts_with("--") => bail!("unknown flag '{other}' for preview"),
             _ => {
                 if input.is_some() {
@@ -413,6 +597,8 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
         window_size,
         ui_scale_milli,
         select,
+        screenshot,
+        control,
     }))
 }
 
@@ -496,9 +682,23 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         #[allow(clippy::cast_precision_loss)] // at most 4000
         ui_scale: args.ui_scale_milli.map(|milli| milli as f32 / 1000.0),
         select: args.select,
+        screenshot: args.screenshot.clone(),
+        png_writer: Some(write_screenshot),
+        control: args.control.clone(),
     };
+    if let Some(path) = &args.screenshot {
+        ensure_parent(path)?;
+    }
     motioner_ui::run_preview(&args.input, options)?;
+    if let Some(path) = &args.screenshot {
+        println!("Wrote {}", path.display());
+    }
     Ok(())
+}
+
+/// The [`motioner_ui::PngWriter`] used for in-app screenshots.
+fn write_screenshot(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    write_png(path, width, height, rgba).map_err(|error| error.to_string())
 }
 
 /// Loads and executes an MDF program.
@@ -527,90 +727,30 @@ fn ensure_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The overrides file that belongs to `program`.
-///
-/// `<dir>/<stem>.overrides.motion`, next to the program (D-0022).
-fn overrides_path(program: &Path) -> PathBuf {
-    let stem = program
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("program");
-    let name = format!("{stem}.overrides.motion");
-    program.with_file_name(name)
-}
-
-/// Writes `text` to `path` through a temporary file in the same directory and
-/// a rename, so a crash never leaves a half-written program or overrides file.
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    ensure_parent(path)?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("file");
-    let temp = path.with_file_name(format!(".{file_name}.tmp"));
-    fs::write(&temp, text).with_context(|| format!("cannot write {}", temp.display()))?;
-    fs::rename(&temp, path).with_context(|| {
-        let _ = fs::remove_file(&temp);
-        format!("cannot replace {}", path.display())
-    })?;
-    Ok(())
-}
-
-/// Folds the overrides file into the program (`motioner bake`).
+/// Folds the overrides file into the program (`motioner bake`) through the
+/// editor's `bake` command, so the CLI, the window and `ctl` share one
+/// implementation.
 fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
-    let source = fs::read_to_string(&args.input)
-        .with_context(|| format!("cannot read {}", args.input.display()))
-        .map_err(Failure::Error)?;
-    let overrides_file = overrides_path(&args.input);
-    let overrides_source = match fs::read_to_string(&overrides_file) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(Failure::Error(anyhow!(
-                "cannot read {}: {error}",
-                overrides_file.display()
-            )))
-        }
-    };
-    let name = args.input.display().to_string();
-    let compiled =
-        motioner_dsl::run_with_overrides(&source, overrides_source.as_deref(), &Limits::default())
-            .map_err(|diagnostic| Failure::Diagnostic(diagnostic.render(&source, &name)))?;
-    for warning in &compiled.warnings {
-        println!("warning: {}", warning.render(&source, &name));
+    let mut editor = motioner_ui::Editor::open(&args.input).map_err(|error| match error.kind {
+        motioner_ui::ErrorKind::NoDocument => Failure::Diagnostic(error.message),
+        _ => Failure::Error(anyhow!("{}", error.message)),
+    })?;
+    for warning in editor.session().warnings() {
+        println!("warning: line {}: {}", warning.line, warning.message);
     }
-
-    let outcome = motioner_dsl::bake(
-        &source,
-        &compiled.document,
-        &compiled.bindings,
-        &compiled.overrides,
-        &args.ids,
-    );
-    if outcome.program != source {
-        write_atomic(&args.input, &outcome.program)?;
-    }
-    let rate = compiled.document.composition().frame_rate();
-    let remaining = outcome.overrides.to_mdf(rate);
-    write_atomic(&overrides_file, &remaining)?;
-
-    for id in &outcome.baked {
-        println!("baked {id}");
-    }
-    for refusal in &outcome.refused {
-        println!(
-            "refused {} '{}': {}",
-            refusal.id, refusal.property, refusal.reason
-        );
-    }
-    if outcome.baked.is_empty() && outcome.refused.is_empty() {
-        println!("Nothing to bake.");
+    let outcome = editor
+        .execute(
+            &motioner_ui::Command::Bake(args.ids.clone()),
+            Duration::ZERO,
+        )
+        .map_err(|error| Failure::Error(anyhow!("{error}")))?;
+    for line in outcome.summary.split("; ") {
+        println!("{line}");
     }
     println!(
-        "Wrote {} and {} ({} override(s) left)",
+        "Wrote {} and {}",
         args.input.display(),
-        overrides_file.display(),
-        outcome.overrides.len()
+        editor.session().overrides_path().display()
     );
     Ok(())
 }
@@ -623,6 +763,23 @@ fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
     let frames = composition.duration();
     #[allow(clippy::cast_precision_loss)] // display only
     let seconds = frames as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
+    if args.json {
+        let mut j = motioner_ui::Json::new();
+        j.begin_object();
+        j.key("file").string(&args.input.display().to_string());
+        j.key("name").string(composition.name());
+        j.key("width").int(i64::from(composition.width()));
+        j.key("height").int(i64::from(composition.height()));
+        j.key("fps")
+            .string(&format!("{}/{}", rate.numerator(), rate.denominator()));
+        j.key("duration").int(frames);
+        j.key("seconds").number(seconds);
+        j.key("nodes")
+            .int(i64::try_from(document.len()).unwrap_or(i64::MAX));
+        j.end_object();
+        println!("{}", j.finish());
+        return Ok(());
+    }
     println!("File: {}", args.input.display());
     println!("Composition: {}", composition.name());
     println!("Canvas: {}x{}", composition.width(), composition.height());
@@ -776,7 +933,7 @@ fn print_average(stage: &str, total: Duration, frames: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{overrides_path, parse, BakeArgs, Command, PreviewArgs, RenderArgs, StillArgs};
+    use super::{agent, parse, BakeArgs, Command, PreviewArgs, RenderArgs, StillArgs};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -867,6 +1024,10 @@ mod tests {
                 "1.25",
                 "--select",
                 "3",
+                "--screenshot",
+                "shot.png",
+                "--control-file",
+                "ctl.txt",
             ]))
             .unwrap(),
             Command::Preview(PreviewArgs {
@@ -877,6 +1038,8 @@ mod tests {
                 window_size: Some((1280, 720)),
                 ui_scale_milli: Some(1250),
                 select: Some(3),
+                screenshot: Some(PathBuf::from("shot.png")),
+                control: Some(PathBuf::from("ctl.txt")),
             })
         );
     }
@@ -893,6 +1056,8 @@ mod tests {
                 window_size: None,
                 ui_scale_milli: None,
                 select: None,
+                screenshot: None,
+                control: None,
             })
         );
     }
@@ -947,15 +1112,59 @@ mod tests {
     }
 
     #[test]
-    fn the_overrides_file_sits_next_to_the_program() {
+    fn parses_the_agent_commands() {
         assert_eq!(
-            overrides_path(std::path::Path::new("out/edit/hello.motion")),
-            PathBuf::from("out/edit/hello.overrides.motion")
+            parse(&args(&[
+                "query", "a.motion", "--frame", "30", "--node", "title"
+            ]))
+            .unwrap(),
+            Command::Query(agent::QueryArgs {
+                input: PathBuf::from("a.motion"),
+                frame: Some(30),
+                node: Some("title".to_owned()),
+            })
         );
         assert_eq!(
-            overrides_path(std::path::Path::new("hello.motion")),
-            PathBuf::from("hello.overrides.motion")
+            parse(&args(&[
+                "edit",
+                "a.motion",
+                "--dry-run",
+                "seek(3)",
+                "--frame",
+                "9",
+                "visible(\"x\", false)"
+            ]))
+            .unwrap(),
+            Command::Edit(agent::EditArgs {
+                input: PathBuf::from("a.motion"),
+                frame: Some(9),
+                dry_run: true,
+                commands: vec!["seek(3)".to_owned(), "visible(\"x\", false)".to_owned()],
+            })
         );
+        assert_eq!(
+            parse(&args(&["ctl", "--endpoint", "e.txt", "state()", "seek(1)"])).unwrap(),
+            Command::Ctl(agent::CtlArgs {
+                endpoint: Some(PathBuf::from("e.txt")),
+                requests: vec!["state()".to_owned(), "seek(1)".to_owned()],
+            })
+        );
+        assert!(parse(&args(&["edit", "a.motion"])).is_err());
+        assert!(parse(&args(&["ctl"])).is_err());
+        assert!(parse(&args(&["query"])).is_err());
+        assert!(parse(&args(&["query", "a.motion", "--bogus"])).is_err());
+        assert!(matches!(
+            parse(&args(&["info", "a.motion", "--json"])).unwrap(),
+            Command::Info(super::InfoArgs { json: true, .. })
+        ));
+    }
+
+    #[test]
+    fn the_help_lists_every_command() {
+        let help = agent::command_help();
+        for kind in motioner_ui::CommandKind::ALL {
+            assert!(help.contains(kind.signature()), "{}", kind.name());
+        }
     }
 
     #[test]

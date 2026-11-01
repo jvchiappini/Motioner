@@ -14,7 +14,7 @@ use crate::theme::{size, type_scale};
 use crate::timeline::{frame_to_x, tick_frames, tick_spacing, TickUnit, MIN_TICK_SPACING_PX};
 use crate::timeline_model::{RowKind, TimelineRow};
 use crate::transport::timecode;
-use crate::widgets::{self, ButtonKind};
+use crate::widgets::{self, ButtonKind, KeyMark};
 
 /// Draws the timeline.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
@@ -284,8 +284,23 @@ fn row_background(
     rect: Rect,
 ) -> bool {
     let t = *p.theme;
+    let is_layer = v
+        .timeline
+        .rows()
+        .get(row)
+        .is_some_and(|entry| entry.kind.is_layer());
     let selected = v.selected == Some(outline);
-    if selected {
+    if !is_layer {
+        // Property rows of an expanded layer sit on a darker names column so
+        // they read as the layer's children; only the layer row itself
+        // carries the selection colour.
+        let names = v.layout.timeline.names;
+        p.fill(
+            Rect::new(rect.x, rect.y, names.right() - rect.x, rect.h),
+            t.sub_row,
+        );
+    }
+    if selected && is_layer {
         p.fill(rect, t.selection);
     } else if matches!(
         v.hover,
@@ -404,49 +419,71 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
         (x_of(duration - 1) - x_of(0)).round(),
         bar_h,
     );
-    // Invisible ranges stay as a dim bar; visible runs paint over it.
-    p.fill_rounded(full, t.track_bar, p.m.px(3.0));
+    // Frames where the layer is not drawn are an empty outline; visible
+    // runs are a solid bar on top, so absence reads at a glance.
+    p.stroke_rounded(full, t.track_bar_hidden, p.m.px(3.0), p.m.hairline());
     if visible {
+        let bar_fill = if v.selected == Some(outline) {
+            t.track_bar_selected
+        } else {
+            t.track_bar
+        };
         for run in &row.visible {
-            let from = x_of(run.from).max(full.x);
-            let to = x_of(run.to).min(full.right());
+            let from = x_of(run.from).max(full.x).round();
+            // A run is inclusive: it reaches the start of the next frame.
+            let to = x_of(run.to + 1).min(full.right()).round();
             if to > from {
                 p.fill_rounded(
-                    Rect::new(from.round(), bar_y, (to - from).round().max(1.0), bar_h),
-                    if v.selected == Some(outline) {
-                        t.control_hover
-                    } else {
-                        t.track_bar
-                    },
+                    Rect::new(from, bar_y, (to - from).max(1.0), bar_h),
+                    bar_fill,
                     p.m.px(3.0),
                 );
             }
         }
     }
-    // Inherited parent keys: hollow, not selectable.
     let diamond = p.m.px(10.0);
+    let marker_at = |frame: Frame| {
+        Rect::new(
+            (x_of(frame) - diamond * 0.5).round(),
+            (rect.center_y() - diamond * 0.5).round(),
+            diamond,
+            diamond,
+        )
+    };
+    let dim = !visible || locked;
     for frame in &row.inherited {
-        let marker = Rect::new(
-            x_of(*frame) - diamond * 0.5,
-            rect.center_y() - diamond * 0.5,
-            diamond,
-            diamond,
-        );
-        p.diamond(marker, t.text_disabled, false);
+        widgets::key_marker(p, marker_at(*frame), KeyMark::Inherited, dim);
     }
-    // Summary keys: filled when one channel has the key, tinted ring when
-    // several channels share the frame.
+    let id = layer_identity(v, outline);
     for key in &row.summary {
-        let marker = Rect::new(
-            x_of(key.frame) - diamond * 0.5,
-            rect.center_y() - diamond * 0.5,
-            diamond,
-            diamond,
-        );
-        p.diamond(marker, t.keyframe, key.channels == 1);
-        if key.channels > 1 {
-            p.diamond(marker, t.accent, false);
-        }
+        let selected = id.as_deref().is_some_and(|id| {
+            v.selected_keys
+                .iter()
+                .any(|k| k.frame == key.frame && k.id == id)
+        });
+        let mark = if selected {
+            KeyMark::Selected
+        } else if key.channels > 1 {
+            KeyMark::Shared
+        } else {
+            KeyMark::Key
+        };
+        widgets::key_marker(p, marker_at(key.frame), mark, dim);
+    }
+}
+
+/// The identity of an outline row's node.
+fn layer_identity(v: &View<'_>, outline: usize) -> Option<String> {
+    let node = v.outline.get(outline)?.node;
+    let document = v.document?;
+    Some(document.node(node)?.identity().as_str().to_owned())
+}
+
+/// The override name of a channel: `pos.x`, `opacity`.
+fn channel_name(property: Property, axis: Option<motioner_core::Axis>) -> String {
+    match axis {
+        Some(axis) => format!("{}.{}", property.name(), axis.name()),
+        None => property.name().to_owned(),
     }
 }
 
@@ -471,7 +508,7 @@ fn property_row(
         .unwrap_or((true, false));
     let dim = !visible || locked;
     draw_row_controls(p, v, index, row, &row_rect, (property, axis), dim);
-    draw_row_keys(p, v, row, outline, property, rect, dim);
+    draw_row_keys(p, v, row, outline, (property, axis), rect, dim);
 }
 
 fn draw_row_controls(
@@ -495,7 +532,11 @@ fn draw_row_controls(
                 p.m.px(size::RADIUS_SM),
             );
         }
-        let ink = if row.animated { t.accent } else { t.text_muted };
+        let ink = if row.animated {
+            t.accent
+        } else {
+            t.text_disabled
+        };
         icons::draw(
             p,
             Icon::Stopwatch,
@@ -559,8 +600,15 @@ fn draw_row_controls(
                     p.m.px(8.0),
                     p.m.px(8.0),
                 );
-                let on_key = row.keys.contains(&v.frame);
-                p.diamond(marker, if on_key { t.keyframe } else { ink }, on_key);
+                let mark = if row.keys.contains(&v.frame) {
+                    KeyMark::Key
+                } else {
+                    KeyMark::Empty
+                };
+                widgets::key_marker(p, marker, mark, false);
+                if state.hovered {
+                    p.diamond(marker.inset(-p.m.px(2.0)), ink, false);
+                }
             }
         }
     }
@@ -571,55 +619,38 @@ fn draw_row_keys(
     v: &View<'_>,
     row: &TimelineRow,
     outline: usize,
-    property: Property,
+    channel: (Property, Option<motioner_core::Axis>),
     rect: Rect,
     dim: bool,
 ) {
-    let t = *p.theme;
+    let (property, axis) = channel;
     let tl = v.layout.timeline;
     let duration = v.duration.max(1);
     let scrub = tl.scrub;
     let x_of =
         |frame: i64| frame_to_x(frame, duration, f64::from(scrub.x), f64::from(scrub.w)) as f32;
-    draw_easing(p, row, x_of, rect, tl.tracks);
+    draw_easing(p, row, x_of, rect, tl.tracks, dim);
     let diamond = p.m.px(10.0);
+    let id = layer_identity(v, outline);
+    let name = channel_name(property, axis);
     for frame in &row.keys {
         let marker = Rect::new(
-            x_of(*frame) - diamond * 0.5,
-            rect.center_y() - diamond * 0.5,
+            (x_of(*frame) - diamond * 0.5).round(),
+            (rect.center_y() - diamond * 0.5).round(),
             diamond,
             diamond,
         );
-        let selected = v.selected_keys.iter().any(|key| {
-            key.frame == *frame
-                && key.property == property.name()
-                && v.outline.get(outline).is_some_and(|outline_row| {
-                    v.document.is_some_and(|document| {
-                        document
-                            .node(outline_row.node)
-                            .is_some_and(|node| node.identity().as_str() == key.id)
-                    })
-                })
+        let selected = id.as_deref().is_some_and(|id| {
+            v.selected_keys
+                .iter()
+                .any(|key| key.frame == *frame && key.property == name && key.id == id)
         });
-        p.diamond(
-            marker,
-            if selected {
-                t.accent
-            } else if dim {
-                t.text_disabled
-            } else {
-                t.keyframe
-            },
-            true,
-        );
-        if selected {
-            p.stroke_rounded(
-                marker.inset(-p.m.px(2.0)),
-                t.accent,
-                p.m.px(2.0),
-                p.m.hairline(),
-            );
-        }
+        let mark = if selected {
+            KeyMark::Selected
+        } else {
+            KeyMark::Key
+        };
+        widgets::key_marker(p, marker, mark, dim);
     }
 }
 fn content_row(
@@ -773,22 +804,30 @@ fn round(value: f64) -> String {
     }
 }
 
-/// A thin sampled polyline per keyed segment whose height follows the
-/// segment's easing, so the user sees where motion happens and how.
+/// A solid line between consecutive keys whose rise follows the segment's
+/// easing (progress 0 at the left key, 1 at the right one), so the shape of
+/// the motion is readable on the row itself.
 fn draw_easing(
     p: &mut Painter<'_>,
     row: &TimelineRow,
     x_of: impl Fn(i64) -> f32,
     rect: Rect,
     tracks: Rect,
+    dim: bool,
 ) {
     if row.keys.len() < 2 {
         return;
     }
     let t = *p.theme;
-    let base = rect.center_y() - p.m.px(8.0);
-    let amp = p.m.px(4.0);
-    let w = p.m.hairline().max(1.0);
+    let ink = if dim {
+        t.text_disabled
+    } else {
+        t.timeline_curve
+    };
+    let band = (rect.h * 0.5).round();
+    let bottom = (rect.center_y() + band * 0.5).round();
+    let w = p.m.px(1.5).max(1.0);
+    let inset = p.m.px(7.0);
     for (index, pair) in row.keys.windows(2).enumerate() {
         let (from, to) = (pair[0], pair[1]);
         if to <= from {
@@ -799,18 +838,26 @@ fn draw_easing(
             .get(index + 1)
             .copied()
             .unwrap_or(motioner_core::Ease::Linear);
-        let x0 = x_of(from);
-        let x1 = x_of(to);
-        if x1 < tracks.x || x0 > tracks.right() {
+        // Keep the line clear of the diamonds at both ends.
+        let x0 = x_of(from) + inset;
+        let x1 = x_of(to) - inset;
+        if x1 <= x0 || x1 < tracks.x || x0 > tracks.right() {
             continue;
         }
-        let steps = (((x1 - x0) / 2.0).clamp(2.0, 64.0)) as i32;
+        let steps = (x1 - x0).ceil().max(1.0) as i32;
+        let mut previous: Option<f32> = None;
         for step in 0..=steps {
             let progress = f64::from(step) / f64::from(steps);
             let x = x0 + (x1 - x0) * progress as f32;
-            let eased = motioner_eval::ease(ease, progress) as f32;
-            let y = base - amp * (eased - 0.5) * 2.0;
-            p.fill(Rect::new(x.round(), y.round(), w, w), t.timeline_curve);
+            let eased = (motioner_eval::ease(ease, progress) as f32).clamp(-0.25, 1.25);
+            let y = bottom - band * eased;
+            // Join each sample to the previous one so steep parts stay solid.
+            let (top, low) = previous.map_or((y, y), |prev| (prev.min(y), prev.max(y)));
+            p.fill(
+                Rect::new(x - w * 0.5, top - w * 0.5, w, (low - top) + w),
+                ink,
+            );
+            previous = Some(y);
         }
     }
 }

@@ -275,8 +275,10 @@ pub enum Hit {
     InspectCopy,
     /// A canvas gizmo handle.
     Gizmo(crate::gizmo::Handle),
-    /// The snapping toggle in the top bar.
+    /// The snapping toggle in the top bar, left of the safe-area toggle.
     SnapToggle,
+    /// The zoom readout in the top bar; clicking it fits the composition.
+    ZoomPill,
     /// A timeline row (index into the timeline row model).
     TimelineRow(usize),
     /// The stopwatch of a timeline property row.
@@ -300,6 +302,8 @@ pub enum Hit {
     OrphanRow(usize),
     /// The delete action of an orphan row.
     OrphanDelete(usize),
+    /// The re-bind action of an orphan row (only with a suggestion).
+    OrphanRebind(usize),
     /// The chevron that expands a layer's property rows.
     LayerChevron(usize),
 }
@@ -367,6 +371,8 @@ pub struct Layout {
     pub safe_area_toggle: Rect,
     /// Snapping toggle in the top bar, left of the safe-area toggle.
     pub snap_toggle: Rect,
+    /// Zoom readout in the top bar; a click fits the composition.
+    pub zoom_pill: Rect,
     /// Splitter hit zones.
     pub splitters: [(Splitter, Rect); 3],
     /// Height of one layer/track row.
@@ -388,11 +394,11 @@ impl Layout {
         let (middle, status_bar) = rest.split_bottom(m.px(size::STATUS_BAR));
 
         let min_canvas = m.px(size::MIN_CANVAS);
-        // The timeline takes at most ~38 % of the height below the top bar,
+        // The timeline takes at most ~42 % of the height below the top bar,
         // unless the user drags it taller.
         let requested = m.px(sizes.timeline);
         let default_cap = if (sizes.timeline - size::TIMELINE).abs() < f32::EPSILON {
-            (middle.h * 0.38).round()
+            (middle.h * 0.42).round()
         } else {
             f32::INFINITY
         };
@@ -421,9 +427,18 @@ impl Layout {
 
         let timeline = timeline_layout(timeline_rect, left_w, m);
         let transport = transport_buttons(timeline.header, m);
+        let zoom_pill = {
+            let h = m.px(20.0);
+            Rect::new(
+                top_bar.right() - m.px(size::PAD) - m.px(56.0),
+                (top_bar.center_y() - h * 0.5).round(),
+                m.px(56.0),
+                h,
+            )
+        };
         let safe_area_toggle = {
             let side = m.px(size::BUTTON);
-            let x = top_bar.right() - m.px(size::PAD) - m.px(56.0) - m.px(size::GRID * 2.0) - side;
+            let x = zoom_pill.x - m.px(size::GRID * 2.0) - side;
             Rect::new(x, top_bar.center_y() - side * 0.5, side, side)
         };
         let snap_toggle = Rect::new(
@@ -461,6 +476,7 @@ impl Layout {
             transport,
             safe_area_toggle,
             snap_toggle,
+            zoom_pill,
             splitters,
             row_h: m.px(size::ROW),
         }
@@ -522,6 +538,13 @@ impl Layout {
         )
     }
 
+    /// The re-bind action inside an orphan row, left of the delete action.
+    #[must_use]
+    pub fn orphan_rebind(&self, row: Rect) -> Rect {
+        let delete = self.orphan_delete(row);
+        Rect::new(delete.x - delete.w, delete.y, delete.w, delete.h)
+    }
+
     /// The rectangle of timeline track `index`, scrolled by `scroll` pixels.
     #[must_use]
     pub fn track_row(&self, index: usize, scroll: f32) -> Rect {
@@ -558,6 +581,9 @@ impl Layout {
         }
         if self.snap_toggle.contains(x, y) {
             return Some(Hit::SnapToggle);
+        }
+        if self.zoom_pill.contains(x, y) {
+            return Some(Hit::ZoomPill);
         }
         if self.layers.body.contains(x, y) {
             let index =
@@ -959,8 +985,8 @@ mod tests {
         );
         let taller = resize_panels(start, Splitter::Timeline, (0.0, -50.0));
         assert!(
-            // 236 + 50 = 286, snapped to the 4 px grid.
-            (taller.timeline - 288.0).abs() < f32::EPSILON,
+            // 320 + 50 = 370, snapped to the 4 px grid.
+            (taller.timeline - 372.0).abs() < f32::EPSILON,
             "{}",
             taller.timeline
         );

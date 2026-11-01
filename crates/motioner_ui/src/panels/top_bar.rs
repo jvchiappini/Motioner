@@ -120,9 +120,6 @@ fn comp_pills(p: &mut Painter<'_>, v: &View<'_>, document: &motioner_core::Docum
 /// The snapping and safe-area toggles and the zoom readout.
 fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
-    let bar = v.layout.top_bar;
-    let pad = p.m.px(size::PAD);
-    let cy = bar.center_y();
     let toggle = v.layout.safe_area_toggle;
     let mut state = v.interaction(Hit::Toggle(TopBarToggle::SafeArea));
     state.active = v.safe_area;
@@ -138,13 +135,12 @@ fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
         "—".to_owned()
     };
     let style = p.style(type_scale::CAPTION, t.text_body);
-    let zoom_w = p.m.px(56.0);
-    let zoom = Rect::new(
-        bar.right() - pad - zoom_w,
-        (cy - p.m.px(10.0)).round(),
-        zoom_w,
-        p.m.px(20.0),
+    let zoom = v.layout.zoom_pill;
+    let state = v.interaction(Hit::ZoomPill);
+    p.fill_rounded(
+        zoom,
+        if state.hovered { t.row_hover } else { t.raised },
+        zoom.h * 0.5,
     );
-    p.fill_rounded(zoom, t.raised, zoom.h * 0.5);
     p.text_in(&zoom_text, zoom, Align::Center, &style);
 }

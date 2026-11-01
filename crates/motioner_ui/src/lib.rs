@@ -27,13 +27,18 @@
 
 mod app;
 mod bounds;
+mod capture;
 mod clipboard;
+mod command;
+mod control;
 mod edit;
+mod editor;
 mod file_watch;
 mod gizmo;
 mod icons;
 mod input;
 mod inspect;
+mod json;
 mod layout;
 mod outline;
 mod paint;
@@ -45,18 +50,29 @@ mod theme;
 mod timeline;
 mod timeline_model;
 mod transport;
+mod viewport;
 mod widgets;
 mod window;
 
 pub use bounds::{hit_node, hit_node_where, node_bounds, Bounds, MeasureText};
+pub use capture::{CaptureResult, PngWriter, DELIVERY_FRAMES};
+pub use command::{
+    parse_calls, parse_commands, Call, Command, CommandError, CommandKind, ErrorKind, KeySpec,
+    Panel, Time,
+};
+pub use control::{
+    default_endpoint_file, send as send_control, ControlServer, Endpoint, Pending, Request,
+};
 pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack};
+pub use editor::{channel_has_key, channel_name, Editor, Effect, Outcome, ViewState, CHANNELS};
 pub use file_watch::FileWatch;
 pub use gizmo::{Corner, Guide, Handle};
-pub use input::{action_for, apply, Action, Effect, Modifiers};
+pub use input::{command_for, Modifiers, Toggles};
 pub use inspect::{
     hex, inspect_comp, inspect_node, kind_label, Axis, Channel, Editing, Field, FieldTarget,
     Header, Item, Layout as InspectLayout, Model as InspectModel, Row, RowValue,
 };
+pub use json::Json;
 pub use layout::{Hit, Layout, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use session::{
@@ -70,4 +86,7 @@ pub use timeline::{
 };
 pub use timeline_model::{RowKind as TimelineRowKind, TimelineRow, TimelineRows, VisibleRun};
 pub use transport::{elapsed_frames, skipped_frames, timecode, Transport};
+pub use viewport::{
+    anchored_pan, clamp_zoom, zoom_by_steps, Viewport, MAX_ZOOM, MIN_ZOOM, WHEEL_STEP,
+};
 pub use window::{run_preview, PreviewOptions, UiError, DEFAULT_WINDOW_SIZE};

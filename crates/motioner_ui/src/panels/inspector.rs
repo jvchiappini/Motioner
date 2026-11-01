@@ -9,7 +9,7 @@ use crate::paint::Painter;
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
-use crate::widgets;
+use crate::widgets::{self, KeyMark};
 
 /// Draws the inspector and returns the height of its content.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) -> f32 {
@@ -32,6 +32,9 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) -> f32 {
     }
     p.pop_clip();
     let content_h = v.inspector_layout.height;
+    if content_h > body.h + 1.0 {
+        scrollbar(p, body, content_h, v.inspector_scroll);
+    }
     if content_h - v.inspector_scroll > body.h + 1.0 {
         let fade_h = p.m.px(size::ROW);
         let mut clear = t.panel;
@@ -49,6 +52,31 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) -> f32 {
         );
     }
     content_h
+}
+
+/// A thin scroll thumb on the right edge of `body` showing which part of
+/// `content_h` is visible.
+fn scrollbar(p: &mut Painter<'_>, body: Rect, content_h: f32, scroll: f32) {
+    let t = *p.theme;
+    let track_w = p.m.px(3.0);
+    let inset = p.m.px(2.0);
+    let track = Rect::new(
+        body.right() - track_w - inset,
+        body.y + inset,
+        track_w,
+        body.h - inset * 2.0,
+    );
+    let ratio = (body.h / content_h).clamp(0.05, 1.0);
+    let thumb_h = (track.h * ratio).round().max(p.m.px(16.0));
+    let travel = (track.h - thumb_h).max(0.0);
+    let max_scroll = (content_h - body.h).max(1.0);
+    let y = track.y + travel * (scroll / max_scroll).clamp(0.0, 1.0);
+    p.layer();
+    p.fill_rounded(
+        Rect::new(track.x, y.round(), track_w, thumb_h),
+        t.control_hover,
+        track_w * 0.5,
+    );
 }
 
 fn draw_item(p: &mut Painter<'_>, v: &View<'_>, index: usize, item: &Item) {
@@ -86,7 +114,7 @@ fn draw_item(p: &mut Painter<'_>, v: &View<'_>, index: usize, item: &Item) {
             if let Some(diamond) = diamond {
                 draw_diamond(p, v, index, row, *diamond);
             }
-            draw_value(p, v, row, fields, segments.as_ref(), index);
+            draw_value(p, v, row, fields, segments, index);
         }
     }
 }
@@ -114,7 +142,7 @@ fn draw_stopwatch(p: &mut Painter<'_>, v: &View<'_>, item: usize, row: &Row, rec
     let ink = if channel.keyed {
         t.accent
     } else {
-        t.text_muted
+        t.text_disabled
     };
     icons::draw(p, Icon::Stopwatch, rect.inset(p.m.px(1.0)), ink, t.panel);
 }
@@ -127,14 +155,14 @@ fn draw_diamond(p: &mut Painter<'_>, v: &View<'_>, item: usize, row: &Row, rect:
     if !channel.keyed {
         return;
     }
-    let ink = if channel.on_key {
-        t.keyframe
+    let mark = if channel.on_key {
+        KeyMark::Key
     } else {
-        t.text_disabled
+        KeyMark::Empty
     };
-    p.diamond(rect, ink, channel.on_key);
+    widgets::key_marker(p, rect, mark, false);
     if v.interaction(Hit::InspectDiamond(item)).hovered {
-        p.diamond(rect, t.text, false);
+        p.diamond(rect.inset(-p.m.px(2.0)), t.text, false);
     }
 }
 
@@ -143,7 +171,7 @@ fn draw_value(
     v: &View<'_>,
     row: &Row,
     fields: &[(Rect, FieldTarget)],
-    segments: Option<&[Rect; 3]>,
+    segments: &[Rect],
     item: usize,
 ) {
     match &row.value {
@@ -180,18 +208,104 @@ fn draw_value(
                 text_field(p, v, *field, text);
             }
         }
-        RowValue::Align { align, .. } => {
-            if let Some(segments) = segments {
-                align_segments(p, v, segments, *align, item);
-            }
+        RowValue::Align { align, .. } => align_segments(p, v, segments, *align, item),
+        RowValue::Ease { current } => ease_tiles(p, v, segments, *current, item),
+    }
+}
+
+/// The ease grid: one tile per ease with its curve and name; the current
+/// ease is filled with the accent.
+fn ease_tiles(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    tiles: &[Rect],
+    current: Option<motioner_core::Ease>,
+    item: usize,
+) {
+    let t = *p.theme;
+    for (segment, (rect, (ease, _))) in tiles.iter().zip(motioner_core::Ease::ALL).enumerate() {
+        let state = v.interaction(Hit::InspectSegment { item, segment });
+        let active = current == Some(ease);
+        let fill = if active {
+            t.selection
+        } else if state.hovered {
+            t.control_hover
+        } else {
+            t.raised
+        };
+        p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
+        if active {
+            p.stroke_rounded(*rect, t.accent, p.m.px(size::RADIUS_SM), p.m.hairline());
         }
+        let pad = p.m.px(size::GRID * 2.0);
+        let label_h = p.m.px(14.0);
+        let curve = Rect::new(
+            rect.x + pad,
+            rect.y + p.m.px(size::GRID * 1.5),
+            rect.w - pad * 2.0,
+            rect.h - label_h - p.m.px(size::GRID * 2.5),
+        );
+        let ink = if active { t.accent_hover } else { t.text_muted };
+        ease_curve(p, curve, ease, ink);
+        let style = p.style(
+            type_scale::CAPTION,
+            if active { t.text } else { t.text_muted },
+        );
+        p.text_in(
+            ease_label(ease),
+            Rect::new(
+                rect.x,
+                rect.bottom() - label_h - p.m.px(2.0),
+                rect.w,
+                label_h,
+            ),
+            Align::Center,
+            &style,
+        );
+    }
+}
+
+/// A short display name for an ease tile.
+fn ease_label(ease: motioner_core::Ease) -> &'static str {
+    use motioner_core::Ease;
+    match ease {
+        Ease::Linear => "Linear",
+        Ease::QuadIn => "Quad in",
+        Ease::QuadOut => "Quad out",
+        Ease::QuadInOut => "Quad in-out",
+        Ease::CubicIn => "Cubic in",
+        Ease::CubicOut => "Cubic out",
+        Ease::CubicInOut => "Cubic in-out",
+        Ease::BackIn => "Back in",
+        Ease::BackOut => "Back out",
+    }
+}
+
+/// A small progress-over-time curve of `ease` inside `rect`.
+fn ease_curve(p: &mut Painter<'_>, rect: Rect, ease: motioner_core::Ease, ink: [f32; 4]) {
+    // Back eases overshoot by about a tenth; leave room for it at both ends.
+    let low = rect.bottom() - rect.h * 0.12;
+    let span = rect.h * 0.76;
+    let w = p.m.px(1.5).max(1.0);
+    let steps = rect.w.ceil().max(1.0) as i32;
+    let mut previous: Option<f32> = None;
+    for step in 0..=steps {
+        let progress = f64::from(step) / f64::from(steps);
+        let x = rect.x + rect.w * progress as f32;
+        let y = low - span * motioner_eval::ease(ease, progress) as f32;
+        let (top, bottom) = previous.map_or((y, y), |prev| (prev.min(y), prev.max(y)));
+        p.fill(
+            Rect::new(x - w * 0.5, top - w * 0.5, w, bottom - top + w),
+            ink,
+        );
+        previous = Some(y);
     }
 }
 
 fn align_segments(
     p: &mut Painter<'_>,
     v: &View<'_>,
-    segments: &[Rect; 3],
+    segments: &[Rect],
     align: motioner_core::TextAlign,
     item: usize,
 ) {

@@ -1,0 +1,346 @@
+//! Machine-readable views of the editor: `query` (the scene at a frame) and
+//! `state` (the editor around it). Both are JSON with a fixed field order,
+//! nodes in outline order and channels in display order, so the same state
+//! always prints the same bytes (D-0024).
+
+use motioner_core::{Document, Frame, NodeContent, NodeId, OverrideValue};
+
+use super::channels::{self, channel_name, CHANNELS};
+use super::Editor;
+use crate::command::{CommandError, Panel};
+use crate::json::Json;
+use crate::timeline_model::{content_fields, is_visible_at};
+
+impl Editor {
+    /// The scene at the playhead as JSON: composition, nodes (identity,
+    /// kind, name, parent, visible/locked, every channel's value and keys,
+    /// content), overrides, orphans and diagnostics. `node` limits the nodes
+    /// to one identity.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NoDocument`](crate::ErrorKind::NoDocument) without a document, [`ErrorKind::UnknownNode`](crate::ErrorKind::UnknownNode)
+    /// for an unknown `node`.
+    pub fn query_json(&self, node: Option<&str>) -> Result<String, CommandError> {
+        let document = self.require_document()?;
+        if let Some(id) = node {
+            channels::node_of(document, id)?;
+        }
+        let frame = self.frame();
+        let rate = document.composition().frame_rate();
+        let mut j = Json::new();
+        j.begin_object();
+        j.key("file")
+            .string(&self.session.path().display().to_string());
+        j.key("frame").int(frame);
+        j.key("time").number(motioner_core::seconds_of(frame, rate));
+        composition(&mut j, document);
+        j.key("nodes").begin_array();
+        for row in &self.outline {
+            let identity = self.node_identity(row.node);
+            if node.is_some_and(|id| id != identity) {
+                continue;
+            }
+            self.node_json(
+                &mut j,
+                document,
+                row.node,
+                &row.name,
+                row.kind.name(),
+                frame,
+            );
+        }
+        j.end_array();
+        j.key("overrides").begin_array();
+        let text = self.session.overrides().to_mdf(rate);
+        for line in text
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+        {
+            j.string(line);
+        }
+        j.end_array();
+        j.key("orphans").begin_array();
+        for (entry, suggestions) in self.orphan_suggestions() {
+            j.begin_object();
+            j.key("id").string(&entry.id);
+            j.key("property").string(&entry.property);
+            match entry.frame() {
+                Some(frame) => j.key("frame").int(frame),
+                None => j.key("frame").null(),
+            };
+            j.key("suggestions").begin_array();
+            for suggestion in &suggestions {
+                j.string(suggestion);
+            }
+            j.end_array();
+            j.end_object();
+        }
+        j.end_array();
+        self.diagnostics_json(&mut j);
+        j.end_object();
+        Ok(j.finish())
+    }
+
+    fn node_json(
+        &self,
+        j: &mut Json,
+        document: &Document,
+        node: NodeId,
+        name: &str,
+        kind: &str,
+        frame: Frame,
+    ) {
+        let Some(n) = document.node(node) else {
+            return;
+        };
+        let rate = document.composition().frame_rate();
+        j.begin_object();
+        j.key("id").string(n.identity().as_str());
+        j.key("explicit_id").boolean(n.identity().is_explicit());
+        j.key("kind").string(&kind.to_lowercase());
+        j.key("name").string(name);
+        match n.parent().and_then(|parent| document.node(parent)) {
+            Some(parent) => j.key("parent").string(parent.identity().as_str()),
+            None => j.key("parent").null(),
+        };
+        j.key("visible").boolean(n.is_visible());
+        j.key("drawn").boolean(is_visible_at(document, node, frame));
+        j.key("locked").boolean(self.node_locked(node));
+        j.key("channels").begin_object();
+        for (property, axis) in CHANNELS {
+            j.key(&channel_name(property, axis)).begin_object();
+            match channels::sampled(document, node, property, axis, frame) {
+                Some(OverrideValue::Number(value)) => j.key("value").number(value),
+                _ => j.key("value").null(),
+            };
+            j.key("keys").begin_array();
+            let frames = channels::keys(document, node, property, axis);
+            let eases = channels::eases(document, node, property, axis);
+            for (index, key) in frames.iter().enumerate() {
+                j.begin_object();
+                j.key("frame").int(*key);
+                j.key("time").number(motioner_core::seconds_of(*key, rate));
+                if let Some((OverrideValue::Number(value), _)) =
+                    channels::key_at(document, node, property, axis, *key)
+                {
+                    j.key("value").number(value);
+                }
+                j.key("ease")
+                    .string(eases.get(index).map_or("linear", |ease| ease.name()));
+                j.end_object();
+            }
+            j.end_array();
+            j.end_object();
+        }
+        j.end_object();
+        j.key("content").begin_object();
+        for field in content_fields(n.content()) {
+            j.key(field.name());
+            content_value(j, n.content(), field);
+        }
+        j.end_object();
+        j.end_object();
+    }
+
+    fn diagnostics_json(&self, j: &mut Json) {
+        j.key("diagnostics").begin_array();
+        for (severity, list) in [
+            ("error", self.session.diagnostics()),
+            ("warning", self.session.warnings()),
+        ] {
+            for diagnostic in list {
+                j.begin_object();
+                j.key("severity").string(severity);
+                j.key("line").int(i64::from(diagnostic.line));
+                j.key("column").int(i64::from(diagnostic.column));
+                j.key("message").string(&diagnostic.message);
+                j.end_object();
+            }
+        }
+        j.end_array();
+    }
+
+    /// The editor state as JSON: playhead, playback, selection, expanded
+    /// rows, selected keys, view toggles, panel sizes, history and whether an
+    /// edit is waiting to be saved.
+    #[must_use]
+    pub fn state_json(&self) -> String {
+        let mut j = Json::new();
+        j.begin_object();
+        j.key("file")
+            .string(&self.session.path().display().to_string());
+        j.key("loaded").boolean(self.document().is_some());
+        j.key("frame").int(self.frame());
+        j.key("duration").int(self.transport.duration());
+        j.key("playing").boolean(self.transport.is_playing());
+        j.key("looping").boolean(self.transport.looping());
+        let selected = self.selected.map(|node| self.node_identity(node));
+        j.key("selected").opt_string(selected.as_deref());
+        j.key("expanded").begin_array();
+        for row in &self.expanded {
+            if let Some(outline) = self.outline.get(*row) {
+                j.string(&self.node_identity(outline.node));
+            }
+        }
+        j.end_array();
+        j.key("selected_keys").begin_array();
+        for key in &self.selected_keys {
+            j.begin_object();
+            j.key("id").string(&key.id);
+            j.key("property").string(&key.property);
+            j.key("frame").int(key.frame);
+            j.end_object();
+        }
+        j.end_array();
+        j.key("only_animated").boolean(self.only_animated);
+        j.key("safe_area").boolean(self.view.safe_area);
+        j.key("snap").boolean(self.view.snap);
+        match self.view.zoom {
+            Some(zoom) => j.key("zoom").number(zoom),
+            None => j.key("zoom").null(),
+        };
+        j.key("pan").begin_array();
+        j.number(self.view.pan.0).number(self.view.pan.1);
+        j.end_array();
+        j.key("panels").begin_object();
+        let sizes = self.view.sizes;
+        for (panel, size) in [
+            (Panel::Layers, sizes.left),
+            (Panel::Inspector, sizes.right),
+            (Panel::Timeline, sizes.timeline),
+        ] {
+            j.key(panel.name()).begin_object();
+            j.key("size").number(f64::from(size));
+            j.key("scroll").number(self.view.scroll(panel));
+            j.end_object();
+        }
+        j.end_object();
+        let (undo, redo) = self.history();
+        j.key("undo_depth")
+            .int(i64::try_from(undo).unwrap_or(i64::MAX));
+        j.key("redo_depth")
+            .int(i64::try_from(redo).unwrap_or(i64::MAX));
+        j.key("dirty").boolean(self.session.is_dirty());
+        j.key("errors")
+            .int(i64::try_from(self.session.diagnostics().len()).unwrap_or(0));
+        j.key("warnings")
+            .int(i64::try_from(self.session.warnings().len()).unwrap_or(0));
+        j.end_object();
+        j.finish()
+    }
+
+    /// Fails with [`ErrorKind::NoDocument`](crate::ErrorKind::NoDocument) when nothing is loaded; used by
+    /// requests that need a document.
+    ///
+    /// # Errors
+    ///
+    /// When the program has an error and no earlier version loaded.
+    pub fn ensure_document(&self) -> Result<(), CommandError> {
+        self.require_document().map(|_| ())
+    }
+}
+
+fn composition(j: &mut Json, document: &Document) {
+    let c = document.composition();
+    let rate = c.frame_rate();
+    j.key("composition").begin_object();
+    j.key("name").string(c.name());
+    j.key("width").int(i64::from(c.width()));
+    j.key("height").int(i64::from(c.height()));
+    j.key("fps")
+        .string(&format!("{}/{}", rate.numerator(), rate.denominator()));
+    j.key("duration").int(c.duration());
+    j.key("background")
+        .string(&crate::inspect::hex(c.background()));
+    j.end_object();
+}
+
+fn content_value(j: &mut Json, content: &NodeContent, field: motioner_core::ContentField) {
+    use motioner_core::ContentField as F;
+    match (content, field) {
+        (NodeContent::Rect { width, .. }, F::Width) => j.number(*width),
+        (NodeContent::Rect { height, .. }, F::Height) => j.number(*height),
+        (NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. }, F::Radius) => {
+            j.number(*radius)
+        }
+        (NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. }, F::Fill) => {
+            j.opt_string(paint.fill.map(crate::inspect::hex).as_deref())
+        }
+        (NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. }, F::Stroke) => j
+            .opt_string(
+                paint
+                    .stroke
+                    .map(|stroke| crate::inspect::hex(stroke.color))
+                    .as_deref(),
+            ),
+        (NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. }, F::StrokeWidth) => {
+            j.number(paint.stroke.map_or(0.0, |stroke| stroke.width))
+        }
+        (NodeContent::Text(text), F::Text) => j.string(&text.text),
+        (NodeContent::Text(text), F::Size) => j.number(text.size),
+        (NodeContent::Text(text), F::Color) => j.string(&crate::inspect::hex(text.color)),
+        (NodeContent::Text(text), F::Align) => j.string(match text.align {
+            motioner_core::TextAlign::Left => "left",
+            motioner_core::TextAlign::Center => "center",
+            motioner_core::TextAlign::Right => "right",
+        }),
+        _ => j.null(),
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::command::ErrorKind;
+    use crate::editor::tests::hello_editor;
+
+    #[test]
+    fn query_is_deterministic_and_lists_every_node() {
+        let (editor, _dir) = hello_editor("query");
+        let first = editor.query_json(None).unwrap();
+        let second = editor.query_json(None).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.matches("\"kind\":").count(), 10);
+        assert!(first.contains("\"composition\":{\"name\":\"Hello\",\"width\":1920"));
+        assert!(first.contains("\"pos.x\":{\"value\":960,\"keys\":[{\"frame\":0"));
+        assert!(first.contains("\"ease\":\"cubic_out\""));
+    }
+
+    #[test]
+    fn query_filters_one_node_and_rejects_unknown_ids() {
+        let (editor, _dir) = hello_editor("query_one");
+        let one = editor.query_json(Some("@288")).unwrap();
+        assert_eq!(one.matches("\"kind\":").count(), 1);
+        assert_eq!(
+            editor.query_json(Some("nope")).unwrap_err().kind,
+            ErrorKind::UnknownNode
+        );
+    }
+
+    #[test]
+    fn state_reports_the_editor() {
+        let (editor, _dir) = hello_editor("state");
+        let state = editor.state_json();
+        assert!(state.contains("\"frame\":0"));
+        assert!(state.contains("\"selected\":null"));
+        assert!(state.contains("\"undo_depth\":0"));
+        assert!(state.contains("\"timeline\":{\"size\":320"));
+    }
+
+    #[test]
+    fn query_lists_orphans_with_their_suggestions() {
+        let (mut editor, dir) = hello_editor("query_orphan");
+        std::fs::write(
+            dir.0.join("hello.overrides.motion"),
+            "override(\"@298\", \"rotation\", 5)\n",
+        )
+        .unwrap();
+        assert!(editor.reload(std::time::Duration::ZERO));
+        let json = editor.query_json(None).unwrap();
+        assert!(
+            json.contains("\"orphans\":[{\"id\":\"@298\",\"property\":\"rotation\""),
+            "{json}"
+        );
+        assert!(json.contains("\"suggestions\":[\"@"), "{json}");
+    }
+}

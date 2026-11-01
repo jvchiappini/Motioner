@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use motioner_core::{OverrideValue, Property, Vec2};
+use motioner_core::{Ease, OverrideValue, Property, Vec2};
 use motioner_ui::{
     apply_edit, overrides_path, EditCommand, PreviewSession, UndoStack, WRITE_DEBOUNCE,
 };
@@ -76,6 +76,7 @@ fn edits_persist_through_the_overrides_file() {
             axis: None,
             frame: 90,
             value: OverrideValue::Number(15.0),
+            ease: Ease::Linear,
         },
         &mut set,
     );
@@ -163,6 +164,7 @@ fn undo_redo_survives_a_recompile() {
             axis: None,
             frame: 30,
             value: OverrideValue::Number(rotation + 20.0),
+            ease: Ease::Linear,
         },
         &mut set,
     );

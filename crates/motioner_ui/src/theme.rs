@@ -170,10 +170,14 @@ pub struct Theme {
     pub success: [f32; 4],
     /// Keyframe markers.
     pub keyframe: [f32; 4],
-    /// Item lifetime bars in the timeline.
+    /// Solid bar where a layer is visible in the timeline.
     pub track_bar: [f32; 4],
-    /// Animated range inside a lifetime bar.
-    pub track_bar_animated: [f32; 4],
+    /// Visible bar of the selected layer.
+    pub track_bar_selected: [f32; 4],
+    /// Outline of the frames where a layer is not drawn.
+    pub track_bar_hidden: [f32; 4],
+    /// Names column of property sub-rows (darker than the panel).
+    pub sub_row: [f32; 4],
     /// Easing curve drawn between keys.
     pub timeline_curve: [f32; 4],
     /// Drop shadows.
@@ -214,9 +218,11 @@ impl Theme {
             warning: WARNING.linear(),
             success: SUCCESS.linear(),
             keyframe: KEYFRAME.linear(),
-            track_bar: N4.linear(),
-            track_bar_animated: ACCENT.alpha(0.28),
-            timeline_curve: ACCENT.alpha(0.55),
+            track_bar: N5.linear(),
+            track_bar_selected: ACCENT.alpha(0.42),
+            track_bar_hidden: N5.linear(),
+            sub_row: N1.linear(),
+            timeline_curve: KEYFRAME.alpha(0.6),
             shadow: BLACK.alpha(0.45),
             tooltip: N4.linear(),
         }
@@ -269,8 +275,8 @@ pub mod size {
     pub const LEFT_PANEL: f32 = 264.0;
     /// Default inspector width.
     pub const RIGHT_PANEL: f32 = 288.0;
-    /// Default timeline height.
-    pub const TIMELINE: f32 = 236.0;
+    /// Default timeline height (about eleven property rows at 1600x900).
+    pub const TIMELINE: f32 = 320.0;
     /// Smallest canvas edge kept when panels grow.
     pub const MIN_CANVAS: f32 = 160.0;
     /// Splitter hit zone width.

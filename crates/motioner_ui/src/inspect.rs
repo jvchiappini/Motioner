@@ -54,8 +54,6 @@ pub enum FieldTarget {
     Align,
     /// The display name of the layer.
     Name,
-    /// The ease of the selected keys (inspector control).
-    Ease,
     /// Not editable (composition summary rows).
     None,
 }
@@ -137,6 +135,11 @@ pub enum RowValue {
         target: FieldTarget,
         /// The current alignment.
         align: TextAlign,
+    },
+    /// The ease of the selected keys: one tile per ease with a curve preview.
+    Ease {
+        /// The ease shared by every selected key, `None` when they differ.
+        current: Option<motioner_core::Ease>,
     },
     /// Read-only text.
     ReadOnly(String),
@@ -223,35 +226,7 @@ fn channel(
     axis: Option<motioner_core::Axis>,
     frame: Frame,
 ) -> Channel {
-    let frames: Vec<Frame> = match (property, axis) {
-        (Property::Position, Some(axis)) => t
-            .position
-            .axis(axis)
-            .keys()
-            .iter()
-            .map(|key| key.frame)
-            .collect(),
-        (Property::Scale, Some(axis)) => t
-            .scale
-            .axis(axis)
-            .keys()
-            .iter()
-            .map(|key| key.frame)
-            .collect(),
-        (Property::Anchor, Some(axis)) => t
-            .anchor
-            .axis(axis)
-            .keys()
-            .iter()
-            .map(|key| key.frame)
-            .collect(),
-        (Property::Rotation, _) => t.rotation.keys().iter().map(|key| key.frame).collect(),
-        (Property::Opacity, _) => t.opacity.keys().iter().map(|key| key.frame).collect(),
-        // A vector property without an axis takes the union of both axes.
-        (Property::Position, None) => t.position.key_frames(),
-        (Property::Scale, None) => t.scale.key_frames(),
-        (Property::Anchor, None) => t.anchor.key_frames(),
-    };
+    let frames = crate::editor::channels::transform_keys(t, property, axis);
     Channel {
         property,
         axis,
@@ -716,8 +691,10 @@ pub enum Item {
         diamond: Option<Rect>,
         /// Editable fields with their targets.
         fields: Vec<(Rect, FieldTarget)>,
-        /// Alignment segments (left, centre, right), when the row is Align.
-        segments: Option<[Rect; 3]>,
+        /// Segments of a segmented control: left, centre, right for Align,
+        /// one tile per [`motioner_core::Ease::ALL`] entry for Ease; empty
+        /// for other rows.
+        segments: Vec<Rect>,
     },
     /// The selected layer's header (name, kind, identity, copy button).
     Header {
@@ -758,16 +735,20 @@ fn layout_header(
 
 /// Lays `model` out inside `body`, scrolled by `scroll`.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::too_many_lines)] // one branch per row value kind
 pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
     let pad = m.px(size::PAD);
     let row_h = m.px(28.0);
     let field_h = m.px(24.0);
-    let label_w = m.px(72.0);
+    // Channel rows start with a fixed key column (stopwatch, then the key
+    // diamond) so the diamond never touches the label; the label column
+    // after it is wide enough for "Anchor X".
+    let key_column = m.px(36.0);
+    let label_column = m.px(104.0);
     let gap = m.px(size::GRID * 2.0);
     let left = body.x + pad;
     let right = body.right() - pad;
-    let value_x = left + label_w;
+    let value_x = left + label_column;
     let value_w = (right - value_x).max(0.0);
     let mut y = body.y - scroll + m.px(size::GRID * 3.0);
     let top = y;
@@ -786,30 +767,39 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
             });
             y += m.px(24.0);
         }
-        let rect = Rect::new(left, y, (right - left).max(0.0), row_h);
+        let height = match row.value {
+            RowValue::Ease { .. } => ease_grid_height(m) + row_h,
+            _ => row_h,
+        };
+        let rect = Rect::new(left, y, (right - left).max(0.0), height);
+        let line = Rect::new(left, y, rect.w, row_h);
         let stopwatch = row.channel.as_ref().map(|_| {
             Rect::new(
                 left,
-                (rect.center_y() - m.px(8.0)).round(),
+                (line.center_y() - m.px(8.0)).round(),
                 m.px(16.0),
                 m.px(16.0),
             )
         });
-        let label_x = left + if stopwatch.is_some() { m.px(20.0) } else { 0.0 };
-        let label = Rect::new(label_x, y, label_w - gap, row_h);
-        let diamond = row.channel.as_ref().map(|channel| {
+        let diamond = row.channel.as_ref().map(|_| {
             let side = m.px(10.0);
-            let _ = channel;
             Rect::new(
-                (label_x + m.px(56.0)).min(value_x - m.px(14.0)),
-                (rect.center_y() - side * 0.5).round(),
+                left + m.px(21.0),
+                (line.center_y() - side * 0.5).round(),
                 side,
                 side,
             )
         });
-        let field_y = (rect.center_y() - field_h * 0.5).round();
+        let label_x = left
+            + if row.channel.is_some() {
+                key_column
+            } else {
+                0.0
+            };
+        let label = Rect::new(label_x, y, (value_x - gap - label_x).max(0.0), row_h);
+        let field_y = (line.center_y() - field_h * 0.5).round();
         let mut fields = Vec::new();
-        let mut segments = None;
+        let mut segments = Vec::new();
         match &row.value {
             RowValue::Pair { left: a, right: b } => {
                 let half = ((value_w - gap) * 0.5).floor();
@@ -826,16 +816,14 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
                 fields.push((Rect::new(value_x, field_y, value_w, field_h), *target));
             }
             RowValue::Align { target, .. } => {
-                let seg_w = m.px(40.0);
-                let total = seg_w * 3.0;
-                let start = value_x;
-                let y_seg = field_y;
-                segments = Some([
-                    Rect::new(start, y_seg, seg_w, field_h),
-                    Rect::new(start + seg_w, y_seg, seg_w, field_h),
-                    Rect::new(start + seg_w * 2.0, y_seg, seg_w, field_h),
-                ]);
-                fields.push((Rect::new(start, y_seg, total, field_h), *target));
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+                fields.push((Rect::new(value_x, field_y, seg_w * 3.0, field_h), *target));
+            }
+            RowValue::Ease { .. } => {
+                segments = ease_tiles(Rect::new(left, y + row_h, rect.w, ease_grid_height(m)), m);
             }
             RowValue::ReadOnly(_) => {
                 fields.push((
@@ -853,10 +841,36 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
             fields,
             segments,
         });
-        y += row_h;
+        y += height;
     }
     let height = (y - top).max(0.0) + pad;
     Layout { items, height }
+}
+
+/// Columns of the ease grid.
+const EASE_COLUMNS: usize = 3;
+/// Height of one ease tile (curve preview over its name).
+const EASE_TILE: f32 = 52.0;
+
+/// Height of the ease grid below the "Ease" label.
+fn ease_grid_height(m: Metrics) -> f32 {
+    let rows = motioner_core::Ease::ALL.len().div_ceil(EASE_COLUMNS);
+    let gap = m.px(size::GRID);
+    m.px(EASE_TILE) * rows as f32 + gap * (rows as f32 - 1.0) + m.px(size::GRID)
+}
+
+/// One tile per ease, in [`motioner_core::Ease::ALL`] order.
+fn ease_tiles(area: Rect, m: Metrics) -> Vec<Rect> {
+    let gap = m.px(size::GRID);
+    let w = ((area.w - gap * (EASE_COLUMNS as f32 - 1.0)) / EASE_COLUMNS as f32).floor();
+    let h = m.px(EASE_TILE);
+    (0..motioner_core::Ease::ALL.len())
+        .map(|index| {
+            let column = (index % EASE_COLUMNS) as f32;
+            let row = (index / EASE_COLUMNS) as f32;
+            Rect::new(area.x + (w + gap) * column, area.y + (h + gap) * row, w, h)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1038,7 +1052,7 @@ mod tests {
             Item::Row {
                 fields, segments, ..
             } => {
-                segments.is_none()
+                segments.is_empty()
                     && fields
                         .iter()
                         .all(|(_, target)| *target == FieldTarget::None)

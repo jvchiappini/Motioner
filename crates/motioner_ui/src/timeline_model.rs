@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use motioner_core::{Axis, ContentField, Document, Ease, Frame, NodeContent, NodeId, Property};
 use motioner_eval::sample;
 
+use crate::editor::{channels, CHANNELS};
 use crate::layout::{Layout, Rect};
 use crate::outline::OutlineRow;
 use crate::theme::size;
@@ -171,34 +172,27 @@ impl TimelineRows {
             if !expanded.contains(&index) {
                 continue;
             }
-            for (property, _) in Property::ALL {
-                let axes: Vec<Option<Axis>> = if property.is_vector() {
-                    vec![Some(Axis::X), Some(Axis::Y)]
-                } else {
-                    vec![None]
-                };
-                for axis in axes {
-                    let keys = channel_frames(document, node, property, axis);
-                    if only_animated && keys.is_empty() {
-                        continue;
-                    }
-                    let eases = channel_eases(document, node, property, axis);
-                    rows.push(TimelineRow {
-                        kind: RowKind::Transform {
-                            outline: index,
-                            property,
-                            axis,
-                        },
-                        visible: Vec::new(),
-                        summary: Vec::new(),
-                        inherited: Vec::new(),
-                        keys,
-                        eases,
-                        animated: true,
-                        on_key: false,
-                        depth: outline_row.depth + 1,
-                    });
+            for (property, axis) in CHANNELS {
+                let keys = channels::keys(document, node, property, axis);
+                if only_animated && keys.is_empty() {
+                    continue;
                 }
+                let eases = channels::eases(document, node, property, axis);
+                rows.push(TimelineRow {
+                    kind: RowKind::Transform {
+                        outline: index,
+                        property,
+                        axis,
+                    },
+                    visible: Vec::new(),
+                    summary: Vec::new(),
+                    inherited: Vec::new(),
+                    animated: !keys.is_empty(),
+                    keys,
+                    eases,
+                    on_key: false,
+                    depth: outline_row.depth + 1,
+                });
             }
             if let Some(content) = document.node(node).map(motioner_core::Node::content) {
                 for field in content_fields(content) {
@@ -251,78 +245,11 @@ pub fn content_fields(content: &NodeContent) -> Vec<ContentField> {
     }
 }
 
-fn channel_frames(
-    document: &Document,
-    node: NodeId,
-    property: Property,
-    axis: Option<Axis>,
-) -> Vec<Frame> {
-    let Some(node) = document.node(node) else {
-        return Vec::new();
-    };
-    let t = node.transform();
-    match (property, axis) {
-        (Property::Position, Some(axis)) => t
-            .position
-            .axis(axis)
-            .keys()
-            .iter()
-            .map(|k| k.frame)
-            .collect(),
-        (Property::Scale, Some(axis)) => {
-            t.scale.axis(axis).keys().iter().map(|k| k.frame).collect()
-        }
-        (Property::Anchor, Some(axis)) => {
-            t.anchor.axis(axis).keys().iter().map(|k| k.frame).collect()
-        }
-        (Property::Position, None) => t.position.key_frames(),
-        (Property::Scale, None) => t.scale.key_frames(),
-        (Property::Anchor, None) => t.anchor.key_frames(),
-        (Property::Rotation, _) => t.rotation.keys().iter().map(|k| k.frame).collect(),
-        (Property::Opacity, _) => t.opacity.keys().iter().map(|k| k.frame).collect(),
-    }
-}
-
-fn channel_eases(
-    document: &Document,
-    node: NodeId,
-    property: Property,
-    axis: Option<Axis>,
-) -> Vec<Ease> {
-    let Some(node) = document.node(node) else {
-        return Vec::new();
-    };
-    let t = node.transform();
-    match (property, axis) {
-        (Property::Position, Some(axis)) => t
-            .position
-            .axis(axis)
-            .keys()
-            .iter()
-            .map(|k| k.ease)
-            .collect(),
-        (Property::Scale, Some(axis)) => t.scale.axis(axis).keys().iter().map(|k| k.ease).collect(),
-        (Property::Anchor, Some(axis)) => {
-            t.anchor.axis(axis).keys().iter().map(|k| k.ease).collect()
-        }
-        (Property::Position | Property::Scale | Property::Anchor, None) => Vec::new(),
-        (Property::Rotation, _) => t.rotation.keys().iter().map(|k| k.ease).collect(),
-        (Property::Opacity, _) => t.opacity.keys().iter().map(|k| k.ease).collect(),
-    }
-}
-
 fn summary_keys(document: &Document, node: NodeId) -> Vec<SummaryKey> {
     let mut counts: BTreeMap<Frame, u8> = BTreeMap::new();
-    for (property, _) in Property::ALL {
-        let axes: Vec<Option<Axis>> = if property.is_vector() {
-            vec![Some(Axis::X), Some(Axis::Y)]
-        } else {
-            vec![None]
-        };
-        for axis in axes {
-            for frame in channel_frames(document, node, property, axis) {
-                *counts.entry(frame).or_insert(0) += 1;
-            }
+    for (property, axis) in CHANNELS {
+        for frame in channels::keys(document, node, property, axis) {
+            *counts.entry(frame).or_insert(0) += 1;
         }
     }
     counts
@@ -335,15 +262,8 @@ fn inherited_keys(document: &Document, node: NodeId) -> Vec<Frame> {
     let mut frames: BTreeSet<Frame> = BTreeSet::new();
     let mut current = document.node(node).and_then(motioner_core::Node::parent);
     while let Some(parent) = current {
-        for (property, _) in Property::ALL {
-            let axes: Vec<Option<Axis>> = if property.is_vector() {
-                vec![Some(Axis::X), Some(Axis::Y)]
-            } else {
-                vec![None]
-            };
-            for axis in axes {
-                frames.extend(channel_frames(document, parent, property, axis));
-            }
+        for (property, axis) in CHANNELS {
+            frames.extend(channels::keys(document, parent, property, axis));
         }
         current = document.node(parent).and_then(motioner_core::Node::parent);
     }
@@ -423,7 +343,6 @@ pub struct RowsLayout {
 
 /// Lays the rows out inside the timeline's names/tracks area.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn layout(rows: &TimelineRows, layout: &Layout, scroll: f32) -> RowsLayout {
     let m = layout.metrics;
     let names = layout.timeline.names;

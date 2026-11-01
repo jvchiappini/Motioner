@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use ferrous_engine::{App, AppMode, Color};
@@ -18,7 +18,9 @@ use motioner_core::FrameRate;
 use motioner_render::RenderError;
 
 use crate::app::PreviewApp;
-use crate::{PreviewSession, SessionError, Transport};
+use crate::capture::PngWriter;
+use crate::control::ControlServer;
+use crate::{Editor, PreviewSession, SessionError, Transport};
 
 /// Embedded UI font (also used by the engine's immediate text pass).
 const UI_FONT: &[u8] = include_bytes!("../../../engine/ferrous/assets/fonts/Roboto-Regular.ttf");
@@ -43,6 +45,15 @@ pub struct PreviewOptions {
     pub ui_scale: Option<f32>,
     /// Outline row selected at startup (screenshots and demos).
     pub select: Option<usize>,
+    /// Capture the window to this PNG once `exit_after_frames` frames were
+    /// presented (one by default), then close it.
+    pub screenshot: Option<PathBuf>,
+    /// Writes screenshots; supplied by the application so this crate does
+    /// not depend on the export crate.
+    pub png_writer: Option<PngWriter>,
+    /// Open the live control endpoint and write its endpoint file here
+    /// (`preview --control`).
+    pub control: Option<PathBuf>,
 }
 
 /// Errors that prevent the preview window from running.
@@ -52,6 +63,10 @@ pub enum UiError {
     Load(SessionError),
     /// The embedded font could not be registered with the renderer.
     Painter(RenderError),
+    /// A requested screenshot could not be taken or written.
+    Screenshot(String),
+    /// The control endpoint could not be opened.
+    Control(String),
     /// An internal invariant failed without a better typed error.
     Internal(String),
 }
@@ -61,6 +76,8 @@ impl fmt::Display for UiError {
         match self {
             Self::Load(error) => write!(f, "{error}"),
             Self::Painter(error) => write!(f, "{error}"),
+            Self::Screenshot(message) => write!(f, "screenshot failed: {message}"),
+            Self::Control(message) => write!(f, "cannot open the control endpoint: {message}"),
             Self::Internal(message) => f.write_str(message),
         }
     }
@@ -76,8 +93,9 @@ impl std::error::Error for UiError {}
 ///
 /// # Errors
 ///
-/// Returns [`UiError::Load`] for an unreadable file and [`UiError::Painter`]
-/// when the embedded font cannot be registered.
+/// Returns [`UiError::Load`] for an unreadable file, [`UiError::Painter`]
+/// when the embedded font cannot be registered and [`UiError::Screenshot`]
+/// when a requested screenshot cannot be taken or written.
 pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> {
     let mut session = PreviewSession::new(path);
     match session.reload() {
@@ -102,10 +120,24 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
             .and_then(|name| name.to_str())
             .unwrap_or("untitled")
     );
+    let control = match &options.control {
+        Some(file) => {
+            let server =
+                ControlServer::start(file).map_err(|error| UiError::Control(error.to_string()))?;
+            println!(
+                "Control endpoint: 127.0.0.1:{} (token in {})",
+                server.endpoint().port,
+                file.display()
+            );
+            Some(server)
+        }
+        None => None,
+    };
     // `App::run` consumes the app and returns `()`, so a fatal error raised
     // inside the event loop is handed back through this shared slot.
     let fatal = Rc::new(RefCell::new(None));
-    let app = PreviewApp::new(session, transport, options, Rc::clone(&fatal));
+    let editor = Editor::new(session, transport, options.select);
+    let app = PreviewApp::new(editor, options, control, Rc::clone(&fatal));
     App::new(app)
         .with_title(&title)
         .with_size(width.max(320), height.max(240))
@@ -116,7 +148,7 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
         .with_font_bytes(UI_FONT)
         .run();
     let error = fatal.borrow_mut().take();
-    error.map_or(Ok(()), |error| Err(UiError::Painter(error)))
+    error.map_or(Ok(()), Err)
 }
 
 fn default_rate() -> Result<FrameRate, UiError> {

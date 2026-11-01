@@ -1,16 +1,21 @@
 <#
 .SYNOPSIS
-Opens `motioner preview` paused on a frame, captures the window and closes it.
+Opens `motioner preview`, optionally drives it with `ctl` commands, writes a
+screenshot and closes it.
 
 .DESCRIPTION
-Runs the debug (or -Release) binary with a fixed window size, waits for the
-window to settle, captures its client area with capture_window.ps1 (no focus
-needed) and stops the process. Screenshots go to out/ui/ (not committed).
+Without -Commands: runs the debug (or -Release) binary paused on -Frame with
+the in-app screenshot hook (`--screenshot`) and exits after -Frames frames.
+
+With -Commands: starts the editor with a private control endpoint, sends each
+command through `motioner ctl` (the same commands a person's clicks become,
+see docs/agents.md), captures with `screenshot(...)` and sends `quit()`.
+No focus, no mouse coordinates. Screenshots go to out/ui/ (not committed).
 
 .EXAMPLE
 scripts/ui_shot.ps1 -Out out/ui/iter-01-layout.png
 scripts/ui_shot.ps1 -Out out/ui/iter-02-720p.png -Size 1280x720 -Scale 1.25 -Select 3
-scripts/ui_shot.ps1 -File out/ui/broken.motion -Out out/ui/iter-03-error.png
+scripts/ui_shot.ps1 -Out out/ui/keys.png -Commands 'select("@288")','select_keys([("@288", "pos.x", 0.8)])'
 #>
 param(
     [string]$File = 'examples/hello.motion',
@@ -19,7 +24,8 @@ param(
     [string]$Size = '1600x900',
     [string]$Scale = '',
     [int]$Select = -1,
-    [double]$WaitSeconds = 4,
+    [int]$Frames = 20,
+    [string[]]$Commands = @(),
     [switch]$Release
 )
 
@@ -33,10 +39,35 @@ $arguments = @('preview', $File, '--frame', "$Frame", '--paused', '--window-size
 if ($Scale -ne '') { $arguments += @('--ui-scale', $Scale) }
 if ($Select -ge 0) { $arguments += @('--select', "$Select") }
 
-$process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $root -PassThru
+Push-Location $root
 try {
-    Start-Sleep -Milliseconds ([int]($WaitSeconds * 1000))
-    & (Join-Path $PSScriptRoot 'capture_window.ps1') -ProcessId $process.Id -Out $Out
+    if ($Commands.Count -eq 0) {
+        & $exe @arguments --exit-after-frames "$Frames" --screenshot $Out
+        if ($LASTEXITCODE -ne 0) { throw "motioner preview failed with exit code $LASTEXITCODE" }
+        return
+    }
+    $endpoint = Join-Path ([System.IO.Path]::GetTempPath()) "motioner-shot-$PID.txt"
+    $process = Start-Process -FilePath $exe -ArgumentList ($arguments + @('--control-file', $endpoint)) -PassThru
+    try {
+        $deadline = (Get-Date).AddSeconds(60)
+        while (-not (Test-Path $endpoint)) {
+            if ($process.HasExited) { throw 'the editor exited before opening its control endpoint' }
+            if ((Get-Date) -gt $deadline) { throw 'the control endpoint never appeared' }
+            Start-Sleep -Milliseconds 100
+        }
+        # Windows PowerShell 5.1 drops unescaped double quotes when it passes
+        # arguments to native programs.
+        $quote = { param($text) $text -replace '"', '\"' }
+        foreach ($command in $Commands) {
+            & $exe ctl --endpoint $endpoint (& $quote $command)
+        }
+        $target = $Out -replace '\\', '/'
+        & $exe ctl --endpoint $endpoint (& $quote "screenshot(`"$target`")")
+        & $exe ctl --endpoint $endpoint 'quit()' | Out-Null
+        $process.WaitForExit(20000) | Out-Null
+    } finally {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+    }
 } finally {
-    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+    Pop-Location
 }

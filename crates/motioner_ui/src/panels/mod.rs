@@ -137,6 +137,8 @@ pub struct OrphanRow {
     pub id: String,
     /// Property it sets.
     pub property: String,
+    /// Best candidate node for re-binding, when one exists.
+    pub suggestion: Option<String>,
 }
 
 impl View<'_> {

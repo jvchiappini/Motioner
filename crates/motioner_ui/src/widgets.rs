@@ -206,3 +206,64 @@ pub fn tooltip(
         p.text_in(key, key_rect, Align::Center, &key_style);
     }
 }
+
+/// What a keyframe marker means. The editor uses one visual language for
+/// keys everywhere (timeline layer rows, property rows, inspector):
+///
+/// - [`KeyMark::Key`]: a key on this channel (or, on a layer row, on one of
+///   its channels): filled gold diamond.
+/// - [`KeyMark::Shared`]: a layer-row key shared by several channels: filled
+///   gold diamond with a dark core.
+/// - [`KeyMark::Selected`]: a selected key: filled accent diamond with an
+///   accent ring.
+/// - [`KeyMark::Inherited`]: a key of a parent group, which moves this layer
+///   but is not its own: hollow grey diamond (dark inside), not selectable.
+/// - [`KeyMark::Empty`]: no key of this channel at this frame (the "add key"
+///   button of an animated channel, or the inspector diamond between keys):
+///   the same hollow diamond.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyMark {
+    /// A key on this channel.
+    Key,
+    /// A layer-row key shared by several channels.
+    Shared,
+    /// A selected key.
+    Selected,
+    /// A parent group's key.
+    Inherited,
+    /// No key here.
+    Empty,
+}
+
+/// Draws a keyframe marker in `rect` following [`KeyMark`]'s language.
+/// `dim` greys out own keys of hidden or locked layers.
+pub fn key_marker(p: &mut Painter<'_>, rect: Rect, mark: KeyMark, dim: bool) {
+    let t = *p.theme;
+    let key_ink = if dim { t.text_disabled } else { t.keyframe };
+    match mark {
+        KeyMark::Key => p.diamond(rect, key_ink, true),
+        KeyMark::Shared => {
+            p.diamond(rect, key_ink, true);
+            let dot = (rect.w * 0.3).round().max(2.0);
+            p.diamond(
+                Rect::new(
+                    rect.center_x() - dot * 0.5,
+                    rect.center_y() - dot * 0.5,
+                    dot,
+                    dot,
+                ),
+                t.app,
+                true,
+            );
+        }
+        KeyMark::Selected => {
+            p.diamond(rect, t.accent, true);
+            p.diamond(rect.inset(-p.m.px(2.0)), t.accent, false);
+        }
+        // Hollow marks get a dark core so they read on top of any bar.
+        KeyMark::Inherited | KeyMark::Empty => {
+            p.diamond(rect, t.app, true);
+            p.diamond(rect, t.text_muted, false);
+        }
+    }
+}

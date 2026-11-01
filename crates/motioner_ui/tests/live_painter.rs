@@ -31,7 +31,7 @@ const GOLDEN_PNG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../motioner_testkit/golden/hello_f120.png"
 ));
-const GOLDEN_SHA256: &str = "ebebab4eab0c7b3da97e1b9139aef83fa9fb88e4c8cc950f0f75edf71875fe44";
+const GOLDEN_SHA256: &str = "c2173badd7f23933461473c5d682e40fc9fc1dcbd4ebbe10a1c7c1c7de5cf15c";
 const MAX_CHANNEL_DIFF: u8 = 2;
 
 struct Frame {

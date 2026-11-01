@@ -278,6 +278,16 @@ fn orphans(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
             &prop_style,
         );
         let delete = v.layout.orphan_delete(rect);
+        if orphan.suggestion.is_some() {
+            let rebind = v.layout.orphan_rebind(rect);
+            let state = v.interaction(Hit::OrphanRebind(index));
+            let ink = if state.hovered {
+                t.accent
+            } else {
+                t.text_muted
+            };
+            icons::draw(p, Icon::Check, rebind.inset(p.m.px(4.0)), ink, t.panel);
+        }
         let state = v.interaction(Hit::OrphanDelete(index));
         let ink = if state.hovered {
             t.danger

@@ -46,6 +46,9 @@ pub enum EditCommand {
         frame: Frame,
         /// Value at that frame.
         value: OverrideValue,
+        /// Ease of the segment arriving at the key (the editor keeps the
+        /// ease of a key it replaces).
+        ease: Ease,
     },
     /// Removes the key at `frame`.
     RemoveKey {
@@ -105,6 +108,15 @@ pub enum EditCommand {
         /// New identity.
         to: String,
     },
+    /// Removes the entry in one slot (deleting an orphaned override).
+    Remove {
+        /// Identity.
+        id: String,
+        /// Property, as written in the file.
+        property: String,
+        /// Frame of a key or unkey entry; `None` for static entries.
+        frame: Option<Frame>,
+    },
 }
 
 /// One key moving to another frame.
@@ -138,13 +150,14 @@ pub fn apply(command: &EditCommand, set: &mut OverrideSet) {
             axis,
             frame,
             value,
+            ease,
         } => set.insert(OverrideEntry::new(
             id.clone(),
             property_name(property, *axis),
             OverrideAction::Key {
                 frame: *frame,
                 value: value.clone(),
-                ease: Ease::Linear,
+                ease: *ease,
             },
         )),
         EditCommand::RemoveKey {
@@ -178,6 +191,11 @@ pub fn apply(command: &EditCommand, set: &mut OverrideSet) {
         )),
         EditCommand::SetName { id, name } => apply_name(set, id, name),
         EditCommand::Reassign { from, to } => apply_reassign(set, from, to),
+        EditCommand::Remove {
+            id,
+            property,
+            frame,
+        } => set.remove_slot(id, property, *frame),
     }
 }
 
@@ -331,6 +349,12 @@ impl UndoStack {
         !self.redo.is_empty()
     }
 
+    /// Number of redo steps.
+    #[must_use]
+    pub fn redo_len(&self) -> usize {
+        self.redo.len()
+    }
+
     /// Opens a gesture (a drag). Records after this call coalesce.
     pub fn begin_gesture(&mut self) {
         self.gesture_open = true;
@@ -418,6 +442,7 @@ mod tests {
                 axis: None,
                 frame: 10,
                 value: OverrideValue::Number(0.5),
+                ease: Ease::Linear,
             },
             &mut set,
         );
