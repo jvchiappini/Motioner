@@ -11,9 +11,10 @@ pipeline shared by preview and export.
 **Milestone 1: an editor.** The MDF program compiles and renders to MP4 or
 PNG, and motioner preview opens an editor window that edits the composition
 through **overrides** stored in <name>.overrides.motion (D-0022): inspector
-fields, canvas gizmos, timeline keys, visibility/lock, undo/redo. The program
-itself changes only through motioner bake. FerrousEngine is vendored as a
-pinned submodule; GUIMaker is not.
+fields, canvas gizmos with zoom and pan, timeline keys, visibility/lock,
+undo/redo. The program itself changes only through motioner bake, which edits
+private literals in place and falls back to a generated block for the rest
+(D-0027). FerrousEngine is vendored as a pinned submodule; GUIMaker is not.
 
 ## What it will do
 
@@ -76,9 +77,12 @@ spec/                 language and format specifications
 ```
 motioner render  examples/hello.motion --out out/hello.mp4
 motioner still   examples/hello.motion --frame 120 --out out/hello.png
-motioner info    examples/hello.motion
+motioner info    examples/hello.motion [--json]
 motioner bake    examples/hello.motion
-motioner preview examples/hello.motion
+motioner preview examples/hello.motion [--control]
+motioner query   examples/hello.motion --frame 48
+motioner edit    examples/hello.motion 'seek(120)' 'edit("@288", "pos.y", 520)'
+motioner ctl     'select("@288")' 'screenshot("out/shot.png")'
 ```
 
 `preview` opens the editor window: layers on the left, the composition
@@ -86,25 +90,41 @@ letterboxed on a canvas with selection gizmos, an editable properties inspector
 on the right, and a timeline with transport, ruler, visibility strips and
 expandable rows with one lane per parameter (Position X/Y, Scale X/Y, Anchor
 X/Y, Rotation, Opacity, plus content fields). X and Y keyframes are independent
-and are stored as `pos.x`/`pos.y` overrides. Selection is shared by the canvas,
-the lists and the inspector; saving the `.motion` or the overrides file reloads
-it, and MDF errors appear as a banner, a red file dot and a status-bar
-diagnostic.
+and are stored as `pos.x`/`pos.y` overrides. The canvas zooms around the
+pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
+`F` or a click on the zoom pill; zoom and pan are view state and never change
+a rendered frame (D-0026). Selection is shared by the canvas, the lists and
+the inspector; saving the `.motion` or the overrides file reloads it, and MDF
+errors appear as a banner, a red file dot and a status-bar diagnostic.
 
 Edits do not touch the program: they are written 300 ms after the last change to
 `<name>.overrides.motion` (`override`, `override_key`, `override_unkey`,
 `override_visible` and `override_locked` statements, D-0022). `motioner bake
-<file> [--id ID]...` folds the overrides of nodes bound to a top-level variable
-into one generated block at the end of the program, removes them from the
-overrides file, and refuses, with a message, nodes created inside loops or
-unbound functions.
+<file> [--id ID]...` folds an override into the program in place when its
+value came from a private plain literal; other overrides of nodes bound to a
+top-level variable go to one generated block at the end, and loop-created
+nodes without a binding keep their overrides with a refusal reason (D-0027).
+Bake re-keys the overrides that stay when an in-place edit shifts byte offsets.
+Orphans are listed with ranked re-binding suggestions (D-0025).
 
-Shortcuts: Space play/pause, Left/Right step (Shift: 10), Up/Down select layer,
-Home/End, L loop, G safe areas, R reload, K add keys, Delete delete keys, U
-show only animated properties, Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo, Esc
-quit. Options: `--frame N`, `--paused`, `--exit-after-frames N` (smoke tests and
-CI), `--window-size WxH`, `--ui-scale F` and `--select ROW` (screenshots, see
-`crates/motioner_ui/README.md`).
+Shortcuts: Space play/pause (release, when it did not drag), Left/Right step
+(Shift: 10), Up/Down select layer, Home/End, L loop, G safe areas, R reload, K
+add keys, Delete delete keys, U show only animated properties, F fit the
+canvas, 1 go to 100 %, Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo, Esc quit.
+Options: `--frame N`, `--paused`, `--exit-after-frames N` (smoke tests and CI),
+`--window-size WxH`, `--ui-scale F`, `--select ROW` and `--screenshot
+<file.png>` (in-app capture, see `crates/motioner_ui/README.md`).
+
+### Agents
+
+Motioner is AI-first: everything a person can do in the editor is a typed
+command, and the window turns its clicks and shortcuts into the same
+commands (D-0024). `motioner query` prints the scene at a frame as JSON,
+`motioner edit` runs commands such as `key("@288", "opacity", 1.5, 0.5,
+ease="quad_out")` on the overrides file (all or nothing), and `motioner
+preview --control` + `motioner ctl` drive a running editor, including
+`state()`, `query()` and `screenshot(path)`. The full command list, the JSON
+formats and an end-to-end example are in [`docs/agents.md`](docs/agents.md).
 
 ## Project control
 

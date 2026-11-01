@@ -206,13 +206,42 @@ on identity or rendering).
 
 ### 9.3 Bake
 
-`motioner bake <file.motion> [--id ID]...` rewrites overrides for nodes
-reachable from a top-level variable binding into one generated block appended
-after
-`# --- baked by motioner (do not edit above this line by hand) ---`, then
-removes those overrides. Nodes created inside loops or unbound function calls
-are refused with a message and keep their overrides. Bake is exact
-(`run(baked)` equals `run(program)` plus the baked overrides) and idempotent.
+`motioner bake <file.motion> [--id ID]...` folds overrides into the program in
+two ways (D-0027):
+
+1. **In place** when the overridden value came from a private plain literal:
+   a constructor argument, a `node.property = literal` assignment, or the
+   value/ease arguments of a `.key(...)` call. A literal is private when its
+   source span was evaluated exactly once in the run; a loop body or a
+   function called twice shares it and is not edited. Static values replace
+   the literal text (numbers keep `format_number`, strings are quoted, pairs
+   are `(x, y)`, booleans `True`/`False`, optional colours `None`); a key
+   edits its value and, when the call has one, its `ease` literal.
+2. **Generated block** for everything else reachable from a top-level
+   variable binding: statements appended after
+   `# --- baked by motioner (do not edit above this line by hand) ---`, then
+   the overrides are removed. Nodes created inside loops or unbound function
+   calls with shared or computed values are refused with a message and keep
+   their overrides.
+
+In-place edits change the program length, so every provenance key after them
+is re-keyed by the exact edit offsets in the same write (D-0025). Bake is
+exact (`run(baked)` plus the remaining overrides equals `run(program)` plus
+all overrides, node identities compared by position) and idempotent. If the
+in-place pass is not exact it is discarded and the generated-block behaviour
+is used.
+
+### 9.4 Editor commands and re-binding
+
+Editor actions are MDF calls too (`edit("title", "pos.x", 900)`,
+`key("title", "opacity", 1.5, 0.5, ease="quad_out")`), parsed with this
+grammar and run by `motioner edit` and `motioner ctl` (D-0024,
+`docs/agents.md`). They are not program statements: they only produce the
+override statements above. When a provenance key changes after an edit above
+the call, its overrides become orphans; `motioner query` lists them with a
+ranked `suggestions` array, and `assign_id("@old", "@new")` moves them to the
+node's new identity. The orphans list in the layers panel offers the same
+re-binding with one click (D-0025 addendum).
 
 ## 10. Modules
 

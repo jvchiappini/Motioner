@@ -16,11 +16,16 @@ timeline. Edits are **overrides** (D-0022) stored next to the program; the
   kind icon, indentation guides, a chevron that expands the row's property
   timeline, a dim detail (`r24`, `96 × 96`), and eye/lock buttons. Double-click
   a name to rename the layer (a `name` override). A collapsible **Orphans**
-  section lists overrides whose node no longer exists; each can be deleted.
-- **Canvas** — the composition letterboxed on a darker pasteboard. Click a
-  shape to select it; drag it to move, drag a corner to scale (Shift keeps the
-  aspect ratio, Alt scales from the anchor), drag the grip above the top edge
-  to rotate (Shift snaps to 15°). Snapping (on by default) aligns to the
+  section lists overrides whose node no longer exists; each can be re-bound to
+  its best suggested node or deleted.
+- **Canvas** — the composition on a darker pasteboard, fitted by default.
+  Ctrl+wheel zooms around the pointer (5 % to 3200 %), a middle drag or
+  Space+drag pans, `F` or a click on the zoom pill fits. Everything that maps
+  window ↔ composition (picks, bounds, gizmos, snapping, guides) goes through
+  one `Viewport`, so overlays always sit on the drawn pixels. Click a shape to
+  select it; drag it to move, drag a corner to scale (Shift keeps the aspect
+  ratio, Alt scales from the anchor), drag the grip above the top edge to
+  rotate (Shift snaps to 15°). Snapping (on by default) aligns to the
   composition edges and centre and to other layers, drawing accent guides.
   Locked layers cannot be picked; hidden layers are not drawn or picked.
 - **Properties** (right) — the selected layer's identity (key/id plus Copy),
@@ -30,19 +35,39 @@ timeline. Edits are **overrides** (D-0022) stored next to the program; the
   align).
   Numeric fields scrub horizontally (Shift ×10, Alt ×0.1) or type on click with
   a visible focus ring; colour fields accept `#RRGGBB[AA]`; align is a
-  three-state control. A stopwatch starts or stops animation; the diamond shows
-  whether the playhead is on a key. With timeline keys selected, a **Keys**
-  section shows an Ease control that cycles through the MDF easings.
+  three-state control. Each animatable row starts with a fixed key column: the
+  stopwatch (accent when the channel is animated, grey when not) and the key
+  diamond at the playhead. With timeline keys selected, a **Keys** section
+  shows the **ease grid**: one tile per MDF ease with its curve; the ease
+  shared by the selected keys is highlighted. The panel scrolls with the wheel
+  and shows a scroll thumb.
 - **Timeline** — timecode and frame counter, transport, a ruler whose labels are
   centred on their tick and labelled to the composition end, one row per layer
-  with a **visibility strip** (sampled from the document, with inherited parent
-  opacity/scale/visibility), summary diamonds (tinted when several channels
-  share the frame) and **hollow inherited diamonds** on children of animated
-  groups. Selecting a layer expands one sub-row per **parameter** — Position X,
-  Position Y, Scale X, Scale Y, Rotation, Anchor X, Anchor Y, Opacity, then the
-  content fields — each with a stopwatch, the value at the playhead, the
-  previous/next/add-key buttons, its own diamonds and a thin sampled polyline
-  showing each segment's easing. X and Y keyframes are independent.
+  with a **visibility strip** (a solid bar where the layer is drawn, an empty
+  outline where it is not: opacity 0, scale 0, hidden, or inherited from a
+  parent), summary diamonds and inherited parent diamonds. Selecting a layer
+  expands one sub-row per **parameter** — Position X, Position Y, Scale X,
+  Scale Y, Rotation, Anchor X, Anchor Y, Opacity, then the content fields — on
+  a darker names column; only the layer row carries the selection colour. Each
+  sub-row has a stopwatch, the value at the playhead, the previous/next/add-key
+  buttons, its diamonds and a solid line between keys whose rise follows the
+  segment's easing. X and Y keyframes are independent. The timeline is 320 px
+  tall by default, its splitter is draggable and it scrolls to a new selection
+  and to newly selected keys.
+
+### Keyframe markers
+
+One visual language everywhere (timeline layer rows, property rows, the
+inspector and the ◆ buttons), drawn by `widgets::key_marker`:
+
+| Marker | Meaning |
+|---|---|
+| filled gold ◆ | a key on this channel (on a layer row: on one of its channels) |
+| filled gold ◆ with a dark core | layer row: several channels have a key on that frame |
+| filled accent ◆ with an accent ring | a selected key |
+| hollow grey ◇ (dark inside) | a parent group's key (moves this layer, not selectable), or no key of this channel at the playhead |
+
+Own keys of hidden or locked layers are drawn grey.
 - **Status bar** — errors, then override warnings in the warning colour, then
   evaluation time, UI fps and dropped frames.
 
@@ -56,17 +81,26 @@ does not trigger a reload. A failed reload keeps the last good version.
 - Every edit becomes one or more `override(...)` statements in
   `<name>.overrides.motion` (D-0022), written 300 ms after the last change
   through a temp file and a rename.
-- Undo/redo is exact (`Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+Y`); a drag is one step.
-- The program is never edited by the editor. `motioner bake <file>` folds the
-  overrides of nodes bound to a top-level variable into one generated block and
-  rewrites the overrides file without them; unbound nodes are refused with a
-  message and keep their overrides.
+- Every action is a `Command` run by the window-free `Editor` (D-0024); the
+  same commands are available to agents through `motioner edit` and
+  `motioner ctl` (`docs/agents.md`).
+- Undo/redo is exact (`Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+Y`); a drag is one step
+  (an editor gesture).
+- Replacing a key keeps its ease; animated vectors are always keyed per axis
+  (`pos.x`, `pos.y`).
+- The program is never edited by the editor. `motioner bake <file>` edits a
+  private literal in place (a constructor argument, an assignment or a
+  `.key()` value/ease) when the run evaluated it exactly once, and otherwise
+  folds the overrides of nodes bound to a top-level variable into one generated
+  block; shared literals and unbound node values are refused with a message and
+  keep their overrides. When an in-place edit shifts byte offsets, bake re-keys
+  every override that stays in the same write (D-0025, D-0027).
 
 ## Shortcuts
 
 | Key | Action |
 | --- | --- |
-| Space | play / pause |
+| Space | play / pause (on release; Space+drag pans instead) |
 | Left / Right | previous / next frame (Shift: ten) |
 | Up / Down | select previous / next layer |
 | Home / End | first / last frame |
@@ -76,9 +110,14 @@ does not trigger a reload. A failed reload keeps the last good version.
 | K | add keys at the playhead (animated channels, else position) |
 | Delete | delete the selected keys |
 | U | show only animated properties in the timeline |
+| F | fit the composition to the canvas |
+| 1 | zoom to 100 % |
 | Ctrl+Z | undo |
 | Ctrl+Shift+Z, Ctrl+Y | redo |
 | Esc | quit |
+| Ctrl+wheel on the canvas | zoom around the pointer |
+| middle drag / Space+drag on the canvas | pan |
+| click the zoom pill (top right) | fit the composition |
 | wheel over the ruler or tracks | step frames (Shift: ten) |
 | wheel over a list or the inspector | scroll |
 | drag a numeric label or field | scrub (Shift ×10, Alt ×0.1) |
@@ -107,13 +146,22 @@ for the transport frame (`tests/live_painter.rs` compares it with the golden).
 src/
   lib.rs            crate docs and re-exports
   window.rs         run_preview, PreviewOptions, UiError
-  app.rs            FerrousApp: state, input, drags, per-frame draw order
+  app/              the window: mod (frame loop, keys, control polling), pointer
+                    (hit testing), press, drag, canvas (painting and picks)
+  command/          Command, CommandKind, errors; text form, parser, examples
+  editor/           Editor: window-free state and the one command executor;
+                    channels, view, resolve (commands → edits), fields, bake,
+                    rebind (orphan suggestions), query (JSON)
+  control.rs        live control endpoint (127.0.0.1, token) and ctl client
+  capture.rs        in-app screenshots through the engine hook
+  json.rs           tiny JSON writer for tool output
   session.rs        PreviewSession: program + overrides, debounced atomic writes
   edit.rs           pure EditCommand model and the bounded UndoStack
+  viewport.rs       pure canvas mapping: fit, zoom, pan, window ↔ composition
   text_edit.rs      pure single-line field editor (caret, selection, keys)
   transport.rs      Transport and rational frame timing
   file_watch.rs     polling hot reload with debounce and self-write reset
-  input.rs          pure key → action mapping
+  input.rs          pure key → Command mapping
   outline.rs        flat layer rows (name, detail, depth, keyframes)
   inspect.rs        editable inspector model and its pure layout
   gizmo.rs          handle hit testing, move/scale/rotate maths and snapping
@@ -148,20 +196,26 @@ the chrome is an immediate painter rather than engine widgets.
 
 ## Screenshots
 
-Captures need no focus and no engine change:
+The editor captures itself: the engine copies the frame it presents
+(`AppContext::request_screenshot`, D-0023), so captures need no focus and
+match the screen exactly (checked against a `PrintWindow` capture: identical
+apart from the live fps readout).
 
 ```powershell
 cargo build -j 2 -p motioner_app
 scripts/ui_shot.ps1 -Out out/ui/shot.png                       # 1600x900, frame 120
 scripts/ui_shot.ps1 -Out out/ui/720.png -Size 1280x720 -Scale 1.25 -Select 7
-scripts/ui_shot.ps1 -File out/ui/broken.motion -Out out/ui/error.png
+scripts/ui_shot.ps1 -Out out/ui/keys.png -Commands 'select("@288")','select_keys([("@288", "pos.x", 0.8)])'
 scripts/crop_zoom.ps1 -In out/ui/shot.png -Out out/ui/zoom.png -X 670 -Y 580 -W 270 -H 44
 ```
 
-`ui_shot.ps1` runs `motioner preview <file> --frame N --paused --window-size
-WxH [--ui-scale F] [--select ROW]` and captures the client area with
-`capture_window.ps1` (Win32 `PrintWindow` with `PW_RENDERFULLCONTENT`, which
-returns the DWM-composed GPU frame). `out/` is not committed.
+Without `-Commands`, `ui_shot.ps1` runs `motioner preview <file> --frame N
+--paused --window-size WxH --exit-after-frames 20 --screenshot <png>`. With
+`-Commands` it opens a control endpoint, sends the commands with `motioner
+ctl`, then `screenshot(...)` and `quit()`. The engine only honours a
+screenshot asked for while drawing, so the request is made in `draw_ui`; an
+adapter whose surface lacks `COPY_SRC` makes the capture fail with a clear
+error after 30 frames. `out/` is not committed.
 
 ## Known limitations
 

@@ -1,0 +1,307 @@
+# mdf: 0.1
+#
+# Showcase: a 12 s, four-scene motion piece built only from what MDF v0
+# supports today (groups, rects, circles, text, transform keys, eases, loops
+# and functions). Render with:
+#   motioner render examples/showcase.motion --out out/showcase.mp4
+#
+# Scenes: 0-3.3 s intro, 3.3-6.6 s "how it works", 6.6-9.6 s chart,
+# 9.6-12 s outro. Each scene is a group centred on the canvas, so its
+# children use coordinates relative to the centre and the whole scene can
+# scale and fade as one.
+
+comp(name="Showcase", width=1920, height=1080, fps=60, duration=12.0,
+     background="#07080D")
+
+INK = "#F2F4F8"
+MUTED = "#8A90A2"
+DIM = "#1C2030"
+CARD = "#121522"
+EDGE = "#2A3045"
+BLUE = "#5B8CFF"
+VIOLET = "#9B7BFF"
+CORAL = "#FF5A6E"
+AMBER = "#FFB547"
+MINT = "#3FD9A4"
+PALETTE = [BLUE, VIOLET, CORAL, AMBER, MINT]
+
+# ---- helpers ---------------------------------------------------------------
+
+PI = 3.141592653589793
+
+def radians(degrees):
+    return degrees * PI / 180
+
+def pop_in(node, t, duration):
+    node.key("scale", t, 0.0)
+    node.key("scale", t + duration, 1.0, ease="back_out")
+
+def fade_in(node, t, duration):
+    node.key("opacity", t, 0.0)
+    node.key("opacity", t + duration, 1.0, ease="quad_out")
+
+def fade_out(node, t, duration):
+    node.key("opacity", t, 1.0)
+    node.key("opacity", t + duration, 0.0, ease="quad_in")
+
+def rise(node, x, y, t, distance, duration):
+    node.key("pos", t, (x, y + distance))
+    node.key("pos", t + duration, (x, y), ease="cubic_out")
+
+def scene(t_in, t_out, fade):
+    holder = group()
+    holder.pos = (960, 540)
+    holder.opacity = 0.0
+    holder.key("opacity", 0.0, 0.0)
+    holder.key("opacity", t_in, 0.0)
+    holder.key("opacity", t_in + 0.02, 1.0)
+    holder.key("opacity", t_out, 1.0)
+    holder.key("opacity", t_out + fade, 0.0, ease="quad_in")
+    holder.key("scale", t_out, 1.0)
+    holder.key("scale", t_out + fade, 0.94, ease="quad_in")
+    return holder
+
+def label(content, size, color, x, y):
+    node = text(content, size=size, color=color, align="center")
+    node.pos = (x, y)
+    return node
+
+# ---- background: dot grid and a slow ring (all scenes) ---------------------
+
+for row in range(13):
+    for col in range(25):
+        dot = circle(radius=2.5, fill=DIM)
+        dot.pos = (0 + col * 80, 60 + row * 80)
+        pop_in(dot, 0.05 + (col + row) * 0.02, 0.45)
+
+ring = group()
+ring.pos = (960, 520)
+ring.key("rotation", 0.0, 0.0)
+ring.key("rotation", 12.0, 150.0)
+ring.key("scale", 0.1, 0.0)
+ring.key("scale", 1.1, 1.0, ease="cubic_out")
+ring.key("opacity", 0.0, 0.55)
+ring.key("opacity", 3.0, 0.55)
+ring.key("opacity", 3.6, 0.25, ease="quad_out")
+ring.key("opacity", 6.4, 0.25)
+ring.key("opacity", 6.9, 0.12, ease="quad_out")
+ring.key("opacity", 9.6, 0.12)
+ring.key("opacity", 10.1, 0.35, ease="quad_out")
+for i in range(48):
+    angle = radians(i * 7.5)
+    length = 14
+    if i % 6 == 0:
+        length = 26
+    shade = EDGE
+    if i % 12 == 0:
+        shade = BLUE
+    tick = rect(4, length, radius=2, fill=shade)
+    tick.pos = (cos(angle) * 360, sin(angle) * 360)
+    tick.rotation = i * 7.5 + 90
+    ring.add(tick)
+
+# ---- scene 1: title --------------------------------------------------------
+
+# Scene 1 is cut (not faded) while the transition covers the screen.
+s1 = scene(0.0, 3.32, 0.02)
+s1.key("opacity", 0.0, 1.0)
+
+word = "MOTIONER"
+advances = [0.874, 0.688, 0.612, 0.272, 0.688, 0.713, 0.568, 0.630]
+size = 190
+total = 0
+for advance in advances:
+    total += advance * size
+cursor = -total / 2
+for i in range(len(word)):
+    width = advances[i] * size
+    letter = label(word[i], size, INK, cursor + width / 2, 40)
+    cursor += width
+    start = 0.55 + i * 0.07
+    rise(letter, cursor - width / 2, 40, start, 90, 0.7)
+    fade_in(letter, start, 0.3)
+    s1.add(letter)
+
+underline = rect(total, 6, radius=3, fill=BLUE)
+underline.pos = (0, 90)
+underline.key("scale", 1.0, (0.0, 1.0))
+underline.key("scale", 1.6, (1.0, 1.0), ease="cubic_in_out")
+s1.add(underline)
+
+for i in range(3):
+    accent = rect(46, 6, radius=3, fill=PALETTE[i + 2])
+    accent.pos = (total / 2 + 40 + i * 58, 90)
+    pop_in(accent, 1.45 + i * 0.08, 0.4)
+    s1.add(accent)
+
+kicker = label("MOTION GRAPHICS, WRITTEN AS CODE", 30, MUTED, 0, 170)
+rise(kicker, 0, 170, 1.5, 30, 0.6)
+fade_in(kicker, 1.5, 0.5)
+s1.add(kicker)
+
+# ---- scene 2: how it works --------------------------------------------------
+
+s2 = scene(3.34, 6.3, 0.35)
+
+heading = label("From code to frames", 72, INK, 0, -250)
+rise(heading, 0, -250, 3.45, 40, 0.6)
+s2.add(heading)
+eyebrow = label("HOW IT WORKS", 26, BLUE, 0, -335)
+fade_in(eyebrow, 3.45, 0.4)
+s2.add(eyebrow)
+
+titles = ["Program", "Overrides", "Pixels"]
+lines = ["title = text(\"Hi\")", "override_key(\"title\", ...)", "1920 x 1080 at 60 fps"]
+for i in range(3):
+    x = -540 + i * 540
+    card = group()
+    start = 3.65 + i * 0.16
+    rise(card, x, 60, start, 120, 0.7)
+    fade_in(card, start, 0.35)
+    body = rect(440, 280, radius=28, fill=CARD, stroke=EDGE, stroke_width=2)
+    card.add(body)
+    strip = rect(440, 8, radius=4, fill=PALETTE[i])
+    strip.pos = (0, -136)
+    card.add(strip)
+    number = label("0" + str(i + 1), 28, PALETTE[i], -170, -70)
+    card.add(number)
+    name = label(titles[i], 52, INK, 0, 10)
+    card.add(name)
+    code = label(lines[i], 24, MUTED, 0, 80)
+    card.add(code)
+    s2.add(card)
+
+# A packet travels card to card, twice.
+for lap in range(2):
+    packet = circle(radius=10, fill=AMBER)
+    t0 = 4.4 + lap * 0.9
+    packet.opacity = 0.0
+    packet.key("opacity", 0.0, 0.0)
+    packet.key("opacity", t0, 0.0)
+    packet.key("opacity", t0 + 0.1, 1.0)
+    packet.key("opacity", t0 + 0.8, 1.0)
+    packet.key("opacity", t0 + 0.9, 0.0)
+    packet.key("pos", t0, (-310, 60))
+    packet.key("pos", t0 + 0.4, (-230, 60), ease="cubic_in_out")
+    packet.key("pos", t0 + 0.45, (230, 60))
+    packet.key("pos", t0 + 0.85, (310, 60), ease="cubic_in_out")
+    s2.add(packet)
+
+for side in [-1, 1]:
+    for j in range(4):
+        link = circle(radius=4, fill=EDGE)
+        link.pos = (side * 270 + (j - 1.5) * 16, 60)
+        pop_in(link, 4.1 + j * 0.05, 0.3)
+        s2.add(link)
+
+# ---- scene 3: chart ---------------------------------------------------------
+
+s3 = scene(6.55, 9.3, 0.35)
+
+title3 = label("Frames per second, by build", 60, INK, 0, -300)
+rise(title3, 0, -300, 6.65, 40, 0.6)
+s3.add(title3)
+note = label("Higher is better. Measured on the reference laptop.", 26, MUTED, 0, -245)
+fade_in(note, 6.85, 0.5)
+s3.add(note)
+
+values = [24, 38, 52, 47, 66, 81, 74, 96, 118, 142]
+base = 300
+baseline = rect(1180, 3, radius=1.5, fill=EDGE)
+baseline.pos = (0, base)
+baseline.key("scale", 6.7, (0.0, 1.0))
+baseline.key("scale", 7.2, (1.0, 1.0), ease="cubic_out")
+s3.add(baseline)
+for i in range(len(values)):
+    x = -486 + i * 108
+    height = values[i] * 3.4
+    column = group()
+    column.pos = (x, base)
+    bar = rect(64, height, radius=10, fill=PALETTE[i % 5])
+    bar.pos = (0, -height / 2)
+    column.add(bar)
+    start = 6.9 + i * 0.07
+    column.key("scale", start, (1.0, 0.0))
+    column.key("scale", start + 0.6, (1.0, 1.0), ease="back_out")
+    s3.add(column)
+    tag = label("v0." + str(i + 1), 22, MUTED, x, base + 40)
+    fade_in(tag, start + 0.2, 0.3)
+    s3.add(tag)
+
+# Pulses above the best result.
+for i in range(3):
+    pulse = circle(radius=40, fill=None, stroke=CORAL, stroke_width=4)
+    pulse.pos = (-486 + 9 * 108, base - 142 * 3.4)
+    t0 = 7.9 + i * 0.35
+    pulse.opacity = 0.0
+    pulse.key("opacity", 0.0, 0.0)
+    pulse.key("opacity", t0, 0.9)
+    pulse.key("opacity", t0 + 0.9, 0.0, ease="quad_out")
+    pulse.key("scale", t0, 0.3)
+    pulse.key("scale", t0 + 0.9, 1.8, ease="cubic_out")
+    s3.add(pulse)
+best = label("142", 44, CORAL, -486 + 9 * 108, base - 142 * 3.4 - 60)
+pop_in(best, 7.8, 0.45)
+s3.add(best)
+
+# ---- scene 4: outro ---------------------------------------------------------
+
+s4 = scene(9.55, 20.0, 0.35)
+
+mark = group()
+mark.pos = (0, -60)
+pop_in(mark, 9.65, 0.7)
+mark.key("rotation", 9.65, -90.0)
+mark.key("rotation", 10.4, 45.0, ease="back_out")
+tile = rect(170, 170, radius=42, fill=BLUE)
+mark.add(tile)
+core = circle(radius=30, fill=INK)
+mark.add(core)
+s4.add(mark)
+
+orbit = group()
+orbit.pos = (0, -60)
+orbit.key("rotation", 9.6, 0.0)
+orbit.key("rotation", 12.0, 260.0, ease="cubic_out")
+for i in range(3):
+    moon = circle(radius=12, fill=[CORAL, AMBER, MINT][i])
+    angle = radians(i * 120)
+    moon.pos = (cos(angle) * 150, sin(angle) * 150)
+    pop_in(moon, 10.0 + i * 0.1, 0.4)
+    orbit.add(moon)
+s4.add(orbit)
+
+name4 = label("Motioner", 120, INK, 0, 235)
+rise(name4, 0, 235, 10.2, 50, 0.7)
+fade_in(name4, 10.2, 0.4)
+s4.add(name4)
+tagline = label("AI-first motion graphics, in Rust", 36, MUTED, 0, 300)
+fade_in(tagline, 10.6, 0.6)
+s4.add(tagline)
+
+# ---- transition 1 -> 2 (on top of the scenes) ------------------------------
+# A wide panel in the background colour trails three coloured panels (drawn
+# on top of it). While the
+# wide panel covers the screen (about 3.29-3.47 s) scene 1 is cut and scene 2
+# appears, so its trailing edge reveals scene 2 like a wipe.
+
+wipe = rect(3200, 1700, fill="#07080D")
+wipe.rotation = 14
+wipe.key("pos", 0.0, (-1800, 540))
+wipe.key("pos", 2.88, (-1800, 540))
+wipe.key("pos", 3.88, (3700, 540))
+
+for i in range(3):
+    panel = rect(700, 1700, fill=[BLUE, VIOLET, CORAL][i])
+    panel.rotation = 14
+    start = 2.7 + i * 0.06
+    panel.key("pos", 0.0, (-1200, 540))
+    panel.key("pos", start, (-1200, 540))
+    panel.key("pos", start + 1.0, (3400, 540))
+# Fade to black on top of everything.
+curtain = rect(1920, 1080, fill="#000000")
+curtain.pos = (960, 540)
+curtain.opacity = 0.0
+curtain.key("opacity", 0.0, 0.0)
+curtain.key("opacity", 11.4, 0.0)
+curtain.key("opacity", 12.0, 1.0, ease="quad_in")
