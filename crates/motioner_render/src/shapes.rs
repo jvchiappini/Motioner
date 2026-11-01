@@ -234,7 +234,7 @@ fn instance(
             style.z,
             1.0,
         ],
-        color: space::rgba(style.color, style.opacity),
+        color: space::linear_rgba(style.color, style.opacity),
         params: [border, corner_radius, 0.0, 1.0],
         ext0: [0.0; 4],
         ext1: 0.0,

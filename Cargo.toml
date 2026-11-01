@@ -41,6 +41,7 @@ ferrous_2d = { path = "engine/ferrous/crates/ferrous_2d" }
 ferrous_font = { path = "engine/ferrous/crates/ferrous_font" }
 ferrous_renderer = { path = "engine/ferrous/crates/ferrous_renderer", default-features = false }
 ferrous_engine = { path = "engine/ferrous/crates/ferrous_engine" }
+ferrous_gui = { path = "engine/ferrous/crates/ferrous_gui" }
 # Must match the engine's wgpu major version.
 wgpu = "23.0"
 glam = "0.29"

@@ -89,7 +89,8 @@ pub(crate) fn z_for(index: u32, total: u32) -> f32 {
 ///
 /// Applies the exact piecewise sRGB EOTF. Alpha is already linear coverage and
 /// must not go through this function.
-pub(crate) fn srgb_to_linear(value: u8) -> f32 {
+#[must_use]
+pub fn srgb_to_linear(value: u8) -> f32 {
     let channel = f32::from(value) / 255.0;
     if channel <= 0.040_45 {
         channel / 12.92
@@ -103,7 +104,8 @@ pub(crate) fn srgb_to_linear(value: u8) -> f32 {
 ///
 /// RGB goes through [`srgb_to_linear`]; the final alpha is
 /// `(colour.a / 255) * opacity`.
-pub(crate) fn rgba(color: motioner_core::Color, opacity: f64) -> [f32; 4] {
+#[must_use]
+pub fn linear_rgba(color: motioner_core::Color, opacity: f64) -> [f32; 4] {
     [
         srgb_to_linear(color.r),
         srgb_to_linear(color.g),

@@ -32,6 +32,10 @@ pub enum Action {
     ToggleLoop,
     /// Reload the document now (R).
     Reload,
+    /// Select the previous (`-1`) or next (`+1`) layer (Up/Down).
+    SelectRelative(i64),
+    /// Show or hide the safe-area guides (G).
+    ToggleSafeArea,
     /// Quit the window (Escape).
     Quit,
 }
@@ -43,6 +47,10 @@ pub enum Effect {
     None,
     /// The caller should reload the session.
     Reload,
+    /// The caller should move the layer selection by this many rows.
+    SelectRelative(i64),
+    /// The caller should toggle the safe-area guides.
+    ToggleSafeArea,
     /// The caller should close the window.
     Quit,
 }
@@ -59,9 +67,30 @@ pub fn action_for(key: KeyCode, modifiers: Modifiers) -> Option<Action> {
         KeyCode::End => Some(Action::GoToEnd),
         KeyCode::KeyL => Some(Action::ToggleLoop),
         KeyCode::KeyR => Some(Action::Reload),
+        KeyCode::ArrowUp => Some(Action::SelectRelative(-1)),
+        KeyCode::ArrowDown => Some(Action::SelectRelative(1)),
+        KeyCode::KeyG => Some(Action::ToggleSafeArea),
         KeyCode::Escape => Some(Action::Quit),
         _ => None,
     }
+}
+
+/// The row selected after moving `delta` rows from `current` in a list of
+/// `len` rows. With nothing selected, moving down selects the first row and
+/// moving up the last; the result is clamped and `None` for an empty list.
+#[must_use]
+pub fn step_selection(current: Option<usize>, len: usize, delta: i64) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    let next = match current {
+        Some(row) => {
+            let row = i64::try_from(row).unwrap_or(i64::MAX);
+            let last = i64::try_from(last).unwrap_or(i64::MAX);
+            usize::try_from(row.saturating_add(delta).clamp(0, last)).unwrap_or(0)
+        }
+        None if delta > 0 => 0,
+        None => last,
+    };
+    Some(next)
 }
 
 /// Applies `action` to `transport` and reports session-level effects.
@@ -88,6 +117,8 @@ pub fn apply(action: Action, transport: &mut Transport, now: Duration) -> Effect
             Effect::None
         }
         Action::Reload => Effect::Reload,
+        Action::SelectRelative(delta) => Effect::SelectRelative(delta),
+        Action::ToggleSafeArea => Effect::ToggleSafeArea,
         Action::Quit => Effect::Quit,
     }
 }
@@ -127,6 +158,18 @@ mod tests {
         assert_eq!(action_for(KeyCode::KeyL, plain), Some(Action::ToggleLoop));
         assert_eq!(action_for(KeyCode::KeyR, plain), Some(Action::Reload));
         assert_eq!(action_for(KeyCode::Escape, plain), Some(Action::Quit));
+        assert_eq!(
+            action_for(KeyCode::ArrowUp, plain),
+            Some(Action::SelectRelative(-1))
+        );
+        assert_eq!(
+            action_for(KeyCode::ArrowDown, plain),
+            Some(Action::SelectRelative(1))
+        );
+        assert_eq!(
+            action_for(KeyCode::KeyG, plain),
+            Some(Action::ToggleSafeArea)
+        );
         assert_eq!(action_for(KeyCode::KeyA, plain), None);
     }
 
@@ -151,6 +194,16 @@ mod tests {
     }
 
     #[test]
+    fn selection_steps_and_clamps() {
+        assert_eq!(step_selection(None, 0, 1), None);
+        assert_eq!(step_selection(None, 5, 1), Some(0));
+        assert_eq!(step_selection(None, 5, -1), Some(4));
+        assert_eq!(step_selection(Some(2), 5, 1), Some(3));
+        assert_eq!(step_selection(Some(0), 5, -1), Some(0));
+        assert_eq!(step_selection(Some(4), 5, 10), Some(4));
+    }
+
+    #[test]
     fn session_actions_do_not_touch_the_transport() {
         let mut transport = transport();
         transport.set_frame(7);
@@ -161,6 +214,14 @@ mod tests {
         assert_eq!(
             apply(Action::Quit, &mut transport, Duration::ZERO),
             Effect::Quit
+        );
+        assert_eq!(
+            apply(Action::SelectRelative(1), &mut transport, Duration::ZERO),
+            Effect::SelectRelative(1)
+        );
+        assert_eq!(
+            apply(Action::ToggleSafeArea, &mut transport, Duration::ZERO),
+            Effect::ToggleSafeArea
         );
         assert_eq!(transport.frame(), 7);
     }

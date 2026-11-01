@@ -1798,6 +1798,8 @@ name = "motioner_ui"
 version = "0.1.0"
 dependencies = [
  "ferrous_engine",
+ "ferrous_font",
+ "ferrous_gui",
  "ferrous_renderer",
  "motioner_core",
  "motioner_dsl",

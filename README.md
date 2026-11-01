@@ -60,7 +60,7 @@ crates/
   motioner_io/        MDF project format, assets, ffmpeg export
   motioner_app/       application binary and wiring
   motioner_testkit/   fixtures, golden frames, benchmarks
-  motioner_ui/        live preview window: viewport, transport, outline, hot reload
+  motioner_ui/        editor window: layers, canvas, inspector, timeline, hot reload
   motioner_dsl/       grammar, parser, printer, sandbox (Phase 5)
   motioner_ai/        providers, tools, context builder (Phase 5)
 .control/             project control system (source of truth for state)
@@ -79,14 +79,16 @@ motioner info    examples/hello.motion
 motioner preview examples/hello.motion
 ```
 
-`preview` opens the live window: the composition is letterboxed in a viewport,
-the top bar shows the file, canvas, frame and timecode, the left panel lists the
-scene, the transport plays, pauses, steps, scrubs and loops, and the status bar
-shows MDF diagnostics (red, with line and column). Saving the `.motion` file
-reloads it automatically. Shortcuts: Space play/pause, Left/Right step (Shift:
-10 frames), Home/End, L loop, R reload, Esc quit. `--frame N` sets the start,
-`--paused` opens without playing, and `--exit-after-frames N` closes the window
-after N presented frames (smoke tests and CI).
+`preview` opens the editor window: layers on the left, the composition
+letterboxed on a canvas, a read-only properties inspector on the right, and a
+timeline with transport, ruler, one track per layer and keyframes. Selection is
+shared by the canvas, the lists and the inspector; saving the `.motion` file
+reloads it, and MDF errors appear as a banner, a red file dot and a status-bar
+diagnostic. Shortcuts: Space play/pause, Left/Right step (Shift: 10), Up/Down
+select layer, Home/End, L loop, G safe areas, R reload, Esc quit. Options:
+`--frame N`, `--paused`, `--exit-after-frames N` (smoke tests and CI),
+`--window-size WxH`, `--ui-scale F` and `--select ROW` (screenshots, see
+`crates/motioner_ui/README.md`).
 
 ## Project control
 

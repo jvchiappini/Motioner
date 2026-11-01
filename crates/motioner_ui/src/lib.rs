@@ -25,20 +25,35 @@
     clippy::cast_sign_loss
 )]
 
+mod app;
+mod bounds;
 mod file_watch;
+mod icons;
 mod input;
+mod inspect;
+mod layout;
 mod outline;
+mod paint;
+mod panels;
 mod session;
+mod text;
+mod theme;
 mod timeline;
 mod transport;
+mod widgets;
 mod window;
 
+pub use bounds::{hit_node, node_bounds, Bounds, MeasureText};
 pub use file_watch::FileWatch;
 pub use input::{action_for, apply, Action, Effect, Modifiers};
+pub use inspect::{inspect_comp, inspect_node, Prop, Section, Value};
+pub use layout::{Hit, Layout, PanelSizes, Rect, Splitter, TransportButton};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use session::{DiagnosticInfo, PreviewSession, SessionError};
+pub use text::{advance, ellipsize, Glyphs, TextStyle};
+pub use theme::{Metrics, Srgb, Theme};
 pub use timeline::{
     frame_to_x, tick_frames, tick_spacing, x_to_frame, TickSpacing, TickUnit, MIN_TICK_SPACING_PX,
 };
 pub use transport::{elapsed_frames, skipped_frames, timecode, Transport};
-pub use window::{run_preview, PreviewOptions, UiError};
+pub use window::{run_preview, PreviewOptions, UiError, DEFAULT_WINDOW_SIZE};

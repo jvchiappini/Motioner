@@ -201,7 +201,7 @@ fn draw_text(
         transform,
         to_f32(size),
         text::align_to_engine(align),
-        space::rgba(color, item.opacity),
+        space::linear_rgba(color, item.opacity),
     );
     Some(missing)
 }

@@ -13,10 +13,10 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
 
 ## Working model (from 2026-10-31, session 008)
 
-- Code is written by opencode with DeepSeek V4.1 Flash.
-- Claude acts as architect and auditor: writes self-contained English
-  prompts for opencode, reviews diffs, runs checks, and only makes small
-  fixes. Conversation with the user is in Spanish.
+- Code is usually written by opencode with DeepSeek V4.1 Flash; Claude is
+  architect and auditor (prompts, reviews, checks, small fixes). Exception:
+  in session 012 Claude implemented the editor UI itself with a
+  screenshot loop. Conversation with the user is in Spanish.
 - Prompts live in `.control/prompts/opencode/opencode-prompt-NN-*.md`
   (05 is the last one). Work only inside the Motioner, FerrousEngine and
   GUIMaker folders.
@@ -100,8 +100,10 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
 - Git Bash rewrites '/x' args: use `MSYS_NO_PATHCONV=1` for
   `git sparse-checkout`.
 - Bash heredocs with mixed quotes broke; write files with the editor.
-- Disk: only ~9.3 GB free on C: (2026-10-31, after first render). Stop
-  below 8 GB; avoid release builds until space is freed. CARGO_INCREMENTAL=0.
+- Disk: 7.2 GB free on C: at the end of session 012 (user allowed going
+  below 8 GB; auto-mode blocks deleting %TEMP%). CARGO_INCREMENTAL=0.
+- PowerShell `Add-Type` fails while `LIB` lists a missing CUDA path: clear
+  `$env:LIB` first (done in the capture scripts).
 - 8 GB RAM: cargo with default parallelism can fail linking with
   `os error 1455` (paging file too small). Use `-j 2` for builds/tests.
 - D-0003 superseded by D-0011; MDF v0 subset frozen; `while`, `use`,
@@ -112,6 +114,21 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
 ## Reference machine
 
 Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
+
+## Editor UI (session 012)
+
+- `motioner preview` (crate `motioner_ui`, D-0020/D-0021): layers, canvas,
+  read-only inspector, timeline (ruler, tracks, keyframes), status bar,
+  selection sync, splitters, tooltips, error/empty/loading states. Chrome is
+  an immediate painter on the engine `GuiBatch`; tokens in `theme.rs` are
+  the only colour literals (sRGB hex via `motioner_render::srgb_to_linear`).
+- Engine pitfalls found: `Color::hex` does not linearise; `draw_text` takes
+  the em-box top; `GuiBatch::border/shadow` pack fields the shader ignores;
+  SVG meshes have no AA; surface lacks `COPY_SRC` (no in-app capture).
+- Screenshots: `scripts/ui_shot.ps1` (PrintWindow, no focus) into `out/ui/`;
+  hover cannot be synthesised. Commits: prompt 07 = 1a2ceea (Motioner),
+  engine Part A = 0ef6fe6 on the clone (not pushed). The redesign is
+  uncommitted until the user approves.
 
 ## Last relevant session
 

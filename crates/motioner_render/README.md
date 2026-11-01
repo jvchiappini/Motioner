@@ -77,8 +77,23 @@ impl LivePainter {
         plan: &motioner_eval::RenderPlan,
         fit: ViewFit,
     ) -> PaintStats;
+    pub fn text_extent(
+        &self,
+        renderer: &ferrous_renderer::Renderer,
+        text: &str,
+        size: f64,
+    ) -> Option<TextExtent>;
 }
+
+pub struct TextExtent { pub advance: f64, pub ascender: f64, pub descender: f64 }
+
+pub fn srgb_to_linear(value: u8) -> f32;
+pub fn linear_rgba(color: motioner_core::Color, opacity: f64) -> [f32; 4];
 ```
+
+`srgb_to_linear` is the workspace's single sRGB → linear conversion; the
+editor theme uses it for every UI colour. `TextExtent` (from
+`LivePainter::text_extent`) gives the editor selection bounds for text layers.
 
 `render` writes exactly `width * height * 4` bytes and reuses the allocation of
 `out`. A plan whose size differs from the renderer's is rejected with

@@ -36,12 +36,15 @@ Usage:
   motioner still   <file.motion> --frame N --out <file.png>
   motioner info    <file.motion>
   motioner preview <file.motion> [--frame N] [--paused] [--exit-after-frames N]
+                   [--window-size WxH] [--ui-scale F] [--select ROW]
   motioner --help
 
 Frames are integer indices. `render` draws the half-open range [from, to) and
 defaults to the whole composition. `still` draws one frame. `preview` opens the
 live editor window; `--exit-after-frames` closes it after N presented frames
-(for smoke runs and CI).";
+(for smoke runs and CI), `--window-size` sets the window in physical pixels,
+`--ui-scale` overrides the chrome scale (to check other DPI settings) and
+`--select` selects an outline row at startup.";
 
 /// Parsed command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +105,12 @@ struct PreviewArgs {
     paused: bool,
     /// Close the window after this many presented frames.
     exit_after_frames: Option<u64>,
+    /// Window size in physical pixels.
+    window_size: Option<(u32, u32)>,
+    /// Chrome scale override, stored in thousandths so the struct stays `Eq`.
+    ui_scale_milli: Option<u32>,
+    /// Outline row selected at startup.
+    select: Option<usize>,
 }
 
 /// Why the run stopped and with which exit code.
@@ -300,6 +309,9 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
     let mut frame = None;
     let mut paused = false;
     let mut exit_after_frames = None;
+    let mut window_size = None;
+    let mut ui_scale_milli = None;
+    let mut select = None;
     let mut index = 0;
     while index < args.len() {
         let Some(arg) = args[index].to_str() else {
@@ -318,6 +330,19 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
                 exit_after_frames = Some(count_value(args, index, "--exit-after-frames")?);
                 index += 2;
             }
+            "--window-size" => {
+                window_size = Some(size_value(args, index)?);
+                index += 2;
+            }
+            "--ui-scale" => {
+                ui_scale_milli = Some(scale_value(args, index)?);
+                index += 2;
+            }
+            "--select" => {
+                let row = count_value(args, index, "--select")?;
+                select = Some(usize::try_from(row).context("--select row is too large")?);
+                index += 2;
+            }
             other if other.starts_with("--") => bail!("unknown flag '{other}' for preview"),
             _ => {
                 if input.is_some() {
@@ -334,7 +359,48 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
         frame,
         paused,
         exit_after_frames,
+        window_size,
+        ui_scale_milli,
+        select,
     }))
+}
+
+/// Parses the `WxH` value of `--window-size`.
+fn size_value(args: &[OsString], index: usize) -> Result<(u32, u32)> {
+    let value = flag_value(args, index, "--window-size")?;
+    let text = value
+        .to_str()
+        .ok_or_else(|| anyhow!("the value of --window-size must be valid UTF-8"))?;
+    let (w, h) = text
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow!("--window-size expects WxH, got '{text}'"))?;
+    let w: u32 = w
+        .parse()
+        .with_context(|| format!("invalid width in '{text}'"))?;
+    let h: u32 = h
+        .parse()
+        .with_context(|| format!("invalid height in '{text}'"))?;
+    if !(320..=8192).contains(&w) || !(240..=8192).contains(&h) {
+        bail!("--window-size must be between 320x240 and 8192x8192, got '{text}'");
+    }
+    Ok((w, h))
+}
+
+/// Parses the `--ui-scale` factor (0.5 to 4.0) into thousandths.
+fn scale_value(args: &[OsString], index: usize) -> Result<u32> {
+    let value = flag_value(args, index, "--ui-scale")?;
+    let text = value
+        .to_str()
+        .ok_or_else(|| anyhow!("the value of --ui-scale must be valid UTF-8"))?;
+    let scale: f64 = text
+        .parse()
+        .with_context(|| format!("invalid scale '{text}' for --ui-scale"))?;
+    if !(0.5..=4.0).contains(&scale) {
+        bail!("--ui-scale must be between 0.5 and 4.0, got '{text}'");
+    }
+    // In range, so the rounded value fits in u32.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok((scale * 1000.0).round() as u32)
 }
 
 /// Reads the value that follows a flag, rejecting a missing value or another
@@ -375,6 +441,10 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         frame: args.frame,
         paused: args.paused,
         exit_after_frames: args.exit_after_frames,
+        window_size: args.window_size,
+        #[allow(clippy::cast_precision_loss)] // at most 4000
+        ui_scale: args.ui_scale_milli.map(|milli| milli as f32 / 1000.0),
+        select: args.select,
     };
     motioner_ui::run_preview(&args.input, options)?;
     Ok(())
@@ -652,6 +722,12 @@ mod tests {
                 "--paused",
                 "--exit-after-frames",
                 "600",
+                "--window-size",
+                "1280x720",
+                "--ui-scale",
+                "1.25",
+                "--select",
+                "3",
             ]))
             .unwrap(),
             Command::Preview(PreviewArgs {
@@ -659,6 +735,9 @@ mod tests {
                 frame: Some(42),
                 paused: true,
                 exit_after_frames: Some(600),
+                window_size: Some((1280, 720)),
+                ui_scale_milli: Some(1250),
+                select: Some(3),
             })
         );
     }
@@ -672,6 +751,9 @@ mod tests {
                 frame: None,
                 paused: false,
                 exit_after_frames: None,
+                window_size: None,
+                ui_scale_milli: None,
+                select: None,
             })
         );
     }
@@ -689,6 +771,10 @@ mod tests {
         .is_err());
         assert!(parse(&args(&["preview", "in.motion", "--bogus"])).is_err());
         assert!(parse(&args(&["preview", "a.motion", "b.motion"])).is_err());
+        assert!(parse(&args(&["preview", "a.motion", "--window-size", "1280"])).is_err());
+        assert!(parse(&args(&["preview", "a.motion", "--window-size", "10x10"])).is_err());
+        assert!(parse(&args(&["preview", "a.motion", "--ui-scale", "9"])).is_err());
+        assert!(parse(&args(&["preview", "a.motion", "--ui-scale", "big"])).is_err());
     }
 
     #[test]

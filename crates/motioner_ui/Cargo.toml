@@ -15,6 +15,9 @@ motioner_render = { workspace = true, features = ["live"] }
 # The window is the one consumer of the engine's app runner and UI pass.
 ferrous_engine.workspace = true
 ferrous_renderer.workspace = true
+# Names the UI batch, quad and font types the chrome draws with.
+ferrous_gui.workspace = true
+ferrous_font.workspace = true
 
 [dev-dependencies]
 png.workspace = true

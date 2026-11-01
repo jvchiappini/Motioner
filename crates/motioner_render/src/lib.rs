@@ -25,6 +25,7 @@ mod space;
 mod text;
 
 pub use fit::ViewFit;
+pub use space::{linear_rgba, srgb_to_linear};
 
 use std::collections::HashMap;
 use std::fmt;
@@ -155,6 +156,18 @@ pub struct PaintStats {
     /// Items skipped by evaluation because their transform or opacity was not
     /// finite.
     pub non_finite_items: u32,
+}
+
+/// Horizontal advance and vertical extent of one measured text line, in
+/// composition pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextExtent {
+    /// Pen advance including kerning.
+    pub advance: f64,
+    /// Distance from the baseline up to the ascender; positive.
+    pub ascender: f64,
+    /// Distance from the baseline down to the descender; negative.
+    pub descender: f64,
 }
 
 /// Per-frame counters reported by [`FrameRenderer::render`].
@@ -309,6 +322,27 @@ impl LivePainter {
     /// reported [`PaintStats::missing_glyphs`] would be stale.
     pub fn clear_cache(&mut self) {
         self.missing_glyphs.clear();
+    }
+
+    /// Measures one text line of the embedded font at `size` composition
+    /// pixels, for selection bounds and hit testing.
+    ///
+    /// Returns `None` when the engine cannot measure the line. The values are
+    /// in the same composition pixels as `size`, before any [`ViewFit`].
+    #[must_use]
+    pub fn text_extent(
+        &self,
+        renderer: &ferrous_renderer::Renderer,
+        text: &str,
+        size: f64,
+    ) -> Option<TextExtent> {
+        let size_px = space::to_f32(size);
+        let metrics = renderer.measure_text_2d(self.font, text, size_px, EngineTextAlign::Left)?;
+        Some(TextExtent {
+            advance: f64::from(metrics.advance),
+            ascender: f64::from(metrics.ascender),
+            descender: f64::from(metrics.descender),
+        })
     }
 
     /// Queues the plan's shapes and text into `renderer`, mapped by `fit`.

@@ -12,3 +12,4 @@
 - **T-ARCH-0004** — Scaffold the Cargo workspace and crate skeleton `[alta]` (actualizado 2026-10-31)
 - **T-ARCH-0005** — Pin FerrousEngine and document the update flow `[alta]` (actualizado 2026-10-31)
 - **T-ARCH-0006** — Set up CI, format and lint gates `[alta]` (actualizado 2026-10-31)
+- **T-UI-0001** — First editor window: motioner preview with live viewport, transport, timeline, outline, hot reload `[alta]` (actualizado 2026-10-31)
