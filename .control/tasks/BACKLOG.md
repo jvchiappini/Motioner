@@ -10,5 +10,7 @@
 - **T-PERF-0001** — Define performance budgets and benchmark plan `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0001** — Spike offscreen deterministic still frame `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0004** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
+- **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
+- **T-UI-0001** — First editor window: motioner preview with live viewport, transport, timeline, outline, hot reload `[alta]` (actualizado 2026-10-31)
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)

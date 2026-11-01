@@ -8,7 +8,15 @@ This crate is the only place in Motioner that talks to the engine. It converts
 an evaluated [`motioner_eval::RenderPlan`] into a headless frame using the
 engine's Pure2D path, then reads the frame back as straight-alpha sRGB RGBA8
 bytes with row 0 at the top. Engine types (`ferrous_*`, `wgpu`, `glam`) are
-private: they never appear in a public signature or a public error payload.
+private: with the default features they never appear in a public signature or a
+public error payload.
+
+The opt-in `live` feature (only `motioner_ui` enables it) adds `LivePainter`.
+It is the one documented exception: `LivePainter::new` and `paint` name
+`ferrous_renderer::Renderer` so the editor can paint the same plan into the
+window's Pure2D pass. `LivePainter` and `FrameRenderer` share the single
+"render plan item → engine draw" path, so the live preview and the export
+cannot drift apart.
 
 Rendering is deterministic. The only clock-dependent value is
 `FrameStats::cpu_ms`, which the engine measures and this crate merely reports.
@@ -44,11 +52,42 @@ pub enum RenderError {
     Font { message: String },
     Readback { message: String },
 }
+
+pub struct ViewFit { /* scale, world offset */ }
+
+pub struct PaintStats {
+    pub shape_draws: u32,
+    pub text_draws: u32,
+    pub missing_glyphs: u32,
+    pub non_finite_items: u32,
+}
+
+#[cfg(feature = "live")]
+pub struct LivePainter;
+
+#[cfg(feature = "live")]
+impl LivePainter {
+    pub fn new(
+        renderer: &mut ferrous_renderer::Renderer,
+    ) -> Result<Self, RenderError>;
+    pub fn paint(
+        &mut self,
+        renderer: &mut ferrous_renderer::Renderer,
+        document: &motioner_core::Document,
+        plan: &motioner_eval::RenderPlan,
+        fit: ViewFit,
+    ) -> PaintStats;
+}
 ```
 
 `render` writes exactly `width * height * 4` bytes and reuses the allocation of
 `out`. A plan whose size differs from the renderer's is rejected with
 `SizeMismatch` before any engine work happens.
+
+`ViewFit::contain(comp_w, comp_h, rect, window_w, window_h)` letterboxes a
+composition into a window rectangle (aspect preserved, centred) and returns a
+fit that draws nothing for a zero-size or non-finite input. `ViewFit::IDENTITY`
+is the mapping `FrameRenderer` uses, so its pixels are unchanged.
 
 ## Coordinate contract
 

@@ -32,13 +32,16 @@ const HELP: &str = "\
 Motioner - AI-first motion graphics
 
 Usage:
-  motioner render <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
-  motioner still  <file.motion> --frame N --out <file.png>
-  motioner info   <file.motion>
+  motioner render  <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
+  motioner still   <file.motion> --frame N --out <file.png>
+  motioner info    <file.motion>
+  motioner preview <file.motion> [--frame N] [--paused] [--exit-after-frames N]
   motioner --help
 
 Frames are integer indices. `render` draws the half-open range [from, to) and
-defaults to the whole composition. `still` draws one frame.";
+defaults to the whole composition. `still` draws one frame. `preview` opens the
+live editor window; `--exit-after-frames` closes it after N presented frames
+(for smoke runs and CI).";
 
 /// Parsed command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -49,6 +52,8 @@ enum Command {
     Still(StillArgs),
     /// Print composition information.
     Info(InfoArgs),
+    /// Open the live preview window.
+    Preview(PreviewArgs),
     /// Print usage.
     Help,
 }
@@ -86,6 +91,19 @@ struct InfoArgs {
     input: PathBuf,
 }
 
+/// Arguments of the `preview` command.
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewArgs {
+    /// MDF program.
+    input: PathBuf,
+    /// Initial frame.
+    frame: Option<i64>,
+    /// Start paused instead of playing.
+    paused: bool,
+    /// Close the window after this many presented frames.
+    exit_after_frames: Option<u64>,
+}
+
 /// Why the run stopped and with which exit code.
 enum Failure {
     /// An MDF lexical, parse or runtime diagnostic (exit code 2).
@@ -108,6 +126,12 @@ impl From<RenderError> for Failure {
 
 impl From<ExportError> for Failure {
     fn from(error: ExportError) -> Self {
+        Self::Error(error.into())
+    }
+}
+
+impl From<motioner_ui::UiError> for Failure {
+    fn from(error: motioner_ui::UiError) -> Self {
         Self::Error(error.into())
     }
 }
@@ -146,6 +170,7 @@ fn run(args: &[OsString]) -> Result<(), Failure> {
         Command::Info(args) => run_info(&args),
         Command::Still(args) => run_still(&args),
         Command::Render(args) => run_render(&args),
+        Command::Preview(args) => run_preview(&args),
     }
 }
 
@@ -162,6 +187,7 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "render" => parse_render(rest),
         "still" => parse_still(rest),
         "info" => parse_info(rest),
+        "preview" => parse_preview(rest),
         other => bail!("unknown command '{other}' (try --help)"),
     }
 }
@@ -268,6 +294,49 @@ fn parse_info(args: &[OsString]) -> Result<Command> {
     }))
 }
 
+/// Parses `preview <file> [--frame N] [--paused] [--exit-after-frames N]`.
+fn parse_preview(args: &[OsString]) -> Result<Command> {
+    let mut input = None;
+    let mut frame = None;
+    let mut paused = false;
+    let mut exit_after_frames = None;
+    let mut index = 0;
+    while index < args.len() {
+        let Some(arg) = args[index].to_str() else {
+            bail!("arguments must be valid UTF-8");
+        };
+        match arg {
+            "--frame" => {
+                frame = Some(frame_value(args, index, "--frame")?);
+                index += 2;
+            }
+            "--paused" => {
+                paused = true;
+                index += 1;
+            }
+            "--exit-after-frames" => {
+                exit_after_frames = Some(count_value(args, index, "--exit-after-frames")?);
+                index += 2;
+            }
+            other if other.starts_with("--") => bail!("unknown flag '{other}' for preview"),
+            _ => {
+                if input.is_some() {
+                    bail!("unexpected argument '{arg}' (already got the input file)");
+                }
+                input = Some(PathBuf::from(&args[index]));
+                index += 1;
+            }
+        }
+    }
+    let input = input.ok_or_else(|| anyhow!("preview needs an input .motion file"))?;
+    Ok(Command::Preview(PreviewArgs {
+        input,
+        frame,
+        paused,
+        exit_after_frames,
+    }))
+}
+
 /// Reads the value that follows a flag, rejecting a missing value or another
 /// flag.
 fn flag_value(args: &[OsString], index: usize, flag: &str) -> Result<OsString> {
@@ -288,6 +357,27 @@ fn frame_value(args: &[OsString], index: usize, flag: &str) -> Result<i64> {
         .ok_or_else(|| anyhow!("the value of {flag} must be valid UTF-8"))?;
     text.parse::<i64>()
         .with_context(|| format!("invalid frame number '{text}' for {flag}"))
+}
+
+/// Reads and parses the non-negative count that follows a flag.
+fn count_value(args: &[OsString], index: usize, flag: &str) -> Result<u64> {
+    let value = flag_value(args, index, flag)?;
+    let text = value
+        .to_str()
+        .ok_or_else(|| anyhow!("the value of {flag} must be valid UTF-8"))?;
+    text.parse::<u64>()
+        .with_context(|| format!("invalid frame count '{text}' for {flag}"))
+}
+
+/// Opens the live preview window.
+fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
+    let options = motioner_ui::PreviewOptions {
+        frame: args.frame,
+        paused: args.paused,
+        exit_after_frames: args.exit_after_frames,
+    };
+    motioner_ui::run_preview(&args.input, options)?;
+    Ok(())
 }
 
 /// Loads and executes an MDF program.
@@ -477,7 +567,7 @@ fn print_average(stage: &str, total: Duration, frames: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Command, RenderArgs, StillArgs};
+    use super::{parse, Command, PreviewArgs, RenderArgs, StillArgs};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -549,6 +639,56 @@ mod tests {
             parse(&args(&["info", "in.motion"])).unwrap(),
             Command::Info(_)
         ));
+    }
+
+    #[test]
+    fn parses_preview_with_all_options() {
+        assert_eq!(
+            parse(&args(&[
+                "preview",
+                "in.motion",
+                "--frame",
+                "42",
+                "--paused",
+                "--exit-after-frames",
+                "600",
+            ]))
+            .unwrap(),
+            Command::Preview(PreviewArgs {
+                input: PathBuf::from("in.motion"),
+                frame: Some(42),
+                paused: true,
+                exit_after_frames: Some(600),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_preview_defaults() {
+        assert_eq!(
+            parse(&args(&["preview", "in.motion"])).unwrap(),
+            Command::Preview(PreviewArgs {
+                input: PathBuf::from("in.motion"),
+                frame: None,
+                paused: false,
+                exit_after_frames: None,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_bad_preview_arguments() {
+        assert!(parse(&args(&["preview"])).is_err());
+        assert!(parse(&args(&["preview", "in.motion", "--frame"])).is_err());
+        assert!(parse(&args(&[
+            "preview",
+            "in.motion",
+            "--exit-after-frames",
+            "-1"
+        ]))
+        .is_err());
+        assert!(parse(&args(&["preview", "in.motion", "--bogus"])).is_err());
+        assert!(parse(&args(&["preview", "a.motion", "b.motion"])).is_err());
     }
 
     #[test]

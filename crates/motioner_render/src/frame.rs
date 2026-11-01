@@ -1,23 +1,24 @@
-//! Frame loop: clear colour, draw counting, submission and readback.
+//! Frame loop, plan painting, draw counting, submission and readback.
 //!
-//! The frame is built in two passes over the plan with no allocation: the first
-//! counts draws so [`crate::space::z_for`] can spread the painter order over a
-//! fixed depth window, and the second submits fill/stroke/text work in plan
-//! order. The engine sorts by `z`, so shapes and text interleave exactly in the
-//! order the evaluator produced.
+//! [`paint_plan`] is the single "render plan item → engine draws" path. The
+//! headless renderer and [`crate::LivePainter`] both call it, so the golden
+//! frame and the live preview cannot drift apart.
+//!
+//! The plan is walked twice with no allocation: the first pass counts draws so
+//! [`crate::space::z_for`] can spread the painter order over a fixed depth
+//! window, and the second submits fill/stroke/text work in plan order. The
+//! engine sorts by `z`, so shapes and text interleave exactly in the order the
+//! evaluator produced.
 
 use std::collections::HashMap;
 
+use ferrous_2d::render::FontId2d;
 use ferrous_renderer::headless::{HarnessError, Pure2dHarness, DEFAULT_FORMAT};
-use motioner_core::{Color, Document, NodeContent, TextAlign};
-use motioner_eval::{Affine2, ItemShape, RenderItem};
+use motioner_core::{Color, Document, NodeContent, NodeId, TextAlign};
+use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan};
 
 use crate::space::{self, to_f32};
-use crate::{shapes, text, FrameRenderer, FrameStats, RenderError};
-
-/// Roboto Regular, embedded so rendering never depends on the working
-/// directory. Any other requested family falls back to this font.
-const ROBOTO: &[u8] = include_bytes!("../../../engine/ferrous/assets/fonts/Roboto-Regular.ttf");
+use crate::{shapes, text, Canvas2d, FrameRenderer, FrameStats, PaintStats, RenderError, ROBOTO};
 
 /// Creates the engine harness, registers Roboto and wraps it in a
 /// [`FrameRenderer`].
@@ -56,7 +57,7 @@ fn map_harness_error(error: HarnessError) -> RenderError {
 pub(crate) fn render(
     renderer: &mut FrameRenderer,
     document: &Document,
-    plan: &motioner_eval::RenderPlan,
+    plan: &RenderPlan,
     out: &mut Vec<u8>,
 ) -> Result<FrameStats, RenderError> {
     if plan.width() != renderer.width || plan.height() != renderer.height {
@@ -69,43 +70,15 @@ pub(crate) fn render(
     apply_clear(renderer, plan.background());
     renderer.harness.begin_frame();
 
-    let mut total = 0u32;
-    for item in plan.items() {
-        total += match item.shape {
-            ItemShape::Text { .. } => 1,
-            _ => shapes::draw_count(&item.shape),
-        };
-    }
-
     let flip = space::composition_flip(renderer.width, renderer.height);
-    let mut z_index = 0u32;
-    let mut shape_draws = 0u32;
-    let mut text_draws = 0u32;
-    let mut missing_glyphs = 0u32;
-    for item in plan.items() {
-        match item.shape {
-            ItemShape::Text { size, color, align } => {
-                if let Some(missing) = draw_text(
-                    renderer,
-                    document,
-                    item,
-                    size,
-                    color,
-                    align,
-                    flip,
-                    &mut z_index,
-                    total,
-                ) {
-                    text_draws += 1;
-                    missing_glyphs = missing_glyphs.saturating_add(missing);
-                }
-            }
-            _ => {
-                shape_draws +=
-                    shapes::draw_item(&mut renderer.harness, item, flip, &mut z_index, total);
-            }
-        }
-    }
+    let stats = paint_plan(
+        &mut renderer.harness,
+        document,
+        plan,
+        flip,
+        renderer.font,
+        &mut renderer.missing_glyphs,
+    );
 
     let report = renderer.harness.render_frame();
     renderer
@@ -116,13 +89,67 @@ pub(crate) fn render(
         })?;
 
     Ok(FrameStats {
-        shape_draws,
-        text_draws,
+        shape_draws: stats.shape_draws,
+        text_draws: stats.text_draws,
         draw_calls: report.draw_calls,
-        missing_glyphs,
-        non_finite_items: plan.non_finite_items(),
+        missing_glyphs: stats.missing_glyphs,
+        non_finite_items: stats.non_finite_items,
         cpu_ms: report.cpu_ms,
     })
+}
+
+/// Paints one plan into a canvas and returns the draw counters.
+///
+/// `flip` maps composition pixels to world space, including any [`crate::ViewFit`]
+/// letterboxing. `font` and `missing_glyphs` are owned by the caller so the
+/// per-node glyph measurement cache survives across frames.
+pub(crate) fn paint_plan(
+    canvas: &mut impl Canvas2d,
+    document: &Document,
+    plan: &RenderPlan,
+    flip: Affine2,
+    font: FontId2d,
+    missing_glyphs: &mut HashMap<NodeId, u32>,
+) -> PaintStats {
+    let mut total = 0u32;
+    for item in plan.items() {
+        total += match item.shape {
+            ItemShape::Text { .. } => 1,
+            _ => shapes::draw_count(&item.shape),
+        };
+    }
+
+    let mut z_index = 0u32;
+    let mut stats = PaintStats {
+        non_finite_items: plan.non_finite_items(),
+        ..PaintStats::default()
+    };
+    for item in plan.items() {
+        match item.shape {
+            ItemShape::Text { size, color, align } => {
+                if let Some(missing) = draw_text(
+                    canvas,
+                    document,
+                    item,
+                    font,
+                    size,
+                    color,
+                    align,
+                    flip,
+                    missing_glyphs,
+                    &mut z_index,
+                    total,
+                ) {
+                    stats.text_draws += 1;
+                    stats.missing_glyphs = stats.missing_glyphs.saturating_add(missing);
+                }
+            }
+            _ => {
+                stats.shape_draws += shapes::draw_item(canvas, item, flip, &mut z_index, total);
+            }
+        }
+    }
+    stats
 }
 
 fn apply_clear(renderer: &mut FrameRenderer, background: Color) {
@@ -140,13 +167,15 @@ fn apply_clear(renderer: &mut FrameRenderer, background: Color) {
 
 #[allow(clippy::too_many_arguments)] // the text item's resolved fields, kept flat
 fn draw_text(
-    renderer: &mut FrameRenderer,
+    canvas: &mut impl Canvas2d,
     document: &Document,
     item: &RenderItem,
+    font: FontId2d,
     size: f64,
     color: Color,
     align: TextAlign,
     flip: Affine2,
+    missing_glyphs: &mut HashMap<NodeId, u32>,
     z_index: &mut u32,
     total: u32,
 ) -> Option<u32> {
@@ -155,20 +184,19 @@ fn draw_text(
         return None;
     };
 
-    let cached = renderer.missing_glyphs.get(&item.node).copied();
-    let missing = if let Some(count) = cached {
+    let missing = if let Some(count) = missing_glyphs.get(&item.node).copied() {
         count
     } else {
-        let count = text::count_missing(&renderer.harness, renderer.font, &content.text, size);
-        renderer.missing_glyphs.insert(item.node, count);
+        let count = text::count_missing(canvas, font, &content.text, size);
+        missing_glyphs.insert(item.node, count);
         count
     };
 
     let model = text::text_model(flip, item.transform);
     let transform = space::model_mat4(model, 1.0, 1.0, space::z_for(*z_index, total));
     *z_index += 1;
-    renderer.harness.draw_text(
-        renderer.font,
+    canvas.text(
+        font,
         &content.text,
         transform,
         to_f32(size),

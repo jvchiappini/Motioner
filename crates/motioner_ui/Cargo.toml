@@ -1,0 +1,24 @@
+[package]
+name = "motioner_ui"
+description = "Live preview window for Motioner compositions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_dsl.workspace = true
+motioner_eval.workspace = true
+motioner_render = { workspace = true, features = ["live"] }
+# The window is the one consumer of the engine's app runner and UI pass.
+ferrous_engine.workspace = true
+ferrous_renderer.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

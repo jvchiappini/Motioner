@@ -102,6 +102,8 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
 - Bash heredocs with mixed quotes broke; write files with the editor.
 - Disk: only ~9.3 GB free on C: (2026-10-31, after first render). Stop
   below 8 GB; avoid release builds until space is freed. CARGO_INCREMENTAL=0.
+- 8 GB RAM: cargo with default parallelism can fail linking with
+  `os error 1455` (paging file too small). Use `-j 2` for builds/tests.
 - D-0003 superseded by D-0011; MDF v0 subset frozen; `while`, `use`,
   dicts, overrides and LaTeX deferred to v0.1.
 - `origin` is jvchiappini/Motioner; do not touch Motioner-legacy; no

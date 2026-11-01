@@ -6,25 +6,126 @@
 //! target and read back as straight-alpha sRGB RGBA8 bytes.
 //!
 //! Engine types (`ferrous_*`, `wgpu`, `glam`) are an implementation detail: no
-//! public signature or public error payload in this crate mentions them. The
-//! renderer is deterministic — the only wall-clock value it reports is
+//! public signature or public error payload in this crate mentions them, with
+//! one documented exception. The `live` cargo feature exposes [`LivePainter`],
+//! whose `new` and `paint` methods name [`ferrous_renderer::Renderer`] so the
+//! editor can paint the same plan into the window's `Pure2D` pass. The default
+//! build stays engine-free at the API boundary.
+//!
+//! The renderer is deterministic — the only wall-clock value it reports is
 //! [`FrameStats::cpu_ms`], which is diagnostic and never drives a decision.
 //!
 //! The coordinate, colour, depth and text contracts are documented in the crate
-//! README and in the private `space`, `shapes` and `text` modules.
+//! README and in the private `space`, `shapes`, `text` and `fit` modules.
 
+mod fit;
 mod frame;
 mod shapes;
 mod space;
 mod text;
 
+pub use fit::ViewFit;
+
 use std::collections::HashMap;
 use std::fmt;
 
-use ferrous_2d::render::FontId2d;
+use ferrous_2d::render::{FontId2d, ShapeInstance};
+use ferrous_font::{LineMetrics, TextAlign as EngineTextAlign};
 use ferrous_renderer::headless::Pure2dHarness;
 use motioner_core::Document;
 use motioner_eval::RenderPlan;
+
+/// Roboto Regular, embedded so rendering never depends on the working
+/// directory. Any other requested family falls back to this font.
+pub(crate) const ROBOTO: &[u8] =
+    include_bytes!("../../../engine/ferrous/assets/fonts/Roboto-Regular.ttf");
+
+/// The single drawing surface abstraction shared by the headless and live
+/// paths.
+///
+/// Every "plan item → engine draw" decision lives above this trait; the two
+/// implementations only forward to the matching engine method. That is what
+/// guarantees the golden frame and the live preview cannot drift apart.
+trait Canvas2d {
+    /// Submits one shape instance.
+    fn shape(&mut self, instance: ShapeInstance);
+
+    /// Submits one text line with an already-built model matrix.
+    fn text(
+        &mut self,
+        font: FontId2d,
+        text: &str,
+        transform: glam::Mat4,
+        size_px: f32,
+        align: EngineTextAlign,
+        color: [f32; 4],
+    );
+
+    /// Measures one text line for the missing-glyph counter.
+    fn measure(
+        &self,
+        font: FontId2d,
+        text: &str,
+        size_px: f32,
+        align: EngineTextAlign,
+    ) -> Option<LineMetrics>;
+}
+
+impl Canvas2d for Pure2dHarness {
+    fn shape(&mut self, instance: ShapeInstance) {
+        self.draw_shape(instance);
+    }
+
+    fn text(
+        &mut self,
+        font: FontId2d,
+        text: &str,
+        transform: glam::Mat4,
+        size_px: f32,
+        align: EngineTextAlign,
+        color: [f32; 4],
+    ) {
+        self.draw_text(font, text, transform, size_px, align, color);
+    }
+
+    fn measure(
+        &self,
+        font: FontId2d,
+        text: &str,
+        size_px: f32,
+        align: EngineTextAlign,
+    ) -> Option<LineMetrics> {
+        self.measure_text(font, text, size_px, align)
+    }
+}
+
+impl Canvas2d for ferrous_renderer::Renderer {
+    fn shape(&mut self, instance: ShapeInstance) {
+        self.draw_2d_shape(instance);
+    }
+
+    fn text(
+        &mut self,
+        font: FontId2d,
+        text: &str,
+        transform: glam::Mat4,
+        size_px: f32,
+        align: EngineTextAlign,
+        color: [f32; 4],
+    ) {
+        self.draw_text_2d(font, text, transform, size_px, align, color);
+    }
+
+    fn measure(
+        &self,
+        font: FontId2d,
+        text: &str,
+        size_px: f32,
+        align: EngineTextAlign,
+    ) -> Option<LineMetrics> {
+        self.measure_text_2d(font, text, size_px, align)
+    }
+}
 
 /// A headless frame renderer bound to one composition size.
 ///
@@ -40,6 +141,20 @@ pub struct FrameRenderer {
     adapter_name: String,
     clear: Option<wgpu::Color>,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
+}
+
+/// Counters returned by one plan paint into a drawing surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PaintStats {
+    /// Fill and stroke instances submitted for shape items.
+    pub shape_draws: u32,
+    /// Text items submitted (one engine draw call per text line).
+    pub text_draws: u32,
+    /// Characters without a glyph, measured once per text node and cached.
+    pub missing_glyphs: u32,
+    /// Items skipped by evaluation because their transform or opacity was not
+    /// finite.
+    pub non_finite_items: u32,
 }
 
 /// Per-frame counters reported by [`FrameRenderer::render`].
@@ -147,5 +262,77 @@ impl FrameRenderer {
     #[must_use]
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+}
+
+/// Paints plans into a live [`ferrous_renderer::Renderer`].
+///
+/// This is the only public API of this crate that names an engine type; it is
+/// compiled only with the `live` feature, which only `motioner_ui` enables.
+/// The painter owns the embedded font registration and the per-node
+/// missing-glyph cache for one renderer, so a frame loop allocates nothing.
+///
+/// [`LivePainter::paint`] only queues shapes and text into the renderer's
+/// `Pure2D` batchers; it never clears, submits or presents. The engine runner
+/// draws the batchers later in the same frame, which is what puts the UI panels
+/// on top.
+#[cfg(feature = "live")]
+pub struct LivePainter {
+    font: FontId2d,
+    missing_glyphs: HashMap<motioner_core::NodeId, u32>,
+}
+
+#[cfg(feature = "live")]
+impl LivePainter {
+    /// Registers the embedded font with `renderer` and prepares a painter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Font`] when the font cannot be registered.
+    pub fn new(renderer: &mut ferrous_renderer::Renderer) -> Result<Self, RenderError> {
+        let font = renderer
+            .register_font_2d(ROBOTO, ferrous_font::charset::latin_western())
+            .map_err(|error| RenderError::Font {
+                message: error.to_string(),
+            })?;
+        Ok(Self {
+            font,
+            missing_glyphs: HashMap::new(),
+        })
+    }
+
+    /// Drops the cached per-node missing-glyph counts.
+    ///
+    /// Call this after loading a different document: node IDs are reused by a
+    /// new program, so a cached count could describe another text line. The
+    /// pixels are unaffected (glyph lookup happens in the engine), only the
+    /// reported [`PaintStats::missing_glyphs`] would be stale.
+    pub fn clear_cache(&mut self) {
+        self.missing_glyphs.clear();
+    }
+
+    /// Queues the plan's shapes and text into `renderer`, mapped by `fit`.
+    ///
+    /// A fit that draws nothing (for example a zero-size viewport) returns
+    /// zeroed [`PaintStats`] without touching the renderer.
+    pub fn paint(
+        &mut self,
+        renderer: &mut ferrous_renderer::Renderer,
+        document: &Document,
+        plan: &RenderPlan,
+        fit: ViewFit,
+    ) -> PaintStats {
+        if !fit.is_drawable() {
+            return PaintStats::default();
+        }
+        let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
+        frame::paint_plan(
+            renderer,
+            document,
+            plan,
+            flip,
+            self.font,
+            &mut self.missing_glyphs,
+        )
     }
 }

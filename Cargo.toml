@@ -8,9 +8,10 @@ members = [
     "crates/motioner_io",
     "crates/motioner_app",
     "crates/motioner_testkit",
+    "crates/motioner_ui",
 ]
 # FerrousEngine is a pinned submodule with its own workspace; its crates are
-# consumed as path dependencies by `motioner_render` only.
+# consumed as path dependencies by `motioner_render` and `motioner_ui` only.
 exclude = ["engine"]
 
 [workspace.package]
@@ -26,13 +27,20 @@ motioner_eval = { path = "crates/motioner_eval" }
 motioner_dsl = { path = "crates/motioner_dsl" }
 motioner_render = { path = "crates/motioner_render" }
 motioner_io = { path = "crates/motioner_io" }
+motioner_ui = { path = "crates/motioner_ui" }
 motioner_testkit = { path = "crates/motioner_testkit" }
 
 # FerrousEngine (pinned submodule, see engine/README.md). Only
-# `motioner_render` may depend on these.
+# `motioner_render` and `motioner_ui` may depend on these.
+#
+# Cargo unifies features across a build: when `motioner_ui` is built,
+# `ferrous_engine` pulls `ferrous_renderer` with its default `gui` feature on.
+# `motioner_render` must still build alone with `default-features = false`,
+# which is why that entry stays explicit (D-0019/D-0020).
 ferrous_2d = { path = "engine/ferrous/crates/ferrous_2d" }
 ferrous_font = { path = "engine/ferrous/crates/ferrous_font" }
 ferrous_renderer = { path = "engine/ferrous/crates/ferrous_renderer", default-features = false }
+ferrous_engine = { path = "engine/ferrous/crates/ferrous_engine" }
 # Must match the engine's wgpu major version.
 wgpu = "23.0"
 glam = "0.29"

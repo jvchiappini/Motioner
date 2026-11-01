@@ -9,10 +9,12 @@ them couples the editor to the renderer and breaks deterministic
 evaluation.
 
 New workspace crates must be added to FORBIDDEN_EDGES. External graphics
-or UI dependencies are detected by prefix. The renderer is the only crate
-allowed to use the engine's external graphics prefixes (wgpu, ferrous),
-declared as data in ALLOWED_PREFIXES. egui, eframe and guimaker stay
-forbidden for every crate.
+or UI dependencies are detected by prefix. Only the renderer and the editor
+UI (`motioner_ui`) may use the engine's external graphics prefixes (wgpu,
+ferrous), declared as data in ALLOWED_PREFIXES; `motioner_ui` may depend on
+the document, DSL, evaluator and renderer crates but not on I/O, AI, the
+application or the test kit. `motioner_app` may depend on `motioner_ui`.
+egui, eframe and guimaker stay forbidden for every crate.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ FORBIDDEN_PREFIXES = ("wgpu", "ferrous_", "ferrous", "egui", "guimaker", "eframe
 
 ALLOWED_PREFIXES = {
     "motioner_render": ("wgpu", "ferrous"),
+    "motioner_ui": ("wgpu", "ferrous"),
 }
 
 FORBIDDEN_EDGES = {
@@ -55,6 +58,12 @@ FORBIDDEN_EDGES = {
     "motioner_io": (
         "motioner_render",
         "motioner_ui",
+        "motioner_ai",
+        "motioner_app",
+        "motioner_testkit",
+    ),
+    "motioner_ui": (
+        "motioner_io",
         "motioner_ai",
         "motioner_app",
         "motioner_testkit",

@@ -10,11 +10,10 @@
 //! scale that single factor is an approximation (documented in the README).
 
 use ferrous_2d::render::ShapeInstance;
-use ferrous_renderer::headless::Pure2dHarness;
 use motioner_core::Color;
 use motioner_eval::{Affine2, ItemShape, RenderItem};
 
-use crate::space;
+use crate::{space, Canvas2d};
 
 /// Colour, opacity and depth shared by one shape instance.
 #[derive(Clone, Copy)]
@@ -51,7 +50,7 @@ fn has_visible_stroke(paint: &motioner_core::Paint) -> bool {
 /// Returns the number of instances submitted. `z_index` advances once per
 /// submitted instance so the caller's draw ordering matches [`draw_count`].
 pub(crate) fn draw_item(
-    harness: &mut Pure2dHarness,
+    canvas: &mut impl Canvas2d,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -73,7 +72,7 @@ pub(crate) fn draw_item(
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                harness.draw_shape(fill_rect(model, width, height, radius, scale, style));
+                canvas.shape(fill_rect(model, width, height, radius, scale, style));
                 *z_index += 1;
                 draws += 1;
             }
@@ -83,7 +82,7 @@ pub(crate) fn draw_item(
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                harness.draw_shape(stroke_rect(
+                canvas.shape(stroke_rect(
                     model,
                     width,
                     height,
@@ -105,7 +104,7 @@ pub(crate) fn draw_item(
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                harness.draw_shape(fill_circle(model, radius, scale, style));
+                canvas.shape(fill_circle(model, radius, scale, style));
                 *z_index += 1;
                 draws += 1;
             }
@@ -115,7 +114,7 @@ pub(crate) fn draw_item(
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                harness.draw_shape(stroke_circle(model, radius, scale, style, stroke.width));
+                canvas.shape(stroke_circle(model, radius, scale, style, stroke.width));
                 *z_index += 1;
                 draws += 1;
             }

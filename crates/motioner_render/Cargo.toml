@@ -16,6 +16,12 @@ ferrous_renderer.workspace = true
 wgpu.workspace = true
 glam.workspace = true
 
+[features]
+default = []
+# Enables `LivePainter`, the only public API that names a `ferrous_renderer`
+# type. Off by default so headless consumers keep an engine-free API boundary.
+live = []
+
 [dev-dependencies]
 motioner_dsl.workspace = true
 sha2.workspace = true
