@@ -22,7 +22,11 @@ accumulates opacity down the hierarchy and resolves paints.
   optional colour with a `none` endpoint holds (D-0028):
   `crates/motioner_eval/src/curve.rs:58-82`.
 - `RenderPlan` / `ItemShape` — the engine-free contract consumed by
-  `motioner_render`: `crates/motioner_eval/src/plan.rs:1-111`.
+  `motioner_render`: `crates/motioner_eval/src/plan.rs:1-125`.
+- `ResolvedPath` / the path arena — a path item stores an index and the plan
+  owns the sampled geometry, trim, dash and paint; items stay `Copy`
+  (D-0029): `crates/motioner_eval/src/plan.rs:41-62` and
+  `crates/motioner_eval/src/evaluate.rs:145-180`.
 
 ## Diagram
 
@@ -31,6 +35,7 @@ Not needed: one traversal, one output buffer.
 ## Relevant decisions
 
 - D-0028 — content channels, colour space and the golden policy.
+- D-0029 — path geometry travels in a plan arena, not inside `ItemShape`.
 
 ## Documentation status
 

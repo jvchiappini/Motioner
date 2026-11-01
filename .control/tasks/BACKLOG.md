@@ -10,7 +10,6 @@
 - **T-RENDER-0001** — Spike offscreen deterministic still frame `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0004** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
-- **T-RENDER-0007** — Vector paths and trim paths (path, polygon, star, arc, trim, dash) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0008** — Gradients for fill and stroke (linear and radial, animatable stops) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0009** — Blend modes (normal, add, multiply, screen, overlay, darken, lighten) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0010** — Effects: drop shadow, blur and glow with keyable parameters `[alta]` (actualizado 2026-11-01)

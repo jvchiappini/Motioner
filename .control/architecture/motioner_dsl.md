@@ -13,6 +13,10 @@ document, plus value origins and bake. The language is the project format
 - `Scene::key` — transform channels and content fields share one method; a
   content field has no axes and `text`/`align` reject keys:
   `crates/motioner_dsl/src/scene.rs:377-500`.
+- `Scene::path` / `polygon` / `star` / `arc` — build a `PathGeometry` from MDF
+  values; a point is `(x, y)` or `(x, y, in_dx, in_dy, out_dx, out_dy)` and
+  the paint/cap/join/trim/dash arguments map to content fields (D-0029):
+  `crates/motioner_dsl/src/scene.rs:243-400`.
 - `ValueOrigins` — the span, literal shape and ease of every written value, the
   input of the hybrid bake: `crates/motioner_dsl/src/origins.rs:52-174`.
 - `bake` — edits private literals in place, otherwise appends a generated

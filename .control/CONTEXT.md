@@ -9,22 +9,22 @@ version_schema: 1
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
 custom FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds
-the composition. Scope and decisions: REF-0001..0004, D-0010..D-0028.
+the composition. Scope and decisions: REF-0001..0004, D-0010..D-0029.
 
 ## Working model
 
 - Code is usually written by opencode with DeepSeek V4.1 Flash; Claude is
-  architect and auditor (prompts, reviews, checks, small fixes). Session 015
-  (opencode) ran prompt 10, phase 1 only. Conversation with the user is in
-  Spanish.
+  architect and auditor (prompts, reviews, checks, small fixes). Conversation
+  with the user is in Spanish.
 - Prompts live in `.control/prompts/{opencode,claude}/`. Work only inside
   Motioner, FerrousEngine and GUIMaker.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
-- Prompt 10 is a 12-phase job. Only the ADR and Phase 1 are done; every later
-  phase has a backlog task (T-RENDER-0007..0013, T-CORE-0002, T-UI-0006/0007,
+- Prompt 10 is a 12-phase job. **ADR, Phase 1 and Phase 2 are done.** The
+  user asked to stop after Phase 2, compact and resume. Every later phase
+  has its backlog task (T-RENDER-0008..0013, T-CORE-0002, T-UI-0006/0007,
   T-APP-0003, T-PERF-0002) with its design in the body.
 
-## Current state (branch feat/m1-foundations, session 015 uncommitted)
+## Current state (branch feat/m1-foundations, sessions 015 + 016 uncommitted)
 
 - `motioner render|still|info|bake|preview|query|edit|ctl`.
 - The editor EDITS through overrides (D-0022); the program only changes with
@@ -34,35 +34,45 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0028.
   `motioner query` (JSON scene), `motioner edit` (all-or-nothing,
   `--dry-run`), `preview --control` + `motioner ctl`. Docs: `docs/agents.md`.
 - **Canvas view (D-0026)**: `ViewState.zoom/pan/fit_zoom`;
-  `viewport::Viewport` is the one window ↔ composition mapping.
+  `viewport::Viewport` is the one window → composition mapping.
 - **Orphans (D-0025)**: `Editor::orphan_suggestions()` ranks live nodes.
 - **Hybrid bake (D-0027)**: value origins + in-place literal edits + re-key +
   verify.
 - **Professional motion model (D-0028, session 015)**: content fields are
-  animatable channels. `NodeContent` stores `Animatable<f64>` /
-  `Animatable<Color>` / `Animatable<Option<Color>>` (`PaintSpec` for
-  fill/stroke/stroke_width). `NodeContent::channel(field)` is the one
-  field-to-channel table. `Document::add_content_keyframe` /
-  `remove_content_keyframe` are the validated writes.
-  - Colour interpolation is **linear-light sRGB** (`Color::lerp`; the sRGB
-    transfer function moved to `motioner_core::Color` and the renderer
-    delegates to it). A keyed red→green midpoint is `#BCBC00`, not `#808000`.
-    An optional colour interpolates when both endpoints exist and holds when
-    one is `none`.
-  - `motioner_eval` samples channels into the plan (`resolved_paint`); a
-    stroke is drawn only when its colour is present and width > 0.
-  - MDF `key("fill"|"width"|"size"|...)`, overrides `override_key`, bake (in
-    place and generated block) and `query` all work on content channels.
-  - Editor: `editor::channels::Channel` = `Transform(property, axis)` |
-    `Content(field)`. Content timeline rows have stopwatches, diamonds and
-    eased lines; the inspector keys them at the playhead; `add_keys` keys all
-    animated channels; content channels appear in `query.channels`.
-  - `examples/animatable.motion` is the feature demo. Golden
-    `crates/motioner_testkit/golden/animatable_f45.png` (SHA `de69d526…`,
-    tolerance 2/0.1 %). `out/color_space_compare.png` justifies linear light.
+  animatable channels (`Animatable<f64|Color|Option<Color>>`), colour
+  interpolation is linear-light sRGB, optional colours hold on a `none`
+  endpoint. `NodeContent::channel(field)` is the one field table.
+  `examples/animatable.motion`, golden `animatable_f45.png`.
+- **Vector paths (D-0029, session 016)**: `path(points, closed, fill, stroke,
+  stroke_width, cap, join, trim_start, trim_end, trim_offset, dash,
+  dash_offset)`, helpers `polygon`, `star`, `arc`. A point is `(x, y)` or
+  `(x, y, in_dx, in_dy, out_dx, out_dy)` with relative handles.
+  - Geometry lives in `motioner_core::path`: adaptive flattening (0.1 px),
+    trim as a wrapping arc-length window, dash on=gap, even-odd containment,
+    local bounds. One implementation for render, bounds, tests.
+  - `NodeContent::Path` holds the geometry plus five animatable numeric
+    channels; `cap`/`join` are discrete content fields (settable, not keyable).
+  - The render plan has a path arena: `ItemShape::Path { index }` +
+    `RenderPlan::path(index)` → `ResolvedPath { geometry, trim, dash, paint }`
+    so items stay `Copy`.
+  - `motioner_render::paths` tessellates fill/stroke pieces with
+    `lyon_tessellation` into local triangles, marks internal edges hard,
+    caches per node by a hash of geometry+trim+dash+width+cap/join and
+    transforms per frame. `path_bounds` is public for the editor.
+  - Editor: path layers in the outline/inspector/timeline; trim/dash rows with
+    stopwatches and keys; cap/join text fields; selection bounds and picking
+    against fill or stroke; gizmo uses the node transform. Canvas point
+    editing is T-UI-0006.
+  - `examples/paths.motion` (960×540, 2 s): star, self-drawing arc, cubic
+    ribbon with a moving trim window, dashed hexagon with marching dashes.
+    Goldens `paths_f45.png` (SHA `d42669a9…`) and `paths_f80.png`
+    (SHA `c646efcd…`), tolerance 2/0.1 %.
 - Keyframes per axis; animated vectors are always keyed per axis (`pos.x`).
 - In-app screenshots: `preview --screenshot <png>` and `ctl screenshot(...)`;
   `scripts/ui_shot.ps1 [-Commands ...]`.
+- `query`: the `channels` object carries sampled values and keys; the
+  `content` object carries the authored **static** values (fixed in session
+  016; it used to emit malformed JSON for animatable content).
 
 ## Gotchas
 
@@ -70,30 +80,48 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0028.
   `submodules: true` and rely on `clippy -D warnings` instead.
 - `scripts/check_boundaries.py`: `motioner_ui` may not depend on
   `motioner_io`, so the app passes a `PngWriter` fn to the UI.
-- Disk: C: had ~9.0 GB free at session 015 end. CARGO_INCREMENTAL=0, `-j 2`.
-- **Engine screenshot hook**: the runner carries an `update`-time
-  `request_screenshot` into the capture decision; Motioner still requests in
-  `draw_ui`.
-- Windows PowerShell 5.1 drops unescaped `"` in arguments to native programs:
-  escape them (`'select(\"@288\")'`); a wrapper script with literal strings
-  plus that escape is the reliable way to drive `ui_shot.ps1`/`motioner edit`.
-- `core.autocrlf=true`: working copies are CRLF, commits are LF; normal.
-  Mixing `Set-Content` with existing LF files makes `cargo fmt --check` fail
-  with "Incorrect newline style"; run `cargo fmt` after.
+- **GPU tests flake when run in parallel** (`wgpu` device creation panic in
+  `motioner_render` integration tests). Run the suite with
+  `-- --test-threads=1`; the gate passes that way.
+- Disk: C: was ~6.0 GB free after Phase 2; deleting
+  `target/debug/incremental` brought it to ~7.7 GB. Keep `CARGO_INCREMENTAL=0`
+  and `-j 2`; stop below 5 GB.
+- `lyon` path builders must end the subpath: `builder.close()` for closed
+  pieces and `builder.end(false)` for open ones, or `build()` panics in debug.
+- lyon fill/stroke tessellators return triangles with exact shared vertices;
+  the edge map relies on that to mark internal edges hard (no seams).
+- Windows PowerShell 5.1 drops/duplicates `"` in native args. For
+  `ui_shot.ps1 -Commands`, pass plain `'select("ring")'` and let the script
+  escape it; adding `\"` yourself produces `\\"` and a parse error.
 - Bash heredocs containing `'''` break in this harness: write scripts to the
   scratchpad with the Write tool.
-- PowerShell `Add-Type` fails while `LIB` lists a missing CUDA path.
-- `cargo fmt` cannot split string literals: keep long strings < 100 columns.
+- PowerShell `Add-Content` appends *after* a module's closing brace; when
+  adding a test to a file that ends with `mod tests { ... }`, remove the
+  closing brace first and re-add it after the test.
+- PowerShell `Get-Content -Raw` + `Set-Content` with `\n` in a single-quoted
+  string inserts literal backslash-n; use the edit tool for multi-line edits.
+- `core.autocrlf=true`: working copies are CRLF, commits are LF; mixing
+  `Set-Content` with existing LF files makes `cargo fmt --check` fail with
+  "Incorrect newline style"; run `cargo fmt` after.
 - 8 GB RAM: cargo with default parallelism can fail linking (`os error 1455`).
-- Clippy enables `option_option`: use a named enum instead of
-  `Option<Option<T>>` (see `editor::channels::SampledColour`).
+- Clippy pedantic: `option_option`, `float_cmp`, `similar_names`,
+  `neg_cmp_op_on_partial_ord`, `cast_precision_loss`,
+  `cast_possible_truncation`, `too_many_lines` are all denied. Prefer
+  `f64::from(u32)`, tolerances instead of `assert_eq!` on floats, and split
+  long functions.
 
 ## FerrousEngine state
 
-- Pin `82f7210` on `feat/pure2d-text-and-readback` (pushed, not merged):
-  update-time screenshot request honoured (D-0023).
+- Pin `82f7210` on `feat/pure2d-text-and-readback` (pushed, not merged).
+- **Untouched by phases 1–2.** Pure2D already has the triangle SDF
+  (`ShapeInstance::polygon_triangle`), so paths render for real without an
+  engine change or a pin bump. The clone
+  `C:\Users\jvchi\CARPETAS\FerrousEngine` has no new commits from this work.
+- Likely needed later: gradient fills (Phase 3), blend pipelines (Phase 4),
+  offscreen layers + separable blur (Phase 5), masks/stencil (Phase 6),
+  TTF loading by family (Phase 7), image textures (Phase 8), motion-blur
+  accumulation (Phase 9).
 - Golden `hello_f120.png` SHA `c2173bad...` (still byte-identical).
-- Pre-existing engine warnings when the engine is linted on its own.
 
 ## GUIMaker facts (read via GitHub API, not cloned, 2026-10-31)
 
@@ -116,12 +144,14 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 - Visibility strips: solid where drawn, outline where not. Eased segments
   are solid lines following the ease. Inspector ease grid with curves.
 - Orphans rows: check icon = Rebind, error icon = delete.
-- Content rows (`fill`, `width`, `size`, ...) now draw the same controls as
-  transform rows; `text`/`align` rows stay static.
+- Content rows (`fill`, `width`, `size`, `trim_start`, `dash`, ...) draw the
+  same controls as transform rows; `text`/`align`/`cap`/`join` stay static.
+- Path layers use the "Path" icon (zigzag with end points); the outline
+  detail is "N pts[, closed]"; the inspector has Path, Fill sections.
 
 ## Last relevant session
 
-S-2026-11-01-005 (opencode, session 015): prompt 10, ADR D-0028 and Phase 1
-(animatable content properties) complete. Gates green. Next: Phase 2
-(T-RENDER-0007, vector paths) unless the engine pin constrains the render
-hook.
+S-2026-11-01-006 (opencode): prompt 10, Phase 2 (vector paths) complete,
+gates green. Next: Phase 3 (T-RENDER-0008, gradients) — first decide whether
+gradients can be done on the CPU (per-vertex/per-pixel) or need a Pure2D
+shader change, and ADR the gradient value model.

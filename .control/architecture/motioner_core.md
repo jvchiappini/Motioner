@@ -21,6 +21,11 @@ in the workspace and never touches the file system or a GPU.
   path for keyed content fields: `crates/motioner_core/src/document.rs:301-360`.
 - `Color` — sRGB with straight alpha, the shared linear-light transfer
   function and the interpolation midpoint: `crates/motioner_core/src/color.rs:39-150`.
+- `PathGeometry` — authored points with relative Bézier handles, adaptive
+  flattening (0.1 px), arc-length trim with wrap, dash splitting, even-odd
+  containment and local bounds; the one geometry implementation shared by
+  render, bounds and tests (D-0029):
+  `crates/motioner_core/src/path.rs:150-560`.
 - `OverrideSet` — the editor's edit layer and its canonical text (D-0022):
   `crates/motioner_core/src/overrides.rs:114-266`.
 
@@ -34,6 +39,7 @@ Not needed: the crate is a leaf and its public types are the diagram.
 - D-0028 — animatable content properties and linear-light colour
   interpolation.
 - D-0027 — value origins and the hybrid bake that consumes this model.
+- D-0029 — path authoring model and the lyon tessellation backend.
 
 ## Documentation status
 
