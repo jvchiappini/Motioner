@@ -1,57 +1,183 @@
-//! Read-only inspector model: what the properties panel shows.
+//! Editable inspector model and layout.
 //!
-//! [`inspect_node`] samples the selected node's transform at the current
-//! frame with the evaluator's own [`motioner_eval::sample`], so the panel
-//! shows exactly the values the frame was rendered with. [`inspect_comp`]
-//! describes the composition when nothing is selected. Both are pure and
-//! return display strings, so formatting is unit-tested without a window.
+//! [`inspect_node`] samples the selected node's transform and content at the
+//! current frame and turns them into [`Row`]s: one row per property, with the
+//! fields the user can edit, the stopwatch state of animatable channels and
+//! the keyframes of the channel at the playhead.
+//!
+//! [`layout`] turns a model into rectangles for drawing **and** hit testing, so
+//! what is drawn is exactly what is clickable. Everything here is pure: no
+//! input, no window, no GPU.
 
 use motioner_core::{
-    Color, Composition, Document, Frame, NodeContent, NodeId, Paint, TextAlign, Transform,
+    Color, Composition, ContentField, Document, Frame, NodeContent, NodeId, OverrideSet, Property,
+    TextAlign, Transform,
 };
 use motioner_eval::sample;
 
-use crate::outline::{number, NodeKind};
+use crate::layout::Rect;
+use crate::text_edit::TextEdit;
+use crate::theme::{size, Metrics};
 
-/// A displayed value.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    /// Two labelled fields side by side, such as `X 960` / `Y 480`.
-    Pair {
-        /// First field: short label and value.
-        first: (&'static str, String),
-        /// Second field: short label and value.
-        second: (&'static str, String),
-    },
-    /// One full-width field.
-    Text(String),
-    /// A colour swatch with its hex code.
-    Color(Color),
-    /// No value (for example "no fill").
+/// Which axis of a vector property a field edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    /// The only component (rotation, opacity).
+    Single,
+    /// X of a pair.
+    X,
+    /// Y of a pair.
+    Y,
+}
+
+impl Axis {
+    /// The core axis of a component, for calls that take one.
+    #[must_use]
+    pub const fn core(self) -> motioner_core::Axis {
+        match self {
+            Self::X | Self::Single => motioner_core::Axis::X,
+            Self::Y => motioner_core::Axis::Y,
+        }
+    }
+}
+
+/// What a field writes when it is edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldTarget {
+    /// A transform property (with its axis for pairs).
+    Transform(Property, Axis),
+    /// A content field.
+    Content(ContentField),
+    /// The text of a text layer.
+    Text,
+    /// The horizontal alignment of a text layer.
+    Align,
+    /// The display name of the layer.
+    Name,
+    /// The ease of the selected keys (inspector control).
+    Ease,
+    /// Not editable (composition summary rows).
     None,
 }
 
-/// One labelled property row.
+/// One numeric field of a row.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Prop {
+pub struct Field {
+    /// What an edit writes.
+    pub target: FieldTarget,
+    /// Short label inside the field ("X", "W", "").
+    pub label: &'static str,
+    /// The property value (scale 1.0, opacity 0.0..=1.0).
+    pub value: f64,
+    /// The text shown and edited (percent for scale and opacity).
+    pub text: String,
+    /// Multiplier from value to display number (100 for percentages).
+    pub factor: f64,
+    /// Unit suffix shown in the field ("%", "°").
+    pub suffix: &'static str,
+}
+
+impl Field {
+    /// The value a parsed display number means.
+    #[must_use]
+    pub fn value_of(&self, shown: f64) -> f64 {
+        shown / self.factor
+    }
+}
+
+/// The state of one animatable channel.
+///
+/// A vector property has one channel per axis: X and Y are keyed, sampled and
+/// shown independently, like After Effects' "separate dimensions".
+#[derive(Debug, Clone, PartialEq)]
+pub struct Channel {
+    /// The transform property.
+    pub property: Property,
+    /// The axis for vector properties (`None` for rotation and opacity).
+    pub axis: Option<motioner_core::Axis>,
+    /// Whether the channel has keyframes.
+    pub keyed: bool,
+    /// Whether the playhead sits exactly on a key.
+    pub on_key: bool,
+    /// Frames of the channel's keys, sorted.
+    pub frames: Vec<Frame>,
+}
+
+/// What one row shows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowValue {
+    /// Two numeric fields side by side.
+    Pair {
+        /// Left field.
+        left: Field,
+        /// Right field.
+        right: Field,
+    },
+    /// One numeric field.
+    Single(Field),
+    /// A colour swatch and its hex code.
+    Color {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The colour.
+        color: Color,
+        /// `#RRGGBB[AA]`.
+        text: String,
+    },
+    /// A free text field.
+    Text {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The text.
+        text: String,
+    },
+    /// A three-state segmented control.
+    Align {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The current alignment.
+        align: TextAlign,
+    },
+    /// Read-only text.
+    ReadOnly(String),
+}
+
+/// One inspector row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    /// Section this row belongs to; the panel draws a header when it changes.
+    pub section: &'static str,
     /// Row label.
     pub label: &'static str,
-    /// Displayed value.
-    pub value: Value,
-    /// Whether the property has keyframes.
-    pub animated: bool,
+    /// The value(s).
+    pub value: RowValue,
+    /// Animatable channel, when the row has a stopwatch and diamonds.
+    pub channel: Option<Channel>,
 }
 
-/// A titled group of property rows.
+/// Everything the inspector shows for a selection.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Section {
-    /// Section title, shown as a small caption.
-    pub title: &'static str,
+pub struct Model {
+    /// Header data (a selected layer) or `None` for the composition.
+    pub header: Option<Header>,
     /// Rows in display order.
-    pub props: Vec<Prop>,
+    pub rows: Vec<Row>,
 }
 
-/// Formats a colour as `#RRGGBB`, plus the alpha byte when it is not opaque.
+/// The selected layer's header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Header {
+    /// Display name (the `name` override when present).
+    pub name: String,
+    /// "Text layer", "Group layer", ...
+    pub kind: &'static str,
+    /// Stable identity key.
+    pub identity: String,
+    /// Whether the identity is explicit (`.id()`) or a provenance key.
+    pub explicit: bool,
+}
+
+/// Formats a colour as `#RRGGBB`, plus alpha when not opaque.
 #[must_use]
 pub fn hex(color: Color) -> String {
     if color.a == 255 {
@@ -64,267 +190,680 @@ pub fn hex(color: Color) -> String {
     }
 }
 
-fn fixed(value: f64) -> String {
-    let rounded = (value * 10.0).round() / 10.0;
-    let rounded = if rounded == 0.0 { 0.0 } else { rounded };
-    number(rounded)
+fn display(value: f64, factor: f64) -> String {
+    let shown = (value * factor * 10.0).round() / 10.0;
+    let shown = if shown == 0.0 { 0.0 } else { shown };
+    if shown.fract().abs() < 1e-9 {
+        format!("{shown:.0}")
+    } else {
+        format!("{shown:.1}")
+    }
 }
 
-fn percent(value: f64) -> String {
-    format!("{}%", fixed(value * 100.0))
-}
-
-fn prop(label: &'static str, value: Value, animated: bool) -> Prop {
-    Prop {
+fn field(
+    target: FieldTarget,
+    label: &'static str,
+    value: f64,
+    factor: f64,
+    suffix: &'static str,
+) -> Field {
+    Field {
+        target,
         label,
         value,
-        animated,
+        text: display(value, factor),
+        factor,
+        suffix,
     }
 }
 
-fn pair(
+fn channel(
+    t: &Transform,
+    property: Property,
+    axis: Option<motioner_core::Axis>,
+    frame: Frame,
+) -> Channel {
+    let frames: Vec<Frame> = match (property, axis) {
+        (Property::Position, Some(axis)) => t
+            .position
+            .axis(axis)
+            .keys()
+            .iter()
+            .map(|key| key.frame)
+            .collect(),
+        (Property::Scale, Some(axis)) => t
+            .scale
+            .axis(axis)
+            .keys()
+            .iter()
+            .map(|key| key.frame)
+            .collect(),
+        (Property::Anchor, Some(axis)) => t
+            .anchor
+            .axis(axis)
+            .keys()
+            .iter()
+            .map(|key| key.frame)
+            .collect(),
+        (Property::Rotation, _) => t.rotation.keys().iter().map(|key| key.frame).collect(),
+        (Property::Opacity, _) => t.opacity.keys().iter().map(|key| key.frame).collect(),
+        // A vector property without an axis takes the union of both axes.
+        (Property::Position, None) => t.position.key_frames(),
+        (Property::Scale, None) => t.scale.key_frames(),
+        (Property::Anchor, None) => t.anchor.key_frames(),
+    };
+    Channel {
+        property,
+        axis,
+        keyed: !frames.is_empty(),
+        on_key: frames.contains(&frame),
+        frames,
+    }
+}
+fn row(
+    section: &'static str,
     label: &'static str,
-    a: (&'static str, String),
-    b: (&'static str, String),
-    animated: bool,
-) -> Prop {
-    prop(
+    value: RowValue,
+    channel: Option<Channel>,
+) -> Row {
+    Row {
+        section,
         label,
-        Value::Pair {
-            first: a,
-            second: b,
-        },
-        animated,
-    )
-}
-
-/// Position, scale, rotation and anchor sampled at `frame`.
-fn transform_section(t: &Transform, frame: Frame) -> Section {
-    let position = sample(&t.position, frame);
-    let scale = sample(&t.scale, frame);
-    let anchor = sample(&t.anchor, frame);
-    let rotation = sample(&t.rotation, frame);
-    Section {
-        title: "Transform",
-        props: vec![
-            pair(
-                "Position",
-                ("X", fixed(position.x)),
-                ("Y", fixed(position.y)),
-                !t.position.keys().is_empty(),
-            ),
-            pair(
-                "Scale",
-                ("W", percent(scale.x)),
-                ("H", percent(scale.y)),
-                !t.scale.keys().is_empty(),
-            ),
-            prop(
-                "Rotation",
-                Value::Text(format!("{}°", fixed(rotation))),
-                !t.rotation.keys().is_empty(),
-            ),
-            pair(
-                "Anchor",
-                ("X", fixed(anchor.x)),
-                ("Y", fixed(anchor.y)),
-                !t.anchor.keys().is_empty(),
-            ),
-        ],
+        value,
+        channel,
     }
 }
 
-/// The sections shown for `node` at `frame`, or `None` if the node is gone.
-#[must_use]
-pub fn inspect_node(document: &Document, node: NodeId, frame: Frame) -> Option<Vec<Section>> {
-    let node = document.node(node)?;
-    let t = node.transform();
+fn transform_rows(t: &Transform, frame: Frame) -> Vec<Row> {
+    let mut rows = position_scale_rows(t, frame);
+    let anchor = motioner_eval::sample_vec2(&t.anchor, frame);
+    let rotation = sample(&t.rotation, frame);
     let opacity = sample(&t.opacity, frame).clamp(0.0, 1.0);
-    let mut sections = vec![transform_section(t, frame)];
+    rows.push(row(
+        "Transform",
+        "Rotation",
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Rotation, Axis::Single),
+            "",
+            rotation,
+            1.0,
+            "\u{00b0}",
+        )),
+        Some(channel(t, Property::Rotation, None, frame)),
+    ));
+    rows.push(row(
+        "Transform",
+        "Anchor X",
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Anchor, Axis::X),
+            "X",
+            anchor.x,
+            1.0,
+            "",
+        )),
+        Some(channel(t, Property::Anchor, Some(Axis::X.core()), frame)),
+    ));
+    rows.push(row(
+        "Transform",
+        "Anchor Y",
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Anchor, Axis::Y),
+            "Y",
+            anchor.y,
+            1.0,
+            "",
+        )),
+        Some(channel(t, Property::Anchor, Some(Axis::Y.core()), frame)),
+    ));
+    rows.push(row(
+        "Transform",
+        "Opacity",
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Opacity, Axis::Single),
+            "",
+            opacity,
+            100.0,
+            "%",
+        )),
+        Some(channel(t, Property::Opacity, None, frame)),
+    ));
+    rows
+}
 
-    match node.content() {
-        NodeContent::Group => {}
+/// Position and scale, one row per axis.
+fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
+    let position = motioner_eval::sample_vec2(&t.position, frame);
+    let scale = motioner_eval::sample_vec2(&t.scale, frame);
+    vec![
+        row(
+            "Transform",
+            "Pos X",
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Position, Axis::X),
+                "X",
+                position.x,
+                1.0,
+                "",
+            )),
+            Some(channel(t, Property::Position, Some(Axis::X.core()), frame)),
+        ),
+        row(
+            "Transform",
+            "Pos Y",
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Position, Axis::Y),
+                "Y",
+                position.y,
+                1.0,
+                "",
+            )),
+            Some(channel(t, Property::Position, Some(Axis::Y.core()), frame)),
+        ),
+        row(
+            "Transform",
+            "Scale X",
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Scale, Axis::X),
+                "W",
+                scale.x,
+                100.0,
+                "%",
+            )),
+            Some(channel(t, Property::Scale, Some(Axis::X.core()), frame)),
+        ),
+        row(
+            "Transform",
+            "Scale Y",
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Scale, Axis::Y),
+                "H",
+                scale.y,
+                100.0,
+                "%",
+            )),
+            Some(channel(t, Property::Scale, Some(Axis::Y.core()), frame)),
+        ),
+    ]
+}
+fn content_rows(content: &NodeContent) -> Vec<Row> {
+    match content {
+        NodeContent::Group => Vec::new(),
         NodeContent::Rect {
             width,
             height,
             radius,
             paint,
-        } => {
-            sections.push(Section {
-                title: "Shape",
-                props: vec![
-                    pair("Size", ("W", fixed(*width)), ("H", fixed(*height)), false),
-                    prop("Radius", Value::Text(fixed(*radius)), false),
-                ],
-            });
-            sections.push(appearance(
-                Some(paint),
-                None,
-                opacity,
-                !t.opacity.keys().is_empty(),
-            ));
-        }
-        NodeContent::Circle { radius, paint } => {
-            sections.push(Section {
-                title: "Shape",
-                props: vec![prop("Radius", Value::Text(fixed(*radius)), false)],
-            });
-            sections.push(appearance(
-                Some(paint),
-                None,
-                opacity,
-                !t.opacity.keys().is_empty(),
-            ));
-        }
-        NodeContent::Text(text) => {
-            let align = match text.align {
-                TextAlign::Left => "Left",
-                TextAlign::Center => "Center",
-                TextAlign::Right => "Right",
-            };
-            sections.push(Section {
-                title: "Text",
-                props: vec![
-                    prop("Content", Value::Text(text.text.replace('\n', " ")), false),
-                    prop("Font", Value::Text(font_label(&text.font)), false),
-                    pair(
-                        "Size",
-                        ("", format!("{} px", fixed(text.size))),
-                        ("", align.to_owned()),
-                        false,
-                    ),
-                ],
-            });
-            sections.push(appearance(
-                None,
-                Some(text.color),
-                opacity,
-                !t.opacity.keys().is_empty(),
-            ));
-        }
+        } => rect_rows(*width, *height, *radius, paint),
+        NodeContent::Circle { radius, paint } => circle_rows(*radius, paint),
+        NodeContent::Text(text) => text_rows(text),
     }
-    if matches!(node.content(), NodeContent::Group) {
-        sections.push(Section {
-            title: "Layer",
-            props: vec![
-                prop(
-                    "Opacity",
-                    Value::Text(percent(opacity)),
-                    !t.opacity.keys().is_empty(),
+}
+
+fn rect_rows(width: f64, height: f64, radius: f64, paint: &motioner_core::Paint) -> Vec<Row> {
+    let mut rows = vec![
+        row(
+            "Shape",
+            "Size",
+            RowValue::Pair {
+                left: field(
+                    FieldTarget::Content(ContentField::Width),
+                    "W",
+                    width,
+                    1.0,
+                    "",
                 ),
-                prop(
-                    "Children",
-                    Value::Text(node.children().len().to_string()),
-                    false,
+                right: field(
+                    FieldTarget::Content(ContentField::Height),
+                    "H",
+                    height,
+                    1.0,
+                    "",
                 ),
-            ],
+            },
+            None,
+        ),
+        row(
+            "Shape",
+            "Radius",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Radius),
+                "",
+                radius,
+                1.0,
+                "",
+            )),
+            None,
+        ),
+    ];
+    rows.extend(paint_rows(paint, true));
+    rows
+}
+
+fn circle_rows(radius: f64, paint: &motioner_core::Paint) -> Vec<Row> {
+    let mut rows = vec![row(
+        "Shape",
+        "Radius",
+        RowValue::Single(field(
+            FieldTarget::Content(ContentField::Radius),
+            "",
+            radius,
+            1.0,
+            "",
+        )),
+        None,
+    )];
+    rows.extend(paint_rows(paint, false));
+    rows
+}
+
+fn text_rows(text: &motioner_core::TextContent) -> Vec<Row> {
+    vec![
+        row(
+            "Text",
+            "Text",
+            RowValue::Text {
+                target: FieldTarget::Text,
+                text: text.text.clone(),
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Size",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Size),
+                "",
+                text.size,
+                1.0,
+                "",
+            )),
+            None,
+        ),
+        row(
+            "Text",
+            "Colour",
+            RowValue::Color {
+                target: FieldTarget::Content(ContentField::Color),
+                color: text.color,
+                text: hex(text.color),
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Align",
+            RowValue::Align {
+                target: FieldTarget::Align,
+                align: text.align,
+            },
+            None,
+        ),
+    ]
+}
+fn paint_rows(paint: &motioner_core::Paint, fill: bool) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if fill {
+        rows.push(match paint.fill {
+            Some(color) => row(
+                "Fill",
+                "Fill",
+                RowValue::Color {
+                    target: FieldTarget::Content(ContentField::Fill),
+                    color,
+                    text: hex(color),
+                },
+                None,
+            ),
+            None => row("Fill", "Fill", RowValue::ReadOnly("None".to_owned()), None),
         });
     }
-    Some(sections)
-}
-
-/// The requested family, flagged when the renderer substitutes the embedded
-/// Roboto (the only font the renderer ships today).
-fn font_label(family: &str) -> String {
-    if family.eq_ignore_ascii_case("roboto") {
-        family.to_owned()
-    } else {
-        format!("{family} (uses Roboto)")
-    }
-}
-
-fn appearance(
-    paint: Option<&Paint>,
-    color: Option<Color>,
-    opacity: f64,
-    opacity_animated: bool,
-) -> Section {
-    let mut props = Vec::new();
-    if let Some(color) = color {
-        props.push(prop("Color", Value::Color(color), false));
-    }
-    if let Some(paint) = paint {
-        props.push(prop(
+    let width = paint.stroke.map_or(0.0, |stroke| stroke.width);
+    rows.push(match paint.stroke {
+        Some(stroke) => row(
             "Fill",
-            paint.fill.map_or(Value::None, Value::Color),
-            false,
-        ));
-        match paint.stroke {
-            Some(stroke) => {
-                props.push(prop("Stroke", Value::Color(stroke.color), false));
-                props.push(prop(
-                    "Width",
-                    Value::Text(format!("{} px", fixed(stroke.width))),
-                    false,
-                ));
+            "Stroke",
+            RowValue::Color {
+                target: FieldTarget::Content(ContentField::Stroke),
+                color: stroke.color,
+                text: hex(stroke.color),
+            },
+            None,
+        ),
+        None => row(
+            "Fill",
+            "Stroke",
+            RowValue::ReadOnly("None".to_owned()),
+            None,
+        ),
+    });
+    rows.push(row(
+        "Fill",
+        "Width",
+        RowValue::Single(field(
+            FieldTarget::Content(ContentField::StrokeWidth),
+            "",
+            width,
+            1.0,
+            "",
+        )),
+        None,
+    ));
+    rows
+}
+
+/// A one-line kind label for the header.
+#[must_use]
+pub const fn kind_label(content: &NodeContent) -> &'static str {
+    match content {
+        NodeContent::Group => "Group layer",
+        NodeContent::Rect { .. } => "Rectangle layer",
+        NodeContent::Circle { .. } => "Circle layer",
+        NodeContent::Text(_) => "Text layer",
+    }
+}
+
+/// The display name of a node: its `name` override when present, otherwise a
+/// kind label with a running ordinal computed by `fallback`.
+fn display_name(
+    document: &Document,
+    node: NodeId,
+    overrides: Option<&OverrideSet>,
+) -> Option<String> {
+    let n = document.node(node)?;
+    if let Some(set) = overrides {
+        if let Some(entry) = set.get(n.identity().as_str(), motioner_core::NAME, None) {
+            if let motioner_core::OverrideAction::Set(motioner_core::OverrideValue::Text(text)) =
+                &entry.action
+            {
+                return Some(text.clone());
             }
-            None => props.push(prop("Stroke", Value::None, false)),
         }
     }
-    props.push(prop(
-        "Opacity",
-        Value::Text(percent(opacity)),
-        opacity_animated,
-    ));
-    Section {
-        title: "Appearance",
-        props,
-    }
+    Some(String::new())
 }
 
-/// The sections shown for the composition when nothing is selected.
+/// The rows shown for `node` at `frame`, or `None` if the node is gone.
+///
+/// `fallback_name` is the outline's generated name ("Circle 3"); a `name`
+/// override replaces it.
 #[must_use]
-pub fn inspect_comp(composition: &Composition, layers: usize) -> Vec<Section> {
+pub fn inspect_node(
+    document: &Document,
+    node: NodeId,
+    frame: Frame,
+    overrides: Option<&OverrideSet>,
+    fallback_name: &str,
+) -> Option<Model> {
+    let n = document.node(node)?;
+    let mut rows = transform_rows(n.transform(), frame);
+    rows.extend(content_rows(n.content()));
+    let name = display_name(document, node, overrides)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| fallback_name.to_owned());
+    let header = Header {
+        name: name.clone(),
+        kind: kind_label(n.content()),
+        identity: n.identity().as_str().to_owned(),
+        explicit: n.identity().is_explicit(),
+    };
+    rows.push(row(
+        "Layer",
+        "Name",
+        RowValue::Text {
+            target: FieldTarget::Name,
+            text: name,
+        },
+        None,
+    ));
+    Some(Model {
+        header: Some(header),
+        rows,
+    })
+}
+
+/// The rows shown for the composition when nothing is selected.
+#[must_use]
+pub fn inspect_comp(composition: &Composition, layers: usize) -> Model {
     let rate = composition.frame_rate();
     let frames = composition.duration();
-    let seconds = frames as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
     let fps = if rate.denominator() == 1 {
         rate.numerator().to_string()
     } else {
         format!("{:.3}", rate.as_f64())
     };
-    vec![
-        Section {
-            title: "Composition",
-            props: vec![
-                prop("Name", Value::Text(composition.name().to_owned()), false),
-                pair(
-                    "Size",
-                    ("W", composition.width().to_string()),
-                    ("H", composition.height().to_string()),
-                    false,
-                ),
-                pair(
-                    "Timing",
-                    ("", format!("{fps} fps")),
-                    ("", format!("{} s", fixed(seconds))),
-                    false,
-                ),
-                prop("Frames", Value::Text(frames.to_string()), false),
-                prop("Background", Value::Color(composition.background()), false),
-            ],
-        },
-        Section {
-            title: "Scene",
-            props: vec![prop("Layers", Value::Text(layers.to_string()), false)],
-        },
-    ]
+    let seconds = frames as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
+    let rows = vec![
+        row(
+            "Composition",
+            "Name",
+            RowValue::ReadOnly(composition.name().to_owned()),
+            None,
+        ),
+        row(
+            "Composition",
+            "Size",
+            RowValue::ReadOnly(format!(
+                "{} × {}",
+                composition.width(),
+                composition.height()
+            )),
+            None,
+        ),
+        row(
+            "Composition",
+            "Timing",
+            RowValue::ReadOnly(format!("{fps} fps · {seconds:.2} s")),
+            None,
+        ),
+        row(
+            "Composition",
+            "Frames",
+            RowValue::ReadOnly(frames.to_string()),
+            None,
+        ),
+        row(
+            "Composition",
+            "Background",
+            RowValue::Color {
+                target: FieldTarget::None,
+                color: composition.background(),
+                text: hex(composition.background()),
+            },
+            None,
+        ),
+        row(
+            "Scene",
+            "Layers",
+            RowValue::ReadOnly(layers.to_string()),
+            None,
+        ),
+    ];
+    Model { header: None, rows }
 }
 
-/// A one-line kind label for the inspector header.
-#[must_use]
-pub const fn kind_label(kind: NodeKind) -> &'static str {
-    match kind {
-        NodeKind::Group => "Group layer",
-        NodeKind::Rect => "Rectangle layer",
-        NodeKind::Circle => "Circle layer",
-        NodeKind::Text => "Text layer",
+/// The field currently being typed into.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Editing {
+    /// Field being edited.
+    pub target: FieldTarget,
+    /// The editor model.
+    pub editor: TextEdit,
+    /// Whether the current text does not parse.
+    pub invalid: bool,
+}
+
+/// One drawable/hit-testable item of the inspector body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    /// A section title.
+    Section {
+        /// Title.
+        title: &'static str,
+        /// Its rectangle.
+        rect: Rect,
+    },
+    /// One property row.
+    Row {
+        /// Index into [`Model::rows`].
+        index: usize,
+        /// The whole row.
+        rect: Rect,
+        /// The label (also the numeric scrub handle).
+        label: Rect,
+        /// Stopwatch button, when the row has a channel.
+        stopwatch: Option<Rect>,
+        /// Filled/outline key diamond, when the row has a channel.
+        diamond: Option<Rect>,
+        /// Editable fields with their targets.
+        fields: Vec<(Rect, FieldTarget)>,
+        /// Alignment segments (left, centre, right), when the row is Align.
+        segments: Option<[Rect; 3]>,
+    },
+    /// The selected layer's header (name, kind, identity, copy button).
+    Header {
+        /// The whole header block.
+        rect: Rect,
+        /// The "Copy" button next to the identity.
+        copy: Rect,
+    },
+}
+
+/// Rows and headers laid out for drawing and hit testing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+    /// Items top to bottom.
+    pub items: Vec<Item>,
+    /// Total content height, for scroll limits.
+    pub height: f32,
+}
+
+/// Lays the selected layer's header out and returns the next `y`.
+fn layout_header(
+    model: &Model,
+    left: f32,
+    right: f32,
+    y: f32,
+    m: Metrics,
+    items: &mut Vec<Item>,
+) -> f32 {
+    if model.header.is_none() {
+        return y;
     }
+    let h = m.px(56.0);
+    let rect = Rect::new(left, y, (right - left).max(0.0), h);
+    let copy = Rect::new(right - m.px(44.0), y + m.px(36.0), m.px(44.0), m.px(16.0));
+    items.push(Item::Header { rect, copy });
+    y + h + m.px(size::GRID * 3.0)
+}
+
+/// Lays `model` out inside `body`, scrolled by `scroll`.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
+    let pad = m.px(size::PAD);
+    let row_h = m.px(28.0);
+    let field_h = m.px(24.0);
+    let label_w = m.px(72.0);
+    let gap = m.px(size::GRID * 2.0);
+    let left = body.x + pad;
+    let right = body.right() - pad;
+    let value_x = left + label_w;
+    let value_w = (right - value_x).max(0.0);
+    let mut y = body.y - scroll + m.px(size::GRID * 3.0);
+    let top = y;
+    let mut items = Vec::new();
+
+    y = layout_header(model, left, right, y, m, &mut items);
+
+    let mut section = "";
+    for (index, row) in model.rows.iter().enumerate() {
+        if row.section != section {
+            section = row.section;
+            let rect = Rect::new(left, y, (right - left).max(0.0), m.px(24.0));
+            items.push(Item::Section {
+                title: section,
+                rect,
+            });
+            y += m.px(24.0);
+        }
+        let rect = Rect::new(left, y, (right - left).max(0.0), row_h);
+        let stopwatch = row.channel.as_ref().map(|_| {
+            Rect::new(
+                left,
+                (rect.center_y() - m.px(8.0)).round(),
+                m.px(16.0),
+                m.px(16.0),
+            )
+        });
+        let label_x = left + if stopwatch.is_some() { m.px(20.0) } else { 0.0 };
+        let label = Rect::new(label_x, y, label_w - gap, row_h);
+        let diamond = row.channel.as_ref().map(|channel| {
+            let side = m.px(10.0);
+            let _ = channel;
+            Rect::new(
+                (label_x + m.px(56.0)).min(value_x - m.px(14.0)),
+                (rect.center_y() - side * 0.5).round(),
+                side,
+                side,
+            )
+        });
+        let field_y = (rect.center_y() - field_h * 0.5).round();
+        let mut fields = Vec::new();
+        let mut segments = None;
+        match &row.value {
+            RowValue::Pair { left: a, right: b } => {
+                let half = ((value_w - gap) * 0.5).floor();
+                fields.push((Rect::new(value_x, field_y, half, field_h), a.target));
+                fields.push((
+                    Rect::new(value_x + half + gap, field_y, half, field_h),
+                    b.target,
+                ));
+            }
+            RowValue::Single(f) => {
+                fields.push((Rect::new(value_x, field_y, value_w, field_h), f.target));
+            }
+            RowValue::Color { target, .. } | RowValue::Text { target, .. } => {
+                fields.push((Rect::new(value_x, field_y, value_w, field_h), *target));
+            }
+            RowValue::Align { target, .. } => {
+                let seg_w = m.px(40.0);
+                let total = seg_w * 3.0;
+                let start = value_x;
+                let y_seg = field_y;
+                segments = Some([
+                    Rect::new(start, y_seg, seg_w, field_h),
+                    Rect::new(start + seg_w, y_seg, seg_w, field_h),
+                    Rect::new(start + seg_w * 2.0, y_seg, seg_w, field_h),
+                ]);
+                fields.push((Rect::new(start, y_seg, total, field_h), *target));
+            }
+            RowValue::ReadOnly(_) => {
+                fields.push((
+                    Rect::new(value_x, field_y, value_w, field_h),
+                    FieldTarget::None,
+                ));
+            }
+        }
+        items.push(Item::Row {
+            index,
+            rect,
+            label,
+            stopwatch,
+            diamond,
+            fields,
+            segments,
+        });
+        y += row_h;
+    }
+    let height = (y - top).max(0.0) + pad;
+    Layout { items, height }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::Metrics;
+    use motioner_core::{OverrideAction, OverrideEntry, OverrideValue};
 
     const HELLO: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -335,118 +874,187 @@ mod tests {
         motioner_dsl::run(HELLO, &motioner_dsl::Limits::default()).unwrap()
     }
 
-    fn find<'a>(sections: &'a [Section], title: &str, label: &str) -> &'a Prop {
-        sections
-            .iter()
-            .find(|s| s.title == title)
-            .and_then(|s| s.props.iter().find(|p| p.label == label))
-            .unwrap()
+    fn body() -> Rect {
+        Rect::new(0.0, 0.0, 320.0, 2000.0)
+    }
+
+    fn field_of<'a>(model: &'a Model, label: &str) -> &'a Row {
+        model.rows.iter().find(|r| r.label == label).unwrap()
     }
 
     #[test]
-    fn title_values_follow_the_frame() {
+    fn transform_values_follow_the_frame() {
         let document = hello();
         let title = document.roots()[0];
-        let start = inspect_node(&document, title, 0).unwrap();
-        let settled = inspect_node(&document, title, 120).unwrap();
-        let position = find(&start, "Transform", "Position");
-        assert!(position.animated);
-        assert_eq!(
-            position.value,
-            Value::Pair {
-                first: ("X", "960".to_owned()),
-                second: ("Y", "520".to_owned())
+        let start = inspect_node(&document, title, 0, None, "Title").unwrap();
+        let settled = inspect_node(&document, title, 120, None, "Title").unwrap();
+        let position_x = field_of(&start, "Pos X");
+        match &position_x.value {
+            RowValue::Single(field) => {
+                assert_eq!(field.text, "960");
+                assert_eq!(
+                    field.target,
+                    FieldTarget::Transform(Property::Position, Axis::X)
+                );
             }
-        );
-        assert_eq!(
-            find(&settled, "Transform", "Position").value,
-            Value::Pair {
-                first: ("X", "960".to_owned()),
-                second: ("Y", "480".to_owned())
-            }
-        );
-        assert_eq!(
-            find(&start, "Appearance", "Opacity").value,
-            Value::Text("0%".to_owned())
-        );
-        assert_eq!(
-            find(&settled, "Appearance", "Opacity").value,
-            Value::Text("100%".to_owned())
-        );
-        assert_eq!(
-            find(&settled, "Text", "Content").value,
-            Value::Text("Motioner".to_owned())
-        );
-        assert_eq!(
-            find(&settled, "Text", "Font").value,
-            Value::Text("Inter (uses Roboto)".to_owned())
-        );
-        assert!(!find(&settled, "Transform", "Rotation").animated);
+            other => panic!("{other:?}"),
+        }
+        match &field_of(&start, "Pos Y").value {
+            RowValue::Single(field) => assert_eq!(field.text, "520"),
+            other => panic!("{other:?}"),
+        }
+        // X and Y have their own channels and keys.
+        assert!(position_x.channel.as_ref().unwrap().keyed);
+        match &field_of(&settled, "Pos Y").value {
+            RowValue::Single(field) => assert_eq!(field.text, "480"),
+            other => panic!("{other:?}"),
+        }
+        let opacity = field_of(&settled, "Opacity");
+        assert!(opacity.channel.as_ref().unwrap().keyed);
+        match &opacity.value {
+            RowValue::Single(f) => assert_eq!(f.text, "100"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
-    fn shapes_report_size_and_paint() {
+    fn stopwatch_state_reports_keys_and_the_playhead() {
+        let document = hello();
+        let title = document.roots()[0];
+        let model = inspect_node(&document, title, 48, None, "Title").unwrap();
+        let opacity = field_of(&model, "Opacity").channel.clone().unwrap();
+        assert!(opacity.keyed);
+        assert!(opacity.on_key, "frame 48 is a key (0.8 s at 60 fps)");
+        assert_eq!(opacity.frames, vec![0, 48]);
+        let between = inspect_node(&document, title, 20, None, "Title").unwrap();
+        assert!(
+            !field_of(&between, "Opacity")
+                .channel
+                .as_ref()
+                .unwrap()
+                .on_key
+        );
+        let rotation = field_of(&between, "Rotation").channel.clone().unwrap();
+        assert!(!rotation.keyed);
+    }
+
+    #[test]
+    fn the_name_override_replaces_the_display_name() {
+        let document = hello();
+        let title = document.roots()[0];
+        let key = document.node(title).unwrap().identity().as_str().to_owned();
+        let mut set = OverrideSet::new();
+        set.insert(OverrideEntry::new(
+            key,
+            motioner_core::NAME,
+            OverrideAction::Set(OverrideValue::Text("Headline".to_owned())),
+        ));
+        let model = inspect_node(&document, title, 0, Some(&set), "Title").unwrap();
+        match &field_of(&model, "Name").value {
+            RowValue::Text { text, .. } => assert_eq!(text, "Headline"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn layout_matches_the_model_and_has_no_overlaps() {
+        let document = hello();
+        let title = document.roots()[0];
+        let model = inspect_node(&document, title, 0, None, "Title").unwrap();
+        let m = Metrics::new(1.0);
+        let out = layout(&model, body(), 0.0, m);
+        let rows: Vec<&Item> = out
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Row { .. }))
+            .collect();
+        assert_eq!(rows.len(), model.rows.len());
+        for pair in out.items.windows(2) {
+            let a = item_rect(&pair[0]);
+            let b = item_rect(&pair[1]);
+            assert!(
+                a.bottom() <= b.y + 1e-3 || b.bottom() <= a.y + 1e-3,
+                "items overlap: {a:?} {b:?}"
+            );
+        }
+        for item in &out.items {
+            if let Item::Row {
+                fields, diamond, ..
+            } = item
+            {
+                for (rect, _) in fields {
+                    assert!(rect.w > 0.0 && rect.h > 0.0);
+                }
+                if let Some(diamond) = diamond {
+                    assert!(diamond.right() <= fields.first().map_or(f32::INFINITY, |(r, _)| r.x));
+                }
+            }
+        }
+        // Scrolling moves everything up by the same amount.
+        let scrolled = layout(&model, body(), 40.0, m);
+        if let (Some(Item::Row { rect: a, .. }), Some(Item::Row { rect: b, .. })) =
+            (out.items.get(1), scrolled.items.get(1))
+        {
+            assert!((a.y - b.y - 40.0).abs() < 1e-3);
+        }
+    }
+
+    fn item_rect(item: &Item) -> Rect {
+        match item {
+            Item::Section { rect, .. } | Item::Header { rect, .. } | Item::Row { rect, .. } => {
+                *rect
+            }
+        }
+    }
+
+    #[test]
+    fn content_rows_match_the_node_kind() {
         let document = hello();
         let rows = crate::outline_rows(&document);
-        let rect = rows.iter().find(|r| r.kind == NodeKind::Rect).unwrap();
-        let sections = inspect_node(&document, rect.node, 0).unwrap();
-        assert_eq!(
-            find(&sections, "Shape", "Size").value,
-            Value::Pair {
-                first: ("W", "96".to_owned()),
-                second: ("H", "96".to_owned())
-            }
-        );
-        assert_eq!(
-            find(&sections, "Appearance", "Fill").value,
-            Value::Color(Color::rgb(0x2a, 0x2a, 0x40))
-        );
-        assert_eq!(
-            find(&sections, "Appearance", "Width").value,
-            Value::Text("4 px".to_owned())
-        );
+        let rect = rows
+            .iter()
+            .find(|r| r.kind == crate::NodeKind::Rect)
+            .unwrap();
+        let model = inspect_node(&document, rect.node, 0, None, "Rect 1").unwrap();
+        let labels: Vec<_> = model.rows.iter().map(|r| r.label).collect();
+        assert!(labels.contains(&"Size"));
+        assert!(labels.contains(&"Radius"));
+        assert!(labels.contains(&"Fill"));
+        assert!(labels.contains(&"Width"));
+        let text = inspect_node(&document, document.roots()[0], 0, None, "Title").unwrap();
+        assert!(text.rows.iter().any(|r| r.label == "Text"));
+        assert!(text.rows.iter().any(|r| r.label == "Align"));
     }
 
     #[test]
-    fn composition_summary() {
+    fn composition_rows_are_read_only() {
         let document = hello();
-        let sections = inspect_comp(document.composition(), 10);
-        assert_eq!(
-            find(&sections, "Composition", "Frames").value,
-            Value::Text("300".to_owned())
-        );
-        assert_eq!(
-            find(&sections, "Composition", "Timing").value,
-            Value::Pair {
-                first: ("", "60 fps".to_owned()),
-                second: ("", "5 s".to_owned())
+        let model = inspect_comp(document.composition(), 10);
+        assert!(model.header.is_none());
+        let m = Metrics::new(1.0);
+        let out = layout(&model, body(), 0.0, m);
+        // Only the background swatch is clickable, and it writes nothing.
+        assert!(out.items.iter().all(|item| match item {
+            Item::Row {
+                fields, segments, ..
+            } => {
+                segments.is_none()
+                    && fields
+                        .iter()
+                        .all(|(_, target)| *target == FieldTarget::None)
             }
-        );
-    }
-
-    #[test]
-    fn hex_codes() {
-        assert_eq!(hex(Color::rgb(0x0b, 0x0b, 0x12)), "#0B0B12");
-        assert_eq!(
-            hex(Color {
-                r: 1,
-                g: 2,
-                b: 3,
-                a: 4
-            }),
-            "#01020304"
-        );
+            _ => true,
+        }));
     }
 
     #[test]
     fn a_missing_node_inspects_to_none() {
-        let document = hello();
         let other = motioner_dsl::run(
             "comp(name=\"A\", duration=1.0)\n",
             &motioner_dsl::Limits::default(),
         )
         .unwrap();
-        assert!(other.is_empty());
-        assert!(inspect_node(&other, document.roots()[0], 0).is_none());
+        let document = hello();
+        assert!(inspect_node(&other, document.roots()[0], 0, None, "Title").is_none());
     }
 }

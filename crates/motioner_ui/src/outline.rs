@@ -152,11 +152,10 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
 pub fn keyframe_frames(transform: &Transform) -> Vec<Frame> {
     let mut frames: Vec<Frame> = transform
         .position
-        .keys()
-        .iter()
-        .map(|k| k.frame)
-        .chain(transform.scale.keys().iter().map(|k| k.frame))
-        .chain(transform.anchor.keys().iter().map(|k| k.frame))
+        .key_frames()
+        .into_iter()
+        .chain(transform.scale.key_frames())
+        .chain(transform.anchor.key_frames())
         .chain(transform.rotation.keys().iter().map(|k| k.frame))
         .chain(transform.opacity.keys().iter().map(|k| k.frame))
         .collect();
@@ -164,7 +163,6 @@ pub fn keyframe_frames(transform: &Transform) -> Vec<Frame> {
     frames.dedup();
     frames
 }
-
 /// Formats a size for display: integers without decimals, others with one.
 #[must_use]
 pub fn number(value: f64) -> String {

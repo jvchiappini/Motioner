@@ -27,7 +27,10 @@
 
 mod app;
 mod bounds;
+mod clipboard;
+mod edit;
 mod file_watch;
+mod gizmo;
 mod icons;
 mod input;
 mod inspect;
@@ -37,23 +40,34 @@ mod paint;
 mod panels;
 mod session;
 mod text;
+mod text_edit;
 mod theme;
 mod timeline;
+mod timeline_model;
 mod transport;
 mod widgets;
 mod window;
 
-pub use bounds::{hit_node, node_bounds, Bounds, MeasureText};
+pub use bounds::{hit_node, hit_node_where, node_bounds, Bounds, MeasureText};
+pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack};
 pub use file_watch::FileWatch;
+pub use gizmo::{Corner, Guide, Handle};
 pub use input::{action_for, apply, Action, Effect, Modifiers};
-pub use inspect::{inspect_comp, inspect_node, Prop, Section, Value};
-pub use layout::{Hit, Layout, PanelSizes, Rect, Splitter, TransportButton};
+pub use inspect::{
+    hex, inspect_comp, inspect_node, kind_label, Axis, Channel, Editing, Field, FieldTarget,
+    Header, Item, Layout as InspectLayout, Model as InspectModel, Row, RowValue,
+};
+pub use layout::{Hit, Layout, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
-pub use session::{DiagnosticInfo, PreviewSession, SessionError};
+pub use session::{
+    overrides_path, write_atomic, DiagnosticInfo, PreviewSession, SessionError, WRITE_DEBOUNCE,
+};
 pub use text::{advance, ellipsize, Glyphs, TextStyle};
+pub use text_edit::{EditKey, TextEdit};
 pub use theme::{Metrics, Srgb, Theme};
 pub use timeline::{
     frame_to_x, tick_frames, tick_spacing, x_to_frame, TickSpacing, TickUnit, MIN_TICK_SPACING_PX,
 };
+pub use timeline_model::{RowKind as TimelineRowKind, TimelineRow, TimelineRows, VisibleRun};
 pub use transport::{elapsed_frames, skipped_frames, timecode, Transport};
 pub use window::{run_preview, PreviewOptions, UiError, DEFAULT_WINDOW_SIZE};

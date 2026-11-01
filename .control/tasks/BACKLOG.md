@@ -2,7 +2,6 @@
 
 (generado por `pctl reindex` — no editar a mano)
 
-- **T-DSL-0002** — Define provenance, override and bake semantics `[critica]` (actualizado 2026-10-31)
 - **T-0001** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
 - **T-ARCH-0007** — Run UI toolkit spike for dock, virtualized list and bezier editor `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0001** — Specify project format v0 `[alta]` (actualizado 2026-10-31)

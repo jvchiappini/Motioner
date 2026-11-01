@@ -10,11 +10,16 @@ use ferrous_engine::KeyCode;
 
 use crate::Transport;
 
-/// Modifier state relevant to the preview shortcuts.
+/// Modifier state relevant to the editor shortcuts.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers {
-    /// Shift is held (step ten frames instead of one).
+    /// Shift is held.
     pub shift: bool,
+    /// Ctrl is held.
+    pub ctrl: bool,
+    /// Alt is held (axis lock on the canvas, fine scrub steps).
+    pub alt: bool,
 }
 
 /// A keyboard shortcut.
@@ -38,6 +43,16 @@ pub enum Action {
     ToggleSafeArea,
     /// Quit the window (Escape).
     Quit,
+    /// Add keys at the playhead (K).
+    AddKeys,
+    /// Show only animated properties in the timeline (U).
+    ToggleOnlyAnimated,
+    /// Delete the selected keys (Delete).
+    DeleteKeys,
+    /// Undo (Ctrl+Z).
+    Undo,
+    /// Redo (Ctrl+Shift+Z or Ctrl+Y).
+    Redo,
 }
 
 /// What [`apply`] did beyond the transport.
@@ -51,6 +66,8 @@ pub enum Effect {
     SelectRelative(i64),
     /// The caller should toggle the safe-area guides.
     ToggleSafeArea,
+    /// The caller should add or remove keys.
+    Edit(Action),
     /// The caller should close the window.
     Quit,
 }
@@ -59,6 +76,14 @@ pub enum Effect {
 #[must_use]
 pub fn action_for(key: KeyCode, modifiers: Modifiers) -> Option<Action> {
     let step = if modifiers.shift { 10 } else { 1 };
+    if modifiers.ctrl {
+        return match key {
+            KeyCode::KeyZ if modifiers.shift => Some(Action::Redo),
+            KeyCode::KeyZ => Some(Action::Undo),
+            KeyCode::KeyY => Some(Action::Redo),
+            _ => None,
+        };
+    }
     match key {
         KeyCode::Space => Some(Action::TogglePlay),
         KeyCode::ArrowLeft => Some(Action::Step(-step)),
@@ -70,6 +95,9 @@ pub fn action_for(key: KeyCode, modifiers: Modifiers) -> Option<Action> {
         KeyCode::ArrowUp => Some(Action::SelectRelative(-1)),
         KeyCode::ArrowDown => Some(Action::SelectRelative(1)),
         KeyCode::KeyG => Some(Action::ToggleSafeArea),
+        KeyCode::KeyK => Some(Action::AddKeys),
+        KeyCode::KeyU => Some(Action::ToggleOnlyAnimated),
+        KeyCode::Delete => Some(Action::DeleteKeys),
         KeyCode::Escape => Some(Action::Quit),
         _ => None,
     }
@@ -120,6 +148,11 @@ pub fn apply(action: Action, transport: &mut Transport, now: Duration) -> Effect
         Action::SelectRelative(delta) => Effect::SelectRelative(delta),
         Action::ToggleSafeArea => Effect::ToggleSafeArea,
         Action::Quit => Effect::Quit,
+        Action::AddKeys
+        | Action::ToggleOnlyAnimated
+        | Action::DeleteKeys
+        | Action::Undo
+        | Action::Redo => Effect::Edit(action),
     }
 }
 
@@ -135,7 +168,14 @@ mod tests {
     #[test]
     fn maps_every_shortcut() {
         let plain = Modifiers::default();
-        let shift = Modifiers { shift: true };
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
         assert_eq!(action_for(KeyCode::Space, plain), Some(Action::TogglePlay));
         assert_eq!(
             action_for(KeyCode::ArrowLeft, plain),
@@ -170,7 +210,28 @@ mod tests {
             action_for(KeyCode::KeyG, plain),
             Some(Action::ToggleSafeArea)
         );
+        assert_eq!(action_for(KeyCode::KeyK, plain), Some(Action::AddKeys));
+        assert_eq!(
+            action_for(KeyCode::KeyU, plain),
+            Some(Action::ToggleOnlyAnimated)
+        );
+        assert_eq!(action_for(KeyCode::Delete, plain), Some(Action::DeleteKeys));
+        assert_eq!(action_for(KeyCode::KeyZ, ctrl), Some(Action::Undo));
+        assert_eq!(action_for(KeyCode::KeyY, ctrl), Some(Action::Redo));
+        assert_eq!(
+            action_for(
+                KeyCode::KeyZ,
+                Modifiers {
+                    ctrl: true,
+                    shift: true,
+                    alt: false
+                }
+            ),
+            Some(Action::Redo)
+        );
         assert_eq!(action_for(KeyCode::KeyA, plain), None);
+        // Ctrl wins over the plain mapping.
+        assert_eq!(action_for(KeyCode::KeyR, ctrl), None);
     }
 
     #[test]
@@ -201,6 +262,25 @@ mod tests {
         assert_eq!(step_selection(Some(2), 5, 1), Some(3));
         assert_eq!(step_selection(Some(0), 5, -1), Some(0));
         assert_eq!(step_selection(Some(4), 5, 10), Some(4));
+    }
+
+    #[test]
+    fn edit_actions_do_not_touch_the_transport() {
+        let mut transport = transport();
+        transport.set_frame(7);
+        for action in [
+            Action::AddKeys,
+            Action::DeleteKeys,
+            Action::ToggleOnlyAnimated,
+            Action::Undo,
+            Action::Redo,
+        ] {
+            assert_eq!(
+                apply(action, &mut transport, Duration::ZERO),
+                Effect::Edit(action)
+            );
+        }
+        assert_eq!(transport.frame(), 7);
     }
 
     #[test]

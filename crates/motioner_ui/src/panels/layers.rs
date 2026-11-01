@@ -1,5 +1,6 @@
 //! Layers panel: the scene outline with kind icons, indentation guides,
-//! hover and selection, and a visibility eye (display only for now).
+//! selection, visibility/lock toggles, expansion chevrons and the collapsible
+//! orphans section at the bottom.
 
 use crate::icons::{self, Icon};
 use crate::layout::{Hit, Rect};
@@ -36,54 +37,119 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
             draw_row(p, v, index, row, rect);
         }
     }
+    orphans(p, v, body);
     p.pop_clip();
 }
 
 /// One outline row: highlight, guides, chevron, kind icon, name, detail and
-/// the hover actions.
+/// the eye/lock actions.
 fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, rect: Rect) {
     let t = *p.theme;
     let pad = p.m.px(size::PAD);
     let indent = p.m.px(size::INDENT);
-    let icon_side = p.m.px(size::ICON);
     let chevron_side = p.m.px(12.0);
     let selected = v.selected == Some(index);
-    let hovered = v.hovered_row() == Some(index);
+    let hovered = matches!(
+        v.hover,
+        Some(
+            Hit::LayerRow(i)
+                | Hit::LayerEye(i)
+                | Hit::LayerLock(i)
+                | Hit::LayerChevron(i)
+        ) if i == index
+    );
+    let (visible, locked) = v.layer_states.get(index).copied().unwrap_or((true, true));
     let highlight = rect.inset_xy(p.m.px(size::GRID), 0.0);
     if selected {
         p.fill_rounded(highlight, t.selection, p.m.px(size::RADIUS_SM));
     } else if hovered {
         p.fill_rounded(highlight, t.row_hover, p.m.px(size::RADIUS_SM));
     }
-
-    // Indentation guides: one hairline per ancestor level.
-    let base = rect.x + pad;
-    for level in 0..row.depth {
-        let gx = (base + level as f32 * indent + chevron_side * 0.5).round();
-        p.vline(gx, rect.y, rect.bottom(), t.hairline);
-    }
-
-    let x = base + row.depth as f32 * indent;
+    draw_guides(p, row, rect, pad, indent, chevron_side);
+    let x = rect.x + pad + row.depth as f32 * indent;
     let cy = rect.center_y();
-    if row.has_children {
-        let chevron = Rect::new(
+    draw_chevron(
+        p,
+        v,
+        index,
+        row,
+        Rect::new(
             x,
             (cy - chevron_side * 0.5).round(),
             chevron_side,
             chevron_side,
-        );
-        icons::draw(p, Icon::ChevronDown, chevron, t.text_muted, t.panel);
-    }
+        ),
+    );
+    let icon_side = p.m.px(size::ICON);
     let icon = Rect::new(
         x + chevron_side + p.m.px(2.0),
         (cy - icon_side * 0.5).round(),
         icon_side,
         icon_side,
     );
-    let ink = if selected { t.accent } else { t.text_muted };
+    let ink = if !visible {
+        t.text_disabled
+    } else if selected {
+        t.accent
+    } else {
+        t.text_muted
+    };
     icons::draw(p, Icon::for_kind(row.kind), icon, ink, t.panel);
+    draw_labels(p, v, row, rect, icon.right(), selected, visible || !locked);
+    if hovered || selected || !visible || locked {
+        draw_actions(p, v, index, rect, selected, visible, locked);
+    }
+}
 
-    let text_x = icon.right() + p.m.px(size::GRID * 2.0);
+/// One hairline per ancestor level.
+fn draw_guides(
+    p: &mut Painter<'_>,
+    row: &OutlineRow,
+    rect: Rect,
+    pad: f32,
+    indent: f32,
+    chevron_side: f32,
+) {
+    for level in 0..row.depth {
+        let gx = (rect.x + pad + level as f32 * indent + chevron_side * 0.5).round();
+        p.vline(gx, rect.y, rect.bottom(), p.theme.hairline);
+    }
+}
+
+fn draw_chevron(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, rect: Rect) {
+    if !row.has_children {
+        return;
+    }
+    let t = *p.theme;
+    let open = v.expanded.contains(&index);
+    icons::draw(
+        p,
+        if open {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        },
+        rect,
+        if v.hover == Some(Hit::LayerChevron(index)) {
+            t.text
+        } else {
+            t.text_muted
+        },
+        t.panel,
+    );
+}
+
+fn draw_labels(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    row: &OutlineRow,
+    rect: Rect,
+    icon_right: f32,
+    selected: bool,
+    readable: bool,
+) {
+    let t = *p.theme;
+    let text_x = icon_right + p.m.px(size::GRID * 2.0);
     let detail_ink = if selected {
         t.text_muted
     } else {
@@ -99,7 +165,13 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
     let name_room = (actions_x - p.m.px(size::GRID) - detail_w - text_x).max(0.0);
     let name_style = p.style(
         type_scale::BODY,
-        if selected { t.text } else { t.text_body },
+        if !readable {
+            t.text_disabled
+        } else if selected {
+            t.text
+        } else {
+            t.text_body
+        },
     );
     p.text_in(
         &row.name,
@@ -117,34 +189,102 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
         );
         p.text_in(&row.detail, detail, Align::Left, &detail_style);
     }
+}
 
-    // The actions only appear on the row being pointed at or selected, so
-    // the list stays quiet (they are display-only until editing lands).
-    if hovered || selected {
-        let surface = over(if selected { t.selection } else { t.row_hover }, t.panel);
-        let ink = |hit| {
-            if v.interaction(hit).hovered {
-                t.text
-            } else {
-                t.text_muted
-            }
+/// Eye and lock stay visible (dimmed) on hidden or locked rows.
+fn draw_actions(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    index: usize,
+    rect: Rect,
+    selected: bool,
+    visible: bool,
+    locked: bool,
+) {
+    let t = *p.theme;
+    let surface = over(if selected { t.selection } else { t.panel }, t.panel);
+    let eye = v.layout.layer_eye(rect);
+    let eye_ink = if visible {
+        if v.hover == Some(Hit::LayerEye(index)) {
+            t.text
+        } else {
+            t.text_muted
+        }
+    } else {
+        t.warning
+    };
+    icons::draw(p, Icon::Eye, eye.inset(p.m.px(2.0)), eye_ink, surface);
+    let lock = v.layout.layer_lock(rect);
+    let lock_ink = if locked {
+        t.warning
+    } else if v.hover == Some(Hit::LayerLock(index)) {
+        t.text
+    } else {
+        t.text_muted
+    };
+    let glyph = if locked { Icon::Lock } else { Icon::Unlock };
+    icons::draw(p, glyph, lock.inset(p.m.px(3.0)), lock_ink, surface);
+}
+/// The collapsible "Orphans" section: overrides whose node is gone.
+fn orphans(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
+    if v.orphans.is_empty() {
+        return;
+    }
+    let t = *p.theme;
+    let header = v.layout.orphans_header(v.outline.len(), v.layer_scroll);
+    if header.bottom() < body.y || header.y > body.bottom() {
+        return;
+    }
+    p.hline(header.x, header.right(), header.y, t.hairline);
+    let caption = crate::widgets::caption(p, t.warning);
+    p.text_in(
+        &format!("ORPHANS ({})", v.orphans.len()),
+        header.inset_xy(p.m.px(size::PAD), 0.0),
+        Align::Left,
+        &caption,
+    );
+    let title = p.style(type_scale::CAPTION, t.text_disabled);
+    p.text_in(
+        "kept, never rendered",
+        header.inset_xy(p.m.px(size::PAD), 0.0),
+        Align::Right,
+        &title,
+    );
+    for (index, orphan) in v.orphans.iter().enumerate() {
+        let rect = v.layout.orphan_row(index, v.outline.len(), v.layer_scroll);
+        if rect.bottom() < body.y || rect.y > body.bottom() {
+            continue;
+        }
+        let hovered = v.hover == Some(Hit::OrphanRow(index));
+        if hovered {
+            p.fill_rounded(
+                rect.inset_xy(p.m.px(size::GRID), 0.0),
+                t.row_hover,
+                p.m.px(size::RADIUS_SM),
+            );
+        }
+        let id_style = p.style(type_scale::CAPTION, t.text_muted);
+        p.text_in(
+            &orphan.id,
+            Rect::new(rect.x + p.m.px(size::PAD), rect.y, rect.w * 0.5, rect.h),
+            Align::Left,
+            &id_style,
+        );
+        let prop_style = p.style(type_scale::CAPTION, t.text_disabled);
+        p.text_in(
+            &orphan.property,
+            Rect::new(rect.x + rect.w * 0.5, rect.y, rect.w * 0.4, rect.h),
+            Align::Left,
+            &prop_style,
+        );
+        let delete = v.layout.orphan_delete(rect);
+        let state = v.interaction(Hit::OrphanDelete(index));
+        let ink = if state.hovered {
+            t.danger
+        } else {
+            t.text_disabled
         };
-        let eye = v.layout.layer_eye(rect);
-        icons::draw(
-            p,
-            Icon::Eye,
-            eye.inset(p.m.px(2.0)),
-            ink(Hit::LayerEye(index)),
-            surface,
-        );
-        let lock = v.layout.layer_lock(rect);
-        icons::draw(
-            p,
-            Icon::Lock,
-            lock.inset(p.m.px(3.0)),
-            ink(Hit::LayerLock(index)),
-            surface,
-        );
+        icons::draw(p, Icon::Error, delete.inset(p.m.px(4.0)), ink, t.panel);
     }
 }
 

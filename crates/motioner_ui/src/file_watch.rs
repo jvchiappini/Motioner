@@ -72,6 +72,17 @@ impl FileWatch {
         &self.path
     }
 
+    /// Takes the current file state as the new baseline, forgetting any
+    /// pending change.
+    ///
+    /// The editor calls this after writing a file itself, so its own write
+    /// never looks like an external change.
+    pub fn reset(&mut self) {
+        self.observed = read_stamp(&self.path);
+        self.candidate = None;
+        self.next_poll = None;
+    }
+
     /// Returns `true` exactly once per stable change.
     ///
     /// Call it every frame with the current instant; it stats the file only

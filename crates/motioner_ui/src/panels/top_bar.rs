@@ -117,7 +117,7 @@ fn comp_pills(p: &mut Painter<'_>, v: &View<'_>, document: &motioner_core::Docum
     }
 }
 
-/// The safe-area toggle and the zoom readout.
+/// The snapping and safe-area toggles and the zoom readout.
 fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let bar = v.layout.top_bar;
@@ -127,6 +127,10 @@ fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
     let mut state = v.interaction(Hit::Toggle(TopBarToggle::SafeArea));
     state.active = v.safe_area;
     widgets::icon_button(p, toggle, Icon::SafeArea, ButtonKind::Ghost, state);
+    let snap = v.layout.snap_toggle;
+    let mut state = v.interaction(Hit::SnapToggle);
+    state.active = v.snap;
+    widgets::icon_button(p, snap, Icon::Snap, ButtonKind::Ghost, state);
 
     let zoom_text = if v.comp_rect.is_some() {
         format!("{:.0}%", v.zoom * 100.0)

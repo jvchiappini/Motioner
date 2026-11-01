@@ -75,6 +75,42 @@ pub enum CoreError {
         /// The requested parent.
         parent: NodeId,
     },
+    /// An explicit identity that does not match `[A-Za-z_][A-Za-z0-9_.-]*`.
+    InvalidIdentity {
+        /// The rejected name.
+        name: String,
+    },
+    /// An explicit identity used by two nodes in one document.
+    DuplicateId {
+        /// The repeated name.
+        name: String,
+    },
+    /// No node has the requested identity.
+    UnknownIdentity {
+        /// The requested identity.
+        id: String,
+    },
+    /// A content field that the node's kind does not have.
+    WrongContentField {
+        /// The node kind ("rect", "text", ...).
+        kind: &'static str,
+        /// The rejected field name.
+        field: &'static str,
+    },
+    /// An axis was given for a scalar property, or a vector write omitted it.
+    WrongAxis {
+        /// The property written.
+        property: &'static str,
+        /// The axis suffix, when one was given.
+        axis: Option<&'static str>,
+    },
+    /// A content value of the wrong shape or out of range.
+    InvalidContentValue {
+        /// The rejected field name.
+        field: &'static str,
+        /// Why it was rejected.
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for CoreError {
@@ -129,6 +165,21 @@ impl fmt::Display for CoreError {
                     f,
                     "cannot add node {child} to {parent}: it would contain itself"
                 )
+            }
+            Self::InvalidIdentity { name } => {
+                write!(f, "invalid id {name:?}: ids match [A-Za-z_][A-Za-z0-9_.-]*")
+            }
+            Self::DuplicateId { name } => write!(f, "the id {name:?} is already used"),
+            Self::UnknownIdentity { id } => write!(f, "no node has the identity {id:?}"),
+            Self::WrongContentField { kind, field } => {
+                write!(f, "a {kind} has no field '{field}'")
+            }
+            Self::WrongAxis { property, axis } => match axis {
+                Some(axis) => write!(f, "property '{property}' has no axis '{axis}'"),
+                None => write!(f, "property '{property}' needs an axis ('x' or 'y')"),
+            },
+            Self::InvalidContentValue { field, reason } => {
+                write!(f, "'{field}' is invalid: {reason}")
             }
         }
     }

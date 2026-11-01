@@ -12,7 +12,7 @@ use motioner_core::Color;
 use motioner_render::linear_rgba;
 
 use crate::icons::{self, Icon};
-use crate::layout::Rect;
+use crate::layout::{Hit, Rect};
 use crate::paint::Painter;
 use crate::panels::View;
 use crate::text::Align;
@@ -121,8 +121,10 @@ pub fn draw_overlays(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
         }
     }
     if let Some(bounds) = v.selection_bounds {
-        selection(p, bounds, v.selection_size);
+        selection(p, v, bounds);
     }
+    guides(p, v);
+    marquee(p, v);
 
     match (v.document.is_some(), v.has_error()) {
         (true, true) => error_banner(p, canvas, v),
@@ -148,16 +150,46 @@ fn safe_areas(p: &mut Painter<'_>, comp: Rect) {
     p.vline(cx, cy - arm, cy + arm + h, color);
 }
 
-fn selection(p: &mut Painter<'_>, bounds: Rect, size_label: Option<(f64, f64)>) {
+/// The selection frame, its corner handles, the rotation handle and the size
+/// pill. Handle positions match `gizmo::hit_handle` exactly.
+fn selection(p: &mut Painter<'_>, v: &View<'_>, bounds: Rect) {
     let t = *p.theme;
     let h = p.m.hairline();
     p.stroke_rounded(bounds, t.accent, 0.0, h);
     let handle = p.m.px(7.0);
-    for (x, y) in [
-        (bounds.x, bounds.y),
-        (bounds.right(), bounds.y),
-        (bounds.x, bounds.bottom()),
-        (bounds.right(), bounds.bottom()),
+    let hovered = |handle_kind: crate::gizmo::Handle| v.hover == Some(Hit::Gizmo(handle_kind));
+    let cx = bounds.center_x().round();
+    let offset = p.m.px(22.0);
+    p.vline(
+        cx,
+        bounds.y - offset,
+        bounds.y,
+        crate::theme::palette::ACCENT.alpha(0.6),
+    );
+    let grip = Rect::new(
+        (cx - handle * 0.5).round(),
+        (bounds.y - offset - handle * 0.5).round(),
+        handle,
+        handle,
+    );
+    p.fill(
+        grip,
+        if hovered(crate::gizmo::Handle::Rotate) {
+            t.accent
+        } else {
+            crate::theme::palette::WHITE.linear()
+        },
+    );
+    p.stroke_rounded(grip, t.accent, 0.0, h);
+    for (x, y, handle_kind) in [
+        (bounds.x, bounds.y, crate::gizmo::Handle::TopLeft),
+        (bounds.right(), bounds.y, crate::gizmo::Handle::TopRight),
+        (
+            bounds.right(),
+            bounds.bottom(),
+            crate::gizmo::Handle::BottomRight,
+        ),
+        (bounds.x, bounds.bottom(), crate::gizmo::Handle::BottomLeft),
     ] {
         let r = Rect::new(
             (x - handle * 0.5).round(),
@@ -165,17 +197,53 @@ fn selection(p: &mut Painter<'_>, bounds: Rect, size_label: Option<(f64, f64)>) 
             handle,
             handle,
         );
-        p.fill(r, crate::theme::palette::WHITE.linear());
+        p.fill(
+            r,
+            if hovered(handle_kind) {
+                t.accent
+            } else {
+                crate::theme::palette::WHITE.linear()
+            },
+        );
         p.stroke_rounded(r, t.accent, 0.0, h);
     }
-    if let Some((w, hgt)) = size_label {
-        let text = format!("{} × {}", w.round(), hgt.round());
+    if let Some((w, hgt)) = v.selection_size {
+        let text = format!("{} \u{00d7} {}", w.round(), hgt.round());
         let style = p.style(type_scale::CAPTION, t.text).medium();
         let width = crate::widgets::pill_width(p, &text, &style);
         let x = bounds.center_x() - width * 0.5;
         let cy = bounds.bottom() + p.m.px(size::GRID * 2.0) + p.m.px(10.0);
         crate::widgets::pill(p, x, cy, &text, &style, t.accent);
     }
+}
+
+/// Accent guide lines shown while a drag snaps.
+fn guides(p: &mut Painter<'_>, v: &View<'_>) {
+    let Some(comp_rect) = v.comp_rect else {
+        return;
+    };
+    let zoom = v.zoom;
+    let t = *p.theme;
+    let canvas = v.layout.canvas;
+    for guide in v.guides {
+        if guide.vertical {
+            let x = (f64::from(comp_rect.x) + guide.at * zoom).round() as f32;
+            p.vline(x, canvas.y, canvas.bottom(), t.accent);
+        } else {
+            let y = (f64::from(comp_rect.y) + guide.at * zoom).round() as f32;
+            p.hline(canvas.x, canvas.right(), y, t.accent);
+        }
+    }
+}
+
+/// The marquee box while selecting keys.
+fn marquee(p: &mut Painter<'_>, v: &View<'_>) {
+    let Some(rect) = v.marquee else {
+        return;
+    };
+    let t = *p.theme;
+    p.fill(rect, t.selection);
+    p.stroke_rounded(rect, t.accent, 0.0, p.m.hairline());
 }
 
 fn empty_card(p: &mut Painter<'_>, comp: Rect, file_name: &str) {

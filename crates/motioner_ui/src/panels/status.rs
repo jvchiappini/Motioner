@@ -1,4 +1,5 @@
-//! Status bar: diagnostics on the left, frame-time readouts on the right.
+//! Status bar: errors first, then override warnings, then frame-time
+//! readouts.
 
 use crate::icons::{self, Icon};
 use crate::layout::Rect;
@@ -24,10 +25,10 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     );
     let text_x = icon.right() + p.m.px(size::GRID * 1.5);
 
-    // Right side first, so the diagnostic can be ellipsized before it.
+    // Right side first, so the message can be ellipsized before it.
     let style = p.style(type_scale::CAPTION, t.text_muted);
     let readout = format!(
-        "Eval {:.2} ms   ·   UI {:.0} fps   ·   Dropped {}",
+        "Eval {:.2} ms   \u{00b7}   UI {:.0} fps   \u{00b7}   Dropped {}",
         v.stats.eval_ms, v.stats.ui_fps, v.stats.dropped
     );
     let readout_w = p.measure(&readout, &style);
@@ -45,6 +46,7 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
         (readout_x - pad * 2.0 - text_x).max(0.0),
         bar.h,
     );
+    let warnings = v.warnings.len();
     if let Some(diagnostic) = v.diagnostics.first() {
         icons::draw(p, Icon::Error, icon, t.danger, t.app);
         let count = v.diagnostics.len();
@@ -54,6 +56,15 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
             diagnostic.to_string()
         };
         let style = p.style(type_scale::CAPTION, t.danger);
+        p.text_in(&message, room, Align::Left, &style);
+    } else if let Some(warning) = v.warnings.first() {
+        icons::draw(p, Icon::Warning, icon, t.warning, t.app);
+        let message = if warnings > 1 {
+            format!("{warning}   (+{} more)", warnings - 1)
+        } else {
+            warning.to_string()
+        };
+        let style = p.style(type_scale::CAPTION, t.warning);
         p.text_in(&message, room, Align::Left, &style);
     } else {
         icons::draw(p, Icon::Check, icon, t.success, t.app);

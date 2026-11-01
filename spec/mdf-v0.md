@@ -171,13 +171,48 @@ are allowed with `.id("name")` and must be unique.
 
 - The editor shows the compiled document.
 - A UI edit creates an override keyed by provenance or explicit ID.
-- Overrides are stored in `overrides.motion` as `override(id, property, value)`
-  statements executed after the program.
-- An override that no longer matches a node is reported as an orphan.
+- Overrides are stored in `<name>.overrides.motion` next to the program as
+  `override(id, property, value)`, `override_key(id, property, time, value,
+  ease)`, `override_unkey(id, property, time)`, `override_visible(id, bool)`
+  and `override_locked(id, bool)` statements executed after the program.
+- An override that no longer matches a node is reported as an orphan
+  **warning** and kept: overrides are never dropped silently.
 - Baking an element rewrites it into the program as explicit code and
   removes the override.
 
 Overrides never silently change generated code.
+
+### 9.1 Identities
+
+An explicit `.id("name")` wins; names match `[A-Za-z_][A-Za-z0-9_.-]*` and
+must be unique per document. Otherwise the identity is the provenance key
+`@<call start>/c<call-site start>.../i<loop index>...` built from the byte
+offset of the creating call, the call sites of the user function frames and
+the iteration index of every enclosing `for` loop. The same program always
+produces the same keys, but editing a line above a call shifts byte offsets,
+so nodes users edit should carry `.id()`. D-0022 has the full rules.
+
+### 9.2 Overridable properties
+
+Transform properties (`pos`, `scale`, `rotation`, `anchor`, `opacity`) and
+their keyframes. Vector properties have independently keyable axes:
+`.key("pos.x", t, v)`, `override_key("id", "pos.x", t, v)` and
+`override_unkey("id", "pos.x", t)` key only that axis, while
+`key("pos", t, (x, y))` keys both. The editor shows one timeline row per axis;
+content fields `width`, `height`, `radius`, `fill`, `stroke`,
+`stroke_width` (rect/circle) and `text`, `size`, `color`, `align` (text);
+`visible` (render) and `locked` (editor only); `name` (display name, no effect
+on identity or rendering).
+
+### 9.3 Bake
+
+`motioner bake <file.motion> [--id ID]...` rewrites overrides for nodes
+reachable from a top-level variable binding into one generated block appended
+after
+`# --- baked by motioner (do not edit above this line by hand) ---`, then
+removes those overrides. Nodes created inside loops or unbound function calls
+are refused with a message and keep their overrides. Bake is exact
+(`run(baked)` equals `run(program)` plus the baked overrides) and idempotent.
 
 ## 10. Modules
 
@@ -313,7 +348,10 @@ for i in range(5):
 ## 17. Deferred to v0.1
 
 1. `use` modules and shared helper files.
-2. Override syntax, orphan reporting and bake behavior.
+2. Override *statements inside a program* (overrides live in the separate
+   `<name>.overrides.motion` file described in §9 and D-0022; that subset is
+   implemented), override diagnostics for blend modes and animated content
+   properties, and the cross-file project folder.
 3. `while` loops.
 4. F-strings and advanced formatting helpers.
 5. LaTeX math commands and error policy.

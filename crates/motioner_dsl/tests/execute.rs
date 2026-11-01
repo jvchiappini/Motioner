@@ -50,9 +50,13 @@ fn hello_example_builds_the_expected_document() {
     assert_eq!((keys[1].frame, keys[1].ease), (48, Ease::QuadOut));
 
     let last_dot = document.nodes().nth(5).unwrap();
-    let scale_keys = last_dot.transform().scale.keys();
-    assert_eq!(scale_keys[0].frame, 36);
-    assert_eq!(scale_keys[1].value, Vec2::splat(1.0));
+    // `key("scale", ...)` keys both axes, so each axis shows the same keys.
+    let scale = &last_dot.transform().scale;
+    let x_keys = scale.axis(motioner_core::Axis::X).keys();
+    let y_keys = scale.axis(motioner_core::Axis::Y).keys();
+    assert_eq!(x_keys[0].frame, 36);
+    assert_eq!((x_keys[1].value, y_keys[1].value), (1.0, 1.0));
+    assert_eq!(scale.value(), Vec2::splat(1.0));
 }
 
 #[test]

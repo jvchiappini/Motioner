@@ -19,25 +19,42 @@
 //! ```
 
 pub mod ast;
+mod bake;
 mod builtins;
 mod diagnostic;
 mod host;
 mod interpreter;
 mod lexer;
 mod limits;
+mod overrides_file;
 mod parser;
 mod scene;
 mod token;
 mod value;
 
-pub use diagnostic::{Diagnostic, ErrorCategory, Span, StackFrame};
-pub use interpreter::execute;
+pub use bake::{bake, BakeOutcome};
+pub use diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
+pub use interpreter::{execute, execute_full};
 pub use lexer::tokenize;
 pub use limits::Limits;
 pub use parser::{parse, MAX_EXPR_DEPTH};
 pub use token::{Keyword, Op, Token, TokenKind};
 
-use motioner_core::Document;
+use motioner_core::{Document, NodeId, OverrideSet};
+
+/// The result of compiling a program together with its overrides file.
+#[derive(Debug, Clone)]
+pub struct Compiled {
+    /// The document with every applicable override already applied.
+    pub document: Document,
+    /// The overrides that were read (and applied where possible).
+    pub overrides: OverrideSet,
+    /// Orphaned or inapplicable overrides, reported as warnings.
+    pub warnings: Vec<Diagnostic>,
+    /// Top-level variable bindings that point at nodes, sorted by name; bake
+    /// uses them to name nodes in generated statements.
+    pub bindings: Vec<(String, NodeId)>,
+}
 
 /// Stack size of the interpreter thread. Deep MDF call chains (up to
 /// [`Limits::max_call_depth`]) recurse through the Rust stack, which is
@@ -74,4 +91,88 @@ pub fn run(source: &str, limits: &Limits) -> Result<Document, Diagnostic> {
     handle
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// Parses and executes MDF source plus an optional overrides file.
+///
+/// The program runs first; its composition rate converts the override times,
+/// then every override that matches a node and its kind is applied to the
+/// document. Orphans and kind mismatches become [`Severity::Warning`]
+/// diagnostics pointing at their statement and are also kept in
+/// [`Compiled::overrides`], so a later save never drops them.
+///
+/// # Errors
+///
+/// Returns the first lexical, parse or runtime diagnostic of the program, or
+/// the first malformed statement of the overrides file (prefixed
+/// `overrides:`).
+///
+/// # Panics
+///
+/// Re-raises a panic from the interpreter thread, which would indicate an
+/// interpreter bug rather than a program error.
+pub fn run_with_overrides(
+    source: &str,
+    overrides_source: Option<&str>,
+    limits: &Limits,
+) -> Result<Compiled, Diagnostic> {
+    let source = source.to_owned();
+    let overrides_source = overrides_source.map(str::to_owned);
+    let limits = limits.clone();
+    let worker = std::thread::Builder::new()
+        .name("mdf-interpreter".to_owned())
+        .stack_size(INTERPRETER_STACK_BYTES)
+        .spawn(move || compile(&source, overrides_source.as_deref(), &limits));
+    let handle = match worker {
+        Ok(handle) => handle,
+        Err(error) => {
+            return Err(Diagnostic::new(
+                ErrorCategory::Limit,
+                Span::default(),
+                format!("could not start the interpreter thread: {error}"),
+            ))
+        }
+    };
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+fn compile(
+    source: &str,
+    overrides_source: Option<&str>,
+    limits: &Limits,
+) -> Result<Compiled, Diagnostic> {
+    let program = parse(source)?;
+    let (mut document, bindings) = execute_full(&program, limits)?;
+    let Some(overrides_source) = overrides_source else {
+        return Ok(Compiled {
+            document,
+            overrides: OverrideSet::new(),
+            warnings: Vec::new(),
+            bindings,
+        });
+    };
+    let rate = document.composition().frame_rate();
+    let parsed = overrides_file::parse_overrides(overrides_source, rate)?;
+    let mut warnings = Vec::new();
+    for index in 0..parsed.set.len() {
+        if let Some(issue) = parsed.set.apply_entry(&mut document, index) {
+            let span = parsed.spans.get(index).copied().unwrap_or_default();
+            warnings.push(Diagnostic::warning(
+                ErrorCategory::Value,
+                span,
+                format!(
+                    "overrides: override for {}: '{}': {}",
+                    issue.id, issue.property, issue.message
+                ),
+            ));
+        }
+    }
+    Ok(Compiled {
+        document,
+        overrides: parsed.set,
+        warnings,
+        bindings,
+    })
 }

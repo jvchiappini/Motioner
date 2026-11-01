@@ -16,9 +16,9 @@ pub mod top_bar;
 
 use motioner_core::{Document, FrameRate};
 
-use crate::inspect::Section;
+use crate::inspect::{Editing, FieldTarget, Layout as InspectLayout, Model as InspectModel};
 use crate::layout::{Hit, Layout, Rect};
-use crate::outline::{NodeKind, OutlineRow};
+use crate::outline::OutlineRow;
 use crate::session::DiagnosticInfo;
 use crate::widgets::Interaction;
 
@@ -33,24 +33,6 @@ pub struct Stats {
     pub dropped: u64,
 }
 
-/// What the inspector shows.
-#[derive(Debug, Clone, PartialEq)]
-pub enum InspectorContent {
-    /// A selected layer.
-    Layer {
-        /// Layer name.
-        name: String,
-        /// Layer kind.
-        kind: NodeKind,
-        /// Property sections.
-        sections: Vec<Section>,
-    },
-    /// The composition (nothing selected).
-    Composition(Vec<Section>),
-    /// Nothing loaded.
-    Empty,
-}
-
 /// A tooltip request: anchor rectangle, label and optional shortcut.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TooltipRequest {
@@ -63,6 +45,8 @@ pub struct TooltipRequest {
 }
 
 /// Everything the panels need to draw one frame.
+#[allow(clippy::struct_excessive_bools)] // independent UI flags, not a state machine
+#[derive(Debug)]
 pub struct View<'a> {
     /// Window layout.
     pub layout: &'a Layout,
@@ -106,16 +90,53 @@ pub struct View<'a> {
     pub stats: Stats,
     /// Layer list scroll offset in pixels.
     pub layer_scroll: f32,
-    /// Timeline track scroll offset in pixels.
-    pub track_scroll: f32,
     /// Inspector scroll offset in pixels.
     pub inspector_scroll: f32,
     /// `1.0` right after a successful reload, fading to `0.0`.
     pub reload_pulse: f32,
-    /// Inspector content.
-    pub inspector: &'a InspectorContent,
+    /// Inspector model (a layer or the composition).
+    pub inspector: &'a InspectModel,
+    /// Rows of the inspector laid out for this frame (already scrolled).
+    pub inspector_layout: &'a InspectLayout,
+    /// Field currently being typed into, if any.
+    pub editing: Option<&'a Editing>,
+    /// A field whose last commit was rejected (drawn in the danger colour).
+    pub inspector_field_error: Option<FieldTarget>,
     /// Tooltip to show this frame.
     pub tooltip: Option<TooltipRequest>,
+    /// Override warnings (orphans and kind mismatches).
+    pub warnings: &'a [DiagnosticInfo],
+    /// Whether the snapping toggle is on.
+    pub snap: bool,
+    /// Accent guide lines drawn while snapping.
+    pub guides: &'a [crate::gizmo::Guide],
+    /// Box-selection rectangle in the track area.
+    pub marquee: Option<Rect>,
+    /// Timeline rows (layer rows and expanded property rows).
+    pub timeline: &'a crate::TimelineRows,
+    /// Laid-out timeline rows for this frame.
+    pub timeline_layout: &'a crate::timeline_model::RowsLayout,
+    /// Keys selected in the timeline.
+    pub selected_keys: &'a [crate::edit::KeyRef],
+    /// Outline rows whose property rows are expanded.
+    pub expanded: &'a std::collections::BTreeSet<usize>,
+    /// Orphaned overrides shown at the bottom of the layers panel.
+    pub orphans: &'a [OrphanRow],
+    /// Whether and lock state per outline row.
+    pub layer_states: &'a [(bool, bool)],
+    /// Whether the identity was copied in the last moment.
+    pub copied: bool,
+    /// Frame delta of a key-drag in progress.
+    pub retime_delta: Option<i64>,
+}
+
+/// One orphaned override row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanRow {
+    /// Identity the override is keyed by.
+    pub id: String,
+    /// Property it sets.
+    pub property: String,
 }
 
 impl View<'_> {
@@ -127,18 +148,6 @@ impl View<'_> {
             pressed: self.pressed == Some(target) && self.hover == Some(target),
             disabled: false,
             active: false,
-        }
-    }
-
-    /// The outline row under the pointer, from the layer list or the
-    /// timeline names column.
-    #[must_use]
-    pub fn hovered_row(&self) -> Option<usize> {
-        match self.hover {
-            Some(Hit::LayerRow(i) | Hit::LayerEye(i) | Hit::LayerLock(i) | Hit::Track(i)) => {
-                Some(i)
-            }
-            _ => None,
         }
     }
 

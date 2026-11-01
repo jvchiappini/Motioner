@@ -4,11 +4,13 @@
 //! This is the only place where MDF values become document mutations, and
 //! every mutation goes through the `motioner_core::Document` API.
 
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use motioner_core::{
-    BlendMode, Color, Composition, CoreError, Document, Ease, FrameRate, NodeContent, NodeId,
-    Paint, Property, PropertyValue, Stroke, TextAlign, TextContent, MAX_CANVAS_SIZE,
+    BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease,
+    FrameRate, NodeContent, NodeId, NodeIdentity, Paint, Property, PropertyValue, Stroke,
+    TextAlign, TextContent, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::ErrorCategory;
@@ -20,6 +22,35 @@ const NTSC_RATES: [(f64, u32); 3] = [(23.976, 24_000), (29.97, 30_000), (59.94, 
 
 /// Highest integer frame rate accepted by `comp()`.
 const MAX_FPS: i64 = 1000;
+
+/// Where a call that creates nodes came from (D-0022 provenance).
+///
+/// The key is `@<call start>` followed by `/c<call-site start>` for every user
+/// function frame (outermost first) and `/i<index>` for every enclosing loop.
+/// The same program always produces the same sites.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CreationSite {
+    /// Byte offset of the creating call's span start.
+    pub call_start: usize,
+    /// Span starts of the user-function call sites on the stack.
+    pub callers: Vec<usize>,
+    /// Iteration index of every enclosing `for` loop, outermost first.
+    pub loops: Vec<i64>,
+}
+
+impl CreationSite {
+    /// The stable provenance key this site renders as.
+    pub fn key(&self) -> String {
+        let mut key = format!("@{}", self.call_start);
+        for caller in &self.callers {
+            let _ = write!(key, "/c{caller}");
+        }
+        for index in &self.loops {
+            let _ = write!(key, "/i{index}");
+        }
+        key
+    }
+}
 
 /// Builds the document while a program runs.
 pub(crate) struct Scene {
@@ -41,12 +72,17 @@ impl Scene {
     }
 
     /// Calls a scene constructor builtin.
-    pub fn call(&mut self, builtin: Builtin, args: CallArgs) -> HostResult<Value> {
+    pub fn call(
+        &mut self,
+        builtin: Builtin,
+        args: CallArgs,
+        site: &CreationSite,
+    ) -> HostResult<Value> {
         match builtin {
             Builtin::Comp => self.comp(args),
             Builtin::Group => {
                 bind("group", &[], 0, args)?;
-                self.create(NodeContent::Group)
+                self.create(NodeContent::Group, site)
             }
             Builtin::Rect => {
                 let params = [
@@ -64,7 +100,7 @@ impl Scene {
                     radius: bound.number_or(2, 0.0)?,
                     paint: paint(&bound, 3)?,
                 };
-                self.create(content)
+                self.create(content, site)
             }
             Builtin::Circle => {
                 let params = ["radius", "fill", "stroke", "stroke_width"];
@@ -73,9 +109,9 @@ impl Scene {
                     radius: bound.number(0)?,
                     paint: paint(&bound, 1)?,
                 };
-                self.create(content)
+                self.create(content, site)
             }
-            Builtin::Text => self.text(args),
+            Builtin::Text => self.text(args, site),
             _ => Err(HostError::type_error(format!(
                 "{}() is not a scene constructor",
                 builtin.name()
@@ -116,7 +152,7 @@ impl Scene {
         Ok(Value::None)
     }
 
-    fn text(&mut self, args: CallArgs) -> HostResult<Value> {
+    fn text(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
         let params = ["content", "font", "size", "color", "align"];
         let bound = bind("text", &params, 1, args)?;
         let Some(Value::Str(content)) = bound.get(0) else {
@@ -138,7 +174,7 @@ impl Scene {
             color: bound.color_or(3, Color::WHITE)?,
             align,
         });
-        self.create(content)
+        self.create(content, site)
     }
 
     fn document_mut(&mut self) -> HostResult<&mut Document> {
@@ -153,7 +189,7 @@ impl Scene {
             .ok_or_else(|| HostError::value_error("call comp(...) before using nodes"))
     }
 
-    fn create(&mut self, content: NodeContent) -> HostResult<Value> {
+    fn create(&mut self, content: NodeContent, site: &CreationSite) -> HostResult<Value> {
         let max_nodes = self.max_nodes;
         let document = self.document_mut()?;
         if document.len() >= max_nodes {
@@ -162,7 +198,7 @@ impl Scene {
             )));
         }
         document
-            .add_node(content)
+            .add_node_with_identity(content, NodeIdentity::provenance(site.key()))
             .map(Value::Node)
             .map_err(|error| core_error(&error))
     }
@@ -184,7 +220,8 @@ impl Scene {
             "rotation" => Value::Number(transform.rotation.value()),
             "opacity" => Value::Number(transform.opacity.value()),
             "blend" => Value::Str(Rc::from(node.blend().name())),
-            _ => return Err(unknown_attribute(name)),
+            "visible" => Value::Bool(node.is_visible()),
+            _ => content_value_of(node.content(), name).ok_or_else(|| unknown_attribute(name))?,
         };
         Ok(value)
     }
@@ -196,6 +233,32 @@ impl Scene {
             return self
                 .document_mut()?
                 .set_blend(id, blend)
+                .map_err(|error| core_error(&error));
+        }
+        if name == "visible" {
+            let Value::Bool(visible) = value else {
+                return Err(HostError::type_error(format!(
+                    "'visible' expects True or False, got {}",
+                    value.type_name()
+                )));
+            };
+            return self
+                .document_mut()?
+                .set_visible(id, *visible)
+                .map_err(|error| core_error(&error));
+        }
+        if let Some(field) = ContentField::from_name(name) {
+            let accepts = self
+                .document()?
+                .node(id)
+                .is_some_and(|node| node.content().accepts(field));
+            if !accepts {
+                return Err(unknown_attribute(name));
+            }
+            let value = content_value(field, value)?;
+            return self
+                .document_mut()?
+                .set_content(id, field, value)
                 .map_err(|error| core_error(&error));
         }
         let property = Property::from_name(name).ok_or_else(|| unknown_attribute(name))?;
@@ -215,25 +278,64 @@ impl Scene {
         match method {
             NodeMethod::Key => self.key(id, args),
             NodeMethod::Add => self.add_children(id, &args),
+            NodeMethod::Id => self.assign_id(id, args),
         }
+    }
+
+    /// Gives a node an explicit identity: `node.id("name")`.
+    fn assign_id(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("id", &["name"], 1, args)?;
+        let name = bound.string_or(0, "")?;
+        self.document_mut()?
+            .assign_id(id, &name)
+            .map_err(|error| core_error(&error))?;
+        // Chainable: `card = rect(1, 1).id("card")` must bind the node.
+        Ok(Value::Node(id))
     }
 
     fn key(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
         let bound = bind("key", &["property", "time", "value", "ease"], 3, args)?;
         let property_name = bound.string_or(0, "")?;
-        let property = Property::from_name(&property_name).ok_or_else(|| {
+        let (base, axis) = split_axis(&property_name);
+        let property = Property::from_name(base).ok_or_else(|| {
             HostError::value_error(format!(
-                "key(): unknown property {property_name:?}; animatable properties are {}",
+                "key(): unknown property {property_name:?}; animatable properties are {} (a vector axis is written \"pos.x\")",
                 quoted_names(Property::ALL.iter().map(|(_, n)| *n))
             ))
         })?;
+        if !property.is_vector() && axis.is_some() {
+            return Err(HostError::value_error(format!(
+                "key(): '{}' has no axes",
+                property.name()
+            )));
+        }
         let time = bound.number(1)?;
         if !time.is_finite() {
             return Err(HostError::value_error(
                 "key(): 'time' must be a finite number of seconds",
             ));
         }
-        let value = property_value(property, bound.get(2).unwrap_or(&Value::None))?;
+        let axis_value = match axis {
+            Some(axis) => {
+                let Some(Value::Number(number)) = bound.get(2) else {
+                    return Err(HostError::type_error("key(): an axis key expects a number"));
+                };
+                if !number.is_finite() {
+                    return Err(HostError::value_error(
+                        "key(): the value must be a finite number",
+                    ));
+                }
+                Some((axis, *number))
+            }
+            None => None,
+        };
+        let value = match axis_value {
+            Some(_) => None,
+            None => Some(property_value(
+                property,
+                bound.get(2).unwrap_or(&Value::None),
+            )?),
+        };
         let ease_name = bound.string_or(3, "linear")?;
         let ease = Ease::from_name(&ease_name).ok_or_else(|| {
             HostError::value_error(format!(
@@ -247,9 +349,15 @@ impl Scene {
             .frame_rate()
             .seconds_to_frame(time)
             .map_err(|error| core_error(&error))?;
-        document
-            .add_keyframe(id, property, frame, value, ease)
-            .map_err(|error| core_error(&error))?;
+        match (axis_value, value) {
+            (Some((axis, number)), _) => document
+                .add_axis_keyframe(id, property, axis, frame, number, ease)
+                .map_err(|error| core_error(&error))?,
+            (None, Some(value)) => document
+                .add_keyframe(id, property, frame, value, ease)
+                .map_err(|error| core_error(&error))?,
+            (None, None) => {}
+        }
         Ok(Value::None)
     }
 
@@ -271,6 +379,16 @@ impl Scene {
         }
         Ok(Value::None)
     }
+}
+
+/// Splits `pos.x` into (`pos`, `Some(X)`); a plain name has no axis.
+fn split_axis(property: &str) -> (&str, Option<motioner_core::Axis>) {
+    if let Some((base, suffix)) = property.rsplit_once('.') {
+        if let Some(axis) = motioner_core::Axis::from_name(suffix) {
+            return (base, Some(axis));
+        }
+    }
+    (property, None)
 }
 
 /// Reads optional `fill`, `stroke` and `stroke_width` starting at `first`.
@@ -338,6 +456,113 @@ fn property_value(property: Property, value: &Value) -> HostResult<PropertyValue
     )))
 }
 
+/// Reads a content field as an MDF value, or `None` when the kind has no such
+/// field.
+fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
+    let field = ContentField::from_name(name)?;
+    if !content.accepts(field) {
+        return None;
+    }
+    let value = match (content, field) {
+        (NodeContent::Rect { width, .. }, ContentField::Width) => Value::Number(*width),
+        (NodeContent::Rect { height, .. }, ContentField::Height) => Value::Number(*height),
+        (
+            NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. },
+            ContentField::Radius,
+        ) => Value::Number(*radius),
+        (
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            ContentField::Fill,
+        ) => paint.fill.map_or(Value::None, color_value),
+        (
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            ContentField::Stroke,
+        ) => match paint.stroke {
+            Some(stroke) => color_value(stroke.color),
+            None => Value::None,
+        },
+        (
+            NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. },
+            ContentField::StrokeWidth,
+        ) => Value::Number(paint.stroke.map_or(0.0, |stroke| stroke.width)),
+        (NodeContent::Text(text), ContentField::Text) => Value::Str(Rc::from(text.text.as_str())),
+        (NodeContent::Text(text), ContentField::Size) => Value::Number(text.size),
+        (NodeContent::Text(text), ContentField::Color) => color_value(text.color),
+        (NodeContent::Text(text), ContentField::Align) => Value::Str(Rc::from(match text.align {
+            TextAlign::Left => "left",
+            TextAlign::Center => "center",
+            TextAlign::Right => "right",
+        })),
+        _ => return None,
+    };
+    Some(value)
+}
+
+/// A colour as the `#RRGGBB[AA]` string the constructors accept.
+fn color_value(color: Color) -> Value {
+    let text = if color.a == 255 {
+        format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+    } else {
+        format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.r, color.g, color.b, color.a
+        )
+    };
+    Value::Str(Rc::from(text))
+}
+
+/// Converts an MDF value to a content field write.
+fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue> {
+    let number = |value: &Value| -> HostResult<ContentValue> {
+        match value {
+            Value::Number(n) => Ok(ContentValue::Number(*n)),
+            other => Err(HostError::type_error(format!(
+                "'{}' expects a number, got {}",
+                field.name(),
+                other.type_name()
+            ))),
+        }
+    };
+    match field {
+        ContentField::Width
+        | ContentField::Height
+        | ContentField::Radius
+        | ContentField::StrokeWidth
+        | ContentField::Size => number(value),
+        ContentField::Fill | ContentField::Stroke | ContentField::Color => match value {
+            Value::None if field != ContentField::Color => Ok(ContentValue::Color(None)),
+            Value::Str(text) => Color::parse_hex(text)
+                .map(|color| ContentValue::Color(Some(color)))
+                .map_err(|error| HostError::value_error(format!("{}(): {error}", field.name()))),
+            other => Err(HostError::type_error(format!(
+                "'{}' expects a colour string, got {}",
+                field.name(),
+                other.type_name()
+            ))),
+        },
+        ContentField::Text => match value {
+            Value::Str(text) => Ok(ContentValue::Text(text.to_string())),
+            other => Err(HostError::type_error(format!(
+                "'text' expects a string, got {}",
+                other.type_name()
+            ))),
+        },
+        ContentField::Align => match value {
+            Value::Str(text) => TextAlign::from_name(text)
+                .map(ContentValue::Align)
+                .ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "'align' must be \"left\", \"center\" or \"right\", got {text:?}"
+                    ))
+                }),
+            other => Err(HostError::type_error(format!(
+                "'align' expects a string, got {}",
+                other.type_name()
+            ))),
+        },
+    }
+}
+
 fn core_error(error: &CoreError) -> HostError {
     let category = match error {
         CoreError::PropertyType { .. } => ErrorCategory::Type,
@@ -350,7 +575,7 @@ fn unknown_attribute(name: &str) -> HostError {
     HostError::new(
         ErrorCategory::Name,
         format!(
-            "nodes have no attribute '{name}'; available are pos, scale, rotation, anchor, opacity, blend, key, add"
+            "nodes have no attribute '{name}'; use a transform property, a content field, or key/add/id"
         ),
     )
 }

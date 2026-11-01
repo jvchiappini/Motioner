@@ -9,17 +9,17 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use motioner_core::Document;
+use motioner_core::{Document, NodeId};
 
 use crate::ast::{
     Argument, AssignOp, BinaryOp, CompareOp, Expr, ExprKind, FunctionDef, LogicalOp, Program, Stmt,
     StmtKind, Target, UnaryOp,
 };
 use crate::builtins;
-use crate::diagnostic::{Diagnostic, ErrorCategory, Span, StackFrame};
+use crate::diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
 use crate::host::{as_integer, bind, f64_from_i64, CallArgs, HostError, HostResult};
 use crate::limits::{Budget, Limits};
-use crate::scene::Scene;
+use crate::scene::{CreationSite, Scene};
 use crate::value::{Builtin, Value};
 
 /// Executes a parsed program and returns the document it built.
@@ -30,15 +30,31 @@ use crate::value::{Builtin, Value};
 /// with the span and call stack of the failure, or a value error if the
 /// program never called `comp()`.
 pub fn execute(program: &Program, limits: &Limits) -> Result<Document, Diagnostic> {
+    execute_full(program, limits).map(|(document, _)| document)
+}
+
+/// Executes a parsed program and returns the document plus every top-level
+/// variable bound to a node, sorted by name (bake uses the bindings to name
+/// nodes in generated statements).
+///
+/// # Errors
+///
+/// Same as [execute].
+pub fn execute_full(
+    program: &Program,
+    limits: &Limits,
+) -> Result<(Document, Vec<(String, NodeId)>), Diagnostic> {
     let mut interpreter = Interpreter {
         limits,
         globals: HashMap::new(),
         frames: Vec::new(),
+        loops: Vec::new(),
         budget: Budget::new(limits),
         scene: Scene::new(limits.max_nodes),
     };
     interpreter.exec_block(&program.body)?;
-    interpreter.scene.into_document().ok_or_else(|| {
+    let bindings = interpreter.bindings();
+    let document = interpreter.scene.into_document().ok_or_else(|| {
         let start = Span {
             line: 1,
             column: 1,
@@ -49,7 +65,8 @@ pub fn execute(program: &Program, limits: &Limits) -> Result<Document, Diagnosti
             start,
             "the program never called comp(...); every MDF program must create a composition",
         )
-    })
+    })?;
+    Ok((document, bindings))
 }
 
 /// How a statement finished.
@@ -70,6 +87,8 @@ struct Interpreter<'l> {
     limits: &'l Limits,
     globals: HashMap<Rc<str>, Value>,
     frames: Vec<CallFrame>,
+    /// Iteration index of every active loop, outermost first.
+    loops: Vec<i64>,
     budget: Budget,
     scene: Scene,
 }
@@ -87,6 +106,7 @@ impl Interpreter<'_> {
     ) -> Diagnostic {
         Diagnostic {
             category,
+            severity: Severity::Error,
             message: message.into(),
             span,
             stack: self
@@ -102,6 +122,33 @@ impl Interpreter<'_> {
 
     fn host_error(&self, span: Span, error: HostError) -> Diagnostic {
         self.diagnostic(error.category, span, error.message)
+    }
+
+    /// The provenance site of a creating call at `span`.
+    fn site(&self, span: Span) -> CreationSite {
+        CreationSite {
+            call_start: span.start,
+            callers: self
+                .frames
+                .iter()
+                .map(|frame| frame.call_span.start)
+                .collect(),
+            loops: self.loops.clone(),
+        }
+    }
+
+    /// Top-level variable bindings that point at nodes, sorted by name.
+    fn bindings(&self) -> Vec<(String, NodeId)> {
+        let mut bindings: Vec<(String, NodeId)> = self
+            .globals
+            .iter()
+            .filter_map(|(name, value)| match value {
+                Value::Node(id) => Some((name.to_string(), *id)),
+                _ => None,
+            })
+            .collect();
+        bindings.sort_by(|a, b| a.0.cmp(&b.0));
+        bindings
     }
 
     fn lookup(&self, name: &str, span: Span) -> Exec<Value> {
@@ -201,9 +248,14 @@ impl Interpreter<'_> {
         body: &[Stmt],
         values: impl Iterator<Item = Value>,
     ) -> Exec<Flow> {
-        for value in values {
+        for (index, value) in values.enumerate() {
             self.store(variable.clone(), value);
-            match self.exec_block(body)? {
+            // The loop index is part of every node's provenance key, so the
+            // same iteration of the same call yields the same identity.
+            self.loops.push(i64::try_from(index).unwrap_or(i64::MAX));
+            let flow = self.exec_block(body);
+            self.loops.pop();
+            match flow? {
                 Flow::Break => break,
                 Flow::Return(value) => return Ok(Flow::Return(value)),
                 Flow::Normal | Flow::Continue => {}
@@ -442,7 +494,7 @@ impl Interpreter<'_> {
                 | Builtin::Rect
                 | Builtin::Circle
                 | Builtin::Text),
-            ) => self.scene.call(builtin, call_args),
+            ) => self.scene.call(builtin, call_args, &self.site(span)),
             Value::Builtin(builtin) => {
                 builtins::call(builtin, call_args, self.limits, &mut self.budget)
             }

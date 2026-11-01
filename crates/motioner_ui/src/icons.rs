@@ -31,6 +31,8 @@ pub enum Icon {
     Eye,
     /// Locked layer.
     Lock,
+    /// Unlocked layer.
+    Unlock,
     /// Text layer.
     Text,
     /// Circle layer.
@@ -41,14 +43,20 @@ pub enum Icon {
     Group,
     /// Expanded disclosure.
     ChevronDown,
-    /// Keyframe marker.
-    Diamond,
+    /// Collapsed disclosure.
+    ChevronRight,
+    /// Stopwatch (animatable property).
+    Stopwatch,
     /// Error state.
     Error,
+    /// Warning state.
+    Warning,
     /// Healthy state.
     Check,
     /// Safe-area guides.
     SafeArea,
+    /// Snapping (magnet).
+    Snap,
 }
 
 impl Icon {
@@ -125,6 +133,24 @@ pub fn draw(p: &mut Painter<'_>, icon: Icon, rect: Rect, color: [f32; 4], surfac
     let g = Grid::new(rect);
     // Strokes never get thinner than one physical pixel.
     let stroke = g.len(1.5).max(1.0);
+    if transport(p, icon, g, color, surface, stroke) {
+        return;
+    }
+    if layer(p, icon, g, color, surface, stroke) {
+        return;
+    }
+    status(p, icon, g, color, surface);
+}
+
+/// Playback and transport glyphs.
+fn transport(
+    p: &mut Painter<'_>,
+    icon: Icon,
+    g: Grid,
+    color: [f32; 4],
+    surface: [f32; 4],
+    stroke: f32,
+) -> bool {
     match icon {
         Icon::Play => p.polygon(&[g.p(4.5, 2.5), g.p(13.0, 8.0), g.p(4.5, 13.5)], color),
         Icon::Pause => {
@@ -150,22 +176,39 @@ pub fn draw(p: &mut Painter<'_>, icon: Icon, rect: Rect, color: [f32; 4], surfac
             p.fill_rounded(g.r(11.75, 3.5, 1.75, 9.0), color, g.len(0.5));
         }
         Icon::Loop => {
-            // A rounded loop with two gaps and arrowheads, like ⟲⟳.
             p.stroke_rounded(g.r(2.0, 4.0, 12.0, 8.0), color, g.len(4.0), stroke);
             p.fill(g.r(6.0, 3.0, 3.0, 2.5), surface);
             p.fill(g.r(7.0, 10.5, 3.0, 2.5), surface);
             p.polygon(&[g.p(9.0, 2.0), g.p(12.0, 4.75), g.p(9.0, 7.5)], color);
             p.polygon(&[g.p(7.0, 8.5), g.p(4.0, 11.25), g.p(7.0, 14.0)], color);
         }
+        _ => return false,
+    }
+    true
+}
+
+/// Layer, object and editor glyphs.
+fn layer(
+    p: &mut Painter<'_>,
+    icon: Icon,
+    g: Grid,
+    color: [f32; 4],
+    surface: [f32; 4],
+    stroke: f32,
+) -> bool {
+    match icon {
         Icon::Eye => {
-            // A lens outline (outer lens in ink, inner lens in the surface
-            // colour) with a round pupil.
             p.polygon(&lens(g, 7.0, 4.75), color);
             p.polygon(&lens(g, 5.4, 3.1), surface);
             p.circle(g.x + g.len(8.0), g.y + g.len(8.0), g.len(2.1), color);
         }
         Icon::Lock => {
             p.stroke_rounded(g.r(4.5, 2.0, 7.0, 9.0), color, g.len(3.5), stroke);
+            p.fill_rounded(g.r(3.0, 7.0, 10.0, 7.0), color, g.len(1.5));
+        }
+        Icon::Unlock => {
+            p.stroke_rounded(g.r(4.5, 2.0, 7.0, 9.0), color, g.len(3.5), stroke);
+            p.fill_rounded(g.r(6.0, 3.0, 5.0, 5.0), surface, 0.0);
             p.fill_rounded(g.r(3.0, 7.0, 10.0, 7.0), color, g.len(1.5));
         }
         Icon::Text => {
@@ -181,15 +224,43 @@ pub fn draw(p: &mut Painter<'_>, icon: Icon, rect: Rect, color: [f32; 4], surfac
         ),
         Icon::Rect => p.stroke_rounded(g.r(2.5, 2.5, 11.0, 11.0), color, g.len(2.0), stroke),
         Icon::Group => {
-            // A folder: tab plus body.
             p.fill_rounded(g.r(2.0, 3.5, 5.5, 3.0), color, g.len(1.0));
             p.stroke_rounded(g.r(2.0, 5.0, 12.0, 8.5), color, g.len(1.5), stroke);
         }
         Icon::ChevronDown => p.polygon(&[g.p(4.0, 6.0), g.p(12.0, 6.0), g.p(8.0, 10.5)], color),
-        Icon::Diamond => p.polygon(
-            &[g.p(8.0, 2.0), g.p(14.0, 8.0), g.p(8.0, 14.0), g.p(2.0, 8.0)],
-            color,
-        ),
+        Icon::ChevronRight => p.polygon(&[g.p(6.0, 4.0), g.p(10.5, 8.0), g.p(6.0, 12.0)], color),
+        Icon::Stopwatch => {
+            p.ring(
+                g.x + g.len(8.0),
+                g.y + g.len(9.0),
+                g.len(5.5),
+                stroke,
+                color,
+            );
+            p.fill_rounded(g.r(7.0, 1.5, 2.0, 2.5), color, g.len(0.75));
+            p.fill_rounded(g.r(7.5, 4.5, 1.0, 5.0), color, g.len(0.5));
+        }
+        Icon::Snap => {
+            p.stroke_rounded(g.r(3.0, 3.0, 10.0, 9.0), color, g.len(5.0), stroke);
+            p.fill(g.r(4.0, 3.0, 2.5, 6.0), surface);
+            p.fill(g.r(9.5, 3.0, 2.5, 6.0), surface);
+            p.fill_rounded(g.r(3.5, 10.0, 2.5, 4.0), color, g.len(1.0));
+            p.fill_rounded(g.r(10.0, 10.0, 2.5, 4.0), color, g.len(1.0));
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Status and overlay glyphs.
+fn status(p: &mut Painter<'_>, icon: Icon, g: Grid, color: [f32; 4], surface: [f32; 4]) {
+    let stroke = g.len(1.5).max(1.0);
+    match icon {
+        Icon::Warning => {
+            p.polygon(&[g.p(8.0, 1.5), g.p(15.0, 14.0), g.p(1.0, 14.0)], color);
+            p.fill_rounded(g.r(7.25, 5.0, 1.5, 5.5), surface, g.len(0.75));
+            p.circle(g.x + g.len(8.0), g.y + g.len(12.2), g.len(1.0), surface);
+        }
         Icon::Error => {
             p.circle(g.x + g.len(8.0), g.y + g.len(8.0), g.len(7.0), color);
             p.fill_rounded(g.r(7.0, 3.75, 2.0, 5.5), surface, g.len(1.0));
@@ -197,7 +268,6 @@ pub fn draw(p: &mut Painter<'_>, icon: Icon, rect: Rect, color: [f32; 4], surfac
         }
         Icon::Check => {
             p.circle(g.x + g.len(8.0), g.y + g.len(8.0), g.len(7.0), color);
-            // Two strokes of the tick as thin quadrilaterals.
             p.polygon(
                 &[g.p(4.2, 8.2), g.p(5.4, 7.0), g.p(7.6, 9.2), g.p(6.4, 10.4)],
                 surface,
@@ -216,5 +286,6 @@ pub fn draw(p: &mut Painter<'_>, icon: Icon, rect: Rect, color: [f32; 4], surfac
             p.stroke_rounded(g.r(1.5, 3.0, 13.0, 10.0), color, g.len(1.5), stroke);
             p.stroke_rounded(g.r(4.0, 5.5, 8.0, 5.0), color, g.len(0.75), stroke);
         }
+        _ => {}
     }
 }

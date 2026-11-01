@@ -3,7 +3,7 @@
 use motioner_core::{Document, Frame, NodeContent, NodeId};
 
 use crate::affine::Affine2;
-use crate::curve::sample;
+use crate::curve::{sample, sample_vec2};
 use crate::plan::{ItemShape, RenderItem, RenderPlan};
 
 /// A node waiting to be visited, with its parent's resolved state.
@@ -55,12 +55,17 @@ impl Evaluator {
             let Some(node) = document.node(pending.id) else {
                 continue;
             };
+            // A hidden node is not drawn, and neither is anything below it:
+            // visibility is inherited, like opacity but without a value.
+            if !node.is_visible() {
+                continue;
+            }
             let props = node.transform();
             let local = Affine2::layer(
-                sample(&props.position, frame),
+                sample_vec2(&props.position, frame),
                 sample(&props.rotation, frame),
-                sample(&props.scale, frame),
-                sample(&props.anchor, frame),
+                sample_vec2(&props.scale, frame),
+                sample_vec2(&props.anchor, frame),
             );
             let transform = pending.parent_transform.then(local);
             let opacity = pending.parent_opacity * sample(&props.opacity, frame).clamp(0.0, 1.0);
@@ -236,6 +241,25 @@ mod tests {
         .unwrap();
         assert!(evaluate(&doc, 0).items().is_empty());
         assert_eq!(evaluate(&doc, 5).items().len(), 1);
+    }
+
+    #[test]
+    fn hidden_nodes_and_their_descendants_are_skipped() {
+        let mut doc = document();
+        let group = doc.add_node(NodeContent::Group).unwrap();
+        let leaf = square(&mut doc);
+        doc.reparent(leaf, group).unwrap();
+        assert_eq!(evaluate(&doc, 0).items().len(), 1, "visible by default");
+        doc.set_visible(group, false).unwrap();
+        assert!(
+            evaluate(&doc, 0).items().is_empty(),
+            "a hidden group hides its child"
+        );
+        doc.set_visible(group, true).unwrap();
+        doc.set_visible(leaf, false).unwrap();
+        assert!(evaluate(&doc, 0).items().is_empty());
+        doc.set_visible(leaf, true).unwrap();
+        assert_eq!(evaluate(&doc, 0).items().len(), 1);
     }
 
     #[test]

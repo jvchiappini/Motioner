@@ -199,6 +199,36 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Draws a keyframe diamond inside `rect`: filled for a solid key,
+    /// outlined for a key between keys, an inherited key or an unselected
+    /// marker.
+    pub fn diamond(&mut self, rect: Rect, color: [f32; 4], filled: bool) {
+        let cx = rect.center_x();
+        let cy = rect.center_y();
+        let rx = rect.w * 0.5;
+        let ry = rect.h * 0.5;
+        let points = [(cx, cy - ry), (cx + rx, cy), (cx, cy + ry), (cx - rx, cy)];
+        if filled {
+            self.polygon(&points, color);
+            return;
+        }
+        let w = self.m.hairline().max(1.0);
+        let steps = (rx.max(ry) * 2.0).ceil().max(2.0) as i32;
+        for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
+            for step in 0..=steps {
+                let t = step as f32 / steps as f32;
+                let (x0, y0) = points[a];
+                let (x1, y1) = points[b];
+                let x = x0 + (x1 - x0) * t;
+                let y = y0 + (y1 - y0) * t;
+                self.fill(
+                    Rect::new((x - w * 0.5).round(), (y - w * 0.5).round(), w, w),
+                    color,
+                );
+            }
+        }
+    }
+
     /// Draws text vertically centred in `rect`, ellipsized to fit.
     pub fn text_in(&mut self, text: &str, rect: Rect, align: Align, style: &TextStyle) {
         text::draw_in(self.batch, self.font, text, rect, align, style);

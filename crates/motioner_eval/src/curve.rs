@@ -61,6 +61,19 @@ impl Interpolate for Vec2 {
 /// and after the last key the value holds. Between two keys the segment
 /// is interpolated with the ease of the later key.
 #[must_use]
+pub fn sample_vec2(value: &motioner_core::AnimatableVec2, frame: Frame) -> motioner_core::Vec2 {
+    motioner_core::Vec2::new(
+        sample(value.axis(motioner_core::Axis::X), frame),
+        sample(value.axis(motioner_core::Axis::Y), frame),
+    )
+}
+
+/// Samples an animatable value at a frame.
+///
+/// Without keyframes the static value is returned. Before the first key and
+/// after the last key the value holds. Between two keys the segment is
+/// interpolated with the ease of the later key.
+#[must_use]
 pub fn sample<T: Interpolate>(value: &Animatable<T>, frame: Frame) -> T {
     let keys = value.keys();
     let (Some(first), Some(last)) = (keys.first(), keys.last()) else {

@@ -154,8 +154,23 @@ pub fn hit_node(
     point: Vec2,
     measure: &impl MeasureText,
 ) -> Option<NodeId> {
+    hit_node_where(document, plan, point, measure, |_| true)
+}
+
+/// Like [`hit_node`], ignoring nodes for which `allow` returns `false`.
+///
+/// The editor uses it to skip locked layers: they cannot be picked on the
+/// canvas.
+#[must_use]
+pub fn hit_node_where(
+    document: &Document,
+    plan: &RenderPlan,
+    point: Vec2,
+    measure: &impl MeasureText,
+    allow: impl Fn(NodeId) -> bool,
+) -> Option<NodeId> {
     plan.items().iter().rev().find_map(|item| {
-        if item.opacity <= 0.0 {
+        if item.opacity <= 0.0 || !allow(item.node) {
             return None;
         }
         let [x0, y0, x1, y1] = local_box(document, item, measure)?;

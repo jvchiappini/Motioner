@@ -35,6 +35,7 @@ Usage:
   motioner render  <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
   motioner still   <file.motion> --frame N --out <file.png>
   motioner info    <file.motion>
+  motioner bake    <file.motion> [--id ID]...
   motioner preview <file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--window-size WxH] [--ui-scale F] [--select ROW]
   motioner --help
@@ -44,7 +45,12 @@ defaults to the whole composition. `still` draws one frame. `preview` opens the
 live editor window; `--exit-after-frames` closes it after N presented frames
 (for smoke runs and CI), `--window-size` sets the window in physical pixels,
 `--ui-scale` overrides the chrome scale (to check other DPI settings) and
-`--select` selects an outline row at startup.";
+`--select` selects an outline row at startup.
+
+`bake` folds <name>.overrides.motion into <name>.motion for nodes bound to a
+top-level variable, appends one generated block and rewrites both files
+atomically. Nodes created inside loops or functions cannot be baked and are
+reported; their overrides stay in the overrides file.";
 
 /// Parsed command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +61,8 @@ enum Command {
     Still(StillArgs),
     /// Print composition information.
     Info(InfoArgs),
+    /// Fold the overrides file into the program.
+    Bake(BakeArgs),
     /// Open the live preview window.
     Preview(PreviewArgs),
     /// Print usage.
@@ -92,6 +100,15 @@ struct StillArgs {
 struct InfoArgs {
     /// MDF program.
     input: PathBuf,
+}
+
+/// Arguments of the `bake` command.
+#[derive(Debug, PartialEq, Eq)]
+struct BakeArgs {
+    /// MDF program whose overrides file is folded in.
+    input: PathBuf,
+    /// Only bake these node identities (all of them when empty).
+    ids: Vec<String>,
 }
 
 /// Arguments of the `preview` command.
@@ -177,6 +194,7 @@ fn run(args: &[OsString]) -> Result<(), Failure> {
             Ok(())
         }
         Command::Info(args) => run_info(&args),
+        Command::Bake(args) => run_bake(&args),
         Command::Still(args) => run_still(&args),
         Command::Render(args) => run_render(&args),
         Command::Preview(args) => run_preview(&args),
@@ -196,6 +214,7 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "render" => parse_render(rest),
         "still" => parse_still(rest),
         "info" => parse_info(rest),
+        "bake" => parse_bake(rest),
         "preview" => parse_preview(rest),
         other => bail!("unknown command '{other}' (try --help)"),
     }
@@ -301,6 +320,38 @@ fn parse_info(args: &[OsString]) -> Result<Command> {
     Ok(Command::Info(InfoArgs {
         input: PathBuf::from(input),
     }))
+}
+
+/// Parses `bake <file> [--id ID]...`.
+fn parse_bake(args: &[OsString]) -> Result<Command> {
+    let mut input = None;
+    let mut ids = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let Some(arg) = args[index].to_str() else {
+            bail!("arguments must be valid UTF-8");
+        };
+        match arg {
+            "--id" => {
+                let value = flag_value(args, index, "--id")?;
+                let text = value
+                    .to_str()
+                    .ok_or_else(|| anyhow!("the value of --id must be valid UTF-8"))?;
+                ids.push(text.to_owned());
+                index += 2;
+            }
+            other if other.starts_with("--") => bail!("unknown flag '{other}' for bake"),
+            _ => {
+                if input.is_some() {
+                    bail!("unexpected argument '{arg}' (already got the input file)");
+                }
+                input = Some(PathBuf::from(&args[index]));
+                index += 1;
+            }
+        }
+    }
+    let input = input.ok_or_else(|| anyhow!("bake needs an input .motion file"))?;
+    Ok(Command::Bake(BakeArgs { input, ids }))
 }
 
 /// Parses `preview <file> [--frame N] [--paused] [--exit-after-frames N]`.
@@ -476,6 +527,94 @@ fn ensure_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The overrides file that belongs to `program`.
+///
+/// `<dir>/<stem>.overrides.motion`, next to the program (D-0022).
+fn overrides_path(program: &Path) -> PathBuf {
+    let stem = program
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("program");
+    let name = format!("{stem}.overrides.motion");
+    program.with_file_name(name)
+}
+
+/// Writes `text` to `path` through a temporary file in the same directory and
+/// a rename, so a crash never leaves a half-written program or overrides file.
+fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    ensure_parent(path)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let temp = path.with_file_name(format!(".{file_name}.tmp"));
+    fs::write(&temp, text).with_context(|| format!("cannot write {}", temp.display()))?;
+    fs::rename(&temp, path).with_context(|| {
+        let _ = fs::remove_file(&temp);
+        format!("cannot replace {}", path.display())
+    })?;
+    Ok(())
+}
+
+/// Folds the overrides file into the program (`motioner bake`).
+fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
+    let source = fs::read_to_string(&args.input)
+        .with_context(|| format!("cannot read {}", args.input.display()))
+        .map_err(Failure::Error)?;
+    let overrides_file = overrides_path(&args.input);
+    let overrides_source = match fs::read_to_string(&overrides_file) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(Failure::Error(anyhow!(
+                "cannot read {}: {error}",
+                overrides_file.display()
+            )))
+        }
+    };
+    let name = args.input.display().to_string();
+    let compiled =
+        motioner_dsl::run_with_overrides(&source, overrides_source.as_deref(), &Limits::default())
+            .map_err(|diagnostic| Failure::Diagnostic(diagnostic.render(&source, &name)))?;
+    for warning in &compiled.warnings {
+        println!("warning: {}", warning.render(&source, &name));
+    }
+
+    let outcome = motioner_dsl::bake(
+        &source,
+        &compiled.document,
+        &compiled.bindings,
+        &compiled.overrides,
+        &args.ids,
+    );
+    if outcome.program != source {
+        write_atomic(&args.input, &outcome.program)?;
+    }
+    let rate = compiled.document.composition().frame_rate();
+    let remaining = outcome.overrides.to_mdf(rate);
+    write_atomic(&overrides_file, &remaining)?;
+
+    for id in &outcome.baked {
+        println!("baked {id}");
+    }
+    for refusal in &outcome.refused {
+        println!(
+            "refused {} '{}': {}",
+            refusal.id, refusal.property, refusal.reason
+        );
+    }
+    if outcome.baked.is_empty() && outcome.refused.is_empty() {
+        println!("Nothing to bake.");
+    }
+    println!(
+        "Wrote {} and {} ({} override(s) left)",
+        args.input.display(),
+        overrides_file.display(),
+        outcome.overrides.len()
+    );
+    Ok(())
+}
+
 /// Prints composition facts for the `info` command.
 fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
     let (_, document) = load_document(&args.input)?;
@@ -637,7 +776,7 @@ fn print_average(stage: &str, total: Duration, frames: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Command, PreviewArgs, RenderArgs, StillArgs};
+    use super::{overrides_path, parse, BakeArgs, Command, PreviewArgs, RenderArgs, StillArgs};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -775,6 +914,48 @@ mod tests {
         assert!(parse(&args(&["preview", "a.motion", "--window-size", "10x10"])).is_err());
         assert!(parse(&args(&["preview", "a.motion", "--ui-scale", "9"])).is_err());
         assert!(parse(&args(&["preview", "a.motion", "--ui-scale", "big"])).is_err());
+    }
+
+    #[test]
+    fn parses_bake_with_ids() {
+        assert_eq!(
+            parse(&args(&[
+                "bake",
+                "in.motion",
+                "--id",
+                "title",
+                "--id",
+                "card"
+            ]))
+            .unwrap(),
+            Command::Bake(BakeArgs {
+                input: PathBuf::from("in.motion"),
+                ids: vec!["title".to_owned(), "card".to_owned()],
+            })
+        );
+        assert_eq!(
+            parse(&args(&["bake", "in.motion"])).unwrap(),
+            Command::Bake(BakeArgs {
+                input: PathBuf::from("in.motion"),
+                ids: Vec::new(),
+            })
+        );
+        assert!(parse(&args(&["bake"])).is_err());
+        assert!(parse(&args(&["bake", "a.motion", "--id"])).is_err());
+        assert!(parse(&args(&["bake", "a.motion", "b.motion"])).is_err());
+        assert!(parse(&args(&["bake", "a.motion", "--bogus"])).is_err());
+    }
+
+    #[test]
+    fn the_overrides_file_sits_next_to_the_program() {
+        assert_eq!(
+            overrides_path(std::path::Path::new("out/edit/hello.motion")),
+            PathBuf::from("out/edit/hello.overrides.motion")
+        );
+        assert_eq!(
+            overrides_path(std::path::Path::new("hello.motion")),
+            PathBuf::from("hello.overrides.motion")
+        );
     }
 
     #[test]

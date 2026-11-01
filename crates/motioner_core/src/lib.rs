@@ -15,17 +15,22 @@ mod document;
 mod error;
 mod math;
 mod node;
+mod overrides;
 mod time;
 
 pub mod bounds;
 
-pub use animation::{Animatable, Ease, Keyframe};
+pub use animation::{Animatable, AnimatableVec2, Axis, Ease, Keyframe};
 pub use color::{Color, ColorParseError};
 pub use document::{Composition, Document, MAX_CANVAS_SIZE};
 pub use error::CoreError;
 pub use math::Vec2;
 pub use node::{
-    BlendMode, Node, NodeContent, NodeId, Paint, Property, PropertyValue, Stroke, TextAlign,
-    TextContent, Transform,
+    is_valid_identity_name, BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId,
+    NodeIdentity, Paint, Property, PropertyValue, Stroke, TextAlign, TextContent, Transform,
+};
+pub use overrides::{
+    format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,
+    OverrideSet, OverrideValue, LOCKED, NAME, VISIBLE,
 };
 pub use time::{Frame, FrameRate, MAX_ABS_FRAME};

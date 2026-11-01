@@ -72,7 +72,29 @@ pub struct StackFrame {
     pub call_span: Span,
 }
 
-/// An error with category, message, source span and call stack.
+/// Whether a diagnostic stops compilation or only reports a recoverable
+/// problem (an override that no longer matches a node, for example).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Severity {
+    /// Compilation fails.
+    #[default]
+    Error,
+    /// Compilation succeeds; the problem is reported with the result.
+    Warning,
+}
+
+impl Severity {
+    /// Lower-case name used in messages.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+/// An error or warning with category, message, source span and call stack.
 ///
 /// The same diagnostic is shown to users and sent to the AI so either can
 /// repair the program.
@@ -80,6 +102,8 @@ pub struct StackFrame {
 pub struct Diagnostic {
     /// What kind of problem this is.
     pub category: ErrorCategory,
+    /// Whether it stops compilation.
+    pub severity: Severity,
     /// Human-readable description.
     pub message: String,
     /// Where the problem is.
@@ -89,15 +113,34 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// Creates a diagnostic without a call stack.
+    /// Creates an error diagnostic without a call stack.
     #[must_use]
     pub fn new(category: ErrorCategory, span: Span, message: impl Into<String>) -> Self {
         Self {
             category,
+            severity: Severity::Error,
             message: message.into(),
             span,
             stack: Vec::new(),
         }
+    }
+
+    /// Creates a warning diagnostic without a call stack.
+    #[must_use]
+    pub fn warning(category: ErrorCategory, span: Span, message: impl Into<String>) -> Self {
+        Self {
+            category,
+            severity: Severity::Warning,
+            message: message.into(),
+            span,
+            stack: Vec::new(),
+        }
+    }
+
+    /// Whether this diagnostic stops compilation.
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        matches!(self.severity, Severity::Error)
     }
 
     /// Formats the diagnostic with the offending source line and a caret,
@@ -118,10 +161,11 @@ impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}:{}: {} error: {}",
+            "{}:{}: {} {}: {}",
             self.span.line,
             self.span.column,
             self.category.name(),
+            self.severity.name(),
             self.message
         )?;
         for frame in self.stack.iter().rev() {

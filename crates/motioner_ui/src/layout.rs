@@ -253,6 +253,55 @@ pub enum Hit {
     Canvas,
     /// The inspector body (scrolls).
     Inspector,
+    /// An editable inspector field: item index in the layout and field index.
+    InspectField {
+        /// Index into the inspector layout items.
+        item: usize,
+        /// Index into that row's fields.
+        field: usize,
+    },
+    /// The stopwatch of an inspector row.
+    InspectStopwatch(usize),
+    /// The key diamond of an inspector row.
+    InspectDiamond(usize),
+    /// One segment of an align control.
+    InspectSegment {
+        /// Index into the inspector layout items.
+        item: usize,
+        /// `0` left, `1` centre, `2` right.
+        segment: usize,
+    },
+    /// The "Copy" button next to the layer identity.
+    InspectCopy,
+    /// A canvas gizmo handle.
+    Gizmo(crate::gizmo::Handle),
+    /// The snapping toggle in the top bar.
+    SnapToggle,
+    /// A timeline row (index into the timeline row model).
+    TimelineRow(usize),
+    /// The stopwatch of a timeline property row.
+    TimelineStopwatch(usize),
+    /// The previous-key button of a timeline property row.
+    TimelinePrevKey(usize),
+    /// The add/remove-key button of a timeline property row.
+    TimelineKeyToggle(usize),
+    /// The next-key button of a timeline property row.
+    TimelineNextKey(usize),
+    /// The value field of a timeline property row.
+    TimelineField(usize),
+    /// A keyframe diamond of a timeline row at a frame.
+    TimelineDiamond {
+        /// Row index in the timeline model.
+        row: usize,
+        /// Composition frame of the diamond.
+        frame: i64,
+    },
+    /// A row of the orphans section.
+    OrphanRow(usize),
+    /// The delete action of an orphan row.
+    OrphanDelete(usize),
+    /// The chevron that expands a layer's property rows.
+    LayerChevron(usize),
 }
 
 /// A panel with a header strip and a body.
@@ -316,6 +365,8 @@ pub struct Layout {
     pub transport: [(TransportButton, Rect); 6],
     /// Safe-area toggle in the top bar.
     pub safe_area_toggle: Rect,
+    /// Snapping toggle in the top bar, left of the safe-area toggle.
+    pub snap_toggle: Rect,
     /// Splitter hit zones.
     pub splitters: [(Splitter, Rect); 3],
     /// Height of one layer/track row.
@@ -375,6 +426,12 @@ impl Layout {
             let x = top_bar.right() - m.px(size::PAD) - m.px(56.0) - m.px(size::GRID * 2.0) - side;
             Rect::new(x, top_bar.center_y() - side * 0.5, side, side)
         };
+        let snap_toggle = Rect::new(
+            safe_area_toggle.x - m.px(size::BUTTON) - m.px(size::GRID),
+            safe_area_toggle.y,
+            safe_area_toggle.w,
+            safe_area_toggle.h,
+        );
 
         let hit = m.px(size::SPLITTER_HIT);
         let splitters = [
@@ -403,6 +460,7 @@ impl Layout {
             timeline,
             transport,
             safe_area_toggle,
+            snap_toggle,
             splitters,
             row_h: m.px(size::ROW),
         }
@@ -433,6 +491,35 @@ impl Layout {
     pub fn layer_lock(&self, row: Rect) -> Rect {
         let eye = self.layer_eye(row);
         Rect::new(eye.x - eye.w, eye.y, eye.w, eye.h)
+    }
+
+    /// The header rectangle of the orphans section, below `rows` rows.
+    #[must_use]
+    pub fn orphans_header(&self, rows: usize, scroll: f32) -> Rect {
+        let body = self.layers.body;
+        let y = body.y + self.metrics.px(size::GRID) + rows as f32 * self.row_h - scroll
+            + self.metrics.px(size::GRID * 2.0);
+        Rect::new(body.x, y, body.w, self.metrics.px(24.0))
+    }
+
+    /// One orphan row below the header.
+    #[must_use]
+    pub fn orphan_row(&self, index: usize, rows: usize, scroll: f32) -> Rect {
+        let header = self.orphans_header(rows, scroll);
+        let y = header.bottom() + index as f32 * self.row_h;
+        Rect::new(header.x, y, header.w, self.row_h)
+    }
+
+    /// The delete action inside an orphan row.
+    #[must_use]
+    pub fn orphan_delete(&self, row: Rect) -> Rect {
+        let side = self.metrics.px(size::ICON + size::GRID);
+        Rect::new(
+            row.right() - self.metrics.px(size::PAD) - side,
+            row.center_y() - side * 0.5,
+            side,
+            side,
+        )
     }
 
     /// The rectangle of timeline track `index`, scrolled by `scroll` pixels.
@@ -468,6 +555,9 @@ impl Layout {
         }
         if self.safe_area_toggle.contains(x, y) {
             return Some(Hit::Toggle(TopBarToggle::SafeArea));
+        }
+        if self.snap_toggle.contains(x, y) {
+            return Some(Hit::SnapToggle);
         }
         if self.layers.body.contains(x, y) {
             let index =

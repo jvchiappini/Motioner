@@ -4,9 +4,6 @@
 //! (hovered, pressed, toggled) and passes it in as an [`Interaction`]. Layout
 //! decides where a widget goes; hit testing lives in [`crate::layout`].
 
-use motioner_core::Color;
-use motioner_render::linear_rgba;
-
 use crate::icons::{self, Icon};
 use crate::layout::Rect;
 use crate::paint::Painter;
@@ -157,41 +154,6 @@ pub fn pill_width(p: &Painter<'_>, text: &str, style: &TextStyle) -> f32 {
     (p.measure(text, style) + p.m.px(size::GRID * 2.0) * 2.0).round()
 }
 
-/// A read-only input-like field: optional short label on the left, value on
-/// the right of it.
-pub fn field(p: &mut Painter<'_>, rect: Rect, label: &str, value: &str) {
-    let t = *p.theme;
-    p.fill_rounded(rect, t.raised, p.m.px(size::RADIUS_SM));
-    let pad = p.m.px(size::GRID * 2.0);
-    let mut inner = rect.inset_xy(pad, 0.0);
-    if !label.is_empty() {
-        let label_style = p.style(type_scale::CAPTION, t.text_disabled);
-        let label_w = p.measure(label, &label_style);
-        p.text_in(label, inner, Align::Left, &label_style);
-        let shift = label_w + p.m.px(size::GRID * 2.0);
-        inner = Rect::new(inner.x + shift, inner.y, inner.w - shift, inner.h);
-    }
-    let value_style = p.style(type_scale::BODY, t.text_body);
-    p.text_in(value, inner, Align::Left, &value_style);
-}
-
-/// A colour field: swatch plus hex code.
-pub fn color_field(p: &mut Painter<'_>, rect: Rect, color: Color, hex: &str) {
-    let t = *p.theme;
-    p.fill_rounded(rect, t.raised, p.m.px(size::RADIUS_SM));
-    let pad = p.m.px(size::GRID * 1.5);
-    let side = rect.h - pad * 2.0;
-    let swatch = Rect::new(rect.x + pad, rect.y + pad, side, side);
-    p.fill_rounded(swatch, linear_rgba(color, 1.0), p.m.px(2.0));
-    p.stroke_rounded(swatch, t.border, p.m.px(2.0), p.m.hairline());
-    let text_x = swatch.right() + p.m.px(size::GRID * 2.0);
-    let inner = Rect::new(text_x, rect.y, rect.right() - text_x - pad, rect.h);
-    let style = p.style(type_scale::BODY, t.text_body);
-    p.text_in(hex, inner, Align::Left, &style);
-}
-
-/// A tooltip above (or below, when there is no room) `anchor`, clamped to
-/// `bounds`.
 #[allow(clippy::many_single_char_names)] // p, t, x, y, w, h: painter, theme, geometry
 pub fn tooltip(
     p: &mut Painter<'_>,

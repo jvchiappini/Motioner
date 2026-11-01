@@ -174,6 +174,8 @@ pub struct Theme {
     pub track_bar: [f32; 4],
     /// Animated range inside a lifetime bar.
     pub track_bar_animated: [f32; 4],
+    /// Easing curve drawn between keys.
+    pub timeline_curve: [f32; 4],
     /// Drop shadows.
     pub shadow: [f32; 4],
     /// Tooltip background.
@@ -214,6 +216,7 @@ impl Theme {
             keyframe: KEYFRAME.linear(),
             track_bar: N4.linear(),
             track_bar_animated: ACCENT.alpha(0.28),
+            timeline_curve: ACCENT.alpha(0.55),
             shadow: BLACK.alpha(0.45),
             tooltip: N4.linear(),
         }

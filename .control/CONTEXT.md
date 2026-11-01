@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-10-31
+actualizado: 2026-11-01
 actualizado_por: agente
 version_schema: 1
 ---
@@ -9,87 +9,38 @@ version_schema: 1
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
 custom FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds
-the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
+the composition. Scope and decisions: REF-0001..0004, D-0010..D-0022.
 
-## Working model (from 2026-10-31, session 008)
+## Working model
 
 - Code is usually written by opencode with DeepSeek V4.1 Flash; Claude is
-  architect and auditor (prompts, reviews, checks, small fixes). Exception:
-  in session 012 Claude implemented the editor UI itself with a
-  screenshot loop. Conversation with the user is in Spanish.
+  architect and auditor (prompts, reviews, checks, small fixes).
+  Conversation with the user is in Spanish.
 - Prompts live in `.control/prompts/opencode/opencode-prompt-NN-*.md`
-  (05 is the last one). Work only inside the Motioner, FerrousEngine and
-  GUIMaker folders.
-- The user wants LONG multi-phase prompts (several verifiable phases,
-  subagents on disjoint files, one final report) and a visible result
-  (PNG/MP4) as soon as possible.
-- Goals include improving FerrousEngine and GUIMaker upstream with small
-  patches, then bumping the pin in Motioner with an ADR.
+  (08 executed 2026-11-01). Work only inside Motioner, FerrousEngine and
+  GUIMaker.
+- The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
 
-## Current state (branch feat/m1-foundations, pushed to origin)
+## Current state (branch feat/m1-foundations, uncommitted prompt 08 work)
 
-- FIRST RENDER WORKS: `cargo run --release -p motioner_app -- render
-  examples/hello.motion --out out/hello.mp4` gives 300 frames 1920x1080
-  60/1 yuv420p in 2.75 s (RTX 4050). CLI: `motioner render|still|info`.
-- Commits after 757c0b5 (`main` untouched): D-0018 pin 61da7f9, core,
-  eval, dsl, example, hardening 480191e/e77a524, control a8a34a5, engine
-  pin bump 0b0737b (D-0019), first render 3fea9e3.
-- Crates: `motioner_render` (Pure2D adapter: flip F, text F*A*S, strictly
-  increasing z, linear colour, centred strokes, engine MSDF text,
-  `read_pixels_into`), `motioner_io` (PNG, streaming ffmpeg H.264 BT.709),
-  `motioner_app` (CLI), `motioner_testkit` golden
-  `crates/motioner_testkit/golden/hello_f120.png`. 131 tests; all gates
-  green incl. `cargo machete crates`. `ferrous_renderer` is built with
-  `default-features = false`.
-- Done: T-DSL-0003/0004, T-RENDER-0002, T-RENDER-0003. Backlog:
-  T-RENDER-0004 (engine polish), T-DSL-0005, T-ARCH-0007 (GUIMaker
-  architecture proposal pending).
-
-## FerrousEngine state
-
-- Pin `32aea8a` = head of engine branch `feat/pure2d-text-and-readback`
-  (pushed, NOT merged to engine main). Adds Pure2D MSDF text, font
-  metrics/kerning/layout, typed buffer-reusing readback, HarnessError,
-  headless without `gui`, engine CI (`.github/workflows/ci.yml`).
-- Open (T-RENDER-0004): readback ring does not overlap work; hard-edge
-  band in `shape_2d.wgsl` can leave 1-px holes; FontId2d without
-  generations; 8 warnings without default features; measure allocates.
-- Still missing for Motioner: premultiplied alpha, blend modes and
-  offscreen layers (straight `ALPHA_BLENDING` only); per-axis ring
-  thickness. SSAO uses `thread_rng` (3D only).
-- Engine repo stores 25 files with CRLF in the index; keep their CRLF
-  when committing (core.autocrlf=true).
-
-## GUIMaker facts (read via GitHub API, not cloned, 2026-10-31)
-
-- GUIMaker (github.com/jvchiappini/GUIMaker, head 9dcbc28, ~1 MB, Rust)
-  is a standalone visual designer BINARY that generates Rust UI code; it
-  is not a widget library. Widgets live in the engine (`ferrous_gui`,
-  `ferrous_ui_core`, `ferrous_layout`, `ferrous_ui_render`).
-- It does not build against the current engine: it imports `ferrous_app`,
-  which no longer exists in FerrousEngine main (02e6d48). Its manifest
-  uses `../crates/...` path deps (expects to sit inside an engine
-  checkout), its docs describe modules (`model.rs`, `codegen.rs`) that
-  the code no longer has, and its README says MIT with no LICENSE file.
-- Implication: `motioner_ui` depends on the engine UI crates; GUIMaker is
-  the design-time tool whose generated code and widget support we
-  improve upstream. REF-0001 section 3 and D-0004 say `motioner_ui`
-  depends on GUIMaker; correct that when T-ARCH-0007 starts.
-- User direction (2026-10-31): GUIMaker must become an egui-class UI
-  toolkit AND a SceneBuilder-style visual designer, very professional and
-  configurable. Needs an architecture proposal and ADR before any code.
-- Dev clones (full history, for upstream branches/PRs):
-  `C:\Users\jvchi\CARPETAS\FerrousEngine` (at 02e6d48, same as the pin)
-  and `C:\Users\jvchi\CARPETAS\GUIMaker` (at 9dcbc28). Motioner keeps
-  using only the pinned submodule.
-- Engine UI base already present at 02e6d48: `ferrous_ui_core` (~11.7k
-  lines, retained-mode `UiTree`, theme, reactive, animation, reflection,
-  widgets incl. dock_layout, split_pane, tabs, tree_view, virtual_list,
-  virtual_grid, data_table, color_picker, infinite_canvas, modal,
-  tooltip) plus a declarative RON/JSON `.fui` loader
-  (`engine/ferrous/crates/ferrous_ui_core/src/fui_loader.rs`), taffy-based
-  `ferrous_layout`, `ferrous_ui_render`, `ferrous_gui`. Build on these;
-  do not rewrite them.
+- FIRST RENDER WORKS: `motioner render|still|info` + `motioner preview`.
+- The editor now EDITS (D-0022): every UI gesture becomes an entry in
+  `<name>.overrides.motion`; the program only changes through
+  `motioner bake <file> [--id ID]...`.
+- **Keyframes are per parameter.** Core `Transform` stores
+  `AnimatableVec2` (X and Y are independent `Animatable<f64>` channels) for
+  position, scale and anchor; rotation/opacity stay scalar. Override/key
+  names accept an axis suffix: `pos.x`, `pos.y`, `scale.x`, …;
+  `key("pos", …)` keys both axes. A 3D transform will add `z`.
+- Crates: core (identities, visible, content setters, OverrideSet),
+  dsl (provenance, `.id()`, severities, run_with_overrides, axis keys,
+  bake), eval (sample_vec2), ui (session debounced atomic writes + undo,
+  per-parameter inspector, gizmos/snapping, timeline rows per axis with
+  visibility strips and inherited keys, layers actions, orphans, clipboard),
+  app (bake CLI). 215+ tests, gates green, golden byte-identical.
+- Manual run: `scripts/ui_drive.ps1` drives the release window with posted
+  mouse/keys and captures `out/ui/p08-*.png`. Bake canvas is byte-identical
+  before/after (verified by a pixel diff).
 
 ## Gotchas
 
@@ -97,41 +48,61 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0017.
   `submodules: true` and rely on `clippy -D warnings` instead.
 - `scripts/check_boundaries.py` bans ferrous/wgpu prefixes everywhere:
   exempt motioner_render and add a motioner_dsl rule.
-- Git Bash rewrites '/x' args: use `MSYS_NO_PATHCONV=1` for
-  `git sparse-checkout`.
-- Bash heredocs with mixed quotes broke; write files with the editor.
-- Disk: 7.2 GB free on C: at the end of session 012 (user allowed going
-  below 8 GB; auto-mode blocks deleting %TEMP%). CARGO_INCREMENTAL=0.
+- Disk: 10.6 GB free on C: after this session. CARGO_INCREMENTAL=0, `-j 2`.
 - PowerShell `Add-Type` fails while `LIB` lists a missing CUDA path: clear
-  `$env:LIB` first (done in the capture scripts).
+  `$env:LIB` first (done in the capture/drive scripts).
+- PowerShell scripts: function names `LP`/`MV` collide with aliases
+  (`Out-Printer`, `Move-Item`); avoid two-letter function names.
+- `cargo fmt` cannot split string literals: keep long user-facing strings
+  under 100 columns by hand.
+- `scripts/ui_shot.ps1` uses the DEBUG binary unless `-Release` is passed.
+- winit needs real focus for SendKeys; the driver calls SetForegroundWindow
+  and moves the real cursor with SetCursorPos so hover matches posted clicks.
 - 8 GB RAM: cargo with default parallelism can fail linking with
-  `os error 1455` (paging file too small). Use `-j 2` for builds/tests.
-- D-0003 superseded by D-0011; MDF v0 subset frozen; `while`, `use`,
-  dicts, overrides and LaTeX deferred to v0.1.
-- `origin` is jvchiappini/Motioner; do not touch Motioner-legacy; no
-  push without permission.
+  `os error 1455`. Use `-j 2`.
+
+## FerrousEngine state
+
+- Pin `32aea8a` = head of `feat/pure2d-text-and-readback` (pushed, NOT merged).
+- Dev clone `C:\Users\jvchi\CARPETAS\FerrousEngine` at `0ef6fe6` has the
+  Part A prompt-08 changes **uncommitted**: exact sRGB constructors,
+  border/shadow packing, `draw_text_baseline` with kerning, screenshot hook
+  (COPY_SRC + `Screenshot`/`on_screenshot`). The reviewer commits and bumps
+  the pin.
+- Pre-existing engine clippy warnings block the 4B clippy gate (listed in the
+  prompt-08 report); do not fix unrelated engine code.
+
+## GUIMaker facts (read via GitHub API, not cloned, 2026-10-31)
+
+- GUIMaker (github.com/jvchiappini/GUIMaker, head 9dcbc28, ~1 MB, Rust)
+  is a standalone visual designer BINARY that generates Rust UI code.
+- It does not build against the current engine: it imports `ferrous_app`
+  (removed in engine main 02e6d48); path deps `../crates/...`.
+- User direction: GUIMaker must become an egui-class toolkit AND a
+  SceneBuilder-style visual designer. Needs an architecture proposal and ADR
+  before code (T-ARCH-0007).
 
 ## Reference machine
 
 Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
-## Editor UI (session 012)
+## Editor UI
 
-- `motioner preview` (crate `motioner_ui`, D-0020/D-0021): layers, canvas,
-  read-only inspector, timeline (ruler, tracks, keyframes), status bar,
-  selection sync, splitters, tooltips, error/empty/loading states. Chrome is
-  an immediate painter on the engine `GuiBatch`; tokens in `theme.rs` are
-  the only colour literals (sRGB hex via `motioner_render::srgb_to_linear`).
+- `motioner preview` opens the editor window (D-0020/D-0021). Chrome is an
+  immediate painter on the engine `GuiBatch`; tokens in `theme.rs` are the
+  only colour literals. Layouts are pure and shared by drawing and hit
+  testing. See `crates/motioner_ui/README.md` for the shortcuts and the
+  per-parameter timeline.
+- Editing: inspector rows per parameter (Pos X/Y, Scale X/Y, Rotation,
+  Anchor X/Y, Opacity + content), stopwatch/diamond per channel, canvas
+  gizmos (move/scale/rotate, snapping), timeline sub-rows per parameter with
+  ◀ ◆ ▶, key marquee + retime + ease, layers eye/lock/rename, orphans.
 - Engine pitfalls found: `Color::hex` does not linearise; `draw_text` takes
   the em-box top; `GuiBatch::border/shadow` pack fields the shader ignores;
-  SVG meshes have no AA; surface lacks `COPY_SRC` (no in-app capture).
-- Screenshots: `scripts/ui_shot.ps1` (PrintWindow, no focus) into `out/ui/`;
-  hover cannot be synthesised. Commits: prompt 07 = 1a2ceea (Motioner),
-  engine Part A = 0ef6fe6 on the clone (not pushed). The redesign is
-  uncommitted until the user approves.
+  surface lacked `COPY_SRC`.
 
 ## Last relevant session
 
-S-2026-10-31-010 (closed) - engine prompt 05 reviewed, engine 32aea8a
-pushed, pin bumped (D-0019), prompt 04 rev 2 executed by opencode,
-reviewed, first render committed 3fea9e3 and pushed.
+S-2026-11-01-001 (open, to close after the prompt-08 report review): prompt 08
+executed end to end in Motioner + FerrousEngine clone, gates green, manual
+run and screenshots done.

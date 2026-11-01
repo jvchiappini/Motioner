@@ -106,6 +106,7 @@ impl Builtin {
 pub(crate) enum NodeMethod {
     Key,
     Add,
+    Id,
 }
 
 impl NodeMethod {
@@ -113,6 +114,7 @@ impl NodeMethod {
         match name {
             "key" => Some(Self::Key),
             "add" => Some(Self::Add),
+            "id" => Some(Self::Id),
             _ => None,
         }
     }
@@ -121,6 +123,7 @@ impl NodeMethod {
         match self {
             Self::Key => "key",
             Self::Add => "add",
+            Self::Id => "id",
         }
     }
 }

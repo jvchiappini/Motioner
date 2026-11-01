@@ -1,11 +1,16 @@
 //! The composition and its node tree, plus the validated mutation API.
 
-use crate::animation::{Animatable, Ease, Keyframe};
+use std::collections::HashMap;
+
+use crate::animation::{Animatable, AnimatableVec2, Axis, Ease, Keyframe};
 use crate::bounds;
 use crate::color::Color;
 use crate::error::CoreError;
 use crate::math::Vec2;
-use crate::node::{BlendMode, Node, NodeContent, NodeId, Property, PropertyValue, Transform};
+use crate::node::{
+    BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, Property,
+    PropertyValue, Stroke, Transform,
+};
 use crate::time::{frame_within_bounds, Frame, FrameRate};
 
 /// Largest accepted canvas side in pixels.
@@ -101,6 +106,10 @@ pub struct Document {
     composition: Composition,
     nodes: Vec<Node>,
     roots: Vec<NodeId>,
+    /// Stable identity to node, for O(1) lookups from override files and the
+    /// editor. Inserts and removes only; never iterated, so evaluation stays
+    /// deterministic.
+    identities: HashMap<String, NodeId>,
 }
 
 /// Whether a property write sets the static value or adds a keyframe.
@@ -118,6 +127,7 @@ impl Document {
             composition,
             nodes: Vec::new(),
             roots: Vec::new(),
+            identities: HashMap::new(),
         }
     }
 
@@ -158,13 +168,37 @@ impl Document {
 
     /// Adds a top-level node with a default transform.
     ///
+    /// The node gets a synthetic provenance identity `#[index]`, which is
+    /// replaced by [`Self::add_node_with_identity`] or [`Self::assign_id`].
+    /// The DSL always supplies a real identity.
+    ///
     /// # Errors
     ///
     /// Returns [`CoreError::InvalidGeometry`] for negative or non-finite
     /// sizes and [`CoreError::TooManyNodes`] when IDs are exhausted.
     pub fn add_node(&mut self, content: NodeContent) -> Result<NodeId, CoreError> {
+        let raw = u32::try_from(self.nodes.len()).map_err(|_| CoreError::TooManyNodes)?;
+        self.add_node_with_identity(content, NodeIdentity::Provenance(format!("#{raw}")))
+    }
+
+    /// Adds a top-level node with an explicit stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::add_node`], plus [`CoreError::DuplicateId`] when an
+    /// explicit identity is already used.
+    pub fn add_node_with_identity(
+        &mut self,
+        content: NodeContent,
+        identity: NodeIdentity,
+    ) -> Result<NodeId, CoreError> {
         if let Some(field) = content.invalid_field() {
             return Err(CoreError::InvalidGeometry { field });
+        }
+        if identity.is_explicit() && self.identities.contains_key(identity.as_str()) {
+            return Err(CoreError::DuplicateId {
+                name: identity.as_str().to_owned(),
+            });
         }
         let raw = u32::try_from(self.nodes.len()).map_err(|_| CoreError::TooManyNodes)?;
         let id = NodeId::from_raw(raw);
@@ -175,9 +209,144 @@ impl Document {
             content,
             transform: Transform::default(),
             blend: BlendMode::Normal,
+            identity,
+            visible: true,
         });
         self.roots.push(id);
+        self.index_identity(id);
         Ok(id)
+    }
+
+    /// Replaces a node's identity with a validated explicit `.id()` name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::InvalidIdentity`] for a malformed name and
+    /// [`CoreError::DuplicateId`] when another node already uses it.
+    pub fn assign_id(&mut self, id: NodeId, name: &str) -> Result<(), CoreError> {
+        self.require(id)?;
+        let identity = NodeIdentity::explicit(name)?;
+        if self
+            .identities
+            .get(identity.as_str())
+            .is_some_and(|&existing| existing != id)
+        {
+            return Err(CoreError::DuplicateId {
+                name: name.to_owned(),
+            });
+        }
+        self.identities
+            .remove(self.nodes[id.index()].identity.as_str());
+        self.nodes[id.index()].identity = identity;
+        self.index_identity(id);
+        Ok(())
+    }
+
+    /// The node with the given stable identity, if any.
+    #[must_use]
+    pub fn find(&self, identity: &str) -> Option<NodeId> {
+        self.identities.get(identity).copied()
+    }
+
+    /// Sets whether a node and its subtree are rendered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID.
+    pub fn set_visible(&mut self, id: NodeId, visible: bool) -> Result<(), CoreError> {
+        self.require(id)?;
+        self.nodes[id.index()].visible = visible;
+        Ok(())
+    }
+
+    /// Writes a validated content field.
+    ///
+    /// # Errors
+    ///
+    /// Fails for an unknown node, a field the node's kind does not have
+    /// ([`CoreError::WrongContentField`]) and a value of the wrong shape or
+    /// out of range ([`CoreError::InvalidContentValue`]).
+    pub fn set_content(
+        &mut self,
+        id: NodeId,
+        field: ContentField,
+        value: ContentValue,
+    ) -> Result<(), CoreError> {
+        let (kind, accepts) = {
+            let node = self.require(id)?;
+            (node.content.kind_name(), node.content.accepts(field))
+        };
+        if !accepts {
+            return Err(CoreError::WrongContentField {
+                kind,
+                field: field.name(),
+            });
+        }
+        let content = &mut self.nodes[id.index()].content;
+        match (field, value) {
+            (ContentField::Width, ContentValue::Number(v)) => match content {
+                NodeContent::Rect { width, .. } => set_number(width, field, v, false),
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Height, ContentValue::Number(v)) => match content {
+                NodeContent::Rect { height, .. } => set_number(height, field, v, false),
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Radius, ContentValue::Number(v)) => match content {
+                NodeContent::Rect { radius, .. } | NodeContent::Circle { radius, .. } => {
+                    set_number(radius, field, v, false)
+                }
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::StrokeWidth, ContentValue::Number(v)) => set_stroke_width(content, v),
+            (ContentField::Size, ContentValue::Number(v)) => match content {
+                NodeContent::Text(text) => set_number(&mut text.size, field, v, true),
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Fill, ContentValue::Color(color)) => match content {
+                NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                    paint.fill = color;
+                    Ok(())
+                }
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Stroke, ContentValue::Color(color)) => match content {
+                NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+                    paint.stroke = color.map(|color| {
+                        let width = paint.stroke.map_or(0.0, |stroke| stroke.width);
+                        Stroke { color, width }
+                    });
+                    Ok(())
+                }
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Color, ContentValue::Color(Some(color))) => match content {
+                NodeContent::Text(text) => {
+                    text.color = color;
+                    Ok(())
+                }
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Text, ContentValue::Text(text_value)) => match content {
+                NodeContent::Text(text) => {
+                    text.text = text_value;
+                    Ok(())
+                }
+                _ => Err(wrong_kind(content, field)),
+            },
+            (ContentField::Align, ContentValue::Align(align)) => match content {
+                NodeContent::Text(text) => {
+                    text.align = align;
+                    Ok(())
+                }
+                _ => Err(wrong_kind(content, field)),
+            },
+            _ => Err(CoreError::InvalidContentValue {
+                field: field.name(),
+                reason: "wrong value type",
+            }),
+        }
     }
 
     /// Moves `child` to the end of `parent`'s children.
@@ -245,6 +414,138 @@ impl Document {
         self.write_property(id, property, value, Write::Key(frame, ease))
     }
 
+    /// Sets one axis of a vector property's static value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::WrongAxis`] for a scalar property, and the same value
+    /// errors as [`Self::set_property`].
+    pub fn set_property_axis(
+        &mut self,
+        id: NodeId,
+        property: Property,
+        axis: Axis,
+        value: f64,
+    ) -> Result<(), CoreError> {
+        self.require(id)?;
+        if !property.is_vector() {
+            return Err(CoreError::WrongAxis {
+                property: property.name(),
+                axis: Some(axis.name()),
+            });
+        }
+        let value = bounds::check_value(property, value)?;
+        self.vector_mut(id, property)?.set_axis_value(axis, value);
+        Ok(())
+    }
+
+    /// Adds or replaces one axis's keyframe.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::WrongAxis`] for a scalar property, and the same value and
+    /// frame errors as [`Self::add_keyframe`].
+    pub fn add_axis_keyframe(
+        &mut self,
+        id: NodeId,
+        property: Property,
+        axis: Axis,
+        frame: Frame,
+        value: f64,
+        ease: Ease,
+    ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
+        self.require(id)?;
+        if !property.is_vector() {
+            return Err(CoreError::WrongAxis {
+                property: property.name(),
+                axis: Some(axis.name()),
+            });
+        }
+        let value = bounds::check_value(property, value)?;
+        self.vector_mut(id, property)?
+            .insert_axis_key(axis, frame, value, ease);
+        Ok(())
+    }
+
+    /// Removes one axis's keyframe at `frame`, if there is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::WrongAxis`] for a scalar property, and
+    /// [`CoreError::FrameOutOfRange`] for a frame outside the allowed range.
+    pub fn remove_axis_keyframe(
+        &mut self,
+        id: NodeId,
+        property: Property,
+        axis: Axis,
+        frame: Frame,
+    ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
+        self.require(id)?;
+        if !property.is_vector() {
+            return Err(CoreError::WrongAxis {
+                property: property.name(),
+                axis: Some(axis.name()),
+            });
+        }
+        self.vector_mut(id, property)?.remove_axis_key(axis, frame);
+        Ok(())
+    }
+
+    fn vector_mut(
+        &mut self,
+        id: NodeId,
+        property: Property,
+    ) -> Result<&mut AnimatableVec2, CoreError> {
+        let transform = &mut self.nodes[id.index()].transform;
+        Ok(match property {
+            Property::Position => &mut transform.position,
+            Property::Scale => &mut transform.scale,
+            Property::Anchor => &mut transform.anchor,
+            Property::Rotation | Property::Opacity => {
+                return Err(CoreError::WrongAxis {
+                    property: property.name(),
+                    axis: None,
+                })
+            }
+        })
+    }
+
+    /// Removes the keyframe at `frame` from a property, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID and
+    /// [`CoreError::FrameOutOfRange`] for a frame outside the allowed range.
+    pub fn remove_keyframe(
+        &mut self,
+        id: NodeId,
+        property: Property,
+        frame: Frame,
+    ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
+        self.require(id)?;
+        let transform = &mut self.nodes[id.index()].transform;
+        match property {
+            Property::Position => transform.position.remove_key(frame),
+            Property::Scale => transform.scale.remove_key(frame),
+            Property::Rotation => drop(transform.rotation.remove_key(frame)),
+            Property::Anchor => transform.anchor.remove_key(frame),
+            Property::Opacity => drop(transform.opacity.remove_key(frame)),
+        }
+        Ok(())
+    }
+
     /// Sets a node's blend mode.
     ///
     /// # Errors
@@ -258,6 +559,11 @@ impl Document {
 
     fn require(&self, id: NodeId) -> Result<&Node, CoreError> {
         self.node(id).ok_or(CoreError::UnknownNode(id))
+    }
+
+    fn index_identity(&mut self, id: NodeId) {
+        let key = self.nodes[id.index()].identity.as_str().to_owned();
+        self.identities.insert(key, id);
     }
 
     fn is_ancestor_or_self(&self, ancestor: NodeId, mut node: NodeId) -> bool {
@@ -282,9 +588,11 @@ impl Document {
         self.require(id)?;
         let transform = &mut self.nodes[id.index()].transform;
         match property {
-            Property::Position => apply(&mut transform.position, vector(property, value)?, write),
-            Property::Anchor => apply(&mut transform.anchor, vector(property, value)?, write),
-            Property::Scale => apply(&mut transform.scale, scale(value)?, write),
+            Property::Position => {
+                apply_vec(&mut transform.position, vector(property, value)?, write);
+            }
+            Property::Anchor => apply_vec(&mut transform.anchor, vector(property, value)?, write),
+            Property::Scale => apply_vec(&mut transform.scale, scale(value)?, write),
             Property::Rotation => apply(&mut transform.rotation, scalar(property, value)?, write),
             Property::Opacity => apply(&mut transform.opacity, scalar(property, value)?, write),
         }
@@ -292,10 +600,67 @@ impl Document {
     }
 }
 
+fn apply_vec(target: &mut crate::animation::AnimatableVec2, value: Vec2, write: Write) {
+    match write {
+        Write::Static => target.set_value(value),
+        Write::Key(frame, ease) => target.insert_key(frame, value, ease),
+    }
+}
+
 fn apply<T: Copy>(target: &mut Animatable<T>, value: T, write: Write) {
     match write {
         Write::Static => target.set_value(value),
         Write::Key(frame, ease) => target.insert_key(Keyframe { frame, value, ease }),
+    }
+}
+
+/// Writes a finite, optionally positive number to a content field.
+fn set_number(
+    target: &mut f64,
+    field: ContentField,
+    value: f64,
+    positive: bool,
+) -> Result<(), CoreError> {
+    let ok = value.is_finite() && if positive { value > 0.0 } else { value >= 0.0 };
+    if !ok {
+        return Err(CoreError::InvalidContentValue {
+            field: field.name(),
+            reason: if positive {
+                "must be a finite number above zero"
+            } else {
+                "must be a finite number zero or above"
+            },
+        });
+    }
+    *target = value;
+    Ok(())
+}
+
+fn wrong_kind(content: &NodeContent, field: ContentField) -> CoreError {
+    CoreError::WrongContentField {
+        kind: content.kind_name(),
+        field: field.name(),
+    }
+}
+
+fn set_stroke_width(content: &mut NodeContent, value: f64) -> Result<(), CoreError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(CoreError::InvalidContentValue {
+            field: ContentField::StrokeWidth.name(),
+            reason: "must be a finite number zero or above",
+        });
+    }
+    match content {
+        NodeContent::Rect { paint, .. } | NodeContent::Circle { paint, .. } => {
+            paint.stroke = paint.stroke.and_then(|stroke| {
+                (value > 0.0).then_some(Stroke {
+                    color: stroke.color,
+                    width: value,
+                })
+            });
+            Ok(())
+        }
+        _ => Err(wrong_kind(content, ContentField::StrokeWidth)),
     }
 }
 
