@@ -9,79 +9,83 @@ version_schema: 1
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
 custom FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds
-the composition. Scope and decisions: REF-0001..0004, D-0010..D-0022.
+the composition. Scope and decisions: REF-0001..0004, D-0010..D-0027.
 
 ## Working model
 
 - Code is usually written by opencode with DeepSeek V4.1 Flash; Claude is
-  architect and auditor (prompts, reviews, checks, small fixes).
-  Conversation with the user is in Spanish.
-- Prompts live in `.control/prompts/opencode/opencode-prompt-NN-*.md`
-  (08 executed 2026-11-01). Work only inside Motioner, FerrousEngine and
-  GUIMaker.
+  architect and auditor (prompts, reviews, checks, small fixes). Session 013
+  was done by Claude. Session 014 (opencode) ran prompt 09. Conversation
+  with the user is in Spanish.
+- Prompts live in `.control/prompts/{opencode,claude}/`. Work only inside
+  Motioner, FerrousEngine and GUIMaker.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
 
-## Current state (branch feat/m1-foundations, uncommitted prompt 08 work)
+## Current state (branch feat/m1-foundations, sessions 013 + 014 uncommitted)
 
-- FIRST RENDER WORKS: `motioner render|still|info` + `motioner preview`.
-- The editor now EDITS (D-0022): every UI gesture becomes an entry in
-  `<name>.overrides.motion`; the program only changes through
-  `motioner bake <file> [--id ID]...`.
-- **Keyframes are per parameter.** Core `Transform` stores
-  `AnimatableVec2` (X and Y are independent `Animatable<f64>` channels) for
-  position, scale and anchor; rotation/opacity stay scalar. Override/key
-  names accept an axis suffix: `pos.x`, `pos.y`, `scale.x`, …;
-  `key("pos", …)` keys both axes. A 3D transform will add `z`.
-- Crates: core (identities, visible, content setters, OverrideSet),
-  dsl (provenance, `.id()`, severities, run_with_overrides, axis keys,
-  bake), eval (sample_vec2), ui (session debounced atomic writes + undo,
-  per-parameter inspector, gizmos/snapping, timeline rows per axis with
-  visibility strips and inherited keys, layers actions, orphans, clipboard),
-  app (bake CLI). 215+ tests, gates green, golden byte-identical.
-- Manual run: `scripts/ui_drive.ps1` drives the release window with posted
-  mouse/keys and captures `out/ui/p08-*.png`. Bake canvas is byte-identical
-  before/after (verified by a pixel diff).
+- `motioner render|still|info|bake|preview|query|edit|ctl`.
+- The editor EDITS through overrides (D-0022); the program only changes with
+  `bake`.
+- **Agent control (D-0024)**: one `Command` enum (49 kinds, MDF call syntax,
+  `motioner_ui::command`) executed only by the window-free `Editor`
+  (`motioner_ui::editor`). `motioner query` (JSON scene), `motioner edit`
+  (all-or-nothing, `--dry-run`), `preview --control` + `motioner ctl`.
+  Docs: `docs/agents.md`.
+- **Canvas view (D-0026)**: `ViewState.zoom` (`None` = fit), `pan`,
+  `fit_zoom`; `viewport::Viewport` is the one window ↔ composition mapping.
+  Commands `zoom(factor)`, `zoom_fit()`, `zoom_by(steps, x, y)`,
+  `pan(dx, dy)`; gestures Ctrl+wheel, middle/Space+drag, F, zoom pill, `1`.
+  Space toggles playback on release only when it did not drag.
+- **Orphans (D-0025 + addendum)**: `Editor::orphan_suggestions()` ranks live
+  nodes (property acceptance, inferred program shift, loop iteration,
+  offset, parent); `query` adds `suggestions`; the layers panel has a Rebind
+  action that runs `assign_id`.
+- **Hybrid bake (D-0027, T-DSL-0006)**: the interpreter records `ValueOrigin`
+  (span + literal shape + key/ease); bake edits private literals in place
+  (count == 1), appends for the rest, re-keys remaining overrides by the
+  exact edit offsets, and verifies by re-running; on mismatch it falls back.
+- Keyframes per axis; animated vectors are always keyed per axis (`pos.x`).
+- In-app screenshots: `preview --screenshot <png>` and `ctl screenshot(...)`;
+  `scripts/ui_shot.ps1 [-Commands ...]`.
 
 ## Gotchas
 
 - CI `RUSTFLAGS=-D warnings` will fail on engine path deps; use
   `submodules: true` and rely on `clippy -D warnings` instead.
-- `scripts/check_boundaries.py` bans ferrous/wgpu prefixes everywhere:
-  exempt motioner_render and add a motioner_dsl rule.
-- Disk: 10.6 GB free on C: after this session. CARGO_INCREMENTAL=0, `-j 2`.
-- PowerShell `Add-Type` fails while `LIB` lists a missing CUDA path: clear
-  `$env:LIB` first (done in the capture/drive scripts).
-- PowerShell scripts: function names `LP`/`MV` collide with aliases
-  (`Out-Printer`, `Move-Item`); avoid two-letter function names.
-- `cargo fmt` cannot split string literals: keep long user-facing strings
-  under 100 columns by hand.
-- `scripts/ui_shot.ps1` uses the DEBUG binary unless `-Release` is passed.
-- winit needs real focus for SendKeys; the driver calls SetForegroundWindow
-  and moves the real cursor with SetCursorPos so hover matches posted clicks.
-- 8 GB RAM: cargo with default parallelism can fail linking with
-  `os error 1455`. Use `-j 2`.
+- `scripts/check_boundaries.py`: `motioner_ui` may not depend on
+  `motioner_io`, so the app passes a `PngWriter` fn to the UI.
+- Disk: C: had ~9.5 GB free at session 014 end. CARGO_INCREMENTAL=0, `-j 2`.
+- **Engine screenshot hook**: the runner now carries an `update`-time
+  `request_screenshot` into the capture decision (session 014, uncommitted in
+  the engine clone); Motioner still requests in `draw_ui`.
+- Windows PowerShell 5.1 drops unescaped `"` in arguments to native programs:
+  escape them (`'select(\"@288\")'`); a wrapper script with literal strings
+  plus that escape is the reliable way to drive `ui_shot.ps1`/`motioner edit`.
+- `core.autocrlf=true`: working copies are CRLF, commits are LF; normal.
+- Bash heredocs containing `'''` break in this harness: write scripts to the
+  scratchpad with the Write tool.
+- PowerShell `Add-Type` fails while `LIB` lists a missing CUDA path.
+- `cargo fmt` cannot split string literals: keep long strings < 100 columns.
+- 8 GB RAM: cargo with default parallelism can fail linking (`os error 1455`).
+- At 400 % zoom the title sits near the canvas centre only with an explicit
+  `pan`; visible composition content is correct, but the selection box can
+  extend outside the canvas.
 
 ## FerrousEngine state
 
 - Pin `c4ae1f2` = head of `feat/pure2d-text-and-readback` (pushed, NOT
-  merged), D-0023. Includes the prompt-08 Part A engine work: exact sRGB
-  constructors, border/shadow packing, `draw_text_baseline` with kerning,
-  in-app screenshot hook (`AppContext::request_screenshot`,
-  `FerrousApp::on_screenshot`). Motioner does not use the screenshot hook
-  yet (prompt 09).
-- Golden `hello_f120.png` regenerated for this pin (14 px of title AA).
-- Pre-existing engine clippy warnings when the engine is linted on its own;
-  do not fix unrelated engine code.
+  merged), D-0023. Session 014 added an uncommitted fix on top of it: an
+  update-time screenshot request is honoured (helper + 3 tests). The reviewer
+  pushes and bumps the Motioner pin.
+- Golden `hello_f120.png` SHA `c2173bad...` (still byte-identical).
+- Pre-existing engine warnings when the engine is linted on its own.
 
 ## GUIMaker facts (read via GitHub API, not cloned, 2026-10-31)
 
-- GUIMaker (github.com/jvchiappini/GUIMaker, head 9dcbc28, ~1 MB, Rust)
-  is a standalone visual designer BINARY that generates Rust UI code.
-- It does not build against the current engine: it imports `ferrous_app`
-  (removed in engine main 02e6d48); path deps `../crates/...`.
-- User direction: GUIMaker must become an egui-class toolkit AND a
-  SceneBuilder-style visual designer. Needs an architecture proposal and ADR
-  before code (T-ARCH-0007).
+- GUIMaker is a standalone visual designer BINARY that generates Rust UI
+  code; it does not build against the current engine (`ferrous_app` removed).
+- User direction: egui-class toolkit AND SceneBuilder-style designer; needs
+  an architecture proposal and ADR before code (T-ARCH-0007).
 
 ## Reference machine
 
@@ -89,21 +93,18 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Editor UI
 
-- `motioner preview` opens the editor window (D-0020/D-0021). Chrome is an
-  immediate painter on the engine `GuiBatch`; tokens in `theme.rs` are the
-  only colour literals. Layouts are pure and shared by drawing and hit
-  testing. See `crates/motioner_ui/README.md` for the shortcuts and the
-  per-parameter timeline.
-- Editing: inspector rows per parameter (Pos X/Y, Scale X/Y, Rotation,
-  Anchor X/Y, Opacity + content), stopwatch/diamond per channel, canvas
-  gizmos (move/scale/rotate, snapping), timeline sub-rows per parameter with
-  ◀ ◆ ▶, key marquee + retime + ease, layers eye/lock/rename, orphans.
-- Engine pitfalls found: `Color::hex` does not linearise; `draw_text` takes
-  the em-box top; `GuiBatch::border/shadow` pack fields the shader ignores;
-  surface lacked `COPY_SRC`.
+- Chrome is an immediate painter on the engine `GuiBatch`; tokens in
+  `theme.rs` are the only colour literals; layouts are pure and shared by
+  drawing and hit testing. See `crates/motioner_ui/README.md`.
+- One key-marker language (`widgets::key_marker`): filled gold = key, dark
+  core = shared on a layer row, accent = selected, hollow = inherited/none.
+- Visibility strips: solid where drawn, outline where not. Eased segments
+  are solid lines following the ease. Inspector ease grid with curves.
+- Orphans rows: check icon = Rebind to the suggested node, error icon =
+  delete.
 
 ## Last relevant session
 
-S-2026-11-01-001 (open, to close after the prompt-08 report review): prompt 08
-executed end to end in Motioner + FerrousEngine clone, gates green, manual
-run and screenshots done.
+S-2026-11-01-003 (opencode, session 014): prompt 09 — canvas zoom/pan
+(T-UI-0005, D-0026), orphan suggestions (T-APP-0002), hybrid bake
+(T-DSL-0006, D-0027), engine screenshot fix (T-RENDER-0006). Gates green.
