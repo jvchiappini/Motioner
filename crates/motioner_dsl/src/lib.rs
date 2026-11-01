@@ -26,6 +26,7 @@ mod host;
 mod interpreter;
 mod lexer;
 mod limits;
+mod origins;
 mod overrides_file;
 mod parser;
 mod scene;
@@ -34,9 +35,10 @@ mod value;
 
 pub use bake::{bake, BakeOutcome};
 pub use diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
-pub use interpreter::{execute, execute_full};
+pub use interpreter::{execute, execute_detailed, execute_full, Execution};
 pub use lexer::tokenize;
 pub use limits::Limits;
+pub use origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
 pub use parser::{parse, MAX_EXPR_DEPTH};
 pub use token::{Keyword, Op, Token, TokenKind};
 
@@ -54,6 +56,9 @@ pub struct Compiled {
     /// Top-level variable bindings that point at nodes, sorted by name; bake
     /// uses them to name nodes in generated statements.
     pub bindings: Vec<(String, NodeId)>,
+    /// Where each node property value came from; the hybrid bake edits a
+    /// private literal in place when that is exact.
+    pub origins: ValueOrigins,
 }
 
 /// Stack size of the interpreter thread. Deep MDF call chains (up to
@@ -144,13 +149,17 @@ fn compile(
     limits: &Limits,
 ) -> Result<Compiled, Diagnostic> {
     let program = parse(source)?;
-    let (mut document, bindings) = execute_full(&program, limits)?;
+    let execution = execute_detailed(&program, limits)?;
+    let mut document = execution.document;
+    let bindings = execution.bindings;
+    let origins = execution.origins;
     let Some(overrides_source) = overrides_source else {
         return Ok(Compiled {
             document,
             overrides: OverrideSet::new(),
             warnings: Vec::new(),
             bindings,
+            origins,
         });
     };
     let rate = document.composition().frame_rate();
@@ -174,5 +183,6 @@ fn compile(
         overrides: parsed.set,
         warnings,
         bindings,
+        origins,
     })
 }

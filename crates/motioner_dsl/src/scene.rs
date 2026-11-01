@@ -13,8 +13,9 @@ use motioner_core::{
     TextAlign, TextContent, MAX_CANVAS_SIZE,
 };
 
-use crate::diagnostic::ErrorCategory;
+use crate::diagnostic::{ErrorCategory, Span};
 use crate::host::{as_integer, as_vec2, bind, vec2_value, Bound, CallArgs, HostError, HostResult};
+use crate::origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
 use crate::value::{Builtin, NodeMethod, Value};
 
 /// NTSC-style frame rates written as decimals, mapped to exact rationals.
@@ -56,6 +57,7 @@ impl CreationSite {
 pub(crate) struct Scene {
     document: Option<Document>,
     max_nodes: usize,
+    origins: ValueOrigins,
 }
 
 impl Scene {
@@ -63,12 +65,33 @@ impl Scene {
         Self {
             document: None,
             max_nodes,
+            origins: ValueOrigins::new(),
         }
+    }
+
+    /// The value origins recorded so far.
+    pub fn origins(&self) -> &ValueOrigins {
+        &self.origins
     }
 
     /// The finished document, if `comp()` was called.
     pub fn into_document(self) -> Option<Document> {
         self.document
+    }
+
+    /// Records where a node property value came from, when the source is
+    /// known (an argument that was actually written in the program).
+    fn record(&mut self, node: NodeId, property: &str, source: Option<(Span, Option<Literal>)>) {
+        if let Some((span, literal)) = source {
+            self.origins.record(ValueOrigin {
+                node,
+                property: property.to_owned(),
+                span,
+                literal,
+                kind: OriginKind::Set,
+                ease: None,
+            });
+        }
     }
 
     /// Calls a scene constructor builtin.
@@ -100,7 +123,20 @@ impl Scene {
                     radius: bound.number_or(2, 0.0)?,
                     paint: paint(&bound, 3)?,
                 };
-                self.create(content, site)
+                let node = self.create(content, site)?;
+                if let Value::Node(id) = node {
+                    for (index, property) in [
+                        (0, "width"),
+                        (1, "height"),
+                        (2, "radius"),
+                        (3, "fill"),
+                        (4, "stroke"),
+                        (5, "stroke_width"),
+                    ] {
+                        self.record(id, property, bound.source(index));
+                    }
+                }
+                Ok(node)
             }
             Builtin::Circle => {
                 let params = ["radius", "fill", "stroke", "stroke_width"];
@@ -109,7 +145,18 @@ impl Scene {
                     radius: bound.number(0)?,
                     paint: paint(&bound, 1)?,
                 };
-                self.create(content, site)
+                let node = self.create(content, site)?;
+                if let Value::Node(id) = node {
+                    for (index, property) in [
+                        (0, "radius"),
+                        (1, "fill"),
+                        (2, "stroke"),
+                        (3, "stroke_width"),
+                    ] {
+                        self.record(id, property, bound.source(index));
+                    }
+                }
+                Ok(node)
             }
             Builtin::Text => self.text(args, site),
             _ => Err(HostError::type_error(format!(
@@ -174,7 +221,13 @@ impl Scene {
             color: bound.color_or(3, Color::WHITE)?,
             align,
         });
-        self.create(content, site)
+        let node = self.create(content, site)?;
+        if let Value::Node(id) = node {
+            for (index, property) in [(0, "text"), (2, "size"), (3, "color"), (4, "align")] {
+                self.record(id, property, bound.source(index));
+            }
+        }
+        Ok(node)
     }
 
     fn document_mut(&mut self) -> HostResult<&mut Document> {
@@ -226,28 +279,31 @@ impl Scene {
         Ok(value)
     }
 
-    /// Writes `node.name = value`.
-    pub fn set_attribute(&mut self, id: NodeId, name: &str, value: &Value) -> HostResult<()> {
-        if name == "blend" {
+    /// Writes `node.name = value` and records where the value came from.
+    pub fn set_attribute(
+        &mut self,
+        id: NodeId,
+        name: &str,
+        value: &Value,
+        span: Span,
+        literal: Option<Literal>,
+    ) -> HostResult<()> {
+        let result = if name == "blend" {
             let blend = blend_mode(value)?;
-            return self
-                .document_mut()?
+            self.document_mut()?
                 .set_blend(id, blend)
-                .map_err(|error| core_error(&error));
-        }
-        if name == "visible" {
+                .map_err(|error| core_error(&error))
+        } else if name == "visible" {
             let Value::Bool(visible) = value else {
                 return Err(HostError::type_error(format!(
                     "'visible' expects True or False, got {}",
                     value.type_name()
                 )));
             };
-            return self
-                .document_mut()?
+            self.document_mut()?
                 .set_visible(id, *visible)
-                .map_err(|error| core_error(&error));
-        }
-        if let Some(field) = ContentField::from_name(name) {
+                .map_err(|error| core_error(&error))
+        } else if let Some(field) = ContentField::from_name(name) {
             let accepts = self
                 .document()?
                 .node(id)
@@ -256,16 +312,19 @@ impl Scene {
                 return Err(unknown_attribute(name));
             }
             let value = content_value(field, value)?;
-            return self
-                .document_mut()?
+            self.document_mut()?
                 .set_content(id, field, value)
-                .map_err(|error| core_error(&error));
-        }
-        let property = Property::from_name(name).ok_or_else(|| unknown_attribute(name))?;
-        let value = property_value(property, value)?;
-        self.document_mut()?
-            .set_property(id, property, value)
-            .map_err(|error| core_error(&error))
+                .map_err(|error| core_error(&error))
+        } else {
+            let property = Property::from_name(name).ok_or_else(|| unknown_attribute(name))?;
+            let value = property_value(property, value)?;
+            self.document_mut()?
+                .set_property(id, property, value)
+                .map_err(|error| core_error(&error))
+        };
+        result?;
+        self.record(id, name, Some((span, literal)));
+        Ok(())
     }
 
     /// Calls `node.method(args)`.
@@ -358,6 +417,24 @@ impl Scene {
                 .map_err(|error| core_error(&error))?,
             (None, None) => {}
         }
+        let source = bound.source(2);
+        let ease_origin = bound
+            .source(3)
+            .filter(|(_, literal)| *literal == Some(Literal::Text))
+            .map(|(span, _)| EaseOrigin {
+                span,
+                name: ease_name.to_string(),
+            });
+        if let Some((span, literal)) = source {
+            self.origins.record(ValueOrigin {
+                node: id,
+                property: property_name.to_string(),
+                span,
+                literal,
+                kind: OriginKind::Key(frame),
+                ease: ease_origin,
+            });
+        }
         Ok(Value::None)
     }
 
@@ -367,10 +444,10 @@ impl Scene {
         }
         let document = self.document_mut()?;
         for child in &args.positional {
-            let Value::Node(child) = child else {
+            let Value::Node(child) = &child.value else {
                 return Err(HostError::type_error(format!(
                     "add() expects nodes, got {}",
-                    child.type_name()
+                    child.value.type_name()
                 )));
             };
             document

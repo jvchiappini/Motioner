@@ -239,9 +239,13 @@ fn extreme(
             "{name}() takes no keyword arguments"
         )));
     }
-    let candidates = match args.positional.as_slice() {
-        [single] => items(single, limits, budget)?,
-        _ => args.positional,
+    let candidates = if args.positional.len() == 1 {
+        items(&args.positional[0].value, limits, budget)?
+    } else {
+        args.positional
+            .into_iter()
+            .map(|argument| argument.value)
+            .collect()
     };
     let mut best: Option<Value> = None;
     for candidate in candidates {

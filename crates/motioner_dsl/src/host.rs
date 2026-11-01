@@ -9,7 +9,8 @@ use std::rc::Rc;
 
 use motioner_core::{Color, Vec2};
 
-use crate::diagnostic::ErrorCategory;
+use crate::diagnostic::{ErrorCategory, Span};
+use crate::origins::Literal;
 use crate::value::Value;
 
 /// A host-side error. The interpreter attaches the span and call stack.
@@ -42,11 +43,21 @@ impl HostError {
 
 pub(crate) type HostResult<T> = Result<T, HostError>;
 
+/// One evaluated call argument: its value and where it came from.
+#[derive(Debug, Clone)]
+pub(crate) struct CallValue {
+    pub value: Value,
+    /// Span of the argument expression in the source.
+    pub span: Span,
+    /// The literal shape of the expression, when it is a plain literal.
+    pub literal: Option<Literal>,
+}
+
 /// Evaluated call arguments.
 #[derive(Debug, Default)]
 pub(crate) struct CallArgs {
-    pub positional: Vec<Value>,
-    pub keywords: Vec<(Rc<str>, Value)>,
+    pub positional: Vec<CallValue>,
+    pub keywords: Vec<(Rc<str>, CallValue)>,
 }
 
 /// Arguments bound to a parameter list, with typed accessors that report
@@ -54,7 +65,7 @@ pub(crate) struct CallArgs {
 pub(crate) struct Bound<'a> {
     function: &'a str,
     params: &'a [&'a str],
-    values: Vec<Option<Value>>,
+    values: Vec<Option<CallValue>>,
 }
 
 /// Binds positional then keyword arguments to `params`. The first
@@ -72,7 +83,7 @@ pub(crate) fn bind<'a>(
             args.positional.len()
         )));
     }
-    let mut values: Vec<Option<Value>> = vec![None; params.len()];
+    let mut values: Vec<Option<CallValue>> = vec![None; params.len()];
     for (slot, value) in values.iter_mut().zip(args.positional) {
         *slot = Some(value);
     }
@@ -107,10 +118,24 @@ impl Bound<'_> {
     /// optional parameters.
     pub fn into_values(self) -> Vec<Option<Value>> {
         self.values
+            .into_iter()
+            .map(|value| value.map(|value| value.value))
+            .collect()
     }
 
     pub fn get(&self, index: usize) -> Option<&Value> {
-        self.values.get(index).and_then(Option::as_ref)
+        self.values
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|value| &value.value)
+    }
+
+    /// The source span and literal shape of parameter `index`, when given.
+    pub fn source(&self, index: usize) -> Option<(Span, Option<Literal>)> {
+        self.values
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|value| (value.span, value.literal))
     }
 
     fn mismatch(&self, index: usize, expected: &str, got: &Value) -> HostError {

@@ -17,8 +17,9 @@ use crate::ast::{
 };
 use crate::builtins;
 use crate::diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
-use crate::host::{as_integer, bind, f64_from_i64, CallArgs, HostError, HostResult};
+use crate::host::{as_integer, bind, f64_from_i64, CallArgs, CallValue, HostError, HostResult};
 use crate::limits::{Budget, Limits};
+use crate::origins::{literal_of, ValueOrigins};
 use crate::scene::{CreationSite, Scene};
 use crate::value::{Builtin, Value};
 
@@ -44,6 +45,28 @@ pub fn execute_full(
     program: &Program,
     limits: &Limits,
 ) -> Result<(Document, Vec<(String, NodeId)>), Diagnostic> {
+    execute_detailed(program, limits).map(|execution| (execution.document, execution.bindings))
+}
+
+/// Everything a run produced: the document, the top-level node bindings and
+/// the value origins the hybrid bake uses.
+#[derive(Debug, Clone)]
+pub struct Execution {
+    /// The document the program built.
+    pub document: Document,
+    /// Top-level variables bound to nodes, sorted by name.
+    pub bindings: Vec<(String, NodeId)>,
+    /// Where every recorded value came from in the source.
+    pub origins: ValueOrigins,
+}
+
+/// Executes a parsed program and returns the document, the bindings and the
+/// value origins.
+///
+/// # Errors
+///
+/// Same as [execute].
+pub fn execute_detailed(program: &Program, limits: &Limits) -> Result<Execution, Diagnostic> {
     let mut interpreter = Interpreter {
         limits,
         globals: HashMap::new(),
@@ -54,6 +77,7 @@ pub fn execute_full(
     };
     interpreter.exec_block(&program.body)?;
     let bindings = interpreter.bindings();
+    let origins = interpreter.scene.origins().clone();
     let document = interpreter.scene.into_document().ok_or_else(|| {
         let start = Span {
             line: 1,
@@ -66,7 +90,11 @@ pub fn execute_full(
             "the program never called comp(...); every MDF program must create a composition",
         )
     })?;
-    Ok((document, bindings))
+    Ok(Execution {
+        document,
+        bindings,
+        origins,
+    })
 }
 
 /// How a statement finished.
@@ -265,11 +293,11 @@ impl Interpreter<'_> {
     }
 
     fn assign(&mut self, target: &Target, op: AssignOp, value: &Expr, span: Span) -> Exec<()> {
-        let value = self.eval(value)?;
-        let combine = |this: &mut Self, current: Value, value: Value| -> Exec<Value> {
+        let evaluated = self.eval(value)?;
+        let combine = |this: &mut Self, current: Value, evaluated: Value| -> Exec<Value> {
             match augmented(op) {
-                None => Ok(value),
-                Some(binary) => match this.binary(binary, &current, &value) {
+                None => Ok(evaluated),
+                Some(binary) => match this.binary(binary, &current, &evaluated) {
                     Ok(value) => Ok(value),
                     Err(error) => Err(this.host_error(span, error)),
                 },
@@ -282,7 +310,7 @@ impl Interpreter<'_> {
                 } else {
                     self.lookup(name, span)?
                 };
-                let new = combine(self, current, value)?;
+                let new = combine(self, current, evaluated)?;
                 self.store(name.clone(), new);
             }
             Target::Attribute { object, name } => {
@@ -301,8 +329,11 @@ impl Interpreter<'_> {
                         .get_attribute(id, name)
                         .map_err(|e| self.host_error(span, e))?
                 };
-                let new = combine(self, current, value)?;
-                let result = self.scene.set_attribute(id, name, &new);
+                let new = combine(self, current, evaluated)?;
+                let literal = (op == AssignOp::Set).then(|| literal_of(value)).flatten();
+                let result = self
+                    .scene
+                    .set_attribute(id, name, &new, value.span, literal);
                 result.map_err(|e| self.host_error(span, e))?;
             }
             Target::Index { object, index } => {
@@ -318,7 +349,7 @@ impl Interpreter<'_> {
                 let len = items.borrow().len();
                 let slot = resolve_index(&index, len).map_err(|e| self.host_error(span, e))?;
                 let current = items.borrow()[slot].clone();
-                let new = combine(self, current, value)?;
+                let new = combine(self, current, evaluated)?;
                 let cycle = new.contains_shared_list(&items, &mut self.budget);
                 if cycle.map_err(|e| self.host_error(span, e))? {
                     return Err(self
@@ -481,9 +512,14 @@ impl Interpreter<'_> {
         let mut call_args = CallArgs::default();
         for arg in args {
             let value = self.eval(&arg.value)?;
+            let call_value = CallValue {
+                value,
+                span: arg.value.span,
+                literal: literal_of(&arg.value),
+            };
             match &arg.name {
-                Some(name) => call_args.keywords.push((name.clone(), value)),
-                None => call_args.positional.push(value),
+                Some(name) => call_args.keywords.push((name.clone(), call_value)),
+                None => call_args.positional.push(call_value),
             }
         }
         let result = match function {
