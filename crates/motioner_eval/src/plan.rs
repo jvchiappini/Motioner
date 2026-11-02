@@ -155,12 +155,30 @@ pub enum EffectValue {
     },
 }
 
+/// A mask sampled for a frame: the item range of the source's drawn subtree.
+///
+/// The mask items sit at the end of the layer's own range, after its content:
+/// `items[content_end()..mask.end]` is what the source draws.  Mask items are
+/// not content: the renderer draws them into the mask source layer instead of
+/// compositing them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanMask {
+    /// First item index of the mask source (inclusive).
+    pub start: usize,
+    /// One past the last item index of the mask source (exclusive).
+    pub end: usize,
+    /// Alpha or luma coverage.
+    pub mode: motioner_core::MaskMode,
+    /// Whether the coverage is inverted.
+    pub invert: bool,
+}
+
 /// A subtree rendered into an offscreen layer before it composites.
 ///
 /// The layer wraps `items[start..end]`; the range is the node's whole drawn
 /// subtree in paint order, so layers nest properly.  A layer exists when the
-/// node has an effect chain or a non-normal blend mode; without effects it is
-/// the same per-draw grouping the blend modes have always used.
+/// node has an effect chain, a non-normal blend mode or a mask; without any of
+/// them it is the same per-draw grouping the blend modes have always used.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanLayer {
     /// The node that owns the layer.
@@ -173,13 +191,29 @@ pub struct PlanLayer {
     pub blend: BlendMode,
     /// Effect chain, already sampled at the frame.
     pub effects: Vec<EffectValue>,
+    /// Mask applied to the finished, effected layer, when the node has one.
+    pub mask: Option<PlanMask>,
 }
 
 impl PlanLayer {
-    /// Whether the layer wraps no draws (and can be skipped).
+    /// One past the last *content* item (mask items excluded).
+    ///
+    /// Always `<= end`: the mask source is drawn after the content.
+    #[must_use]
+    pub fn content_end(&self) -> usize {
+        self.mask.map_or(self.end, |mask| mask.start)
+    }
+
+    /// Whether the layer wraps no content (and can be skipped).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.end <= self.start
+        self.content_end() <= self.start
+    }
+
+    /// The mask source's item range, when the layer is masked.
+    #[must_use]
+    pub fn mask_range(&self) -> Option<(usize, usize)> {
+        self.mask.map(|mask| (mask.start, mask.end))
     }
 }
 
@@ -255,6 +289,18 @@ impl RenderPlan {
         self.layers
             .iter()
             .find(|layer| !layer.effects.is_empty())
+            .map(|layer| layer.node)
+    }
+
+    /// The first masked node, if any.
+    ///
+    /// Renderers without mask support report a typed unsupported-feature error
+    /// naming this node.
+    #[must_use]
+    pub fn first_mask_node(&self) -> Option<NodeId> {
+        self.layers
+            .iter()
+            .find(|layer| layer.mask.is_some())
             .map(|layer| layer.node)
     }
 

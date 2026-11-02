@@ -598,6 +598,62 @@ fn effect_errors_are_typed() {
     assert_eq!(error.category, ErrorCategory::Value);
 }
 
+#[test]
+fn masks_set_update_and_clear() {
+    let document = build(
+        "\
+card = rect(40, 40)
+cutout = rect(20, 20)
+card.mask(cutout)
+",
+    );
+    let card = document.roots()[0];
+    let cutout = document.roots()[1];
+    let mask = document.node(card).unwrap().mask().unwrap();
+    assert_eq!(mask.source, cutout);
+    assert_eq!(mask.mode, motioner_core::MaskMode::Alpha);
+    assert!(!mask.invert);
+    assert!(document.is_mask_source(cutout));
+
+    let document = build(
+        "\
+card = rect(40, 40)
+cutout = rect(20, 20)
+card.mask(cutout, mode=\"luma\", invert=True)
+",
+    );
+    let mask = document.node(document.roots()[0]).unwrap().mask().unwrap();
+    assert_eq!(mask.mode, motioner_core::MaskMode::Luma);
+    assert!(mask.invert);
+
+    // A string identity resolves the same way a node value does.
+    let document = build(
+        "\
+card = rect(40, 40)
+card.id(\"card\")
+cutout = rect(20, 20)
+cutout.id(\"cutout\")
+card.mask(\"cutout\")
+card.mask(None)
+",
+    );
+    assert!(document.node(document.roots()[0]).unwrap().mask().is_none());
+}
+
+#[test]
+fn mask_errors_are_typed() {
+    let error = fail("a = rect(1, 1)\na.mask(a)\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("itself"), "{error}");
+    let error = fail("a = rect(1, 1)\na.mask(\"missing\")\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    let error = fail("a = rect(1, 1)\nb = rect(1, 1)\na.mask(b, mode=\"coverage\")\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("alpha"), "{error}");
+    let error = fail("a = rect(1, 1)\nb = rect(1, 1)\na.mask(b, invert=1)\n");
+    assert_eq!(error.category, ErrorCategory::Type);
+}
+
 fn number_channel(
     effect: &motioner_core::Effect,
     param: motioner_core::EffectParam,

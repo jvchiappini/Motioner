@@ -215,6 +215,21 @@ fn draw_value(
         RowValue::EffectAdd => {
             label_tiles(p, v, segments, &["Shadow", "Blur", "Glow"], item);
         }
+        RowValue::MaskSource { current, .. } => {
+            let label = current.as_deref().unwrap_or("Pick source");
+            label_tiles(p, v, segments, &[label], item);
+        }
+        RowValue::MaskMode { mode, .. } => {
+            let active = match mode {
+                motioner_core::MaskMode::Alpha => 0,
+                motioner_core::MaskMode::Luma => 1,
+            };
+            active_tiles(p, v, segments, &["Alpha", "Luma"], active, item);
+        }
+        RowValue::MaskInvert { invert, .. } => {
+            let active = usize::from(*invert);
+            active_tiles(p, v, segments, &["Off", "On", "Clear"], active, item);
+        }
     }
 }
 
@@ -230,6 +245,42 @@ fn label_tiles(p: &mut Painter<'_>, v: &View<'_>, tiles: &[Rect], labels: &[&str
         };
         p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
         let style = p.style(type_scale::BODY, t.text_muted);
+        p.text_in(label, *rect, Align::Center, &style);
+    }
+}
+
+/// Tiles with a centered label where `active` is filled with the accent.
+fn active_tiles(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    tiles: &[Rect],
+    labels: &[&str],
+    active: usize,
+    item: usize,
+) {
+    let t = *p.theme;
+    for (segment, (rect, label)) in tiles.iter().zip(labels).enumerate() {
+        let state = v.interaction(Hit::InspectSegment { item, segment });
+        let current = segment == active;
+        let fill = if current {
+            t.selection
+        } else if state.hovered {
+            t.control_hover
+        } else {
+            t.raised
+        };
+        p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
+        if current {
+            p.stroke_rounded(*rect, t.accent, p.m.px(size::RADIUS_SM), p.m.hairline());
+        }
+        let style = p.style(
+            type_scale::BODY,
+            if current {
+                t.accent_hover
+            } else {
+                t.text_muted
+            },
+        );
         p.text_in(label, *rect, Align::Center, &style);
     }
 }

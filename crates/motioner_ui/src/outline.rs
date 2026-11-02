@@ -70,6 +70,29 @@ pub struct OutlineRow {
     pub has_next_sibling: bool,
     /// Keyframe frames of the node's transform, sorted and unique.
     pub keyframes: Vec<Frame>,
+    /// The node's mask relationship (D-0033), drawn as a badge.
+    pub mask_role: MaskRole,
+}
+
+/// How a row participates in masks, for the layers-panel badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskRole {
+    /// Neither masked nor a source.
+    None,
+    /// Carries a mask.
+    Masked,
+    /// Supplies another node's mask.
+    Source,
+    /// Both: it is masked and used as a source.
+    Both,
+}
+
+impl MaskRole {
+    /// `true` when the row shows the mask badge.
+    #[must_use]
+    pub const fn shows_badge(self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
 
 /// Builds the outline rows for `document`.
@@ -116,6 +139,12 @@ fn push_rows(
         has_children: !children.is_empty(),
         has_next_sibling,
         keyframes: node_keyframes(node),
+        mask_role: match (node.mask().is_some(), document.is_mask_source(id)) {
+            (true, true) => MaskRole::Both,
+            (true, false) => MaskRole::Masked,
+            (false, true) => MaskRole::Source,
+            (false, false) => MaskRole::None,
+        },
     });
     for (index, &child) in children.iter().enumerate() {
         push_rows(
@@ -262,6 +291,32 @@ mod tests {
             assert_eq!(row.name, format!("Circle {}", index + 1));
             assert_eq!(row.detail, "r24");
         }
+    }
+
+    #[test]
+    fn mask_roles_mark_the_masked_node_and_its_source() {
+        let mut document = hello();
+        let masked = document.roots()[0];
+        let source = document
+            .add_node(NodeContent::circle(
+                8.0,
+                motioner_core::Paint {
+                    fill: Some(motioner_core::Color::WHITE),
+                    stroke: None,
+                },
+            ))
+            .unwrap();
+        document
+            .set_mask(masked, source, motioner_core::MaskMode::Alpha, false)
+            .unwrap();
+        let rows = outline_rows(&document);
+        assert_eq!(rows[0].mask_role, MaskRole::Masked);
+        assert!(rows[0].mask_role.shows_badge());
+        let source_row = rows.iter().find(|row| row.node == source).unwrap();
+        assert_eq!(source_row.mask_role, MaskRole::Source);
+        assert!(rows[1..rows.len() - 1]
+            .iter()
+            .all(|row| row.mask_role == MaskRole::None));
     }
 
     #[test]

@@ -10,8 +10,8 @@ use std::rc::Rc;
 use motioner_core::{
     BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease, Effect,
     EffectChannel, EffectKind, EffectParam, EffectValueInput, FrameRate, Gradient, LineCap,
-    LineJoin, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint, Property,
-    PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
+    LineJoin, MaskMode, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint,
+    Property, PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -546,6 +546,7 @@ impl Scene {
             NodeMethod::Id => self.assign_id(id, args),
             NodeMethod::Effect => self.effect(id, args),
             NodeMethod::EffectStack => self.effect_stack(id, args),
+            NodeMethod::Mask => self.mask(id, args),
         }
     }
 
@@ -646,6 +647,64 @@ impl Scene {
                 self.write_effect_param(id, channel, EffectValueInput::Number(number), source)?;
             }
         }
+        Ok(Value::Node(id))
+    }
+
+    /// `node.mask(source, mode="alpha", invert=False)`: masks this node with
+    /// the drawn subtree of `source` (D-0033).
+    ///
+    /// The source is not drawn on its own; it becomes the coverage of this
+    /// node's offscreen layer.  `source` is a node or its identity string;
+    /// `mode` is `"alpha"` (the default) or `"luma"`, and `invert` swaps the
+    /// coverage.  `node.mask(None)` clears the mask, which is what `bake`
+    /// writes for a cleared override.
+    fn mask(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("mask", &["source", "mode", "invert"], 1, args)?;
+        if self.document()?.node(id).is_none() {
+            return Err(HostError::value_error(format!("unknown node {id}")));
+        }
+        if matches!(bound.get(0), Some(Value::None)) {
+            self.document_mut()?
+                .clear_mask(id)
+                .map_err(|error| core_error(&error))?;
+            return Ok(Value::Node(id));
+        }
+        let source = match bound.get(0) {
+            Some(Value::Node(node)) => *node,
+            Some(Value::Str(name)) => self.document()?.find(name).ok_or_else(|| {
+                HostError::value_error(format!("mask(): no node has the identity {name:?}"))
+            })?,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "mask(): 'source' expects a node, got {}",
+                    other.type_name()
+                )))
+            }
+            None => {
+                return Err(HostError::type_error(
+                    "mask(): missing required argument 'source'",
+                ))
+            }
+        };
+        let mode_name = bound.string_or(1, MaskMode::Alpha.name())?;
+        let mode = MaskMode::from_name(&mode_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "mask(): unknown mode {mode_name:?}; expected alpha or luma"
+            ))
+        })?;
+        let invert = match bound.get(2) {
+            None => false,
+            Some(Value::Bool(flag)) => *flag,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "mask(): 'invert' expects True or False, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        self.document_mut()?
+            .set_mask(id, source, mode, invert)
+            .map_err(|error| core_error(&error))?;
         Ok(Value::Node(id))
     }
 

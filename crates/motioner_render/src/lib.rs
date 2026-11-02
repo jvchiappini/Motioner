@@ -12,7 +12,7 @@
 //! editor can paint the same plan into the window's `Pure2D` pass. The default
 //! build stays engine-free at the API boundary.
 //!
-//! The renderer is deterministic â€” the only wall-clock value it reports is
+//! The renderer is deterministic — the only wall-clock value it reports is
 //! [`FrameStats::cpu_ms`], which is diagnostic and never drives a decision.
 //!
 //! The coordinate, colour, depth and text contracts are documented in the crate
@@ -43,6 +43,17 @@ use motioner_eval::RenderPlan;
 /// directory. Any other requested family falls back to this font.
 pub(crate) const ROBOTO: &[u8] =
     include_bytes!("../../../engine/ferrous/assets/fonts/Roboto-Regular.ttf");
+
+/// A mask request in Motioner terms.
+///
+/// The canvas impls translate this into the engine's `Mask2d`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CanvasMask {
+    /// Alpha or luma coverage.
+    pub mode: motioner_core::MaskMode,
+    /// Whether the coverage is inverted.
+    pub invert: bool,
+}
 
 /// The single drawing surface abstraction shared by the headless and live
 /// paths.
@@ -90,8 +101,41 @@ trait Canvas2d {
         effects: &[ferrous_2d::render::Effect2d],
     ) -> bool;
 
+    /// Opens an offscreen layer masked by `mask` (D-0033).
+    ///
+    /// The mask source is drawn between [`Canvas2d::begin_mask`] and
+    /// [`Canvas2d::end_mask`] after the content.  Returns `false` when the
+    /// engine rejected the layer (nothing was opened, so the caller must not
+    /// pop it or draw a source).
+    fn push_masked_layer(
+        &mut self,
+        opacity: f64,
+        blend: motioner_core::BlendMode,
+        depth: f32,
+        effects: &[ferrous_2d::render::Effect2d],
+        mask: CanvasMask,
+    ) -> bool;
+
+    /// Starts the mask source of the innermost masked layer.
+    fn begin_mask(&mut self);
+
+    /// Ends the mask source and attaches it to the masked layer.
+    fn end_mask(&mut self);
+
     /// Closes the innermost layer.
     fn pop_layer(&mut self);
+}
+
+/// The engine mask type for a canvas mask request.
+fn engine_mask(mask: CanvasMask) -> ferrous_2d::render::Mask2d {
+    use ferrous_2d::render::MaskMode2d;
+    ferrous_2d::render::Mask2d {
+        mode: match mask.mode {
+            motioner_core::MaskMode::Alpha => MaskMode2d::Alpha,
+            motioner_core::MaskMode::Luma => MaskMode2d::Luma,
+        },
+        invert: mask.invert,
+    }
 }
 
 /// The engine composite mode of a node mode (D-0031).
@@ -153,6 +197,27 @@ impl Canvas2d for Pure2dHarness {
         }
     }
 
+    fn push_masked_layer(
+        &mut self,
+        opacity: f64,
+        blend: motioner_core::BlendMode,
+        depth: f32,
+        effects: &[ferrous_2d::render::Effect2d],
+        mask: CanvasMask,
+    ) -> bool {
+        let opacity = space::to_f32(opacity);
+        let desc = ferrous_2d::render::Layer2d::new(opacity, composite_blend(blend), depth);
+        Pure2dHarness::push_masked_layer(self, desc, effects, engine_mask(mask)).is_ok()
+    }
+
+    fn begin_mask(&mut self) {
+        let _ = Pure2dHarness::begin_mask(self);
+    }
+
+    fn end_mask(&mut self) {
+        let _ = Pure2dHarness::end_mask(self);
+    }
+
     fn pop_layer(&mut self) {
         let _ = Pure2dHarness::pop_layer(self);
     }
@@ -200,6 +265,28 @@ impl Canvas2d for ferrous_renderer::Renderer {
         } else {
             ferrous_renderer::Renderer::push_layer_2d_with_effects(self, desc, effects).is_ok()
         }
+    }
+
+    fn push_masked_layer(
+        &mut self,
+        opacity: f64,
+        blend: motioner_core::BlendMode,
+        depth: f32,
+        effects: &[ferrous_2d::render::Effect2d],
+        mask: CanvasMask,
+    ) -> bool {
+        let opacity = space::to_f32(opacity);
+        let desc = ferrous_2d::render::Layer2d::new(opacity, composite_blend(blend), depth);
+        ferrous_renderer::Renderer::push_layer_2d_masked(self, desc, effects, engine_mask(mask))
+            .is_ok()
+    }
+
+    fn begin_mask(&mut self) {
+        let _ = ferrous_renderer::Renderer::begin_mask_2d(self);
+    }
+
+    fn end_mask(&mut self) {
+        let _ = ferrous_renderer::Renderer::end_mask_2d(self);
     }
 
     fn pop_layer(&mut self) {
@@ -273,9 +360,10 @@ pub struct FrameStats {
 /// A drawing feature the pinned engine cannot render yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
-    /// A node effect (drop shadow, blur, glow). Not raised since the engine
-    /// pin carries the effect passes; kept for future pin gaps.
-    Effect,
+    /// A node mask (alpha or luma). No longer raised: the pinned engine
+    /// carries the mask pass. Kept so callers can match on `Unsupported`
+    /// while future pin gaps reuse the mechanism.
+    Mask,
 }
 
 impl Feature {
@@ -283,7 +371,7 @@ impl Feature {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Effect => "effect",
+            Self::Mask => "mask",
         }
     }
 }
@@ -341,12 +429,12 @@ impl fmt::Display for RenderError {
             Self::Unsupported { feature, node } => match node {
                 Some(node) => write!(
                     f,
-                    "{} is not supported by the pinned engine yet (node {node}); see D-0032",
+                    "{} is not supported by the pinned engine yet (node {node}); see D-0033",
                     feature.name()
                 ),
                 None => write!(
                     f,
-                    "{} is not supported by the pinned engine yet; see D-0032",
+                    "{} is not supported by the pinned engine yet; see D-0033",
                     feature.name()
                 ),
             },
@@ -357,7 +445,7 @@ impl fmt::Display for RenderError {
 impl std::error::Error for RenderError {}
 
 impl FrameRenderer {
-    /// Creates a headless renderer for a `width` Ã— `height` composition.
+    /// Creates a headless renderer for a `width` × `height` composition.
     ///
     /// The engine registers the embedded Roboto font once. Other font families
     /// requested by a document fall back to Roboto (see the crate README).

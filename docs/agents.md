@@ -57,6 +57,16 @@ Every one of them prints **one JSON object per line** on stdout.
   channel, and `query` reports `effects` as an array of
   `{kind, params: {<name>: {value, keys}}}`. Effects apply to the node **and
   its subtree** as one offscreen layer, in `render`, `still` and `preview`.
+- **Masks** (D-0033): `node.mask(source, mode="alpha"|"luma", invert=False)`
+  makes another node's drawn subtree the coverage of this node. The source is
+  never drawn on its own; it is evaluated in world space with its own animated
+  transform. `node.mask(None)` clears it. In the editor the relationship is the
+  `mask` override (`set(id, "mask", "<source>:<luma>:true")`, or `"none"`), set
+  and cleared with `mask_set`/`mask_clear`; `query` reports it as
+  `mask: {source, mode, invert}` (or `null`). A mask applies after the effect
+  chain and before group opacity/blend, so a drop shadow is clipped by it; a
+  `blur` effect on the source feathers the edge. `render`, `still` and
+  `preview` all draw masks; the source is never shown as content.
 - **Gradients** (D-0030): `fill`/`stroke`/text `color` may be a gradient
   instead of a colour. A gradient adds one pair of channels per stop:
   `fill_stop<n>_offset` (0..1), `fill_stop<n>_color`, and
@@ -167,6 +177,8 @@ Space+drag over the canvas pans.
 | `effect_add(id, kind)` | the Shadow/Blur/Glow tiles in the inspector Effects section |
 | `effect_remove(id, kind)` | the remove tile of an effect row |
 | `effect_move(id, kind, index)` | the up/down tiles of an effect row |
+| `mask_set(id, source, mode="alpha", invert=False)` | the Source/Mode/Invert rows of the inspector Mask section |
+| `mask_clear(id)` | the Clear tile of the Mask section |
 | `undo()`, `redo()` | Ctrl+Z, Ctrl+Y |
 | `bake(id, ...)` | fold overrides into the program (all ids when none) |
 

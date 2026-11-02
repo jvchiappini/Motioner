@@ -1,5 +1,7 @@
 //! Frame evaluation: document plus frame to render plan.
 
+use std::collections::HashSet;
+
 use motioner_core::{
     BlendMode, DashSpec, Document, Effect, Frame, Gradient, Node, NodeContent, NodeId, PaintSpec,
     TrimSpec,
@@ -8,21 +10,27 @@ use motioner_core::{
 use crate::affine::Affine2;
 use crate::curve::{sample, sample_vec2};
 use crate::plan::{
-    EffectValue, ItemShape, PlanLayer, RenderItem, RenderPlan, ResolvedFill, ResolvedGradient,
-    ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
+    EffectValue, ItemShape, PlanLayer, PlanMask, RenderItem, RenderPlan, ResolvedFill,
+    ResolvedGradient, ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
 };
 
 /// One entry of the traversal stack.
 #[derive(Debug, Clone, Copy)]
 enum Pending {
     /// Visit a node, with its parent's resolved state.
+    ///
+    /// `mask_for` marks a visit of a mask source: its items belong to the mask
+    /// range of the layer at that index and are not drawn as content.
     Visit {
         id: NodeId,
         parent_transform: Affine2,
         parent_opacity: f64,
+        mask_for: Option<usize>,
     },
     /// Close the layer opened for the node at the given index.
     CloseLayer { index: usize },
+    /// Close the mask range of the layer at the given index.
+    CloseMask { index: usize },
 }
 
 /// Evaluates documents into render plans.
@@ -33,6 +41,8 @@ enum Pending {
 #[derive(Debug, Default)]
 pub struct Evaluator {
     stack: Vec<Pending>,
+    /// Every node used as a mask source (skipped in the normal stream).
+    mask_sources: HashSet<NodeId>,
 }
 
 impl Evaluator {
@@ -52,6 +62,7 @@ impl Evaluator {
     /// A node whose resolved transform or accumulated opacity is not finite
     /// is skipped together with its subtree, because no renderer can draw
     /// it; each such skip increments [`RenderPlan::non_finite_items`].
+    #[allow(clippy::too_many_lines)] // one pass over the traversal kinds, kept linear
     pub fn evaluate(&mut self, document: &Document, frame: Frame, plan: &mut RenderPlan) {
         let composition = document.composition();
         plan.width = composition.width();
@@ -63,17 +74,34 @@ impl Evaluator {
         plan.non_finite_items = 0;
 
         self.stack.clear();
+        self.mask_sources.clear();
+        for node in document.nodes() {
+            if let Some(mask) = node.mask() {
+                self.mask_sources.insert(mask.source);
+            }
+        }
         self.push_children(document.roots(), Affine2::IDENTITY, 1.0);
         while let Some(pending) = self.stack.pop() {
-            let (pending_id, parent_transform, parent_opacity) = match pending {
+            let (pending_id, parent_transform, parent_opacity, mask_for) = match pending {
                 Pending::Visit {
                     id,
                     parent_transform,
                     parent_opacity,
-                } => (id, parent_transform, parent_opacity),
+                    mask_for,
+                } => (id, parent_transform, parent_opacity, mask_for),
                 Pending::CloseLayer { index } => {
                     if let Some(layer) = plan.layers.get_mut(index) {
                         layer.end = plan.items.len();
+                    }
+                    continue;
+                }
+                Pending::CloseMask { index } => {
+                    if let Some(mask) = plan
+                        .layers
+                        .get_mut(index)
+                        .and_then(|layer| layer.mask.as_mut())
+                    {
+                        mask.end = plan.items.len();
                     }
                     continue;
                 }
@@ -81,6 +109,11 @@ impl Evaluator {
             let Some(node) = document.node(pending_id) else {
                 continue;
             };
+            // A mask source is not part of the normal draw stream; it is drawn
+            // only where a masked node asks for it.
+            if mask_for.is_none() && self.mask_sources.contains(&node.id()) {
+                continue;
+            }
             // A hidden node is not drawn, and neither is anything below it:
             // visibility is inherited, like opacity but without a value.
             if !node.is_visible() {
@@ -102,19 +135,58 @@ impl Evaluator {
             if opacity <= 0.0 {
                 continue;
             }
-            // A node with effects or a non-normal blend renders its subtree
-            // into an offscreen layer.  The layer opens before the node's own
-            // item and closes after the last descendant.
-            if !node.effects().is_empty() || node.blend() != BlendMode::Normal {
+            // The mask source's first item is where its range begins; a
+            // source that draws nothing leaves an empty range.
+            if let Some(layer_index) = mask_for {
+                if let Some(mask) = plan
+                    .layers
+                    .get_mut(layer_index)
+                    .and_then(|layer| layer.mask.as_mut())
+                {
+                    mask.start = plan.items.len();
+                }
+            }
+            // A node with effects, a non-normal blend or a mask renders its
+            // subtree into an offscreen layer.  The layer opens before the
+            // node's own item and closes after the last descendant and the
+            // mask source.
+            if !node.effects().is_empty()
+                || node.blend() != BlendMode::Normal
+                || node.mask().is_some()
+            {
                 let index = plan.layers.len();
+                let mask = node.mask().map(|spec| PlanMask {
+                    start: plan.items.len(),
+                    end: plan.items.len(),
+                    mode: spec.mode,
+                    invert: spec.invert,
+                });
                 plan.layers.push(PlanLayer {
                     node: node.id(),
                     start: plan.items.len(),
                     end: plan.items.len(),
                     blend: node.blend(),
                     effects: resolved_effects(node, frame),
+                    mask,
                 });
                 self.stack.push(Pending::CloseLayer { index });
+                if let Some(spec) = node.mask() {
+                    // A source inside the masked subtree moves with it; any
+                    // other source is drawn in world space with its own
+                    // transform, so its ancestors' transforms do not leak in.
+                    let parent = if document.is_ancestor(node.id(), spec.source) {
+                        transform
+                    } else {
+                        Affine2::IDENTITY
+                    };
+                    self.stack.push(Pending::CloseMask { index });
+                    self.stack.push(Pending::Visit {
+                        id: spec.source,
+                        parent_transform: parent,
+                        parent_opacity: 1.0,
+                        mask_for: Some(index),
+                    });
+                }
             }
             if let Some(shape) = item_shape(node.content(), frame, plan) {
                 plan.items.push(RenderItem {
@@ -138,6 +210,7 @@ impl Evaluator {
                 id,
                 parent_transform,
                 parent_opacity,
+                mask_for: None,
             }));
     }
 }
@@ -726,5 +799,142 @@ mod tests {
         assert!(plan.items().is_empty());
         assert!(plan.layers().is_empty());
         assert_eq!(plan.first_effect_node(), None);
+    }
+
+    #[test]
+    fn mask_items_follow_the_content_and_are_not_drawn_as_content() {
+        let mut doc = document();
+        let card = square(&mut doc);
+        let cutout = square(&mut doc);
+        doc.set_mask(card, cutout, motioner_core::MaskMode::Alpha, false)
+            .unwrap();
+
+        let plan = evaluate(&doc, 0);
+        // Only the masked node's own content is a normal item.
+        assert_eq!(plan.items().len(), 2);
+        assert_eq!(plan.items()[0].node, card);
+        assert_eq!(plan.items()[1].node, cutout);
+        assert_eq!(plan.layers().len(), 1);
+        let layer = &plan.layers()[0];
+        assert_eq!(layer.node, card);
+        assert_eq!((layer.start, layer.end), (0, 2));
+        assert_eq!(layer.content_end(), 1);
+        let mask = layer.mask.expect("a mask");
+        assert_eq!((mask.start, mask.end), (1, 2));
+        assert_eq!(mask.mode, motioner_core::MaskMode::Alpha);
+        assert!(!mask.invert);
+        assert_eq!(plan.first_mask_node(), Some(card));
+        assert!(doc.is_mask_source(cutout));
+    }
+
+    #[test]
+    fn an_unused_mask_source_is_not_drawn() {
+        let mut doc = document();
+        let card = square(&mut doc);
+        let cutout = square(&mut doc);
+        doc.set_mask(card, cutout, motioner_core::MaskMode::Luma, true)
+            .unwrap();
+        let plan = evaluate(&doc, 0);
+        let drawn: Vec<_> = plan.items().iter().map(|item| item.node).collect();
+        assert!(drawn.contains(&card));
+        assert!(
+            drawn.contains(&cutout),
+            "the source is drawn inside the mask"
+        );
+        // Removing the mask makes the source a normal node again.
+        doc.clear_mask(card).unwrap();
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.items().len(), 2);
+        assert!(plan.layers().is_empty());
+        assert_eq!(plan.first_mask_node(), None);
+    }
+
+    #[test]
+    fn a_mask_source_child_moves_with_the_masked_node() {
+        let mut doc = document();
+        let card = doc.add_node(NodeContent::Group).unwrap();
+        let body = square(&mut doc);
+        doc.reparent(body, card).unwrap();
+        let cutout = square(&mut doc);
+        doc.reparent(cutout, card).unwrap();
+        doc.set_property(
+            card,
+            Property::Position,
+            PropertyValue::Vec2(Vec2::new(50.0, 20.0)),
+        )
+        .unwrap();
+        doc.set_property(
+            cutout,
+            Property::Position,
+            PropertyValue::Vec2(Vec2::new(5.0, 5.0)),
+        )
+        .unwrap();
+        doc.set_mask(card, cutout, motioner_core::MaskMode::Alpha, false)
+            .unwrap();
+        let plan = evaluate(&doc, 0);
+        let source = plan
+            .items()
+            .iter()
+            .find(|item| item.node == cutout)
+            .expect("the source item");
+        assert_eq!(
+            source.transform.apply(Vec2::ZERO),
+            Vec2::new(55.0, 25.0),
+            "a source child inherits the masked node's transform"
+        );
+    }
+
+    #[test]
+    fn a_mask_source_outside_the_subtree_uses_its_own_transform_only() {
+        let mut doc = document();
+        let group = doc.add_node(NodeContent::Group).unwrap();
+        doc.set_property(
+            group,
+            Property::Position,
+            PropertyValue::Vec2(Vec2::new(30.0, 0.0)),
+        )
+        .unwrap();
+        let card = square(&mut doc);
+        doc.reparent(card, group).unwrap();
+        let cutout = square(&mut doc);
+        doc.reparent(cutout, group).unwrap();
+        doc.set_property(
+            cutout,
+            Property::Position,
+            PropertyValue::Vec2(Vec2::new(7.0, 3.0)),
+        )
+        .unwrap();
+        doc.set_mask(card, cutout, motioner_core::MaskMode::Alpha, false)
+            .unwrap();
+        let plan = evaluate(&doc, 0);
+        let source = plan
+            .items()
+            .iter()
+            .find(|item| item.node == cutout)
+            .expect("the source item");
+        assert_eq!(
+            source.transform.apply(Vec2::ZERO),
+            Vec2::new(7.0, 3.0),
+            "a source outside the subtree is evaluated in world space"
+        );
+    }
+
+    #[test]
+    fn a_nested_mask_source_with_effects_opens_its_own_layer() {
+        let mut doc = document();
+        let card = square(&mut doc);
+        let cutout = square(&mut doc);
+        doc.add_effect(cutout, motioner_core::EffectKind::Blur)
+            .unwrap();
+        doc.set_mask(card, cutout, motioner_core::MaskMode::Alpha, false)
+            .unwrap();
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.layers().len(), 2);
+        let outer = &plan.layers()[0];
+        let inner = &plan.layers()[1];
+        assert_eq!(outer.node, card);
+        assert_eq!(inner.node, cutout);
+        assert_eq!((inner.start, inner.end), (1, 2));
+        assert_eq!(outer.mask.expect("outer mask").start, 1);
     }
 }

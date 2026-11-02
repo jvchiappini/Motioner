@@ -146,7 +146,7 @@ Common node members:
   with `color` as the gradient.
 - `clip_in`, `clip_out`, `time_remap`.
 - Methods: `add(*nodes)`, `remove()`, `key(property, time, value, ease="linear")`,
-  `ease(name)`, `mask(node)`, `effect(kind, **params)`.
+  `ease(name)`, `effect(kind, **params)`, `mask(source, mode="alpha", invert=False)`.
 
 Every content field except `text`, `align`, `cap` and `join` is an
 **animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
@@ -225,6 +225,27 @@ channel named `<kind>.<param>` (`offset` adds `.x`/`.y`), so
 `key("drop_shadow.blur", 1.0, 20)`, overrides and the editor's stopwatches work
 on it without special cases. Colours are `#RRGGBB[AA]`; radii are non-negative
 pixels; `opacity` is `0..1`, `intensity` is added light. See D-0032.
+
+### 7.4 Masks
+
+`node.mask(source, mode="alpha", invert=False)` uses the drawn subtree of
+`source` as the coverage of this node's layer; `node.mask(None)` clears it. The
+source is not drawn by itself, is evaluated in world space with its own animated
+transform (a child of the masked node moves with it), and may carry effects: a
+`blur` on the source feathers the mask edge.
+
+```
+card = rect(440, 210, fill=linear_gradient(...))
+spot = circle(110, fill="#808080")
+card.mask(spot, mode="luma", invert=True)
+```
+
+Coverage is `alpha` (the source's alpha) or `luma` (its linear-light luminance),
+optionally inverted, multiplied into the finished, effected layer before the
+node's opacity and blend mode. Masks compose with nested masks, effects and
+blend modes. The editor stores the relationship as the `mask` override
+(`"<source>:<alpha|luma>:<true|false>"`), set and cleared with `mask_set` and
+`mask_clear`. See D-0033.
 
 3D nodes add `target`, `fov`, `intensity`, `material`, `cast_shadow` and
 similar properties. NLE nodes add clip points and track assignment.

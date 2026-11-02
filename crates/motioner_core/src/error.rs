@@ -133,6 +133,26 @@ pub enum CoreError {
         /// Number of effects in the stack.
         len: usize,
     },
+    /// A node was set to mask itself.
+    MaskSelfReference {
+        /// The node.
+        node: NodeId,
+    },
+    /// The mask source is an ancestor of the masked node, so drawing the mask
+    /// would draw the masked node again.
+    MaskSourceIsAncestor {
+        /// The masked node.
+        node: NodeId,
+        /// The rejected source.
+        source: NodeId,
+    },
+    /// The mask would close a cycle in the mask graph.
+    MaskCycle {
+        /// The masked node.
+        node: NodeId,
+        /// The rejected source.
+        source: NodeId,
+    },
 }
 
 impl fmt::Display for CoreError {
@@ -208,6 +228,17 @@ impl fmt::Display for CoreError {
                 write!(f, "the node already has a '{kind}' effect")
             }
             Self::MissingEffect { kind } => write!(f, "the node has no '{kind}' effect"),
+            Self::MaskSelfReference { node } => {
+                write!(f, "node {node} cannot use itself as its mask source")
+            }
+            Self::MaskSourceIsAncestor { node, source } => write!(
+                f,
+                "node {source} cannot mask {node}: it is an ancestor, so the mask would draw {node} again"
+            ),
+            Self::MaskCycle { node, source } => write!(
+                f,
+                "node {source} cannot mask {node}: the mask chain would form a cycle"
+            ),
             Self::InvalidEffectOrder { index, len } => write!(
                 f,
                 "effect position {index} is out of range: the stack has {len} effect(s)"

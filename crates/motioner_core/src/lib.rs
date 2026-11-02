@@ -15,6 +15,7 @@ mod document;
 mod effect;
 mod error;
 mod gradient;
+mod mask;
 mod math;
 mod node;
 mod overrides;
@@ -32,6 +33,7 @@ pub use effect::{
 };
 pub use error::CoreError;
 pub use gradient::{Gradient, GradientKind, GradientStop, PaintSlot, StopPart, MAX_GRADIENT_STOPS};
+pub use mask::{MaskMode, MaskSpec};
 pub use math::Vec2;
 pub use node::{
     is_valid_identity_name, BlendMode, ContentChannel, ContentField, ContentValue, Node,
@@ -40,7 +42,7 @@ pub use node::{
 };
 pub use overrides::{
     format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,
-    OverrideSet, OverrideValue, EFFECTS, LOCKED, NAME, VISIBLE,
+    OverrideSet, OverrideValue, EFFECTS, LOCKED, MASK, NAME, VISIBLE,
 };
 pub use path::{
     DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,

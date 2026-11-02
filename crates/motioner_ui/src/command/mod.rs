@@ -352,6 +352,22 @@ pub enum Command {
         /// New position in the stack.
         index: usize,
     },
+    /// Mask a node with another node's drawn subtree (D-0033).
+    MaskSet {
+        /// Masked node identity.
+        id: String,
+        /// Source node identity (the coverage).
+        source: String,
+        /// Alpha or luma coverage.
+        mode: motioner_core::MaskMode,
+        /// Whether the coverage is inverted.
+        invert: bool,
+    },
+    /// Remove a node's mask.
+    MaskClear {
+        /// Masked node identity.
+        id: String,
+    },
     /// Undo the last edit (Ctrl+Z).
     Undo,
     /// Redo (Ctrl+Shift+Z, Ctrl+Y).
@@ -413,6 +429,8 @@ pub enum CommandKind {
     EffectAdd,
     EffectRemove,
     EffectMove,
+    MaskSet,
+    MaskClear,
     Undo,
     Redo,
     Bake,
@@ -420,7 +438,7 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 54] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -470,6 +488,8 @@ impl CommandKind {
         Self::EffectAdd,
         Self::EffectRemove,
         Self::EffectMove,
+        Self::MaskSet,
+        Self::MaskClear,
         Self::Undo,
         Self::Redo,
         Self::Bake,
@@ -528,6 +548,8 @@ impl CommandKind {
             Self::EffectAdd => "effect_add",
             Self::EffectRemove => "effect_remove",
             Self::EffectMove => "effect_move",
+            Self::MaskSet => "mask_set",
+            Self::MaskClear => "mask_clear",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::Bake => "bake",
@@ -593,6 +615,8 @@ impl CommandKind {
             Self::EffectAdd => "effect_add(id, kind)",
             Self::EffectRemove => "effect_remove(id, kind)",
             Self::EffectMove => "effect_move(id, kind, index)",
+            Self::MaskSet => "mask_set(id, source, mode=\"alpha\", invert=False)",
+            Self::MaskClear => "mask_clear(id)",
             Self::Undo => "undo()",
             Self::Redo => "redo()",
             Self::Bake => "bake(id, ...)",
@@ -624,6 +648,8 @@ impl CommandKind {
                 | Self::EffectAdd
                 | Self::EffectRemove
                 | Self::EffectMove
+                | Self::MaskSet
+                | Self::MaskClear
         )
     }
 }
@@ -682,6 +708,8 @@ impl Command {
             Self::EffectAdd { .. } => CommandKind::EffectAdd,
             Self::EffectRemove { .. } => CommandKind::EffectRemove,
             Self::EffectMove { .. } => CommandKind::EffectMove,
+            Self::MaskSet { .. } => CommandKind::MaskSet,
+            Self::MaskClear { .. } => CommandKind::MaskClear,
             Self::Undo => CommandKind::Undo,
             Self::Redo => CommandKind::Redo,
             Self::Bake(_) => CommandKind::Bake,

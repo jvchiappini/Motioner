@@ -212,6 +212,7 @@ impl Document {
             transform: Transform::default(),
             blend: BlendMode::Normal,
             effects: Vec::new(),
+            mask: None,
             identity,
             visible: true,
         });
@@ -570,6 +571,91 @@ impl Document {
         Ok(())
     }
 
+    /// Masks `id` with the drawn subtree of `source` (D-0033).
+    ///
+    /// The source node is hidden from the normal draw stream and evaluated in
+    /// world space with its own animated transform; when it is a child of `id`
+    /// it inherits `id`'s transform and moves with it.  A node cannot mask
+    /// itself, cannot be masked by one of its ancestors, and the mask graph may
+    /// not contain a cycle.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`] for either ID, [`CoreError::MaskSelfReference`],
+    /// [`CoreError::MaskSourceIsAncestor`] and [`CoreError::MaskCycle`].
+    pub fn set_mask(
+        &mut self,
+        id: NodeId,
+        source: NodeId,
+        mode: crate::mask::MaskMode,
+        invert: bool,
+    ) -> Result<(), CoreError> {
+        if let Some(error) = self.mask_problem(id, source) {
+            return Err(error);
+        }
+        self.nodes[id.index()].mask = Some(crate::mask::MaskSpec {
+            source,
+            mode,
+            invert,
+        });
+        Ok(())
+    }
+
+    /// Removes the mask of `id`, if it has one.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`] for an unknown ID.
+    pub fn clear_mask(&mut self, id: NodeId) -> Result<(), CoreError> {
+        self.require(id)?;
+        self.nodes[id.index()].mask = None;
+        Ok(())
+    }
+
+    /// Whether `source` may mask `node` (the rule behind [`Self::set_mask`]).
+    #[must_use]
+    pub fn can_mask(&self, node: NodeId, source: NodeId) -> bool {
+        self.mask_problem(node, source).is_none()
+    }
+
+    /// Whether any node uses `id` as its mask source.
+    ///
+    /// Evaluation skips these nodes in the normal draw stream: they are drawn
+    /// only as the mask of the nodes that reference them.
+    #[must_use]
+    pub fn is_mask_source(&self, id: NodeId) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| node.mask.is_some_and(|mask| mask.source == id))
+    }
+
+    /// The reason `source` may not mask `node`, if any.
+    fn mask_problem(&self, node: NodeId, source: NodeId) -> Option<CoreError> {
+        if self.node(node).is_none() {
+            return Some(CoreError::UnknownNode(node));
+        }
+        if self.node(source).is_none() {
+            return Some(CoreError::UnknownNode(source));
+        }
+        if source == node {
+            return Some(CoreError::MaskSelfReference { node });
+        }
+        if self.is_ancestor_or_self(source, node) {
+            return Some(CoreError::MaskSourceIsAncestor { node, source });
+        }
+        // A cycle appears when following the source's own mask chain reaches
+        // the node being masked.
+        let mut cursor = self.nodes[source.index()].mask.map(|mask| mask.source);
+        for _ in 0..=self.nodes.len() {
+            match cursor {
+                Some(next) if next == node => return Some(CoreError::MaskCycle { node, source }),
+                Some(next) => cursor = self.nodes[next.index()].mask.map(|mask| mask.source),
+                None => return None,
+            }
+        }
+        Some(CoreError::MaskCycle { node, source })
+    }
+
     /// Adds an effect of `kind` with default parameters at the top of the
     /// stack.
     ///
@@ -813,6 +899,12 @@ impl Document {
     fn index_identity(&mut self, id: NodeId) {
         let key = self.nodes[id.index()].identity.as_str().to_owned();
         self.identities.insert(key, id);
+    }
+
+    /// Whether `ancestor` is a strict ancestor of `node`.
+    #[must_use]
+    pub fn is_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
+        ancestor != node && self.is_ancestor_or_self(ancestor, node)
     }
 
     fn is_ancestor_or_self(&self, ancestor: NodeId, mut node: NodeId) -> bool {
@@ -1906,5 +1998,88 @@ mod tests {
             ),
             Err(CoreError::InvalidContentValue { .. })
         ));
+    }
+
+    #[test]
+    fn masks_validate_the_source_and_round_trip() {
+        let mut doc = document();
+        let card = doc.add_node(dot()).unwrap();
+        let cutout = doc.add_node(dot()).unwrap();
+        doc.set_mask(card, cutout, crate::MaskMode::Luma, true)
+            .unwrap();
+        let mask = doc.node(card).unwrap().mask().unwrap();
+        assert_eq!(mask.source, cutout);
+        assert_eq!(mask.mode, crate::MaskMode::Luma);
+        assert!(mask.invert);
+        assert!(doc.is_mask_source(cutout));
+        assert!(!doc.is_mask_source(card));
+
+        doc.clear_mask(card).unwrap();
+        assert!(doc.node(card).unwrap().mask().is_none());
+        assert!(!doc.is_mask_source(cutout));
+    }
+
+    #[test]
+    fn masks_reject_self_ancestors_and_cycles() {
+        let mut doc = document();
+        let outer = doc.add_node(NodeContent::Group).unwrap();
+        let inner = doc.add_node(NodeContent::Group).unwrap();
+        let leaf = doc.add_node(dot()).unwrap();
+        doc.reparent(inner, outer).unwrap();
+        doc.reparent(leaf, inner).unwrap();
+        assert_eq!(
+            doc.set_mask(leaf, leaf, crate::MaskMode::Alpha, false),
+            Err(CoreError::MaskSelfReference { node: leaf })
+        );
+        assert_eq!(
+            doc.set_mask(leaf, outer, crate::MaskMode::Alpha, false),
+            Err(CoreError::MaskSourceIsAncestor {
+                node: leaf,
+                source: outer
+            })
+        );
+        // A child may mask its parent (it moves with it).
+        doc.set_mask(outer, leaf, crate::MaskMode::Alpha, false)
+            .unwrap();
+        // Following the chain leaf -> outer -> leaf would cycle.
+        assert_eq!(
+            doc.set_mask(leaf, outer, crate::MaskMode::Alpha, false),
+            Err(CoreError::MaskSourceIsAncestor {
+                node: leaf,
+                source: outer
+            })
+        );
+        assert_eq!(
+            doc.set_mask(leaf, inner, crate::MaskMode::Alpha, false),
+            Err(CoreError::MaskSourceIsAncestor {
+                node: leaf,
+                source: inner
+            })
+        );
+        let other = doc.add_node(dot()).unwrap();
+        doc.set_mask(inner, other, crate::MaskMode::Alpha, false)
+            .unwrap();
+        assert_eq!(
+            doc.set_mask(other, inner, crate::MaskMode::Alpha, false),
+            Err(CoreError::MaskCycle {
+                node: other,
+                source: inner
+            })
+        );
+    }
+
+    #[test]
+    fn can_mask_agrees_with_set_mask() {
+        let mut doc = document();
+        let a = doc.add_node(NodeContent::Group).unwrap();
+        let b = doc.add_node(dot()).unwrap();
+        doc.reparent(b, a).unwrap();
+        assert!(!doc.can_mask(a, a));
+        assert!(!doc.can_mask(b, a));
+        assert!(doc.can_mask(a, b));
+        assert_eq!(
+            doc.set_mask(b, a, crate::MaskMode::Alpha, false),
+            Err(CoreError::MaskSourceIsAncestor { node: b, source: a })
+        );
     }
 }

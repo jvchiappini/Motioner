@@ -321,3 +321,13 @@ composition pixels by the view) and opens the layer with
 `push_layer_2d_with_effects`. A layer the engine rejects (invalid parameters)
 is not opened, so its draws composite directly and it is never popped. See
 the engine's `crates/ferrous_2d/docs/effects.md` for the passes.
+
+Masks (D-0033) use the same layer: a masked node's `PlanLayer` also carries a
+`PlanMask` with the item range of the mask source's subtree. `paint_plan`
+opens the layer with `push_masked_layer`, draws the content, calls `begin_mask`
+when the source range starts, draws the source items (including any layers and
+effects they have, which is how a blurred mask feathers), calls `end_mask`,
+and pops. The engine multiplies the finished, effected texture by the source's
+coverage. See the engine's `crates/ferrous_2d/docs/masks.md`.
+`golden_masks.rs` pins two stills and compares the render against them.
+

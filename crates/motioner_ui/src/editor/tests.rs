@@ -534,6 +534,94 @@ fn effect_commands_add_reorder_remove_and_edit_parameters() {
 }
 
 #[test]
+fn mask_commands_set_toggle_and_clear_the_override() {
+    let (mut editor, _dir) = hello_editor("masks");
+    let (card, source) = {
+        let document = editor.session().document().expect("document");
+        let card = document.find(TITLE).unwrap();
+        let source = document
+            .nodes()
+            .map(|node| node.identity().as_str().to_owned())
+            .find(|identity| {
+                let id = document.find(identity).unwrap();
+                id != card && document.can_mask(card, id)
+            })
+            .expect("hello has another node");
+        (card, source)
+    };
+
+    run(
+        &mut editor,
+        &format!("mask_set(\"{TITLE}\", \"{source}\", mode=\"luma\", invert=True)"),
+    );
+    assert_eq!(
+        editor
+            .session()
+            .overrides()
+            .get(TITLE, motioner_core::MASK, None)
+            .unwrap()
+            .action,
+        OverrideAction::Set(OverrideValue::Text(format!("{source}:luma:true")))
+    );
+    let document = editor.session().document().expect("document");
+    let mask = document.node(card).unwrap().mask().expect("a mask");
+    assert_eq!(
+        document.node(mask.source).unwrap().identity().as_str(),
+        source
+    );
+    assert_eq!(mask.mode, motioner_core::MaskMode::Luma);
+    assert!(mask.invert);
+    let json = editor.query_json(Some(TITLE)).unwrap();
+    assert!(
+        json.contains(&format!("\"mask\":{{\"source\":\"{source}\"")),
+        "{json}"
+    );
+    assert!(json.contains("\"mode\":\"luma\""), "{json}");
+
+    // Changing only the mode keeps the source and the inversion, and the
+    // override is rewritten rather than duplicated.
+    run(
+        &mut editor,
+        &format!("mask_set(\"{TITLE}\", \"{source}\", \"alpha\", true)"),
+    );
+    assert_eq!(
+        editor
+            .session()
+            .overrides()
+            .get(TITLE, motioner_core::MASK, None)
+            .unwrap()
+            .action,
+        OverrideAction::Set(OverrideValue::Text(format!("{source}:alpha:true")))
+    );
+
+    run(&mut editor, &format!("mask_clear(\"{TITLE}\")"));
+    assert!(editor
+        .session()
+        .overrides()
+        .get(TITLE, motioner_core::MASK, None)
+        .is_none());
+    let document = editor.session().document().expect("document");
+    assert!(document
+        .node(document.find(TITLE).unwrap())
+        .unwrap()
+        .mask()
+        .is_none());
+
+    assert_eq!(
+        error(&mut editor, &format!("mask_set(\"{TITLE}\", \"{TITLE}\")")),
+        ErrorKind::BadValue
+    );
+    assert_eq!(
+        error(&mut editor, "mask_set(\"@288\", \"missing\")"),
+        ErrorKind::UnknownNode
+    );
+    assert_eq!(
+        error(&mut editor, "mask_clear(\"@288\")"),
+        ErrorKind::BadValue
+    );
+}
+
+#[test]
 fn effect_parameters_key_through_the_generic_commands() {
     let (mut editor, _dir) = hello_editor("effect_keys");
     run(

@@ -95,7 +95,15 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
         t.text_muted
     };
     icons::draw(p, Icon::for_kind(row.kind), icon, ink, t.panel);
-    draw_labels(p, v, row, rect, icon.right(), selected, visible || !locked);
+    let mut icon_right = icon.right();
+    // A masked node and a mask source both carry the mask badge; a source that
+    // is a child is already indented under the node that uses it.
+    if row.mask_role.shows_badge() {
+        let badge = Rect::new(icon_right + p.m.px(2.0), icon.y, icon_side, icon_side);
+        icons::draw(p, Icon::Mask, badge, ink, t.panel);
+        icon_right = badge.right();
+    }
+    draw_labels(p, v, row, rect, icon_right, selected, visible || !locked);
     if hovered || selected || !visible || locked {
         draw_actions(p, v, index, rect, selected, visible, locked);
     }

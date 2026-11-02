@@ -221,6 +221,7 @@ impl PreviewApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per segmented control
     pub(super) fn press_segment(&mut self, item: usize, segment: usize) {
         match self.inspector_row_value(item) {
             Some(inspect::RowValue::Ease { .. }) => {
@@ -292,6 +293,81 @@ impl PreviewApp {
                     }
                     _ => {}
                 }
+            }
+            Some(inspect::RowValue::MaskSource {
+                current,
+                candidates,
+                mode,
+                invert,
+            }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                // Cycle: the next candidate after the current source, or the
+                // first one when the node is not masked yet.
+                let next = match current {
+                    Some(current) => {
+                        let index = candidates
+                            .iter()
+                            .position(|candidate| candidate == current)
+                            .map_or(0, |index| index + 1);
+                        candidates.get(index % candidates.len().max(1))
+                    }
+                    None => candidates.first(),
+                };
+                let Some(source) = next else {
+                    return;
+                };
+                self.run(&Command::MaskSet {
+                    id,
+                    source: source.clone(),
+                    mode: *mode,
+                    invert: *invert,
+                });
+            }
+            Some(inspect::RowValue::MaskMode {
+                source,
+                mode,
+                invert,
+            }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                let Some(next) = motioner_core::MaskMode::ALL.get(segment) else {
+                    return;
+                };
+                if next == mode {
+                    return;
+                }
+                self.run(&Command::MaskSet {
+                    id,
+                    source: source.clone(),
+                    mode: *next,
+                    invert: *invert,
+                });
+            }
+            Some(inspect::RowValue::MaskInvert {
+                source,
+                mode,
+                invert,
+            }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                if segment >= 2 {
+                    self.run(&Command::MaskClear { id });
+                    return;
+                }
+                let next = segment == 1;
+                if next == *invert {
+                    return;
+                }
+                self.run(&Command::MaskSet {
+                    id,
+                    source: source.clone(),
+                    mode: *mode,
+                    invert: next,
+                });
             }
             Some(inspect::RowValue::Align { .. }) => {
                 let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {

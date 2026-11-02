@@ -1,0 +1,53 @@
+# mdf: 0.1
+#
+# Masks and track mattes: an alpha text-reveal wipe and an inverted luma cut-out
+# (Phase 6, D-0033).  A mask node is never drawn: its subtree becomes the
+# coverage of the node that masks with it.
+#
+# Beat A (0.0-1.2 s): a white bar slides across a headline plate with an alpha
+# mask, revealing it from left to right.
+#
+# Beat B (1.6-2.6 s): a mid-grey disc slides across a gradient card with an
+# inverted luma mask: the disc turns into a translucent window, because 0.216
+# linear luminance leaves 78 % of the card's coverage there.
+
+comp(name="Masks", width=960, height=540, fps=60, duration=3.0, background="#0E1116")
+
+# --- Beat A: alpha-masked reveal ------------------------------------------
+headline = group()
+headline.pos = (480, 200)
+headline.id("headline")
+plate = rect(560, 150, radius=10, fill="#FF6B4D")
+word = text("MASKED", size=96, color="#FFFFFF", align="center")
+word.pos = (0, -20)
+headline.add(plate, word)
+
+wipe = rect(440, 190, fill="#FFFFFF")
+wipe.id("wipe")
+wipe.pos = (60, 200)
+wipe.key("pos.x", 0.0, 60)
+wipe.key("pos.x", 1.2, 900)
+
+headline.mask(wipe, mode="alpha")
+
+# --- Beat B: inverted luma cut-out ----------------------------------------
+card = rect(440, 210, radius=14)
+card.pos = (480, 400)
+card.fill = linear_gradient(
+    start=(-220, 0),
+    end=(220, 0),
+    stops=[(0.0, "#5A7CFF"), (0.5, "#33F2E6"), (1.0, "#8A5AFF")],
+)
+card.id("card")
+
+spot = circle(110, fill="#808080")
+spot.id("spot")
+spot.pos = (380, 400)
+spot.key("pos.x", 1.6, 380)
+spot.key("pos.x", 2.6, 580)
+
+card.mask(spot, mode="luma", invert=True)
+
+# --- Captions -------------------------------------------------------------
+caption = text("alpha reveal - inverted luma matte", size=24, color="#C9D1DC", align="center")
+caption.pos = (480, 505)

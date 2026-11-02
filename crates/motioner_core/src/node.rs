@@ -1089,6 +1089,7 @@ pub struct Node {
     pub(crate) transform: Transform,
     pub(crate) blend: BlendMode,
     pub(crate) effects: Vec<crate::effect::Effect>,
+    pub(crate) mask: Option<crate::mask::MaskSpec>,
     pub(crate) identity: NodeIdentity,
     pub(crate) visible: bool,
 }
@@ -1159,5 +1160,14 @@ impl Node {
     #[must_use]
     pub fn effect(&self, kind: crate::EffectKind) -> Option<&crate::effect::Effect> {
         self.effects.iter().find(|effect| effect.is_kind(kind))
+    }
+
+    /// The mask applied to this node, if any (D-0033).
+    ///
+    /// The source node is not drawn on its own; its subtree supplies the
+    /// coverage of this node's offscreen layer.
+    #[must_use]
+    pub fn mask(&self) -> Option<crate::mask::MaskSpec> {
+        self.mask
     }
 }

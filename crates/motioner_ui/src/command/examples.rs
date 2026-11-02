@@ -158,6 +158,13 @@ impl CommandKind {
                 kind: motioner_core::EffectKind::DropShadow,
                 index: 1,
             },
+            Self::MaskSet => Command::MaskSet {
+                id: id(),
+                source: "cutout".to_owned(),
+                mode: motioner_core::MaskMode::Alpha,
+                invert: false,
+            },
+            Self::MaskClear => Command::MaskClear { id: id() },
             Self::Undo => Command::Undo,
             Self::Redo => Command::Redo,
             Self::Bake => Command::Bake(vec![id(), "card".to_owned()]),

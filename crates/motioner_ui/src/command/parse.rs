@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use motioner_core::{Ease, EffectKind, OverrideValue, Vec2};
+use motioner_core::{Ease, EffectKind, MaskMode, OverrideValue, Vec2};
 use motioner_dsl::ast::{Argument, Expr, ExprKind, StmtKind, UnaryOp};
 
 use super::{Command, CommandError, CommandKind, ErrorKind, KeySpec, Panel, Time};
@@ -233,6 +233,18 @@ impl Command {
                     CommandError::new(ErrorKind::BadArgument, "'index' must be zero or above")
                 })?,
             },
+            CommandKind::MaskSet => Self::MaskSet {
+                id: a.string("id")?,
+                source: a.string("source")?,
+                mode: match a.optional_string("mode")? {
+                    Some(name) => mask_mode(&name)?,
+                    None => MaskMode::Alpha,
+                },
+                invert: a.optional_boolean("invert")?.unwrap_or(false),
+            },
+            CommandKind::MaskClear => Self::MaskClear {
+                id: a.string("id")?,
+            },
             CommandKind::Bake => Self::Bake(a.rest_strings()?),
         };
         a.finish()?;
@@ -241,6 +253,15 @@ impl Command {
 }
 
 /// Parses an effect kind name from a command argument.
+fn mask_mode(name: &str) -> Result<MaskMode, CommandError> {
+    MaskMode::from_name(name).ok_or_else(|| {
+        CommandError::new(
+            ErrorKind::BadArgument,
+            format!("unknown mask mode {name:?}; expected alpha or luma"),
+        )
+    })
+}
+
 fn effect_kind(name: &str) -> Result<EffectKind, CommandError> {
     EffectKind::from_name(name).ok_or_else(|| {
         CommandError::new(

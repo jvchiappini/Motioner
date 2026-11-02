@@ -109,12 +109,22 @@ pub(crate) fn render(
     })
 }
 
+/// One layer open during the paint loop.
+struct OpenLayer<'a> {
+    layer: &'a motioner_eval::PlanLayer,
+    /// Whether the engine accepted the push (a rejected layer is never popped).
+    pushed: bool,
+    /// Whether the mask source layer is open.
+    mask_open: bool,
+}
+
 /// Paints one plan into a canvas and returns the draw counters.
 ///
 /// `flip` maps composition pixels to world space, including any [`crate::ViewFit`]
 /// letterboxing. `font` and `missing_glyphs` are owned by the caller so the
 /// per-node glyph measurement cache survives across frames.
 #[allow(clippy::too_many_arguments)] // the plan, the canvas and its caches, kept explicit
+#[allow(clippy::too_many_lines)] // the plan walk: open, draw, masks, close
 pub(crate) fn paint_plan(
     canvas: &mut impl Canvas2d,
     document: &Document,
@@ -139,10 +149,24 @@ pub(crate) fn paint_plan(
     // view so a zoomed preview matches the export.
     let effect_scale = space::to_f32(space::world_unit_scale(flip));
     // Each open layer remembers whether the engine accepted it, so a rejected
-    // push (invalid effect) is never popped.
-    let mut open: Vec<(&motioner_eval::PlanLayer, bool)> = Vec::new();
+    // push (invalid effect) is never popped, and whether its mask source layer
+    // is open.
+    let mut open: Vec<OpenLayer<'_>> = Vec::new();
     let mut next_layer = 0usize;
     for (item_index, item) in plan.items().iter().enumerate() {
+        // A mask source starts after all of the layer's content, so the top
+        // open layer is the masked one; begin its source before opening the
+        // layers that start at this index (the source's own effect layers).
+        if let Some(entry) = open.last_mut() {
+            if entry.pushed && !entry.mask_open {
+                if let Some(mask) = entry.layer.mask {
+                    if mask.start == item_index && mask.end > mask.start {
+                        canvas.begin_mask();
+                        entry.mask_open = true;
+                    }
+                }
+            }
+        }
         // Layers open before their first item and close after their last one.
         // A group without content opens at the same index as its first child,
         // so several layers can start here (parents first).
@@ -155,13 +179,26 @@ pub(crate) fn paint_plan(
             for (slot, effect) in effects.iter_mut().zip(&layer.effects) {
                 *slot = engine_effect(effect, effect_scale);
             }
-            let pushed = canvas.push_layer(
-                1.0,
-                layer.blend,
-                space::z_for(z_index, total),
-                &effects[..count],
-            );
-            open.push((layer, pushed));
+            let pushed = match layer.mask {
+                Some(mask) => canvas.push_masked_layer(
+                    1.0,
+                    layer.blend,
+                    space::z_for(z_index, total),
+                    &effects[..count],
+                    engine_mask(&mask),
+                ),
+                None => canvas.push_layer(
+                    1.0,
+                    layer.blend,
+                    space::z_for(z_index, total),
+                    &effects[..count],
+                ),
+            };
+            open.push(OpenLayer {
+                layer,
+                pushed,
+                mask_open: false,
+            });
             next_layer += 1;
         }
         match item.shape {
@@ -203,17 +240,34 @@ pub(crate) fn paint_plan(
                 );
             }
         }
-        while let Some(&(layer, pushed)) = open.last() {
-            if layer.end != item_index + 1 {
+        while let Some(entry) = open.last() {
+            if entry.layer.end != item_index + 1 {
                 break;
             }
-            if pushed {
+            if entry.pushed {
+                if entry.layer.mask.is_some() {
+                    // An empty source (start == end) never reached the
+                    // mid-stream begin above; begin it here so the engine
+                    // still composes a deterministic transparent mask.
+                    if !entry.mask_open {
+                        canvas.begin_mask();
+                    }
+                    canvas.end_mask();
+                }
                 canvas.pop_layer();
             }
             open.pop();
         }
     }
     stats
+}
+
+/// Maps one sampled document mask to the canvas request (D-0033).
+fn engine_mask(mask: &motioner_eval::PlanMask) -> crate::CanvasMask {
+    crate::CanvasMask {
+        mode: mask.mode,
+        invert: mask.invert,
+    }
 }
 
 /// Maps one sampled document effect to the engine effect (D-0032).

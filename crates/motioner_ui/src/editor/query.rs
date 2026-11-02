@@ -155,6 +155,21 @@ impl Editor {
             j.end_object();
         }
         j.end_array();
+        match n.mask() {
+            Some(mask) => {
+                j.key("mask").begin_object();
+                match document.node(mask.source) {
+                    Some(source) => j.key("source").string(source.identity().as_str()),
+                    None => j.key("source").null(),
+                };
+                j.key("mode").string(mask.mode.name());
+                j.key("invert").boolean(mask.invert);
+                j.end_object();
+            }
+            None => {
+                j.key("mask").null();
+            }
+        }
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
             let name = field.name();

@@ -121,6 +121,7 @@ pub(crate) enum NodeMethod {
     Id,
     Effect,
     EffectStack,
+    Mask,
 }
 
 impl NodeMethod {
@@ -131,6 +132,7 @@ impl NodeMethod {
             "id" => Some(Self::Id),
             "effect" => Some(Self::Effect),
             "effect_stack" => Some(Self::EffectStack),
+            "mask" => Some(Self::Mask),
             _ => None,
         }
     }
@@ -142,6 +144,7 @@ impl NodeMethod {
             Self::Id => "id",
             Self::Effect => "effect",
             Self::EffectStack => "effect_stack",
+            Self::Mask => "mask",
         }
     }
 }

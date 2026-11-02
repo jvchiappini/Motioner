@@ -34,6 +34,9 @@ pub const NAME: &str = "name";
 /// effect.
 pub const EFFECTS: &str = "effects";
 
+/// The mask override (D-0033): `"<source>:<mode>:<invert>"` or `"none"`.
+pub const MASK: &str = "mask";
+
 /// A value written by an override.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverrideValue {
@@ -295,6 +298,12 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
         };
         return apply_effect_stack(document, node, list);
     }
+    if entry.property == MASK {
+        let OverrideAction::Set(OverrideValue::Text(text)) = &entry.action else {
+            return Err("'mask' expects '<source>:<mode>:<invert>'".to_owned());
+        };
+        return apply_mask(document, node, text);
+    }
     let (base, axis) = split_property(&entry.property);
     match &entry.action {
         OverrideAction::Visible(visible) => document
@@ -433,6 +442,15 @@ fn set_value(
         };
         return apply_effect_stack(document, node, list);
     }
+    if property_name == MASK {
+        let OverrideValue::Text(text) = value else {
+            return Err(format!(
+                "'mask' cannot take {}: expected '<source>:<mode>:<invert>'",
+                describe(value)
+            ));
+        };
+        return apply_mask(document, node, text);
+    }
     if property_name == "blend" {
         let OverrideValue::Text(name) = value else {
             return Err(format!(
@@ -458,6 +476,26 @@ fn set_value(
     document
         .set_content(node, field, value)
         .map_err(|error| error.to_string())
+}
+
+/// Applies a `mask` override: `"<source>:<mode>:<invert>"` or `"none"`.
+fn apply_mask(
+    document: &mut Document,
+    node: crate::node::NodeId,
+    text: &str,
+) -> Result<(), String> {
+    match crate::mask::MaskSpec::parse_override(text) {
+        Ok(None) => document.clear_mask(node).map_err(|error| error.to_string()),
+        Ok(Some((source, mode, invert))) => {
+            let source = document
+                .find(source)
+                .ok_or_else(|| format!("no node has the identity {source:?}"))?;
+            document
+                .set_mask(node, source, mode, invert)
+                .map_err(|error| error.to_string())
+        }
+        Err(reason) => Err(format!("'mask' cannot take {text:?}: {reason}")),
+    }
 }
 
 /// Rebuilds a node's effect stack from a comma-separated list of kind names.
@@ -1095,5 +1133,58 @@ mod tests {
             text.contains("override(\"p\", \"cap\", \"round\")"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn mask_overrides_set_clear_and_report_bad_sources() {
+        let mut doc = document();
+        let card = dot(&mut doc, "card");
+        let cutout = dot(&mut doc, "cutout");
+        let mut set = OverrideSet::new();
+        set.insert(OverrideEntry::new(
+            "card",
+            MASK,
+            OverrideAction::Set(OverrideValue::Text("cutout:luma:true".to_owned())),
+        ));
+        assert!(set.apply(&mut doc).is_empty());
+        let mask = doc.node(card).unwrap().mask().unwrap();
+        assert_eq!(mask.source, cutout);
+        assert_eq!(mask.mode, crate::MaskMode::Luma);
+        assert!(mask.invert);
+        let text = set.to_mdf(rate());
+        assert!(
+            text.contains("override(\"card\", \"mask\", \"cutout:luma:true\")"),
+            "{text}"
+        );
+
+        let mut clear = OverrideSet::new();
+        clear.insert(OverrideEntry::new(
+            "card",
+            MASK,
+            OverrideAction::Set(OverrideValue::Text("none".to_owned())),
+        ));
+        assert!(clear.apply(&mut doc).is_empty());
+        assert!(doc.node(card).unwrap().mask().is_none());
+
+        let mut bad = OverrideSet::new();
+        bad.insert(OverrideEntry::new(
+            "card",
+            MASK,
+            OverrideAction::Set(OverrideValue::Text("missing:alpha:false".to_owned())),
+        ));
+        let issues = bad.apply(&mut doc);
+        assert_eq!(issues.len(), 1);
+        assert!(
+            issues[0].message.contains("no node has the identity"),
+            "{issues:?}"
+        );
+
+        let mut bad_mode = OverrideSet::new();
+        bad_mode.insert(OverrideEntry::new(
+            "card",
+            MASK,
+            OverrideAction::Set(OverrideValue::Text("cutout:coverage:false".to_owned())),
+        ));
+        assert_eq!(bad_mode.apply(&mut doc).len(), 1);
     }
 }

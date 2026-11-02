@@ -62,11 +62,22 @@ impl Command {
             Self::EffectMove { id, kind, index } => {
                 vec![quote(id), quote(kind.name()), index.to_string()]
             }
+            Self::MaskSet {
+                id,
+                source,
+                mode,
+                invert,
+            } => vec![
+                quote(id),
+                quote(source),
+                quote(mode.name()),
+                bool_text(*invert),
+            ],
             Self::PrevKey { id, property }
             | Self::NextKey { id, property }
             | Self::Stopwatch { id, property }
             | Self::ToggleKey { id, property } => vec![quote(id), quote(property)],
-            Self::Select(id) => vec![quote(id)],
+            Self::Select(id) | Self::MaskClear { id } => vec![quote(id)],
             Self::Expand { id, open } => vec![quote(id), bool_text(*open)],
             Self::SelectKeys { keys, add } => {
                 let list: Vec<String> = keys

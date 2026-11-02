@@ -167,6 +167,35 @@ pub enum RowValue {
     },
     /// The three add-effect tiles (shadow, blur, glow).
     EffectAdd,
+    /// The mask source picker: clicking the tile cycles the candidates.
+    MaskSource {
+        /// Current source identity, `None` when the node is not masked.
+        current: Option<String>,
+        /// Node identities a `mask_set` accepts, in outline order.
+        candidates: Vec<String>,
+        /// Mode kept by the cycle.
+        mode: motioner_core::MaskMode,
+        /// Invert kept by the cycle.
+        invert: bool,
+    },
+    /// Alpha or luma coverage: one tile per mode.
+    MaskMode {
+        /// The masked node's source identity.
+        source: String,
+        /// The current mode.
+        mode: motioner_core::MaskMode,
+        /// Invert kept by the change.
+        invert: bool,
+    },
+    /// Whether the coverage is inverted: Off / On / Clear.
+    MaskInvert {
+        /// The masked node's source identity.
+        source: String,
+        /// The current mode (kept by the toggle).
+        mode: motioner_core::MaskMode,
+        /// Whether the coverage is inverted.
+        invert: bool,
+    },
     /// A three-state segmented control.
     Align {
         /// What an edit writes.
@@ -943,6 +972,68 @@ fn effect_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
     rows
 }
 
+/// The Mask section: source picker, mode, invert and the clear tile (D-0033).
+///
+/// A node without a mask still gets the Source row so the section shows how to
+/// add one; clicking it masks with the first candidate.
+fn mask_rows(document: &Document, node: NodeId) -> Vec<Row> {
+    let candidates: Vec<String> = document
+        .nodes()
+        .filter(|candidate| candidate.id() != node && document.can_mask(node, candidate.id()))
+        .map(|candidate| candidate.identity().as_str().to_owned())
+        .collect();
+    let mask = document.node(node).and_then(motioner_core::Node::mask);
+    let Some(mask) = mask else {
+        return vec![row(
+            "Mask",
+            "Source",
+            RowValue::MaskSource {
+                current: None,
+                candidates,
+                mode: motioner_core::MaskMode::Alpha,
+                invert: false,
+            },
+            None,
+        )];
+    };
+    let source = document
+        .node(mask.source)
+        .map_or_else(String::new, |node| node.identity().as_str().to_owned());
+    vec![
+        row(
+            "Mask",
+            "Source",
+            RowValue::MaskSource {
+                current: Some(source.clone()),
+                candidates,
+                mode: mask.mode,
+                invert: mask.invert,
+            },
+            None,
+        ),
+        row(
+            "Mask",
+            "Mode",
+            RowValue::MaskMode {
+                source: source.clone(),
+                mode: mask.mode,
+                invert: mask.invert,
+            },
+            None,
+        ),
+        row(
+            "Mask",
+            "Invert",
+            RowValue::MaskInvert {
+                source,
+                mode: mask.mode,
+                invert: mask.invert,
+            },
+            None,
+        ),
+    ]
+}
+
 /// "X" or "Y" for an effect offset field.
 fn axis_label(axis: motioner_core::Axis) -> &'static str {
     match axis {
@@ -977,6 +1068,7 @@ pub fn inspect_node(
     )];
     // Effects sit next to Blend: both are whole-node properties.
     rows.extend(effect_rows(document, node, frame));
+    rows.extend(mask_rows(document, node));
     rows.extend(transform_rows(n.transform(), frame));
     rows.extend(content_rows(document, node, n.content(), frame));
     let name = display_name(document, node, overrides)
@@ -1237,6 +1329,21 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
                 segments = blend_tiles(Rect::new(left, y + row_h, rect.w, blend_grid_height(m)), m);
             }
             RowValue::EffectOps { .. } | RowValue::EffectAdd => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::MaskSource { .. } => {
+                segments = vec![Rect::new(value_x, field_y, value_w, field_h)];
+            }
+            RowValue::MaskMode { .. } => {
+                let seg_w = (value_w / 2.0).floor();
+                segments = (0..2)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::MaskInvert { .. } => {
                 let seg_w = (value_w / 3.0).floor();
                 segments = (0..3)
                     .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))

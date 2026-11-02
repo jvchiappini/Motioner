@@ -14,6 +14,6 @@ pub use affine::Affine2;
 pub use curve::{ease, sample, sample_vec2, Interpolate};
 pub use evaluate::Evaluator;
 pub use plan::{
-    EffectValue, ItemShape, PlanLayer, RenderItem, RenderPlan, ResolvedFill, ResolvedGradient,
-    ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
+    EffectValue, ItemShape, PlanLayer, PlanMask, RenderItem, RenderPlan, ResolvedFill,
+    ResolvedGradient, ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
 };

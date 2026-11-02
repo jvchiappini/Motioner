@@ -71,7 +71,9 @@ impl Editor {
             | Command::DeleteOrphan { .. }
             | Command::EffectAdd { .. }
             | Command::EffectRemove { .. }
-            | Command::EffectMove { .. } => layer_edits(command, document, set)?,
+            | Command::EffectMove { .. }
+            | Command::MaskSet { .. }
+            | Command::MaskClear { .. } => layer_edits(command, document, set)?,
             _ => self.key_edits(command, document, keys)?,
         };
         if edits.is_empty() {
@@ -254,6 +256,9 @@ fn layer_edits(
     ) {
         return effect_edits(command, document);
     }
+    if matches!(command, Command::MaskSet { .. } | Command::MaskClear { .. }) {
+        return mask_edits(command, document);
+    }
     let rate = document.composition().frame_rate();
     Ok(match command {
         Command::Visible { id, visible } => {
@@ -412,6 +417,64 @@ fn effect_edits(command: &Command, document: &Document) -> Result<Vec<EditComman
             let moved = kinds.remove(from);
             kinds.insert(*index, moved);
             Ok(vec![effect_stack_edit(id, &kinds)])
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Mask commands rewrite the `mask` override (D-0033).
+///
+/// The value is `"<source>:<mode>:<invert>"`; the source is written by identity
+/// so it survives a reload and shows up in `query`.
+fn mask_edits(command: &Command, document: &Document) -> Result<Vec<EditCommand>, CommandError> {
+    match command {
+        Command::MaskSet {
+            id,
+            source,
+            mode,
+            invert,
+        } => {
+            let node = channels::node_of(document, id)?;
+            let source_node = document.find(source).ok_or_else(|| {
+                CommandError::new(
+                    ErrorKind::UnknownNode,
+                    format!("no node has the identity {source:?} (see `query` for the ids)"),
+                )
+            })?;
+            // Validate on a copy so the typed core error (self, ancestor,
+            // cycle) reaches the caller without touching the session.
+            document
+                .clone()
+                .set_mask(node, source_node, *mode, *invert)
+                .map_err(|error| CommandError::new(ErrorKind::BadValue, error.to_string()))?;
+            let spec = motioner_core::MaskSpec {
+                source: source_node,
+                mode: *mode,
+                invert: *invert,
+            };
+            Ok(vec![EditCommand::SetValue {
+                id: id.clone(),
+                property: motioner_core::MASK.to_owned(),
+                value: OverrideValue::Text(spec.override_text(source)),
+            }])
+        }
+        Command::MaskClear { id } => {
+            let node = channels::node_of(document, id)?;
+            if document
+                .node(node)
+                .and_then(motioner_core::Node::mask)
+                .is_none()
+            {
+                return Err(CommandError::new(
+                    ErrorKind::BadValue,
+                    format!("{id} has no mask to clear"),
+                ));
+            }
+            Ok(vec![EditCommand::Remove {
+                id: id.clone(),
+                property: motioner_core::MASK.to_owned(),
+                frame: None,
+            }])
         }
         _ => Ok(Vec::new()),
     }

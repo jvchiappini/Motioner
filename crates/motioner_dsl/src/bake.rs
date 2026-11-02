@@ -119,6 +119,7 @@ type Semantics = (
     Transform,
     motioner_core::BlendMode,
     Vec<motioner_core::Effect>,
+    Option<motioner_core::MaskSpec>,
     bool,
     Option<usize>,
 );
@@ -133,6 +134,7 @@ fn semantics(document: &Document) -> Vec<Semantics> {
                 node.transform().clone(),
                 node.blend(),
                 node.effects().to_vec(),
+                node.mask(),
                 node.is_visible(),
                 node.parent().and_then(index),
             )
@@ -505,6 +507,12 @@ fn bake_entry(
                 };
                 return Ok(format!("{variable}.effect_stack({})", quote(list)));
             }
+            if entry.property == motioner_core::MASK {
+                let OverrideValue::Text(text) = value else {
+                    return Err("'mask' expects '<source>:<mode>:<invert>'".to_owned());
+                };
+                return mask_set_statement(document, bindings, variable, text);
+            }
             if let Some(channel) = EffectChannel::from_name(&entry.property) {
                 return effect_set_statement(document, node, variable, channel, value);
             }
@@ -554,6 +562,47 @@ fn bake_entry(
             Err("locks are editor-only and have no program statement".to_owned())
         }
     }
+}
+
+/// `var.mask(source[, mode="luma"][, invert=True])` for a mask override.
+///
+/// A cleared mask writes `var.mask(None)`, the explicit form of "this node is
+/// not masked".  The source has to be a top-level variable for the same
+/// reason every other reference does: the program must be able to name it.
+fn mask_set_statement(
+    document: &Document,
+    bindings: &[(String, NodeId)],
+    variable: &str,
+    text: &str,
+) -> Result<String, String> {
+    let (source_identity, mode, invert) = match motioner_core::MaskSpec::parse_override(text) {
+        Ok(None) => return Ok(format!("{variable}.mask(None)")),
+        Ok(Some(parsed)) => parsed,
+        Err(reason) => return Err(format!("'mask' cannot take {text:?}: {reason}")),
+    };
+    let source = document
+        .find(source_identity)
+        .ok_or_else(|| format!("no node has the identity {source_identity:?}"))?;
+    let Some(source_variable) = bindings
+        .iter()
+        .find(|(_, id)| *id == source)
+        .map(|(name, _)| name.as_str())
+    else {
+        return Err(
+            "the mask source is not bound to a top-level variable (created in a loop or a function)"
+                .to_owned(),
+        );
+    };
+    let mut call = format!("{variable}.mask({source_variable}");
+    if mode != motioner_core::MaskMode::Alpha {
+        use std::fmt::Write as _;
+        let _ = write!(call, ", mode={}", quote(mode.name()));
+    }
+    if invert {
+        call.push_str(", invert=True");
+    }
+    call.push(')');
+    Ok(call)
 }
 
 /// `var.effect("kind", param=value)` for an effect parameter override.
@@ -861,6 +910,66 @@ mod tests {
         assert!(baked.overrides.is_empty(), "{baked:?}");
         assert!(
             baked.program.contains("key(\"blur.radius\", 1, 9)"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(semantics(&actual), semantics(&before));
+    }
+
+    const MASKS_SOURCE: &str = "comp(name=\"T\", width=200, height=100, fps=60, duration=2.0)\ncard = rect(40, 40)\ncutout = rect(20, 20)\n";
+
+    #[test]
+    fn bake_folds_a_mask_and_its_clear() {
+        let compiled = compile(MASKS_SOURCE);
+        let card = id_of(&compiled, compiled.document.roots()[0]);
+        let cutout = id_of(&compiled, compiled.document.roots()[1]);
+        let set = overrides(&[(
+            &card,
+            motioner_core::MASK,
+            OverrideAction::Set(OverrideValue::Text(format!("{cutout}:luma:true"))),
+        )]);
+        let before = expected(&compiled, &set);
+        let baked = bake(
+            MASKS_SOURCE,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.overrides.is_empty(), "{baked:?}");
+        assert!(
+            baked
+                .program
+                .contains("card.mask(cutout, mode=\"luma\", invert=True)"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(semantics(&actual), semantics(&before));
+
+        // Clearing an existing mask folds as the explicit `mask(None)`.
+        let masked = format!("{MASKS_SOURCE}card.mask(cutout, mode=\"luma\", invert=True)\n");
+        let compiled = compile(&masked);
+        let card = id_of(&compiled, compiled.document.roots()[0]);
+        let set = overrides(&[(
+            &card,
+            motioner_core::MASK,
+            OverrideAction::Set(OverrideValue::Text("none".to_owned())),
+        )]);
+        let before = expected(&compiled, &set);
+        let baked = bake(
+            &masked,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.overrides.is_empty(), "{baked:?}");
+        assert!(
+            baked.program.contains("card.mask(None)"),
             "{}",
             baked.program
         );

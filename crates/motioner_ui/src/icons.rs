@@ -59,6 +59,8 @@ pub enum Icon {
     SafeArea,
     /// Snapping (magnet).
     Snap,
+    /// Masked layer.
+    Mask,
 }
 
 impl Icon {
@@ -237,6 +239,18 @@ fn layer(
         Icon::Group => {
             p.fill_rounded(g.r(2.0, 3.5, 5.5, 3.0), color, g.len(1.0));
             p.stroke_rounded(g.r(2.0, 5.0, 12.0, 8.5), color, g.len(1.5), stroke);
+        }
+        Icon::Mask => {
+            p.stroke_rounded(g.r(2.5, 2.5, 11.0, 11.0), color, g.len(1.5), stroke);
+            // The cut-out disc is the masked-away region.
+            p.circle(g.x + g.len(10.5), g.y + g.len(10.5), g.len(3.0), surface);
+            p.ring(
+                g.x + g.len(10.5),
+                g.y + g.len(10.5),
+                g.len(3.0),
+                stroke,
+                color,
+            );
         }
         Icon::ChevronDown => p.polygon(&[g.p(4.0, 6.0), g.p(12.0, 6.0), g.p(8.0, 10.5)], color),
         Icon::ChevronRight => p.polygon(&[g.p(6.0, 4.0), g.p(10.5, 8.0), g.p(6.0, 12.0)], color),
