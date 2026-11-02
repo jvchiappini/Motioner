@@ -89,10 +89,18 @@ impl Editor {
             },
             FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
                 match document.node(node).map(motioner_core::Node::content) {
-                    Some(NodeContent::Text(text)) => text.text.clone(),
+                    Some(NodeContent::Text(text)) => text.text.replace('\n', "\\n"),
                     _ => String::new(),
                 }
             }
+            FieldTarget::Font => match document.node(node).map(motioner_core::Node::content) {
+                Some(NodeContent::Text(text)) => text.font.clone(),
+                _ => String::new(),
+            },
+            FieldTarget::Weight => match document.node(node).map(motioner_core::Node::content) {
+                Some(NodeContent::Text(text)) => text.weight.to_string(),
+                _ => String::new(),
+            },
             FieldTarget::Align => match document.node(node).map(motioner_core::Node::content) {
                 Some(NodeContent::Text(text)) => align_name(text.align).to_owned(),
                 _ => String::new(),
@@ -172,8 +180,24 @@ impl Editor {
                 let value: f64 = trimmed.parse().ok().filter(|v: &f64| v.is_finite())?;
                 (channel.name(), OverrideValue::Number(value))
             }
-            FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
-                ("text".to_owned(), OverrideValue::Text(text.to_owned()))
+            FieldTarget::Content(ContentField::Text) | FieldTarget::Text => (
+                "text".to_owned(),
+                // The inspector shows line breaks as `\n`; commit them as real
+                // newlines (D-0034).
+                OverrideValue::Text(text.replace("\\n", "\n")),
+            ),
+            FieldTarget::Font => {
+                if trimmed.is_empty() {
+                    return None;
+                }
+                ("font".to_owned(), OverrideValue::Text(trimmed.to_owned()))
+            }
+            FieldTarget::Weight => {
+                let value: f64 = trimmed.parse().ok().filter(|v: &f64| v.is_finite())?;
+                if !(1.0..=1000.0).contains(&value) || value.fract() != 0.0 {
+                    return None;
+                }
+                ("weight".to_owned(), OverrideValue::Number(value))
             }
             FieldTarget::Align => {
                 let align = TextAlign::from_name(trimmed)?;
@@ -242,6 +266,9 @@ fn is_numeric_field(field: ContentField) -> bool {
             | ContentField::Radius
             | ContentField::StrokeWidth
             | ContentField::Size
+            | ContentField::Weight
+            | ContentField::Tracking
+            | ContentField::LineHeight
             | ContentField::TrimStart
             | ContentField::TrimEnd
             | ContentField::TrimOffset

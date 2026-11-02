@@ -14,29 +14,41 @@ use std::collections::HashMap;
 
 use ferrous_2d::render::{Effect2d, FontId2d, MAX_EFFECTS_PER_LAYER};
 use ferrous_renderer::headless::{HarnessError, Pure2dHarness, DEFAULT_FORMAT};
+use motioner_core::{CharOrder, CharProperty, CharValue, Frame, Vec2 as CoreVec2};
 use motioner_core::{Color, Document, NodeContent, NodeId, TextAlign};
 use motioner_eval::{Affine2, EffectValue, ItemShape, RenderItem, RenderPlan};
 
+use crate::fonts::FontSet;
 use crate::paths::PathCache;
 use crate::space::{self, to_f32};
-use crate::{shapes, text, Canvas2d, FrameRenderer, FrameStats, PaintStats, RenderError, ROBOTO};
+use crate::{shapes, text, Canvas2d, FrameRenderer, FrameStats, PaintStats, RenderError};
 
 /// Creates the engine harness, registers Roboto and wraps it in a
 /// [`FrameRenderer`].
-pub(crate) fn create(width: u32, height: u32) -> Result<FrameRenderer, RenderError> {
+pub(crate) fn create(
+    width: u32,
+    height: u32,
+    fonts: FontSet,
+) -> Result<FrameRenderer, RenderError> {
     let mut harness =
         Pure2dHarness::new(width, height, DEFAULT_FORMAT).map_err(map_harness_error)?;
+    let roboto = fonts
+        .resolve("Roboto", 400)
+        .map_err(RenderError::FontFamily)?;
     let font = harness
-        .register_font(ROBOTO, ferrous_font::charset::latin_western())
+        .register_font(roboto.bytes, ferrous_font::charset::latin_western())
         .map_err(|error| RenderError::Font {
             message: error.to_string(),
         })?;
+    let font_ids = vec![(("Roboto".to_owned(), 400), font)];
     let adapter_name = harness.adapter_name();
     Ok(FrameRenderer {
         width,
         height,
         harness,
         font,
+        fonts,
+        font_ids,
         adapter_name,
         clear: None,
         missing_glyphs: HashMap::new(),
@@ -71,6 +83,13 @@ pub(crate) fn render(
             actual: (plan.width(), plan.height()),
         });
     }
+    prepare_fonts(
+        &mut renderer.harness,
+        document,
+        plan,
+        &renderer.fonts,
+        &mut renderer.font_ids,
+    )?;
     apply_clear(renderer, plan.background());
     renderer.harness.begin_frame();
 
@@ -86,6 +105,7 @@ pub(crate) fn render(
         plan,
         flip,
         renderer.font,
+        &renderer.font_ids,
         &mut renderer.missing_glyphs,
         &mut renderer.path_cache,
         &gradients,
@@ -109,6 +129,59 @@ pub(crate) fn render(
     })
 }
 
+/// Registers one atlas per resolved `(family, weight)` the plan uses.
+///
+/// A missing family is a typed error naming the family and what was searched;
+/// it is raised before any draw, so a frame never renders with a wrong face.
+fn prepare_fonts(
+    harness: &mut Pure2dHarness,
+    document: &Document,
+    plan: &RenderPlan,
+    fonts: &FontSet,
+    font_ids: &mut Vec<((String, u16), FontId2d)>,
+) -> Result<(), RenderError> {
+    for item in plan.items() {
+        if !matches!(item.shape, ItemShape::Text { .. }) {
+            continue;
+        }
+        let Some(NodeContent::Text(content)) =
+            document.node(item.node).map(motioner_core::Node::content)
+        else {
+            continue;
+        };
+        let resolved = fonts
+            .resolve(&content.font, content.weight)
+            .map_err(RenderError::FontFamily)?;
+        let key = (resolved.family.to_owned(), resolved.weight);
+        if font_ids
+            .iter()
+            .any(|((family, weight), _)| *weight == key.1 && family.eq_ignore_ascii_case(&key.0))
+        {
+            continue;
+        }
+        let id = harness
+            .register_font(resolved.bytes, ferrous_font::charset::latin_western())
+            .map_err(|error| RenderError::Font {
+                message: error.to_string(),
+            })?;
+        font_ids.push((key, id));
+    }
+    Ok(())
+}
+
+/// The engine font handle resolved for a text node, falling back to `fallback`.
+fn font_for(
+    font_ids: &[((String, u16), FontId2d)],
+    family: &str,
+    weight: u16,
+    fallback: FontId2d,
+) -> FontId2d {
+    font_ids
+        .iter()
+        .find(|((name, w), _)| *w == weight && name.eq_ignore_ascii_case(family))
+        .map_or(fallback, |(_, id)| *id)
+}
+
 /// One layer open during the paint loop.
 struct OpenLayer<'a> {
     layer: &'a motioner_eval::PlanLayer,
@@ -123,7 +196,7 @@ struct OpenLayer<'a> {
 /// `flip` maps composition pixels to world space, including any [`crate::ViewFit`]
 /// letterboxing. `font` and `missing_glyphs` are owned by the caller so the
 /// per-node glyph measurement cache survives across frames.
-#[allow(clippy::too_many_arguments)] // the plan, the canvas and its caches, kept explicit
+#[allow(clippy::too_many_arguments)] // the plan, the canvas, the font table and its caches
 #[allow(clippy::too_many_lines)] // the plan walk: open, draw, masks, close
 pub(crate) fn paint_plan(
     canvas: &mut impl Canvas2d,
@@ -131,6 +204,7 @@ pub(crate) fn paint_plan(
     plan: &RenderPlan,
     flip: Affine2,
     font: FontId2d,
+    font_ids: &[((String, u16), FontId2d)],
     missing_glyphs: &mut HashMap<NodeId, u32>,
     path_cache: &mut PathCache,
     gradients: &crate::gradients::GradientTable,
@@ -204,9 +278,13 @@ pub(crate) fn paint_plan(
         match item.shape {
             ItemShape::Text {
                 size,
+                weight,
+                tracking,
+                line_height,
                 color,
                 align,
                 gradient,
+                animations,
                 ..
             } => {
                 if let Some(missing) = draw_text(
@@ -214,10 +292,16 @@ pub(crate) fn paint_plan(
                     document,
                     item,
                     font,
+                    font_ids,
                     size,
+                    weight,
+                    tracking,
+                    line_height,
                     color,
                     align,
                     gradient.and_then(|index| gradients.base(index)),
+                    animations,
+                    plan,
                     flip,
                     missing_glyphs,
                     &mut z_index,
@@ -323,11 +407,17 @@ fn draw_text(
     canvas: &mut impl Canvas2d,
     document: &Document,
     item: &RenderItem,
-    font: FontId2d,
+    fallback_font: FontId2d,
+    font_ids: &[((String, u16), FontId2d)],
     size: f64,
+    weight: u16,
+    tracking: f64,
+    line_height: f64,
     color: Color,
     align: TextAlign,
     gradient: Option<u32>,
+    animations: Option<usize>,
+    plan: &RenderPlan,
     flip: Affine2,
     missing_glyphs: &mut HashMap<NodeId, u32>,
     z_index: &mut u32,
@@ -337,6 +427,7 @@ fn draw_text(
     let NodeContent::Text(content) = node.content() else {
         return None;
     };
+    let font = font_for(font_ids, &content.font, weight, fallback_font);
 
     let missing = if let Some(count) = missing_glyphs.get(&item.node).copied() {
         count
@@ -349,14 +440,165 @@ fn draw_text(
     let model = text::text_model(flip, item.transform);
     let transform = space::model_mat4(model, 1.0, 1.0, space::z_for(*z_index, total));
     *z_index += 1;
-    canvas.text(
-        font,
-        &content.text,
-        transform,
-        to_f32(size),
-        text::align_to_engine(align),
-        space::linear_rgba(color, item.opacity),
-        gradient,
-    );
+
+    let style = ferrous_2d::render::TextStyle2d {
+        size_px: to_f32(size),
+        align: text::align_to_engine(align),
+        tracking: to_f32(tracking),
+        line_height: to_f32(line_height),
+    };
+    if let Some(index) = animations {
+        let mut layout = Vec::new();
+        let _ = canvas.layout_text(font, &content.text, style, &mut layout);
+        let animators = plan.text_animations(index).unwrap_or(&[]);
+        let draws = animated_draws(
+            item,
+            &layout,
+            animators,
+            plan.frame(),
+            color,
+            gradient,
+            &transform,
+        );
+        canvas.glyphs(font, &draws);
+    } else {
+        canvas.text_styled(
+            font,
+            &content.text,
+            transform,
+            style,
+            space::linear_rgba(color, item.opacity),
+            gradient,
+        );
+    }
     Some(missing)
+}
+
+/// A glyph index as a stagger rank (text blocks are far below `u32::MAX`).
+fn glyph_rank(index: usize) -> f64 {
+    f64::from(u32::try_from(index).unwrap_or(u32::MAX))
+}
+
+/// A frame delta as `f64`.
+#[allow(clippy::cast_precision_loss)] // frame counts stay far below 2^52
+fn frame_f64(frames: Frame) -> f64 {
+    frames as f64
+}
+
+/// Builds one per-glyph draw per laid-out character, applying every animator
+/// in order (D-0034).
+#[allow(clippy::too_many_arguments)] // the item, its layout and the frame
+fn animated_draws(
+    item: &RenderItem,
+    layout: &[ferrous_font::GlyphLayout],
+    animators: &[motioner_core::TextAnimator],
+    frame: Frame,
+    base_color: Color,
+    gradient: Option<u32>,
+    base_transform: &glam::Mat4,
+) -> Vec<ferrous_2d::render::GlyphDraw2d> {
+    let count = layout.len();
+    let centre = (glyph_rank(count) - 1.0) * 0.5;
+    layout
+        .iter()
+        .enumerate()
+        .map(|(index, glyph)| {
+            let mut state = GlyphState::default();
+            for animator in animators {
+                let rank = match animator.order {
+                    CharOrder::Forward => glyph_rank(index),
+                    CharOrder::Reverse => glyph_rank(count - 1 - index),
+                    CharOrder::Center => (glyph_rank(index) - centre).abs(),
+                };
+                let local = frame_f64(frame - animator.start) - rank * animator.stagger;
+                let progress = (local / animator.duration).clamp(0.0, 1.0);
+                state.apply(animator, motioner_eval::ease(animator.ease, progress));
+            }
+            let color = match state.color {
+                Some(animated) => space::linear_rgba(animated, item.opacity * state.opacity),
+                None => space::linear_rgba(base_color, item.opacity * state.opacity),
+            };
+            let gradient = if state.color.is_some() {
+                None
+            } else {
+                gradient
+            };
+            let transform = if state.is_identity() {
+                *base_transform
+            } else {
+                let pivot = glam::Vec3::new(glyph.x, glyph.baseline_y, 0.0);
+                let offset = glam::Vec3::new(to_f32(state.offset.x), -to_f32(state.offset.y), 0.0);
+                let local = glam::Mat4::from_translation(pivot + offset)
+                    * glam::Mat4::from_rotation_z(to_f32(state.rotation).to_radians())
+                    * glam::Mat4::from_scale(glam::Vec3::new(
+                        to_f32(state.scale),
+                        to_f32(state.scale),
+                        1.0,
+                    ))
+                    * glam::Mat4::from_translation(-pivot);
+                *base_transform * local
+            };
+            ferrous_2d::render::GlyphDraw2d {
+                glyph: glyph.clone(),
+                transform,
+                color,
+                gradient,
+            }
+        })
+        .collect()
+}
+
+/// Per-glyph animated state, starting from the identity.
+struct GlyphState {
+    opacity: f64,
+    offset: CoreVec2,
+    scale: f64,
+    rotation: f64,
+    color: Option<Color>,
+}
+
+impl Default for GlyphState {
+    fn default() -> Self {
+        Self {
+            opacity: 1.0,
+            offset: CoreVec2::default(),
+            scale: 1.0,
+            rotation: 0.0,
+            color: None,
+        }
+    }
+}
+
+impl GlyphState {
+    fn is_identity(&self) -> bool {
+        (self.opacity - 1.0).abs() < f64::EPSILON
+            && self.offset.x.abs() < f64::EPSILON
+            && self.offset.y.abs() < f64::EPSILON
+            && (self.scale - 1.0).abs() < f64::EPSILON
+            && self.rotation.abs() < f64::EPSILON
+    }
+
+    fn apply(&mut self, animator: &motioner_core::TextAnimator, progress: f64) {
+        match (animator.property, animator.from, animator.to) {
+            (CharProperty::Opacity, CharValue::Number(from), CharValue::Number(to)) => {
+                self.opacity = from + (to - from) * progress;
+            }
+            (CharProperty::Offset, CharValue::Vec2(from), CharValue::Vec2(to)) => {
+                self.offset = CoreVec2::new(
+                    from.x + (to.x - from.x) * progress,
+                    from.y + (to.y - from.y) * progress,
+                );
+            }
+            (CharProperty::Scale, CharValue::Number(from), CharValue::Number(to)) => {
+                self.scale = from + (to - from) * progress;
+            }
+            (CharProperty::Rotation, CharValue::Number(from), CharValue::Number(to)) => {
+                self.rotation = from + (to - from) * progress;
+            }
+            (CharProperty::Color, CharValue::Color(from), CharValue::Color(to)) => {
+                self.color = Some(Color::lerp(from, to, progress));
+            }
+            _ => {}
+        }
+    }
 }

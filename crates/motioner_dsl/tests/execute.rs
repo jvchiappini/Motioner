@@ -1,6 +1,8 @@
 //! End-to-end tests: MDF source in, document (or diagnostic) out.
 
-use motioner_core::{Document, Ease, NodeContent, Vec2};
+use motioner_core::{
+    Document, Ease, NodeContent, TextBounds, TextMeasurement, TextMetrics, TextRequest, Vec2,
+};
 use motioner_dsl::{run, ErrorCategory, Limits};
 
 const HEADER: &str = "comp(name=\"T\", width=200, height=100, fps=60, duration=2.0)\n";
@@ -666,4 +668,41 @@ fn number_channel(
 
 fn number_value(effect: &motioner_core::Effect, param: motioner_core::EffectParam) -> f64 {
     number_channel(effect, param).value()
+}
+
+struct FixedMetrics;
+
+impl TextMetrics for FixedMetrics {
+    fn measure(&self, request: &TextRequest<'_>) -> Option<TextMeasurement> {
+        // A predictable width so the test observes the returned number.
+        Some(TextMeasurement {
+            width: request.size * 2.0 + f64::from(u32::try_from(request.text.len()).unwrap_or(0)),
+            line_count: 1,
+            height: request.size,
+            ink: TextBounds {
+                left: 1.0,
+                top: -request.size,
+                right: 3.0,
+                bottom: 0.0,
+            },
+            line_advances: vec![request.size],
+        })
+    }
+}
+
+#[test]
+fn text_width_and_bounds_use_the_installed_metrics() {
+    let source = format!("{HEADER}w = text_width(\"AB\", 10)\nbox = rect(w, 1)\n");
+    let document =
+        motioner_dsl::run_with_metrics(&source, &Limits::default(), &FixedMetrics).unwrap();
+    let first = document.nodes().next().expect("a node");
+    assert!((first.transform().position.value().x - 0.0).abs() < 1e-9);
+    let NodeContent::Rect { width, .. } = first.content() else {
+        panic!("expected a rect");
+    };
+    assert!(
+        (width.value() - 22.0).abs() < 1e-9,
+        "width {}",
+        width.value()
+    );
 }

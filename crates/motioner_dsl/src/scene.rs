@@ -8,10 +8,11 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use motioner_core::{
-    BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease, Effect,
-    EffectChannel, EffectKind, EffectParam, EffectValueInput, FrameRate, Gradient, LineCap,
-    LineJoin, MaskMode, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint,
-    Property, PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
+    BlendMode, CharOrder, CharProperty, CharValue, Color, Composition, ContentField, ContentValue,
+    CoreError, Document, Ease, Effect, EffectChannel, EffectKind, EffectParam, EffectValueInput,
+    FrameRate, Gradient, LineCap, LineJoin, MaskMode, NodeContent, NodeId, NodeIdentity, Paint,
+    PathGeometry, PathPoint, Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent,
+    Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -216,7 +217,16 @@ impl Scene {
     }
 
     fn text(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
-        let params = ["content", "font", "size", "color", "align"];
+        let params = [
+            "content",
+            "font",
+            "size",
+            "color",
+            "align",
+            "weight",
+            "tracking",
+            "line_height",
+        ];
         let bound = bind("text", &params, 1, args)?;
         let Some(Value::Str(content)) = bound.get(0) else {
             let got = bound.get(0).map_or("nothing", Value::type_name);
@@ -234,7 +244,9 @@ impl Scene {
         let (color, gradient) = split_paint(color);
         let content = NodeContent::Text(TextContent::new(
             content.to_string(),
-            bound.string_or(1, "Inter")?.to_string(),
+            // Roboto is the historical default: documents that never asked for
+            // a family keep the exact advances they were authored with.
+            bound.string_or(1, "Roboto")?.to_string(),
             bound.number_or(2, 48.0)?,
             color.unwrap_or(Color::WHITE),
             align,
@@ -250,7 +262,28 @@ impl Scene {
                     )
                     .map_err(|error| core_error(&error))?;
             }
-            for (index, property) in [(0, "text"), (2, "size"), (3, "color"), (4, "align")] {
+            let weight = bound.number_or(5, 400.0)?;
+            let tracking = bound.number_or(6, 0.0)?;
+            let line_height = bound.number_or(7, 1.0)?;
+            let document = self.document_mut()?;
+            for (field, value) in [
+                (ContentField::Weight, weight),
+                (ContentField::Tracking, tracking),
+                (ContentField::LineHeight, line_height),
+            ] {
+                document
+                    .set_content(id, field, ContentValue::Number(value))
+                    .map_err(|error| core_error(&error))?;
+            }
+            for (index, property) in [
+                (0, "text"),
+                (2, "size"),
+                (3, "color"),
+                (4, "align"),
+                (5, "weight"),
+                (6, "tracking"),
+                (7, "line_height"),
+            ] {
                 self.record(id, property, bound.source(index));
             }
         }
@@ -547,7 +580,64 @@ impl Scene {
             NodeMethod::Effect => self.effect(id, args),
             NodeMethod::EffectStack => self.effect_stack(id, args),
             NodeMethod::Mask => self.mask(id, args),
+            NodeMethod::AnimateChars => self.animate_chars(id, args),
         }
+    }
+
+    /// `node.animate_chars(property, from, to, start, stagger, duration,
+    /// ease="linear", order="forward")`: appends a per-character animator
+    /// (D-0034).
+    fn animate_chars(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = [
+            "property", "from", "to", "start", "stagger", "duration", "ease", "order",
+        ];
+        let bound = bind("animate_chars", &params, 6, args)?;
+        let property_name = match bound.get(0) {
+            Some(Value::Str(name)) => name.clone(),
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "animate_chars(): 'property' must be a string, got {}",
+                    other.type_name()
+                )))
+            }
+            None => return Err(HostError::type_error("animate_chars(): missing 'property'")),
+        };
+        let property = CharProperty::from_name(&property_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "animate_chars(): unknown property {property_name:?}; use opacity, offset, \
+                 scale, rotation or color"
+            ))
+        })?;
+        let from = char_value(property, bound.get(1), "from")?;
+        let to = char_value(property, bound.get(2), "to")?;
+        let start_seconds = bound.number(3)?;
+        let stagger_seconds = bound.number(4)?;
+        let duration_seconds = bound.number(5)?;
+        let ease_name = bound.string_or(6, "linear")?;
+        let ease = Ease::from_name(&ease_name).ok_or_else(|| {
+            HostError::value_error(format!("animate_chars(): unknown ease {ease_name:?}"))
+        })?;
+        let order_name = bound.string_or(7, "forward")?;
+        let order = CharOrder::from_name(&order_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "animate_chars(): unknown order {order_name:?}; use forward, reverse or center"
+            ))
+        })?;
+        let rate = self.document()?.composition().frame_rate().as_f64();
+        let start = self
+            .document()?
+            .composition()
+            .frame_rate()
+            .seconds_to_frame(start_seconds)
+            .map_err(|error| core_error(&error))?;
+        let stagger = stagger_seconds * rate;
+        let duration = (duration_seconds * rate).max(1.0);
+        let animator = TextAnimator::new(property, from, to, start, stagger, duration, ease, order)
+            .map_err(|error| core_error(&error))?;
+        self.document_mut()?
+            .add_text_animator(id, animator)
+            .map_err(|error| core_error(&error))?;
+        Ok(Value::None)
     }
 
     /// `node.effect(kind, **params)`: adds the effect if absent and writes the
@@ -1177,6 +1267,41 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
 }
 
 /// Converts an MDF value to a content field write.
+/// Converts one `animate_chars` endpoint to the property's value kind.
+fn char_value(property: CharProperty, value: Option<&Value>, role: &str) -> HostResult<CharValue> {
+    let Some(value) = value else {
+        return Err(HostError::type_error(format!(
+            "animate_chars(): missing '{role}'"
+        )));
+    };
+    match property {
+        CharProperty::Opacity | CharProperty::Scale | CharProperty::Rotation => match value {
+            Value::Number(number) => Ok(CharValue::Number(*number)),
+            other => Err(HostError::type_error(format!(
+                "animate_chars(): '{role}' for {} must be a number, got {}",
+                property.name(),
+                other.type_name()
+            ))),
+        },
+        CharProperty::Offset => as_vec2(value).map(CharValue::Vec2).ok_or_else(|| {
+            HostError::type_error(format!(
+                "animate_chars(): '{role}' for offset must be an (x, y) pair"
+            ))
+        }),
+        CharProperty::Color => match value {
+            Value::Str(text) => Color::parse_hex(text)
+                .map(CharValue::Color)
+                .map_err(|error| {
+                    HostError::value_error(format!("animate_chars(): '{role}': {error}"))
+                }),
+            other => Err(HostError::type_error(format!(
+                "animate_chars(): '{role}' for color must be a colour string, got {}",
+                other.type_name()
+            ))),
+        },
+    }
+}
+
 fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue> {
     let number = |value: &Value| -> HostResult<ContentValue> {
         match value {
@@ -1194,6 +1319,9 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::Radius
         | ContentField::StrokeWidth
         | ContentField::Size
+        | ContentField::Weight
+        | ContentField::Tracking
+        | ContentField::LineHeight
         | ContentField::TrimStart
         | ContentField::TrimEnd
         | ContentField::TrimOffset

@@ -54,6 +54,10 @@ pub enum FieldTarget {
     Text,
     /// The horizontal alignment of a text layer.
     Align,
+    /// The font family of a text layer.
+    Font,
+    /// The font weight of a text layer.
+    Weight,
     /// The display name of the layer.
     Name,
     /// Not editable (composition summary rows).
@@ -202,6 +206,15 @@ pub enum RowValue {
         target: FieldTarget,
         /// The current alignment.
         align: TextAlign,
+    },
+    /// A one-tile picker that cycles through `options` on click.
+    Cycle {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The current option.
+        current: String,
+        /// Every option, in display order.
+        options: Vec<String>,
     },
     /// The ease of the selected keys: one tile per ease with a curve preview.
     Ease {
@@ -441,13 +454,14 @@ fn content_rows(
     node: NodeId,
     content: &NodeContent,
     frame: Frame,
+    font_families: &[String],
 ) -> Vec<Row> {
     match content {
         NodeContent::Group => Vec::new(),
         NodeContent::Rect { .. } => rect_rows(document, node, frame),
         NodeContent::Circle { .. } => circle_rows(document, node, frame),
         NodeContent::Path { geometry, .. } => path_rows(document, node, geometry, frame),
-        NodeContent::Text(text) => text_rows(document, node, text, frame),
+        NodeContent::Text(text) => text_rows(document, node, text, frame, font_families),
     }
 }
 
@@ -586,11 +600,13 @@ fn circle_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
     rows
 }
 
+#[allow(clippy::too_many_lines)] // one row per text field, in inspector order
 fn text_rows(
     document: &Document,
     node: NodeId,
     text: &motioner_core::TextContent,
     frame: Frame,
+    font_families: &[String],
 ) -> Vec<Row> {
     let mut rows = vec![
         row(
@@ -598,7 +614,28 @@ fn text_rows(
             "Text",
             RowValue::Text {
                 target: FieldTarget::Text,
-                text: text.text.clone(),
+                // Newlines are shown as `\n`, the spelling `bake` writes.
+                text: text.text.replace('\n', "\\n"),
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Family",
+            RowValue::Cycle {
+                target: FieldTarget::Font,
+                current: text.font.clone(),
+                options: font_families.to_vec(),
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Weight",
+            RowValue::Cycle {
+                target: FieldTarget::Weight,
+                current: text.weight.to_string(),
+                options: vec!["400".to_owned(), "600".to_owned(), "700".to_owned()],
             },
             None,
         ),
@@ -613,6 +650,40 @@ fn text_rows(
                 "",
             )),
             Some(content_channel(document, node, ContentField::Size, frame)),
+        ),
+        row(
+            "Text",
+            "Tracking",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Tracking),
+                "",
+                number_or_zero(document, node, ContentField::Tracking, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(
+                document,
+                node,
+                ContentField::Tracking,
+                frame,
+            )),
+        ),
+        row(
+            "Text",
+            "Line height",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::LineHeight),
+                "",
+                number_or_zero(document, node, ContentField::LineHeight, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(
+                document,
+                node,
+                ContentField::LineHeight,
+                frame,
+            )),
         ),
         row(
             "Text",
@@ -1053,6 +1124,7 @@ pub fn inspect_node(
     frame: Frame,
     overrides: Option<&OverrideSet>,
     fallback_name: &str,
+    font_families: &[String],
 ) -> Option<Model> {
     let n = document.node(node)?;
     // Blend sits at the top: it is a whole-node property, and the segmented
@@ -1070,7 +1142,13 @@ pub fn inspect_node(
     rows.extend(effect_rows(document, node, frame));
     rows.extend(mask_rows(document, node));
     rows.extend(transform_rows(n.transform(), frame));
-    rows.extend(content_rows(document, node, n.content(), frame));
+    rows.extend(content_rows(
+        document,
+        node,
+        n.content(),
+        frame,
+        font_families,
+    ));
     let name = display_name(document, node, overrides)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| fallback_name.to_owned());
@@ -1334,7 +1412,7 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
                     .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
                     .collect();
             }
-            RowValue::MaskSource { .. } => {
+            RowValue::MaskSource { .. } | RowValue::Cycle { .. } => {
                 segments = vec![Rect::new(value_x, field_y, value_w, field_h)];
             }
             RowValue::MaskMode { .. } => {
@@ -1451,8 +1529,8 @@ mod tests {
     fn transform_values_follow_the_frame() {
         let document = hello();
         let title = document.roots()[0];
-        let start = inspect_node(&document, title, 0, None, "Title").unwrap();
-        let settled = inspect_node(&document, title, 120, None, "Title").unwrap();
+        let start = inspect_node(&document, title, 0, None, "Title", &[]).unwrap();
+        let settled = inspect_node(&document, title, 120, None, "Title", &[]).unwrap();
         let position_x = field_of(&start, "Pos X");
         match &position_x.value {
             RowValue::Single(field) => {
@@ -1486,12 +1564,12 @@ mod tests {
     fn stopwatch_state_reports_keys_and_the_playhead() {
         let document = hello();
         let title = document.roots()[0];
-        let model = inspect_node(&document, title, 48, None, "Title").unwrap();
+        let model = inspect_node(&document, title, 48, None, "Title", &[]).unwrap();
         let opacity = field_of(&model, "Opacity").channel.clone().unwrap();
         assert!(opacity.keyed);
         assert!(opacity.on_key, "frame 48 is a key (0.8 s at 60 fps)");
         assert_eq!(opacity.frames, vec![0, 48]);
-        let between = inspect_node(&document, title, 20, None, "Title").unwrap();
+        let between = inspect_node(&document, title, 20, None, "Title", &[]).unwrap();
         assert!(
             !field_of(&between, "Opacity")
                 .channel
@@ -1514,7 +1592,7 @@ mod tests {
             motioner_core::NAME,
             OverrideAction::Set(OverrideValue::Text("Headline".to_owned())),
         ));
-        let model = inspect_node(&document, title, 0, Some(&set), "Title").unwrap();
+        let model = inspect_node(&document, title, 0, Some(&set), "Title", &[]).unwrap();
         match &field_of(&model, "Name").value {
             RowValue::Text { text, .. } => assert_eq!(text, "Headline"),
             other => panic!("{other:?}"),
@@ -1525,7 +1603,7 @@ mod tests {
     fn layout_matches_the_model_and_has_no_overlaps() {
         let document = hello();
         let title = document.roots()[0];
-        let model = inspect_node(&document, title, 0, None, "Title").unwrap();
+        let model = inspect_node(&document, title, 0, None, "Title", &[]).unwrap();
         let m = Metrics::new(1.0);
         let out = layout(&model, body(), 0.0, m);
         let rows: Vec<&Item> = out
@@ -1580,13 +1658,13 @@ mod tests {
             .iter()
             .find(|r| r.kind == crate::NodeKind::Rect)
             .unwrap();
-        let model = inspect_node(&document, rect.node, 0, None, "Rect 1").unwrap();
+        let model = inspect_node(&document, rect.node, 0, None, "Rect 1", &[]).unwrap();
         let labels: Vec<&str> = model.rows.iter().map(|r| r.label.as_str()).collect();
         assert!(labels.contains(&"Size"));
         assert!(labels.contains(&"Radius"));
         assert!(labels.contains(&"Fill"));
         assert!(labels.contains(&"Width"));
-        let text = inspect_node(&document, document.roots()[0], 0, None, "Title").unwrap();
+        let text = inspect_node(&document, document.roots()[0], 0, None, "Title", &[]).unwrap();
         assert!(text.rows.iter().any(|r| r.label == "Text"));
         assert!(text.rows.iter().any(|r| r.label == "Align"));
     }
@@ -1606,7 +1684,7 @@ mod tests {
         document
             .set_effect(node, channel, motioner_core::EffectValueInput::Number(12.0))
             .unwrap();
-        let model = inspect_node(&document, node, 0, None, "Title").unwrap();
+        let model = inspect_node(&document, node, 0, None, "Title", &[]).unwrap();
         assert!(model.rows.iter().any(|row| row.label == "Blur"));
         assert!(model.rows.iter().any(|row| row.label == "Radius"));
         assert!(model
@@ -1650,6 +1728,6 @@ mod tests {
         )
         .unwrap();
         let document = hello();
-        assert!(inspect_node(&other, document.roots()[0], 0, None, "Title").is_none());
+        assert!(inspect_node(&other, document.roots()[0], 0, None, "Title", &[]).is_none());
     }
 }

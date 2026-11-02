@@ -107,14 +107,14 @@ s1 = scene(0.0, 3.32, 0.02)
 s1.key("opacity", 0.0, 1.0)
 
 word = "MOTIONER"
-advances = [0.874, 0.688, 0.612, 0.272, 0.688, 0.713, 0.568, 0.630]
 size = 190
+# Real advances, so the title tracks the font instead of a hand-copied table.
 total = 0
-for advance in advances:
-    total += advance * size
+for ch in word:
+    total += text_width(ch, size, font="Roboto")
 cursor = -total / 2
 for i in range(len(word)):
-    width = advances[i] * size
+    width = text_width(word[i], size, font="Roboto")
     letter = label(word[i], size, INK, cursor + width / 2, 40)
     cursor += width
     start = 0.55 + i * 0.07

@@ -22,6 +22,7 @@ use crate::limits::{Budget, Limits};
 use crate::origins::{literal_of, ValueOrigins};
 use crate::scene::{CreationSite, Scene};
 use crate::value::{Builtin, Value};
+use motioner_core::{NoTextMetrics, TextMetrics};
 
 /// Executes a parsed program and returns the document it built.
 ///
@@ -31,7 +32,20 @@ use crate::value::{Builtin, Value};
 /// with the span and call stack of the failure, or a value error if the
 /// program never called `comp()`.
 pub fn execute(program: &Program, limits: &Limits) -> Result<Document, Diagnostic> {
-    execute_full(program, limits).map(|(document, _)| document)
+    execute_with_metrics(program, limits, &NoTextMetrics)
+}
+
+/// Executes a parsed program with text metrics installed (D-0034).
+///
+/// # Errors
+///
+/// Same as [`execute`].
+pub fn execute_with_metrics(
+    program: &Program,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+) -> Result<Document, Diagnostic> {
+    execute_full_with_metrics(program, limits, metrics).map(|(document, _)| document)
 }
 
 /// Executes a parsed program and returns the document plus every top-level
@@ -46,6 +60,20 @@ pub fn execute_full(
     limits: &Limits,
 ) -> Result<(Document, Vec<(String, NodeId)>), Diagnostic> {
     execute_detailed(program, limits).map(|execution| (execution.document, execution.bindings))
+}
+
+/// [`execute_full`] with text metrics installed (D-0034).
+///
+/// # Errors
+///
+/// Same as [`execute`].
+pub fn execute_full_with_metrics(
+    program: &Program,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+) -> Result<(Document, Vec<(String, NodeId)>), Diagnostic> {
+    execute_detailed_with_metrics(program, limits, metrics)
+        .map(|execution| (execution.document, execution.bindings))
 }
 
 /// Everything a run produced: the document, the top-level node bindings and
@@ -67,8 +95,22 @@ pub struct Execution {
 ///
 /// Same as [execute].
 pub fn execute_detailed(program: &Program, limits: &Limits) -> Result<Execution, Diagnostic> {
+    execute_detailed_with_metrics(program, limits, &NoTextMetrics)
+}
+
+/// [`execute_detailed`] with text metrics installed (D-0034).
+///
+/// # Errors
+///
+/// Same as [`execute`].
+pub fn execute_detailed_with_metrics(
+    program: &Program,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+) -> Result<Execution, Diagnostic> {
     let mut interpreter = Interpreter {
         limits,
+        metrics,
         globals: HashMap::new(),
         frames: Vec::new(),
         loops: Vec::new(),
@@ -113,6 +155,7 @@ struct CallFrame {
 
 struct Interpreter<'l> {
     limits: &'l Limits,
+    metrics: &'l dyn TextMetrics,
     globals: HashMap<Rc<str>, Value>,
     frames: Vec<CallFrame>,
     /// Iteration index of every active loop, outermost first.
@@ -535,9 +578,13 @@ impl Interpreter<'_> {
                 | Builtin::Star
                 | Builtin::Arc),
             ) => self.scene.call(builtin, call_args, &self.site(span)),
-            Value::Builtin(builtin) => {
-                builtins::call(builtin, call_args, self.limits, &mut self.budget)
-            }
+            Value::Builtin(builtin) => builtins::call(
+                builtin,
+                call_args,
+                self.limits,
+                &mut self.budget,
+                self.metrics,
+            ),
             Value::Method(id, method) => self.scene.call_method(id, method, call_args),
             other => Err(HostError::type_error(format!(
                 "a {} is not callable",

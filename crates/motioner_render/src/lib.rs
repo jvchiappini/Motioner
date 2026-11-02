@@ -19,6 +19,7 @@
 //! README and in the private `space`, `shapes`, `text` and `fit` modules.
 
 mod fit;
+mod fonts;
 mod frame;
 mod gradients;
 mod paths;
@@ -27,6 +28,7 @@ mod space;
 mod text;
 
 pub use fit::ViewFit;
+pub use fonts::{CpuTextMetrics, FontFace, FontFamilyError, FontSet, FontWarning, ResolvedFace};
 pub use paths::path_bounds;
 pub use space::{linear_rgba, srgb_to_linear};
 
@@ -58,25 +60,12 @@ pub(crate) struct CanvasMask {
 /// The single drawing surface abstraction shared by the headless and live
 /// paths.
 ///
-/// Every "plan item â†’ engine draw" decision lives above this trait; the two
+/// Every "plan item → engine draw" decision lives above this trait; the two
 /// implementations only forward to the matching engine method. That is what
 /// guarantees the golden frame and the live preview cannot drift apart.
 trait Canvas2d {
     /// Submits one shape instance.
     fn shape(&mut self, instance: ShapeInstance);
-
-    /// Submits one text line with an already-built model matrix.
-    #[allow(clippy::too_many_arguments)] // the plan item fields, kept flat
-    fn text(
-        &mut self,
-        font: FontId2d,
-        text: &str,
-        transform: glam::Mat4,
-        size_px: f32,
-        align: EngineTextAlign,
-        color: [f32; 4],
-        gradient: Option<u32>,
-    );
 
     /// Measures one text line for the missing-glyph counter.
     fn measure(
@@ -86,6 +75,30 @@ trait Canvas2d {
         size_px: f32,
         align: EngineTextAlign,
     ) -> Option<LineMetrics>;
+
+    /// Lays out a whole styled block.
+    fn layout_text(
+        &self,
+        font: FontId2d,
+        text: &str,
+        style: ferrous_2d::render::TextStyle2d,
+        out: &mut Vec<ferrous_font::GlyphLayout>,
+    ) -> Option<ferrous_font::TextMetrics>;
+
+    /// Draws a whole styled block.
+    #[allow(clippy::too_many_arguments)] // the plan item fields, kept flat
+    fn text_styled(
+        &mut self,
+        font: FontId2d,
+        text: &str,
+        transform: glam::Mat4,
+        style: ferrous_2d::render::TextStyle2d,
+        color: [f32; 4],
+        gradient: Option<u32>,
+    );
+
+    /// Draws pre-laid-out glyphs.
+    fn glyphs(&mut self, font: FontId2d, glyphs: &[ferrous_2d::render::GlyphDraw2d]);
 
     /// Opens an offscreen layer for a group of draws (D-0031, D-0032).
     ///
@@ -158,19 +171,6 @@ impl Canvas2d for Pure2dHarness {
         self.draw_shape(instance);
     }
 
-    fn text(
-        &mut self,
-        font: FontId2d,
-        text: &str,
-        transform: glam::Mat4,
-        size_px: f32,
-        align: EngineTextAlign,
-        color: [f32; 4],
-        gradient: Option<u32>,
-    ) {
-        self.draw_text_with_gradient(font, text, transform, size_px, align, color, gradient);
-    }
-
     fn measure(
         &self,
         font: FontId2d,
@@ -179,6 +179,32 @@ impl Canvas2d for Pure2dHarness {
         align: EngineTextAlign,
     ) -> Option<LineMetrics> {
         self.measure_text(font, text, size_px, align)
+    }
+
+    fn layout_text(
+        &self,
+        font: FontId2d,
+        text: &str,
+        style: ferrous_2d::render::TextStyle2d,
+        out: &mut Vec<ferrous_font::GlyphLayout>,
+    ) -> Option<ferrous_font::TextMetrics> {
+        self.layout_text(font, text, style, out)
+    }
+
+    fn text_styled(
+        &mut self,
+        font: FontId2d,
+        text: &str,
+        transform: glam::Mat4,
+        style: ferrous_2d::render::TextStyle2d,
+        color: [f32; 4],
+        gradient: Option<u32>,
+    ) {
+        self.draw_text_styled_with_gradient(font, text, transform, style, color, gradient);
+    }
+
+    fn glyphs(&mut self, font: FontId2d, glyphs: &[ferrous_2d::render::GlyphDraw2d]) {
+        self.draw_glyphs(font, glyphs);
     }
 
     fn push_layer(
@@ -228,19 +254,6 @@ impl Canvas2d for ferrous_renderer::Renderer {
         self.draw_2d_shape(instance);
     }
 
-    fn text(
-        &mut self,
-        font: FontId2d,
-        text: &str,
-        transform: glam::Mat4,
-        size_px: f32,
-        align: EngineTextAlign,
-        color: [f32; 4],
-        gradient: Option<u32>,
-    ) {
-        self.draw_text_2d_with_gradient(font, text, transform, size_px, align, color, gradient);
-    }
-
     fn measure(
         &self,
         font: FontId2d,
@@ -249,6 +262,34 @@ impl Canvas2d for ferrous_renderer::Renderer {
         align: EngineTextAlign,
     ) -> Option<LineMetrics> {
         self.measure_text_2d(font, text, size_px, align)
+    }
+
+    fn layout_text(
+        &self,
+        font: FontId2d,
+        text: &str,
+        style: ferrous_2d::render::TextStyle2d,
+        out: &mut Vec<ferrous_font::GlyphLayout>,
+    ) -> Option<ferrous_font::TextMetrics> {
+        ferrous_renderer::Renderer::layout_text_2d(self, font, text, style, out)
+    }
+
+    fn text_styled(
+        &mut self,
+        font: FontId2d,
+        text: &str,
+        transform: glam::Mat4,
+        style: ferrous_2d::render::TextStyle2d,
+        color: [f32; 4],
+        gradient: Option<u32>,
+    ) {
+        ferrous_renderer::Renderer::draw_text_2d_with_gradient_styled(
+            self, font, text, transform, style, color, gradient,
+        );
+    }
+
+    fn glyphs(&mut self, font: FontId2d, glyphs: &[ferrous_2d::render::GlyphDraw2d]) {
+        ferrous_renderer::Renderer::draw_glyphs_2d(self, font, glyphs);
     }
 
     fn push_layer(
@@ -304,7 +345,12 @@ pub struct FrameRenderer {
     width: u32,
     height: u32,
     harness: Pure2dHarness,
+    /// Roboto Regular, registered eagerly for selection bounds and fallback.
     font: FontId2d,
+    /// Faces the document may use: project faces first, bundled last.
+    fonts: FontSet,
+    /// Registered engine handles, keyed by resolved family and weight.
+    font_ids: Vec<((String, u16), FontId2d)>,
     adapter_name: String,
     clear: Option<wgpu::Color>,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
@@ -360,10 +406,9 @@ pub struct FrameStats {
 /// A drawing feature the pinned engine cannot render yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
-    /// A node mask (alpha or luma). No longer raised: the pinned engine
-    /// carries the mask pass. Kept so callers can match on `Unsupported`
-    /// while future pin gaps reuse the mechanism.
-    Mask,
+    /// Styled text layout (D-0034). No longer raised: the pinned engine
+    /// carries block layout. Kept so future pin gaps reuse the mechanism.
+    TextLayout,
 }
 
 impl Feature {
@@ -371,7 +416,7 @@ impl Feature {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Mask => "mask",
+            Self::TextLayout => "styled text layout",
         }
     }
 }
@@ -396,6 +441,8 @@ pub enum RenderError {
         /// Underlying font error.
         message: String,
     },
+    /// A requested font family is in neither the project nor the bundled set.
+    FontFamily(FontFamilyError),
     /// Reading the rendered frame back into the output buffer failed.
     Readback {
         /// Underlying readback error.
@@ -425,16 +472,17 @@ impl fmt::Display for RenderError {
                 actual.0, actual.1, expected.0, expected.1
             ),
             Self::Font { message } => write!(f, "font registration failed: {message}"),
+            Self::FontFamily(error) => write!(f, "{error}"),
             Self::Readback { message } => write!(f, "frame readback failed: {message}"),
             Self::Unsupported { feature, node } => match node {
                 Some(node) => write!(
                     f,
-                    "{} is not supported by the pinned engine yet (node {node}); see D-0033",
+                    "{} is not supported by the pinned engine yet (node {node}); see D-0034",
                     feature.name()
                 ),
                 None => write!(
                     f,
-                    "{} is not supported by the pinned engine yet; see D-0033",
+                    "{} is not supported by the pinned engine yet; see D-0034",
                     feature.name()
                 ),
             },
@@ -456,7 +504,25 @@ impl FrameRenderer {
     /// device (no hardware adapter and no software fallback), and
     /// [`RenderError::Font`] when the embedded font cannot be registered.
     pub fn new(width: u32, height: u32) -> Result<Self, RenderError> {
-        frame::create(width, height)
+        frame::create(width, height, FontSet::bundled())
+    }
+
+    /// Creates a headless renderer with additional project faces.
+    ///
+    /// Faces in `fonts` that share a family and weight with a bundled face win.
+    /// The bytes are loaded by `motioner_io`; this crate never reads a path.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::new`].
+    pub fn with_fonts(width: u32, height: u32, fonts: FontSet) -> Result<Self, RenderError> {
+        frame::create(width, height, fonts)
+    }
+
+    /// The unresolved font set (project plus bundled faces).
+    #[must_use]
+    pub fn font_set(&self) -> &FontSet {
+        &self.fonts
     }
 
     /// Renders one frame and writes exactly `width * height * 4` bytes into
@@ -500,6 +566,8 @@ impl FrameRenderer {
 #[cfg(feature = "live")]
 pub struct LivePainter {
     font: FontId2d,
+    fonts: FontSet,
+    font_ids: Vec<((String, u16), FontId2d)>,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
     path_cache: paths::PathCache,
 }
@@ -512,16 +580,51 @@ impl LivePainter {
     ///
     /// Returns [`RenderError::Font`] when the font cannot be registered.
     pub fn new(renderer: &mut ferrous_renderer::Renderer) -> Result<Self, RenderError> {
-        let font = renderer
-            .register_font_2d(ROBOTO, ferrous_font::charset::latin_western())
-            .map_err(|error| RenderError::Font {
-                message: error.to_string(),
-            })?;
+        Self::with_fonts(renderer, FontSet::bundled())
+    }
+
+    /// [`Self::new`] with extra project faces (D-0034).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Font`] when a face cannot be registered.
+    pub fn with_fonts(
+        renderer: &mut ferrous_renderer::Renderer,
+        fonts: FontSet,
+    ) -> Result<Self, RenderError> {
+        let mut font_ids = Vec::new();
+        for face in fonts.all() {
+            let id = renderer
+                .register_font_2d(&face.bytes, ferrous_font::charset::latin_western())
+                .map_err(|error| RenderError::Font {
+                    message: error.to_string(),
+                })?;
+            font_ids.push(((face.family.clone(), face.weight), id));
+        }
+        let font = match font_ids
+            .iter()
+            .find(|((family, weight), _)| *weight == 400 && family.eq_ignore_ascii_case("Roboto"))
+        {
+            Some((_, id)) => *id,
+            None => renderer
+                .register_font_2d(ROBOTO, ferrous_font::charset::latin_western())
+                .map_err(|error| RenderError::Font {
+                    message: error.to_string(),
+                })?,
+        };
         Ok(Self {
             font,
+            fonts,
+            font_ids,
             missing_glyphs: HashMap::new(),
             path_cache: paths::PathCache::default(),
         })
+    }
+
+    /// The font set this painter registered.
+    #[must_use]
+    pub fn font_set(&self) -> &FontSet {
+        &self.fonts
     }
 
     /// Drops the cached per-node missing-glyph counts.
@@ -579,6 +682,7 @@ impl LivePainter {
             plan,
             flip,
             self.font,
+            &self.font_ids,
             &mut self.missing_glyphs,
             &mut self.path_cache,
             &gradients,

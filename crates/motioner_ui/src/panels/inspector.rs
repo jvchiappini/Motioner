@@ -219,6 +219,9 @@ fn draw_value(
             let label = current.as_deref().unwrap_or("Pick source");
             label_tiles(p, v, segments, &[label], item);
         }
+        RowValue::Cycle { current, .. } => {
+            label_tiles(p, v, segments, &[current], item);
+        }
         RowValue::MaskMode { mode, .. } => {
             let active = match mode {
                 motioner_core::MaskMode::Alpha => 0,

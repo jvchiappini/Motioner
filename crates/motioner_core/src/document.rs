@@ -11,7 +11,7 @@ use crate::gradient::{PaintSlot, StopPart};
 use crate::math::Vec2;
 use crate::node::{
     BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, PaintSpec,
-    Property, PropertyValue, Transform,
+    Property, PropertyValue, TextAnimator, Transform,
 };
 use crate::time::{frame_within_bounds, Frame, FrameRate};
 
@@ -166,6 +166,94 @@ impl Document {
     /// All nodes in creation order.
     pub fn nodes(&self) -> impl Iterator<Item = &Node> {
         self.nodes.iter()
+    }
+
+    /// The per-character animators of a text node, or `None` for a non-text
+    /// node.
+    #[must_use]
+    pub fn text_animators(&self, id: NodeId) -> Option<&[TextAnimator]> {
+        match self.node(id)?.content() {
+            NodeContent::Text(text) => Some(&text.animators),
+            _ => None,
+        }
+    }
+
+    /// Appends a per-character animator to a text node and returns its index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID and
+    /// [`CoreError::WrongContentField`] when the node is not text.
+    pub fn add_text_animator(
+        &mut self,
+        id: NodeId,
+        animator: TextAnimator,
+    ) -> Result<usize, CoreError> {
+        self.require(id)?;
+        let index = id.index();
+        if let NodeContent::Text(text) = &mut self.nodes[index].content {
+            text.animators.push(animator);
+            Ok(text.animators.len() - 1)
+        } else {
+            Err(CoreError::WrongContentField {
+                field: "text_animators".to_owned(),
+                kind: self.nodes[index].content.kind_name(),
+            })
+        }
+    }
+
+    /// Removes the animator at `index` from a text node.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::WrongContentField`] for a non-text node and
+    /// [`CoreError::InvalidContentValue`] for an out-of-range index.
+    pub fn remove_text_animator(
+        &mut self,
+        id: NodeId,
+        index: usize,
+    ) -> Result<TextAnimator, CoreError> {
+        self.require(id)?;
+        let node = id.index();
+        if let NodeContent::Text(text) = &mut self.nodes[node].content {
+            if index >= text.animators.len() {
+                return Err(CoreError::InvalidContentValue {
+                    field: "text_animators".to_owned(),
+                    reason: "no animator at that index",
+                });
+            }
+            Ok(text.animators.remove(index))
+        } else {
+            Err(CoreError::WrongContentField {
+                field: "text_animators".to_owned(),
+                kind: self.nodes[node].content.kind_name(),
+            })
+        }
+    }
+
+    /// Replaces a text node's animator list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID and
+    /// [`CoreError::WrongContentField`] when the node is not text.
+    pub fn set_text_animators(
+        &mut self,
+        id: NodeId,
+        animators: Vec<TextAnimator>,
+    ) -> Result<(), CoreError> {
+        self.require(id)?;
+        let index = id.index();
+        if let NodeContent::Text(text) = &mut self.nodes[index].content {
+            text.animators = animators;
+            Ok(())
+        } else {
+            Err(CoreError::WrongContentField {
+                field: "text_animators".to_owned(),
+                kind: self.nodes[index].content.kind_name(),
+            })
+        }
     }
 
     /// Adds a top-level node with a default transform.
@@ -989,6 +1077,29 @@ fn content_static_write(
             NodeContent::Text(text) => set_number(&mut text.size, field, v, true),
             _ => Err(wrong_kind(content, field)),
         },
+        (ContentField::Weight, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => {
+                if !(1.0..=1000.0).contains(&v) || v.fract() != 0.0 {
+                    return Err(CoreError::InvalidContentValue {
+                        field: field.name(),
+                        reason: "weight must be a whole number in 1..=1000",
+                    });
+                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let weight = v as u16;
+                text.weight = weight;
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Tracking, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => set_number(&mut text.tracking, field, v, false),
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::LineHeight, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => set_number(&mut text.line_height, field, v, true),
+            _ => Err(wrong_kind(content, field)),
+        },
         (
             ContentField::TrimStart
             | ContentField::TrimEnd
@@ -1146,6 +1257,14 @@ fn content_key_write(
         },
         (ContentField::Size, ContentValue::Number(v)) => match content {
             NodeContent::Text(text) => text.size.insert_key(key(v, true)?),
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Tracking, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => text.tracking.insert_key(key(v, false)?),
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::LineHeight, ContentValue::Number(v)) => match content {
+            NodeContent::Text(text) => text.line_height.insert_key(key(v, true)?),
             _ => return Err(wrong_kind(content, field)),
         },
         (
@@ -1381,6 +1500,8 @@ fn content_key_remove(content: &mut NodeContent, field: ContentField, frame: Fra
             ContentField::StrokeWidth,
         ) => remove(&mut paint.stroke_width),
         (NodeContent::Text(text), ContentField::Size) => remove(&mut text.size),
+        (NodeContent::Text(text), ContentField::Tracking) => remove(&mut text.tracking),
+        (NodeContent::Text(text), ContentField::LineHeight) => remove(&mut text.line_height),
         (
             NodeContent::Path {
                 trim_start,

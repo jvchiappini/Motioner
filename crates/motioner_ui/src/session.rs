@@ -13,9 +13,10 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use motioner_core::{Composition, Document, OverrideSet};
+use motioner_core::{Composition, Document, NoTextMetrics, OverrideSet, TextMetrics};
 use motioner_dsl::{Compiled, Diagnostic, Limits};
 use motioner_eval::{Evaluator, RenderPlan};
 
@@ -138,6 +139,7 @@ pub struct PreviewSession {
     diagnostics: Vec<DiagnosticInfo>,
     warnings: Vec<DiagnosticInfo>,
     evaluator: Evaluator,
+    text_metrics: Option<Arc<dyn TextMetrics>>,
     plan: RenderPlan,
     plan_frame: Option<i64>,
     plan_generation: u64,
@@ -168,6 +170,7 @@ impl PreviewSession {
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             evaluator: Evaluator::new(),
+            text_metrics: None,
             plan: RenderPlan::new(),
             plan_frame: None,
             plan_generation: 0,
@@ -176,6 +179,13 @@ impl PreviewSession {
             write_at: Instant::now(),
             last_overrides_text: String::new(),
         }
+    }
+
+    /// Installs the CPU text measurer used by `text_width`/`text_bounds`.
+    ///
+    /// Must be called before [`Self::reload`] for a program that measures text.
+    pub fn set_text_metrics(&mut self, metrics: Arc<dyn TextMetrics>) {
+        self.text_metrics = Some(metrics);
     }
 
     /// The source path.
@@ -281,10 +291,12 @@ impl PreviewSession {
                 });
             }
         };
-        match motioner_dsl::run_with_overrides(
+        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
+        match motioner_dsl::run_with_overrides_and_metrics(
             &source,
             (!overrides_text.trim().is_empty()).then_some(overrides_text.as_str()),
             &Limits::default(),
+            metrics,
         ) {
             Ok(compiled) => {
                 self.source = source;
@@ -325,7 +337,13 @@ impl PreviewSession {
             None => return false,
         };
         let text = set.to_mdf(rate);
-        match motioner_dsl::run_with_overrides(&self.source, Some(&text), &Limits::default()) {
+        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
+        match motioner_dsl::run_with_overrides_and_metrics(
+            &self.source,
+            Some(&text),
+            &Limits::default(),
+            metrics,
+        ) {
             Ok(compiled) => {
                 self.accept(compiled);
                 self.diagnostics.clear();

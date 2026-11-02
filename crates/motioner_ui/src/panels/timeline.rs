@@ -797,6 +797,9 @@ fn content_text(
         | motioner_core::ContentField::Height
         | motioner_core::ContentField::Radius
         | motioner_core::ContentField::Size
+        | motioner_core::ContentField::Weight
+        | motioner_core::ContentField::Tracking
+        | motioner_core::ContentField::LineHeight
         | motioner_core::ContentField::TrimStart
         | motioner_core::ContentField::TrimEnd
         | motioner_core::ContentField::TrimOffset

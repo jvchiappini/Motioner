@@ -2,8 +2,9 @@
 
 use std::fmt;
 
-use crate::animation::{Animatable, AnimatableVec2};
+use crate::animation::{Animatable, AnimatableVec2, Ease};
 use crate::color::Color;
+use crate::error::CoreError;
 use crate::gradient::{Gradient, PaintSlot, StopPart};
 use crate::math::Vec2;
 use crate::path::{LineCap, LineJoin, PathGeometry};
@@ -120,6 +121,12 @@ pub enum ContentField {
     Text,
     /// Text em size in pixels.
     Size,
+    /// Text font weight (100..=900, discrete).
+    Weight,
+    /// Extra advance between characters, in em units.
+    Tracking,
+    /// Line-step multiplier for multi-line text.
+    LineHeight,
     /// Text glyph colour.
     Color,
     /// Text horizontal alignment.
@@ -144,7 +151,7 @@ impl ContentField {
     /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
     /// [`ContentField::from_name`] and describe them with
     /// [`ContentField::name`].
-    pub const ALL: [(Self, &'static str); 17] = [
+    pub const ALL: [(Self, &'static str); 20] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
@@ -158,6 +165,9 @@ impl ContentField {
         (Self::DashOffset, "dash_offset"),
         (Self::Text, "text"),
         (Self::Size, "size"),
+        (Self::Weight, "weight"),
+        (Self::Tracking, "tracking"),
+        (Self::LineHeight, "line_height"),
         (Self::Color, "color"),
         (Self::Align, "align"),
         (Self::Cap, "cap"),
@@ -167,10 +177,13 @@ impl ContentField {
     /// Whether the field has keyframes (D-0028).
     ///
     /// Content fields are scalar channels: none of them has axes. Text,
-    /// alignment, cap and join are discrete and cannot be animated.
+    /// alignment, weight, cap and join are discrete and cannot be animated.
     #[must_use]
     pub const fn is_animatable(self) -> bool {
-        !matches!(self, Self::Text | Self::Align | Self::Cap | Self::Join)
+        !matches!(
+            self,
+            Self::Text | Self::Align | Self::Weight | Self::Cap | Self::Join
+        )
     }
 
     /// Looks up a field by its override property name.
@@ -507,25 +520,33 @@ impl TextAlign {
     }
 }
 
-/// A single line of text. The baseline passes through the node origin.
+/// A block of text. Line 0's baseline passes through the node origin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextContent {
-    /// The characters to draw.
+    /// The characters to draw; `\n` starts a new line.
     pub text: String,
     /// Requested font family name.
     pub font: String,
+    /// Font weight (100..=900); resolved to the nearest static face.
+    pub weight: u16,
     /// Font size in pixels (em height); animatable (`size`).
     pub size: Animatable<f64>,
+    /// Extra advance between characters in em units; animatable (`tracking`).
+    pub tracking: Animatable<f64>,
+    /// Multiplier of the font's natural line step; animatable (`line_height`).
+    pub line_height: Animatable<f64>,
     /// Glyph color; animatable (`color`).
     pub color: Animatable<Color>,
-    /// Horizontal alignment.
+    /// Horizontal alignment, applied per line.
     pub align: TextAlign,
     /// Glyph fill gradient (D-0030); takes precedence over color when present.
     pub gradient: Option<Gradient>,
+    /// Per-character animators (D-0034), in application order.
+    pub animators: Vec<TextAnimator>,
 }
 
 impl TextContent {
-    /// Creates a text line from static values.
+    /// Creates a text block from static values.
     #[must_use]
     pub fn new(
         text: impl Into<String>,
@@ -537,11 +558,209 @@ impl TextContent {
         Self {
             text: text.into(),
             font: font.into(),
+            weight: 400,
             size: Animatable::new(size),
+            tracking: Animatable::new(0.0),
+            line_height: Animatable::new(1.0),
             color: Animatable::new(color),
             align,
             gradient: None,
+            animators: Vec::new(),
         }
+    }
+}
+
+/// One property a [`TextAnimator`] can animate on every character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CharProperty {
+    /// Glyph opacity multiplier in `0.0..=1.0`.
+    Opacity,
+    /// Glyph offset in local pixels.
+    Offset,
+    /// Uniform glyph scale around the glyph's pen origin.
+    Scale,
+    /// Glyph rotation in degrees around the glyph's pen origin.
+    Rotation,
+    /// Glyph colour.
+    Color,
+}
+
+impl CharProperty {
+    /// Every property with its MDF name.
+    pub const ALL: [(Self, &'static str); 5] = [
+        (Self::Opacity, "opacity"),
+        (Self::Offset, "offset"),
+        (Self::Scale, "scale"),
+        (Self::Rotation, "rotation"),
+        (Self::Color, "color"),
+    ];
+
+    /// Looks up a property by its MDF name.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .find(|(_, candidate)| *candidate == name)
+            .map(|(property, _)| *property)
+    }
+
+    /// The MDF name of this property.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(property, _)| *property == self)
+            .map_or("opacity", |(_, name)| name)
+    }
+}
+
+/// The order in which characters enter a [`TextAnimator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CharOrder {
+    /// First character first.
+    #[default]
+    Forward,
+    /// Last character first.
+    Reverse,
+    /// Characters closest to the block centre first.
+    Center,
+}
+
+impl CharOrder {
+    /// Every order with its MDF name.
+    pub const ALL: [(Self, &'static str); 3] = [
+        (Self::Forward, "forward"),
+        (Self::Reverse, "reverse"),
+        (Self::Center, "center"),
+    ];
+
+    /// Looks up an order by its MDF name.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .find(|(_, candidate)| *candidate == name)
+            .map(|(order, _)| *order)
+    }
+
+    /// The MDF name of this order.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(order, _)| *order == self)
+            .map_or("forward", |(_, name)| name)
+    }
+}
+
+/// A typed value of a [`CharProperty`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CharValue {
+    /// A number for `opacity`, `scale` or `rotation`.
+    Number(f64),
+    /// A pair for `offset`.
+    Vec2(Vec2),
+    /// A colour for `color`.
+    Color(Color),
+}
+
+impl CharValue {
+    /// The value as a number when it has one.
+    #[must_use]
+    pub fn number(self) -> Option<f64> {
+        match self {
+            Self::Number(value) => Some(value),
+            Self::Vec2(_) | Self::Color(_) => None,
+        }
+    }
+
+    /// The value as a pair when it has one.
+    #[must_use]
+    pub fn vec2(self) -> Option<Vec2> {
+        match self {
+            Self::Vec2(value) => Some(value),
+            Self::Number(_) | Self::Color(_) => None,
+        }
+    }
+
+    /// The value as a colour when it has one.
+    #[must_use]
+    pub fn color(self) -> Option<Color> {
+        match self {
+            Self::Color(value) => Some(value),
+            Self::Number(_) | Self::Vec2(_) => None,
+        }
+    }
+}
+
+/// One per-character animation applied to a text node (D-0034).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextAnimator {
+    /// Property this animator drives.
+    pub property: CharProperty,
+    /// Value before the character starts.
+    pub from: CharValue,
+    /// Value once the character finishes.
+    pub to: CharValue,
+    /// First frame of the first character.
+    pub start: Frame,
+    /// Frames between consecutive characters.
+    pub stagger: f64,
+    /// Frames one character takes to go from `from` to `to`.
+    pub duration: f64,
+    /// Ease of the per-character segment.
+    pub ease: Ease,
+    /// Character order.
+    pub order: CharOrder,
+}
+
+impl TextAnimator {
+    /// Validates that `from` and `to` match the property's value kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidContentValue`] when a value has the wrong
+    /// shape for the property.
+    #[allow(clippy::too_many_arguments)] // the authored animator call, kept flat
+    pub fn new(
+        property: CharProperty,
+        from: CharValue,
+        to: CharValue,
+        start: Frame,
+        stagger: f64,
+        duration: f64,
+        ease: Ease,
+        order: CharOrder,
+    ) -> Result<Self, CoreError> {
+        let matches = match property {
+            CharProperty::Opacity | CharProperty::Scale | CharProperty::Rotation => {
+                from.number().is_some() && to.number().is_some()
+            }
+            CharProperty::Offset => from.vec2().is_some() && to.vec2().is_some(),
+            CharProperty::Color => from.color().is_some() && to.color().is_some(),
+        };
+        if !matches {
+            return Err(CoreError::InvalidContentValue {
+                field: property.name().to_owned(),
+                reason: "from and to must match the animator's property kind",
+            });
+        }
+        if !stagger.is_finite() || !duration.is_finite() || stagger < 0.0 || duration <= 0.0 {
+            return Err(CoreError::InvalidContentValue {
+                field: property.name().to_owned(),
+                reason: "stagger must be finite and >= 0 and duration must be finite and > 0",
+            });
+        }
+        Ok(Self {
+            property,
+            from,
+            to,
+            start,
+            stagger,
+            duration,
+            ease,
+            order,
+        })
     }
 }
 
@@ -732,6 +951,9 @@ impl NodeContent {
                     field,
                     ContentField::Text
                         | ContentField::Size
+                        | ContentField::Weight
+                        | ContentField::Tracking
+                        | ContentField::LineHeight
                         | ContentField::Color
                         | ContentField::Align
                 )
@@ -825,6 +1047,8 @@ impl NodeContent {
                 _ => paint.channel(field),
             },
             (Self::Text(text), ContentField::Size) => number(&text.size),
+            (Self::Text(text), ContentField::Tracking) => number(&text.tracking),
+            (Self::Text(text), ContentField::LineHeight) => number(&text.line_height),
             (Self::Text(text), ContentField::Color) => Some(ContentChannel::Color(&text.color)),
             _ => None,
         }
@@ -897,6 +1121,15 @@ impl NodeContent {
             },
             (Self::Text(text), ContentField::Text) => Some(ContentValue::Text(text.text.clone())),
             (Self::Text(text), ContentField::Size) => Some(ContentValue::Number(text.size.value())),
+            (Self::Text(text), ContentField::Weight) => {
+                Some(ContentValue::Number(f64::from(text.weight)))
+            }
+            (Self::Text(text), ContentField::Tracking) => {
+                Some(ContentValue::Number(text.tracking.value()))
+            }
+            (Self::Text(text), ContentField::LineHeight) => {
+                Some(ContentValue::Number(text.line_height.value()))
+            }
             (Self::Text(text), ContentField::Color) => Some(match &text.gradient {
                 Some(gradient) => ContentValue::Gradient(Some(gradient.clone())),
                 None => ContentValue::Color(Some(text.color.value())),
@@ -982,8 +1215,14 @@ impl NodeContent {
                     .is_some_and(|g| g.invalid().is_some())
                 {
                     Some("color")
+                } else if bad(size) || size == 0.0 {
+                    Some("size")
+                } else if !text.tracking.value().is_finite() {
+                    Some("tracking")
+                } else if !text.line_height.value().is_finite() || text.line_height.value() <= 0.0 {
+                    Some("line_height")
                 } else {
-                    (bad(size) || size == 0.0).then_some("size")
+                    None
                 }
             }
         }

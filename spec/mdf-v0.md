@@ -120,7 +120,7 @@ The v0 surface:
 | `arc(radius, start=0, end=360, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Circular arc |
 | `linear_gradient(start=(0, 0), end=(100, 0), stops=[(0, "#000000"), (1, "#ffffff")])` | Linear paint |
 | `radial_gradient(center=(0, 0), radius=100, stops=[(0, "#ffffff"), (1, "#000000")])` | Radial paint |
-| `text(content, font="Inter", size=48, color="#ffffff", align="left")` | Text |
+| `text(content, font="Roboto", size=48, color="#ffffff", align="left", weight=400, tracking=0.0, line_height=1.0)` | Text |
 | `latex(expression, size=48, color="#ffffff", display=False)` | LaTeX math |
 | `image(source, width=None, height=None, fit="contain")` | Image |
 | `video(source, in_point=0.0, out_point=None)` | Video clip |
@@ -148,8 +148,9 @@ Common node members:
 - Methods: `add(*nodes)`, `remove()`, `key(property, time, value, ease="linear")`,
   `ease(name)`, `effect(kind, **params)`, `mask(source, mode="alpha", invert=False)`.
 
-Every content field except `text`, `align`, `cap` and `join` is an
+Every content field except `text`, `align`, `weight`, `cap` and `join` is an
 **animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
+`key("tracking", t, 0.02)`, `key("line_height", t, 1.4)`,
 `key("stroke_width", t, 8)`, `key("trim_end", t, 1)`. Colours interpolate
 in linear-light sRGB; a `fill`/`stroke` keyed to `None` holds the previous
 colour until that key (a step). See D-0028.
@@ -262,6 +263,26 @@ title.key("opacity", 0.6, 1.0, ease="quad_out")
 
 Keyframe times are in seconds and are converted to frames with the
 composition fps. Values are lists or tuples for vectors.
+
+### 7.1 Text layout, measurement and per-character animation (D-0034)
+
+`text()` accepts `font`, `weight`, `tracking` (extra advance between
+characters, em units) and `line_height` (multiplier of the font's natural line
+step). A `\n` in the content starts a new line; each line is aligned on its
+own and line 0's baseline is the node origin. `tracking` and `line_height` are
+animatable channels; `weight` is discrete.
+
+`text_width(content, size, font="Roboto", weight=400, tracking=0,
+line_height=1, align="left")` returns the widest line's advance, and
+`text_bounds(...)` returns `(left, top, right, bottom)` in Motioner local pixels
+(y down). Both use the CPU measurer installed by the host; a host without one
+reports a runtime error.
+
+`node.animate_chars(property, from, to, start, stagger, duration,
+ease="linear", order="forward")` appends a per-character animator. Properties
+are `opacity`, `offset`, `scale`, `rotation` and `color`; order is `forward`,
+`reverse` or `center`. Whitespace counts for the stagger but draws no quad.
+Animators are deterministic and bakeable.
 
 ## 8. Control flow example
 

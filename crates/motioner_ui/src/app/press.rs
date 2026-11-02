@@ -380,6 +380,40 @@ impl PreviewApp {
                     value: OverrideValue::Text(name.to_owned()),
                 });
             }
+            Some(inspect::RowValue::Cycle {
+                target,
+                current,
+                options,
+            }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                if options.is_empty() {
+                    return;
+                }
+                let index = options
+                    .iter()
+                    .position(|option| option == current)
+                    .unwrap_or(0);
+                let next = &options[(index + 1) % options.len()];
+                let (property, value) = match target {
+                    inspect::FieldTarget::Font => {
+                        ("font".to_owned(), OverrideValue::Text(next.clone()))
+                    }
+                    inspect::FieldTarget::Weight => {
+                        let Ok(weight) = next.parse::<f64>() else {
+                            return;
+                        };
+                        ("weight".to_owned(), OverrideValue::Number(weight))
+                    }
+                    _ => return,
+                };
+                self.run(&Command::Edit {
+                    id,
+                    property,
+                    value,
+                });
+            }
             _ => {}
         }
     }

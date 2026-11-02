@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use motioner_core::{Gradient, GradientKind, GradientStop};
+use motioner_core::{Gradient, GradientKind, GradientStop, TextAlign, TextMetrics, TextRequest};
 
 use crate::host::{as_integer, as_vec2, bind, f64_from_i64, CallArgs, HostError, HostResult};
 use crate::limits::{Budget, Limits};
@@ -25,8 +25,11 @@ pub(crate) fn call(
     args: CallArgs,
     limits: &Limits,
     budget: &mut Budget,
+    metrics: &dyn TextMetrics,
 ) -> HostResult<Value> {
     match builtin {
+        Builtin::TextWidth => text_measure("text_width", args, metrics, false),
+        Builtin::TextBounds => text_measure("text_bounds", args, metrics, true),
         Builtin::Range => range(args),
         Builtin::Len => {
             let bound = bind("len", &["value"], 1, args)?;
@@ -82,6 +85,81 @@ pub(crate) fn call(
             "{}() is a scene constructor",
             builtin.name()
         ))),
+    }
+}
+
+/// `text_width(...)` / `text_bounds(...)` (D-0034).
+///
+/// Both take `(content, size, font="Inter", weight=400, tracking=0,
+/// line_height=1, align="left")`.  `text_width` returns the widest line's
+/// advance; `text_bounds` returns `(left, top, right, bottom)` in Motioner
+/// local pixels (y down).
+fn text_measure(
+    name: &str,
+    args: CallArgs,
+    metrics: &dyn TextMetrics,
+    bounds: bool,
+) -> HostResult<Value> {
+    let params = [
+        "content",
+        "size",
+        "font",
+        "weight",
+        "tracking",
+        "line_height",
+        "align",
+    ];
+    let bound = bind(name, &params, 2, args)?;
+    let content = match bound.get(0) {
+        Some(Value::Str(text)) => text.clone(),
+        Some(other) => {
+            return Err(HostError::type_error(format!(
+                "{name}(): 'content' must be a string, got {}",
+                other.type_name()
+            )))
+        }
+        None => {
+            return Err(HostError::type_error(format!(
+                "{name}() is missing 'content'"
+            )))
+        }
+    };
+    let size = bound.number(1)?;
+    let font = bound.string_or(2, "Roboto")?;
+    let weight = bound.integer_in(3, 400, 1, 1000)?;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let weight = weight.clamp(1, 1000) as u16;
+    let tracking = bound.number_or(4, 0.0)?;
+    let line_height = bound.number_or(5, 1.0)?;
+    let align_name = bound.string_or(6, "left")?;
+    let align = TextAlign::from_name(&align_name).ok_or_else(|| {
+        HostError::value_error(format!(
+            "{name}(): unknown align {align_name:?}; use \"left\", \"center\" or \"right\""
+        ))
+    })?;
+    let request = TextRequest {
+        text: &content,
+        size,
+        font: &font,
+        weight,
+        tracking,
+        line_height,
+        align,
+    };
+    let measurement = metrics.measure(&request).ok_or_else(|| {
+        HostError::value_error(format!(
+            "{name}(): no metrics for font {font:?} at weight {weight}"
+        ))
+    })?;
+    if bounds {
+        Ok(Value::tuple(vec![
+            Value::Number(measurement.ink.left),
+            Value::Number(measurement.ink.top),
+            Value::Number(measurement.ink.right),
+            Value::Number(measurement.ink.bottom),
+        ]))
+    } else {
+        Ok(Value::Number(measurement.width))
     }
 }
 

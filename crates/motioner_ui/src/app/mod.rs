@@ -76,6 +76,8 @@ pub(crate) struct PreviewApp {
     editor: Editor,
     watch: FileWatch,
     options: PreviewOptions,
+    /// Project faces for the live painter, when the app supplied them.
+    fonts: Option<motioner_render::FontSet>,
     timeline_layout: timeline_model::RowsLayout,
     inspector_layout: InspectLayout,
     editing: Option<Editing>,
@@ -123,10 +125,12 @@ impl PreviewApp {
     ) -> Self {
         let watch = FileWatch::new(editor.session().path());
         let start_playing = !options.paused;
+        let fonts = options.fonts.clone();
         Self {
             editor,
             watch,
             options,
+            fonts,
             timeline_layout: timeline_model::RowsLayout {
                 rows: Vec::new(),
                 height: 0.0,
@@ -766,7 +770,11 @@ impl FerrousApp for PreviewApp {
             pasteboard[1],
             pasteboard[2],
         ));
-        match LivePainter::new(ctx.render.renderer_mut()) {
+        let painter = match self.fonts.clone() {
+            Some(fonts) => LivePainter::with_fonts(ctx.render.renderer_mut(), fonts),
+            None => LivePainter::new(ctx.render.renderer_mut()),
+        };
+        match painter {
             Ok(painter) => self.painter = Some(painter),
             Err(error) => {
                 *self.fatal.borrow_mut() = Some(UiError::Painter(error));

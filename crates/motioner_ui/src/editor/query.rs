@@ -82,6 +82,7 @@ impl Editor {
         Ok(j.finish())
     }
 
+    #[allow(clippy::too_many_lines)] // one node's fixed JSON field order
     fn node_json(
         &self,
         j: &mut Json,
@@ -170,6 +171,22 @@ impl Editor {
                 j.key("mask").null();
             }
         }
+        j.key("text_animators").begin_array();
+        for animator in document.text_animators(node).unwrap_or(&[]) {
+            j.begin_object();
+            j.key("property").string(animator.property.name());
+            j.key("from");
+            char_value_json(j, animator.from);
+            j.key("to");
+            char_value_json(j, animator.to);
+            j.key("start").int(animator.start);
+            j.key("stagger").number(animator.stagger);
+            j.key("duration").number(animator.duration);
+            j.key("ease").string(animator.ease.name());
+            j.key("order").string(animator.order.name());
+            j.end_object();
+        }
+        j.end_array();
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
             let name = field.name();
@@ -321,6 +338,23 @@ fn channel_json(
     }
     j.end_array();
     j.end_object();
+}
+
+/// One per-character animator endpoint (D-0034).
+fn char_value_json(j: &mut Json, value: motioner_core::CharValue) {
+    match value {
+        motioner_core::CharValue::Number(number) => {
+            j.number(number);
+        }
+        motioner_core::CharValue::Vec2(pair) => {
+            j.begin_array();
+            j.number(pair.x).number(pair.y);
+            j.end_array();
+        }
+        motioner_core::CharValue::Color(color) => {
+            j.string(&color.to_hex());
+        }
+    }
 }
 
 fn value_or_null(j: &mut Json, value: Option<OverrideValue>) {

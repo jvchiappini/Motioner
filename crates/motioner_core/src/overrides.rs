@@ -564,6 +564,9 @@ fn content_value(field: ContentField, value: &OverrideValue) -> Result<ContentVa
             | ContentField::Radius
             | ContentField::StrokeWidth
             | ContentField::Size
+            | ContentField::Weight
+            | ContentField::Tracking
+            | ContentField::LineHeight
             | ContentField::TrimStart
             | ContentField::TrimEnd
             | ContentField::TrimOffset

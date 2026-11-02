@@ -20,6 +20,7 @@ mod math;
 mod node;
 mod overrides;
 mod path;
+mod text;
 mod time;
 
 pub mod bounds;
@@ -36,9 +37,9 @@ pub use gradient::{Gradient, GradientKind, GradientStop, PaintSlot, StopPart, MA
 pub use mask::{MaskMode, MaskSpec};
 pub use math::Vec2;
 pub use node::{
-    is_valid_identity_name, BlendMode, ContentChannel, ContentField, ContentValue, Node,
-    NodeContent, NodeId, NodeIdentity, Paint, PaintSpec, Property, PropertyValue, Stroke,
-    TextAlign, TextContent, Transform,
+    is_valid_identity_name, BlendMode, CharOrder, CharProperty, CharValue, ContentChannel,
+    ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, Paint, PaintSpec,
+    Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Transform,
 };
 pub use overrides::{
     format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,
@@ -48,4 +49,5 @@ pub use path::{
     DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,
     FLATTEN_TOLERANCE,
 };
+pub use text::{NoTextMetrics, TextBounds, TextMeasurement, TextMetrics, TextRequest};
 pub use time::{Frame, FrameRate, MAX_ABS_FRAME};

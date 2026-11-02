@@ -18,9 +18,13 @@ mod view;
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use motioner_core::{Document, Ease, Frame, NodeId, OverrideAction, OverrideEntry, OverrideSet};
+use motioner_core::{
+    Document, Ease, Frame, NoTextMetrics, NodeId, OverrideAction, OverrideEntry, OverrideSet,
+    TextMetrics,
+};
 
 use crate::command::{Command, CommandError, ErrorKind, Panel};
 use crate::edit::{self, EditCommand, KeyRef, UndoStack};
@@ -134,6 +138,8 @@ pub struct Editor {
     undo: UndoStack,
     gesture: Option<Gesture>,
     view: ViewState,
+    /// Families the text inspector offers: bundled plus project faces.
+    font_families: Vec<String>,
     model_generation: u64,
 }
 
@@ -165,6 +171,7 @@ impl Editor {
                 pan: (0.0, 0.0),
                 fit_zoom: 1.0,
             },
+            font_families: vec!["Inter".to_owned(), "Roboto".to_owned()],
             model_generation: u64::MAX,
         };
         editor.refresh_models();
@@ -182,7 +189,20 @@ impl Editor {
     /// [`ErrorKind::Io`](crate::ErrorKind::Io) when the program cannot be read and
     /// [`ErrorKind::NoDocument`](crate::ErrorKind::NoDocument) when it does not compile.
     pub fn open(path: &Path) -> Result<Self, CommandError> {
+        Self::open_with_metrics(path, Arc::new(NoTextMetrics))
+    }
+
+    /// Opens a program with a CPU text measurer installed (D-0034).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::open`].
+    pub fn open_with_metrics(
+        path: &Path,
+        metrics: Arc<dyn TextMetrics>,
+    ) -> Result<Self, CommandError> {
         let mut session = PreviewSession::new(path);
+        session.set_text_metrics(metrics);
         session.reload().map_err(|error| match error {
             crate::SessionError::Io { .. } => CommandError::new(ErrorKind::Io, error.to_string()),
             crate::SessionError::Diagnostic(_) => {
@@ -197,6 +217,15 @@ impl Editor {
     }
 
     // ---- read access -----------------------------------------------------
+
+    /// Sets the families the inspector offers in the Text section.
+    pub fn set_font_families(&mut self, families: Vec<String>) {
+        if families.is_empty() {
+            return;
+        }
+        self.font_families = families;
+        self.refresh_models();
+    }
 
     /// The document session.
     #[must_use]
@@ -394,6 +423,7 @@ impl Editor {
                 frame,
                 Some(self.session.overrides()),
                 fallback,
+                &self.font_families,
             ),
             None => Some(inspect::inspect_comp(
                 document.composition(),

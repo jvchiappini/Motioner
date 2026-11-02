@@ -29,7 +29,7 @@ const UI_FONT: &[u8] = include_bytes!("../../../engine/ferrous/assets/fonts/Robo
 pub const DEFAULT_WINDOW_SIZE: (u32, u32) = (1600, 900);
 
 /// Options accepted by [`run_preview`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct PreviewOptions {
     /// Initial frame (clamped into the composition).
     pub frame: Option<i64>,
@@ -54,6 +54,11 @@ pub struct PreviewOptions {
     /// Open the live control endpoint and write its endpoint file here
     /// (`preview --control`).
     pub control: Option<PathBuf>,
+    /// CPU text measurer for `text_width`/`text_bounds` (D-0034).
+    pub text_metrics: Option<std::sync::Arc<dyn motioner_core::TextMetrics>>,
+    /// Faces the preview may use (project plus bundled). The default renders
+    /// with the bundled set only.
+    pub fonts: Option<motioner_render::FontSet>,
 }
 
 /// Errors that prevent the preview window from running.
@@ -98,6 +103,9 @@ impl std::error::Error for UiError {}
 /// when a requested screenshot cannot be taken or written.
 pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> {
     let mut session = PreviewSession::new(path);
+    if let Some(metrics) = options.text_metrics.clone() {
+        session.set_text_metrics(metrics);
+    }
     match session.reload() {
         Ok(()) | Err(SessionError::Diagnostic(_)) => {}
         Err(error @ SessionError::Io { .. }) => return Err(UiError::Load(error)),
@@ -136,7 +144,14 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     // `App::run` consumes the app and returns `()`, so a fatal error raised
     // inside the event loop is handed back through this shared slot.
     let fatal = Rc::new(RefCell::new(None));
-    let editor = Editor::new(session, transport, options.select);
+    let mut editor = Editor::new(session, transport, options.select);
+    if let Some(fonts) = &options.fonts {
+        let mut families: Vec<String> =
+            fonts.faces().map(|(family, _)| family.to_owned()).collect();
+        families.sort();
+        families.dedup();
+        editor.set_font_families(families);
+    }
     let app = PreviewApp::new(editor, options, control, Rc::clone(&fatal));
     App::new(app)
         .with_title(&title)

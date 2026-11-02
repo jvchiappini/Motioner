@@ -161,17 +161,25 @@ Within one item the fill is submitted before its stroke.
 
 ## Text path
 
-Roboto Regular is embedded with `include_bytes!` (relative to the source file),
-so rendering never depends on the working directory. The atlas is baked once
-over `ferrous_font::charset::latin_western()`. Any requested font family other
-than Roboto falls back to Roboto; the family name is currently not used to
-select another face.
+D-0034 ships Inter 400/600/700 under `assets/fonts/` (OFL 1.1) and keeps Roboto
+Regular embedded as the default/fallback, so rendering never depends on the
+working directory. A `FontSet` holds project faces first and bundled faces
+last; `FrameRenderer::with_fonts` registers one atlas per resolved
+`(family, weight)` the plan uses. `font="Inter", weight=600` resolves to the
+exact face, or to the nearest weight with a typed warning; a missing family is
+`RenderError::FontFamily`, naming what was searched.
 
 The string is read from the item's node (`NodeContent::Text`). Alignment maps
-one-to-one (`Left`, `Center`, `Right`). Missing glyphs are measured once per
-text node with `measure_text` and cached on the renderer; later frames reuse the
-cached count instead of re-measuring. The cache is keyed by `NodeId` and assumes
-one document per renderer, which is how the CLI uses it.
+one-to-one (`Left`, `Center`, `Right`). `tracking`, `line_height` and `\n`
+multi-line layout go through the engine's `draw_text_2d_styled`, and
+character animators through `layout_text_2d` + `draw_glyphs_2d`. Single-line
+Roboto with no tracking renders exactly as before.
+
+`CpuTextMetrics` implements `motioner_core::TextMetrics` from the same
+`ferrous_font` parser and is what `text_width`/`text_bounds` use. Missing
+glyphs are measured once per text node with `measure_text` and cached on the
+renderer; later frames reuse the cached count. The cache is keyed by `NodeId`
+and assumes one document per renderer, which is how the CLI uses it.
 
 ## Vector paths
 
@@ -245,7 +253,6 @@ stays well-behaved; fills receive the same clamp to half the smallest side.
   frame N with rendering of frame N+1); wiring them in is a future optimisation.
 - Roboto's `.notdef` glyph is empty, so characters without a glyph are skipped
   and counted in `FrameStats::missing_glyphs` rather than drawn as boxes.
-- Text is a single line; there is no multi-line layout in this path.
 
 ## First render report
 

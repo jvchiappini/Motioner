@@ -34,7 +34,9 @@ use motioner_core::Document;
 use motioner_dsl::Limits;
 use motioner_eval::{Evaluator, RenderPlan};
 use motioner_io::{write_png, ExportError, FfmpegLocation, Mp4Encoder, VideoSettings};
+use motioner_render::{CpuTextMetrics, FontSet};
 use motioner_render::{FrameRenderer, RenderError};
+use std::sync::Arc;
 
 /// Printed by `--help` and on argument errors.
 const HELP: &str = "\
@@ -674,6 +676,7 @@ fn count_value(args: &[OsString], index: usize, flag: &str) -> Result<u64> {
 
 /// Opens the live preview window.
 fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
+    let fonts = project_fonts();
     let options = motioner_ui::PreviewOptions {
         frame: args.frame,
         paused: args.paused,
@@ -685,6 +688,8 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         screenshot: args.screenshot.clone(),
         png_writer: Some(write_screenshot),
         control: args.control.clone(),
+        text_metrics: Some(Arc::new(CpuTextMetrics::new(fonts.clone()))),
+        fonts: Some(fonts),
     };
     if let Some(path) = &args.screenshot {
         ensure_parent(path)?;
@@ -701,6 +706,30 @@ fn write_screenshot(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result
     write_png(path, width, height, rgba).map_err(|error| error.to_string())
 }
 
+/// The bundled faces plus every static face under the project's
+/// `assets/fonts/` (D-0034). Project faces win on a family/weight clash.
+fn project_fonts() -> FontSet {
+    let mut fonts = FontSet::bundled();
+    let dir = std::env::current_dir()
+        .unwrap_or_default()
+        .join("assets/fonts");
+    fonts.set_project_label(dir.display().to_string());
+    if let Ok(project) = motioner_io::load_project_fonts(&dir) {
+        for face in project {
+            fonts.push_face(face.family, face.weight, face.bytes);
+        }
+    }
+    fonts
+}
+
+/// Unique family names in `fonts`, sorted for the inspector picker.
+fn font_families(fonts: &FontSet) -> Vec<String> {
+    let mut families: Vec<String> = fonts.faces().map(|(family, _)| family.to_owned()).collect();
+    families.sort();
+    families.dedup();
+    families
+}
+
 /// Loads and executes an MDF program.
 ///
 /// Returns the source text and the document. An MDF diagnostic becomes
@@ -710,7 +739,8 @@ fn load_document(path: &Path) -> std::result::Result<(String, Document), Failure
         .with_context(|| format!("cannot read {}", path.display()))
         .map_err(Failure::Error)?;
     let name = path.display().to_string();
-    match motioner_dsl::run(&source, &Limits::default()) {
+    let metrics = CpuTextMetrics::new(project_fonts());
+    match motioner_dsl::run_with_metrics(&source, &Limits::default(), &metrics) {
         Ok(document) => Ok((source, document)),
         Err(diagnostic) => Err(Failure::Diagnostic(diagnostic.render(&source, &name))),
     }
@@ -731,10 +761,15 @@ fn ensure_parent(path: &Path) -> Result<()> {
 /// editor's `bake` command, so the CLI, the window and `ctl` share one
 /// implementation.
 fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
-    let mut editor = motioner_ui::Editor::open(&args.input).map_err(|error| match error.kind {
-        motioner_ui::ErrorKind::NoDocument => Failure::Diagnostic(error.message),
-        _ => Failure::Error(anyhow!("{}", error.message)),
-    })?;
+    let fonts = project_fonts();
+    let families = font_families(&fonts);
+    let mut editor =
+        motioner_ui::Editor::open_with_metrics(&args.input, Arc::new(CpuTextMetrics::new(fonts)))
+            .map_err(|error| match error.kind {
+            motioner_ui::ErrorKind::NoDocument => Failure::Diagnostic(error.message),
+            _ => Failure::Error(anyhow!("{}", error.message)),
+        })?;
+    editor.set_font_families(families);
     for warning in editor.session().warnings() {
         println!("warning: line {}: {}", warning.line, warning.message);
     }
@@ -807,7 +842,8 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
     }
     ensure_parent(&args.output)?;
 
-    let mut renderer = FrameRenderer::new(composition.width(), composition.height())?;
+    let mut renderer =
+        FrameRenderer::with_fonts(composition.width(), composition.height(), project_fonts())?;
     let mut evaluator = Evaluator::new();
     let mut plan = RenderPlan::new();
     let mut rgba = Vec::new();
@@ -859,7 +895,7 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
             FfmpegLocation::Path(path.clone())
         });
 
-    let mut renderer = FrameRenderer::new(settings.width, settings.height)?;
+    let mut renderer = FrameRenderer::with_fonts(settings.width, settings.height, project_fonts())?;
     let mut encoder = Mp4Encoder::start(&args.output, &settings, &location)?;
     let mut evaluator = Evaluator::new();
     let mut plan = RenderPlan::new();

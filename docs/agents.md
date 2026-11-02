@@ -33,7 +33,7 @@ Every one of them prints **one JSON object per line** on stdout.
 - **Content fields**: `width`, `height`, `radius`, `fill`, `stroke`,
   `stroke_width` (rect/circle/path); `trim_start`, `trim_end`,
   `trim_offset`, `dash`, `dash_offset`, `cap`, `join` (path); `text`,
-  `size`, `color`, `align` (text). Colours are `"#RRGGBB"` or
+  `size`, `weight`, `tracking`, `line_height`, `color`, `align` (text). Colours are `"#RRGGBB"` or
   `"#RRGGBBAA"`; `fill`/`stroke` also take `"none"`. `align` is `"left"`,
   `"center"` or `"right"`; `cap` is `"butt"`, `"round"` or `"square"`;
   `join` is `"miter"`, `"bevel"` or `"round"`.
@@ -76,7 +76,9 @@ Every one of them prints **one JSON object per line** on stdout.
   The gradient structure itself is authored in MDF; the editor and `edit`
   change stop colours and offsets.
 - **Animatable content fields** (D-0028): every field above except `text`,
-  `align`, `cap` and `join` is a channel with no axes. `key(id, "fill", t, "#FF0000")`,
+  `align`, `weight`, `cap` and `join` is a channel with no axes.
+  `tracking` and `line_height` are ordinary text channels (D-0034).
+  `key(id, "fill", t, "#FF0000")`,
   `stopwatch(id, "size")` and `edit(id, "width", 420)` work exactly like
   transform channels; the timeline and inspector show the same stopwatch and
   diamonds. Colours interpolate in linear-light sRGB, so a keyed red-green
@@ -186,6 +188,21 @@ Eases: `linear`, `quad_in`, `quad_out`, `quad_in_out`, `cubic_in`,
 `cubic_out`, `cubic_in_out`, `back_in`, `back_out`.
 
 `motioner --help` prints the same list from the code, so it cannot drift.
+
+## Typography (D-0034)
+
+- `text(..., font="Inter", weight=600, tracking=0.02, line_height=1.2)`; `\n`
+  starts a new line and each line is aligned on its own.
+- `text_width(content, size, font="Roboto", weight=400, tracking=0)` and
+  `text_bounds(...)` measure with the same layout the renderer draws.
+  `text_bounds` returns `(left, top, right, bottom)` in local pixels (y down).
+- `node.animate_chars("opacity", 0, 1, start, stagger, duration,
+  ease="cubic_out", order="forward")` animates every character. Properties:
+  `opacity`, `offset`, `scale`, `rotation`, `color`; orders: `forward`,
+  `reverse`, `center`.
+- Rendering a node that needs multi-line text, tracking or an animator returns
+  `Unsupported("styled text layout")` until the engine pin bump. `query` still
+  reports the document and the channels.
 
 ## `motioner query`
 

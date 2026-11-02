@@ -1,0 +1,44 @@
+# Typography demo (D-0034): tracking, multi-line layout and per-character
+# animation. Three beats on one card, each with its own text node.
+comp(name="Typography", width=640, height=360, fps=60, duration=6.0,
+     background="#0B0F16")
+
+INK = "#F2F5FA"
+MUTED = "#A9B4C4"
+ACCENT = "#5AB0FF"
+
+# ---- beat 1: a tracked title (0.0 - 2.0 s) ---------------------------------
+
+title = text("TRACKED", font="Inter", size=64, weight=700, color=INK,
+             align="center", tracking=0.0)
+title.pos = (320, 150)
+title.key("opacity", 0.0, 0.0)
+title.key("opacity", 0.2, 1.0)
+title.key("tracking", 0.0, 0.0)
+title.key("tracking", 1.6, 0.10, ease="cubic_in_out")
+title.key("opacity", 1.6, 1.0)
+title.key("opacity", 1.9, 0.0)
+
+# ---- beat 2: a centred multi-line paragraph (2.0 - 4.0 s) ------------------
+
+lines = text("Layout is real text,\nnot a hand-copied advance table.\nLine height is a channel.",
+             font="Inter", size=24, weight=400, color=MUTED, align="center",
+             line_height=1.6)
+lines.pos = (320, 185)
+lines.key("opacity", 1.9, 0.0)
+lines.key("opacity", 2.2, 1.0)
+lines.key("line_height", 2.0, 1.2)
+lines.key("line_height", 3.6, 1.9, ease="quad_in_out")
+lines.key("opacity", 3.7, 1.0)
+lines.key("opacity", 3.9, 0.0)
+
+# ---- beat 3: a per-character reveal (4.0 - 6.0 s) --------------------------
+
+reveal = text("MOTION", font="Inter", size=72, weight=600, color=ACCENT,
+             align="center", tracking=0.02)
+reveal.pos = (320, 170)
+reveal.key("opacity", 3.9, 1.0)
+reveal.animate_chars("opacity", 0.0, 1.0, 4.1, 0.07, 0.30, ease="cubic_out")
+reveal.animate_chars("offset", (0, 22), (0, 0), 4.1, 0.07, 0.35, ease="cubic_out")
+reveal.key("opacity", 5.7, 1.0)
+reveal.key("opacity", 5.9, 0.0)

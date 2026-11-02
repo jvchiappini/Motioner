@@ -1,7 +1,8 @@
 //! The render plan: a flat, ordered list of resolved draw items.
 
 use motioner_core::{
-    BlendMode, Color, DashSpec, GradientKind, NodeId, PathGeometry, TextAlign, TrimSpec, Vec2,
+    BlendMode, Color, DashSpec, Frame, GradientKind, NodeId, PathGeometry, TextAlign, TextAnimator,
+    TrimSpec, Vec2,
 };
 
 use crate::affine::Affine2;
@@ -81,12 +82,23 @@ pub enum ItemShape {
     Text {
         /// Font size in local pixels.
         size: f64,
+        /// Font weight.
+        weight: u16,
+        /// Extra advance between characters, in em units.
+        tracking: f64,
+        /// Line-step multiplier.
+        line_height: f64,
         /// Glyph colour fallback (the gradient when gradient is set).
         color: Color,
         /// Index into [`RenderPlan::gradients`] when the glyphs use one.
         gradient: Option<usize>,
         /// Horizontal alignment.
         align: TextAlign,
+        /// Whether the source string contains a line break.
+        multiline: bool,
+        /// Index into [`RenderPlan::text_animations`] when the node has
+        /// per-character animators.
+        animations: Option<usize>,
     },
     /// A vector path; the geometry and trim values are in the plan's path
     /// arena at this index (D-0029).
@@ -225,6 +237,7 @@ impl PlanLayer {
 pub struct RenderPlan {
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) frame: Frame,
     pub(crate) background: Option<Color>,
     pub(crate) items: Vec<RenderItem>,
     /// Offscreen layers wrapping item ranges, in opening order.
@@ -233,6 +246,8 @@ pub struct RenderPlan {
     pub(crate) paths: Vec<ResolvedPath>,
     /// Gradients referenced by [`ResolvedFill::Gradient`] values.
     pub(crate) gradients: Vec<ResolvedGradient>,
+    /// Per-character animator lists referenced by [`ItemShape::Text`] items.
+    pub(crate) text_animations: Vec<Vec<TextAnimator>>,
     /// Nodes skipped during the last evaluation because their resolved
     /// transform or opacity was not finite. Their subtrees were skipped
     /// too and are not counted individually.
@@ -262,6 +277,12 @@ impl RenderPlan {
     #[must_use]
     pub fn background(&self) -> Color {
         self.background.unwrap_or(Color::BLACK)
+    }
+
+    /// The composition frame this plan was evaluated at.
+    #[must_use]
+    pub fn frame(&self) -> Frame {
+        self.frame
     }
 
     /// Items in paint order (first is painted first).
@@ -326,6 +347,38 @@ impl RenderPlan {
     #[must_use]
     pub fn gradients(&self) -> &[ResolvedGradient] {
         &self.gradients
+    }
+
+    /// The per-character animator list at `index`, when an item references it.
+    #[must_use]
+    pub fn text_animations(&self, index: usize) -> Option<&[TextAnimator]> {
+        self.text_animations.get(index).map(Vec::as_slice)
+    }
+
+    /// The first text node that needs block layout or per-character animation,
+    /// if any (D-0034).
+    ///
+    /// A renderer whose pinned engine lacks it reports an
+    /// [`crate::RenderPlan`]-level unsupported feature naming this node.
+    #[must_use]
+    pub fn first_text_layout_node(&self) -> Option<NodeId> {
+        self.items.iter().find_map(|item| {
+            let ItemShape::Text {
+                tracking,
+                line_height,
+                multiline,
+                animations,
+                ..
+            } = &item.shape
+            else {
+                return None;
+            };
+            let needs = *multiline
+                || tracking.abs() > f64::EPSILON
+                || (line_height - 1.0).abs() > f64::EPSILON
+                || animations.is_some();
+            needs.then_some(item.node)
+        })
     }
 
     /// Adds a resolved gradient and returns its arena index.

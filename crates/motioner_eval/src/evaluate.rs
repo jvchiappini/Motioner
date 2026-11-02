@@ -67,10 +67,12 @@ impl Evaluator {
         let composition = document.composition();
         plan.width = composition.width();
         plan.height = composition.height();
+        plan.frame = frame;
         plan.background = Some(composition.background());
         plan.items.clear();
         plan.layers.clear();
         plan.gradients.clear();
+        plan.text_animations.clear();
         plan.non_finite_items = 0;
 
         self.stack.clear();
@@ -290,11 +292,23 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
                 },
                 None => (sample(&text.color, frame), None),
             };
+            let animations = if text.animators.is_empty() {
+                None
+            } else {
+                let index = plan.text_animations.len();
+                plan.text_animations.push(text.animators.clone());
+                Some(index)
+            };
             Some(ItemShape::Text {
                 size: sample(&text.size, frame),
+                weight: text.weight,
+                tracking: sample(&text.tracking, frame),
+                line_height: sample(&text.line_height, frame),
                 color,
                 gradient,
                 align: text.align,
+                multiline: text.text.contains('\n'),
+                animations,
             })
         }
     }

@@ -35,7 +35,10 @@ mod value;
 
 pub use bake::{bake, BakeOutcome};
 pub use diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
-pub use interpreter::{execute, execute_detailed, execute_full, Execution};
+pub use interpreter::{
+    execute, execute_detailed, execute_detailed_with_metrics, execute_full,
+    execute_full_with_metrics, execute_with_metrics, Execution,
+};
 pub use lexer::tokenize;
 pub use limits::Limits;
 pub use origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
@@ -77,25 +80,46 @@ const INTERPRETER_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// Re-raises a panic from the interpreter thread, which would indicate an
 /// interpreter bug rather than a program error.
 pub fn run(source: &str, limits: &Limits) -> Result<Document, Diagnostic> {
+    run_with_metrics(source, limits, &motioner_core::NoTextMetrics)
+}
+
+/// [`run`] with text metrics installed (D-0034).
+///
+/// # Errors
+///
+/// Same as [`run`].
+///
+/// # Panics
+///
+/// Re-raises a panic from the interpreter thread.
+pub fn run_with_metrics(
+    source: &str,
+    limits: &Limits,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Result<Document, Diagnostic> {
     let source = source.to_owned();
     let limits = limits.clone();
-    let worker = std::thread::Builder::new()
-        .name("mdf-interpreter".to_owned())
-        .stack_size(INTERPRETER_STACK_BYTES)
-        .spawn(move || execute(&parse(&source)?, &limits));
-    let handle = match worker {
-        Ok(handle) => handle,
-        Err(error) => {
-            return Err(Diagnostic::new(
-                ErrorCategory::Limit,
-                Span::default(),
-                format!("could not start the interpreter thread: {error}"),
-            ))
-        }
-    };
-    handle
-        .join()
-        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("mdf-interpreter".to_owned())
+            .stack_size(INTERPRETER_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                interpreter::execute_with_metrics(&parse(&source)?, &limits, metrics)
+            });
+        let handle = match worker {
+            Ok(handle) => handle,
+            Err(error) => {
+                return Err(Diagnostic::new(
+                    ErrorCategory::Limit,
+                    Span::default(),
+                    format!("could not start the interpreter thread: {error}"),
+                ))
+            }
+        };
+        handle
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 /// Parses and executes MDF source plus an optional overrides file.
@@ -121,35 +145,63 @@ pub fn run_with_overrides(
     overrides_source: Option<&str>,
     limits: &Limits,
 ) -> Result<Compiled, Diagnostic> {
+    run_with_overrides_and_metrics(
+        source,
+        overrides_source,
+        limits,
+        &motioner_core::NoTextMetrics,
+    )
+}
+
+/// [`run_with_overrides`] with text metrics installed (D-0034).
+///
+/// # Errors
+///
+/// Same as [`run_with_overrides`].
+///
+/// # Panics
+///
+/// Re-raises a panic from the interpreter thread.
+pub fn run_with_overrides_and_metrics(
+    source: &str,
+    overrides_source: Option<&str>,
+    limits: &Limits,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Result<Compiled, Diagnostic> {
     let source = source.to_owned();
     let overrides_source = overrides_source.map(str::to_owned);
     let limits = limits.clone();
-    let worker = std::thread::Builder::new()
-        .name("mdf-interpreter".to_owned())
-        .stack_size(INTERPRETER_STACK_BYTES)
-        .spawn(move || compile(&source, overrides_source.as_deref(), &limits));
-    let handle = match worker {
-        Ok(handle) => handle,
-        Err(error) => {
-            return Err(Diagnostic::new(
-                ErrorCategory::Limit,
-                Span::default(),
-                format!("could not start the interpreter thread: {error}"),
-            ))
-        }
-    };
-    handle
-        .join()
-        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("mdf-interpreter".to_owned())
+            .stack_size(INTERPRETER_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                compile(&source, overrides_source.as_deref(), &limits, metrics)
+            });
+        let handle = match worker {
+            Ok(handle) => handle,
+            Err(error) => {
+                return Err(Diagnostic::new(
+                    ErrorCategory::Limit,
+                    Span::default(),
+                    format!("could not start the interpreter thread: {error}"),
+                ))
+            }
+        };
+        handle
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 fn compile(
     source: &str,
     overrides_source: Option<&str>,
     limits: &Limits,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Result<Compiled, Diagnostic> {
     let program = parse(source)?;
-    let execution = execute_detailed(&program, limits)?;
+    let execution = interpreter::execute_detailed_with_metrics(&program, limits, metrics)?;
     let mut document = execution.document;
     let bindings = execution.bindings;
     let origins = execution.origins;
