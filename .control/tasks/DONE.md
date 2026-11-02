@@ -20,6 +20,7 @@
 - **T-RENDER-0008** — Gradients for fill and stroke (linear and radial, animatable stops) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0009** — Blend modes (normal, add, multiply, screen, overlay, darken, lighten) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0010** — Effects: drop shadow, blur and glow with keyable parameters `[alta]` (actualizado 2026-11-02)
+- **T-RENDER-0011** — Masks and track mattes (alpha and luma, invert) `[alta]` (actualizado 2026-11-02)
 - **T-UI-0001** — First editor window: motioner preview with live viewport, transport, timeline, outline, hot reload `[alta]` (actualizado 2026-10-31)
 - **T-UI-0002** — Professional editor chrome: tokens, painter, icons, layers, canvas, inspector, timeline `[alta]` (actualizado 2026-11-01)
 - **T-UI-0003** — Editing in the editor: overrides, inspector, gizmos, keyframes and undo `[alta]` (actualizado 2026-11-01)

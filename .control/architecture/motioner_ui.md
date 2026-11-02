@@ -8,6 +8,14 @@ only place that names engine types on the editor side (through
 `motioner_render`'s `live` feature).
 
 ## Key components
+- Mask section: a source picker (click cycles the nodes `can_mask` accepts),
+  Alpha/Luma tiles, Off/On invert tiles and a Clear tile, backed by
+  `mask_set`/`mask_clear`; the masked node and its source carry a mask badge in
+  the layers panel (a source child is already indented under its node) -
+  `crates/motioner_ui/src/inspect.rs:850-1080`,
+  `crates/motioner_ui/src/panels/inspector.rs:160-320`,
+  `crates/motioner_ui/src/panels/layers.rs:40-120`,
+  `crates/motioner_ui/src/editor/resolve.rs:240-420`.
 - Effects section: one row per stacked effect (up/down/remove tiles), one
   row per parameter with its stopwatch, and an "Add effect" row with the
   three kinds; `effect_add`/`effect_remove`/`effect_move` are commands:

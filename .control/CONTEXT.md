@@ -9,7 +9,7 @@ version_schema: 1
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
 custom FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds
-the composition. Scope and decisions: REF-0001..0004, D-0010..D-0032.
+the composition. Scope and decisions: REF-0001..0004, D-0010..D-0033.
 
 ## Working model
 
@@ -18,8 +18,8 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0032.
 - Prompts live in `.control/prompts/{opencode,claude}/`. Work only inside
   Motioner, FerrousEngine and GUIMaker.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
-- Prompt 10 is a 12-phase job. **Phases 1-5 are done.** Every later phase has
-  its backlog task (T-RENDER-0011..0013, T-CORE-0002, T-UI-0006/0007,
+- Prompt 10 is a 12-phase job. **Phases 1-6 are done.** Every later phase has
+  its backlog task (T-RENDER-0012/0013, T-CORE-0002, T-UI-0006/0007,
   T-APP-0003, T-PERF-0002) with its design in the body.
 - **FerrousEngine is a general-purpose engine, not a Motioner backend.** A
   missing render capability is built in the clone as a public engine feature
@@ -40,7 +40,7 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0032.
   `viewport::Viewport` is the one window → composition mapping.
 - **Orphans (D-0025)**: `Editor::orphan_suggestions()` ranks live nodes.
 - **Hybrid bake (D-0027)**: value origins + in-place literal edits + re-key +
-  verify. Verification compares content, transform, **blend and effects**.
+  verify. Verification compares content, transform, **blend, effects and masks**.
 - **Professional motion model (D-0028)**: content fields are animatable
   channels (`Animatable<f64|Color|Option<Color>>`), colour interpolation is
   linear-light sRGB. `NodeContent::channel(field)` is the one field table.
@@ -52,98 +52,91 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0032.
   text gradients are **unconditional** (features deleted after pin e9fb90d).
 - **Blend modes (D-0031)**: seven modes on every node (discrete property,
   overridable, not keyable). Evaluate emits a `PlanLayer` for a node with a
-  non-normal blend **or effects**, wrapping its whole drawn subtree; the
-  renderer opens/closes engine layers by item range. All seven render on the
-  pin; the temporary `engine-composite` feature is deleted.
+  non-normal blend, effects **or a mask**, wrapping its whole drawn subtree.
 - **Layer effects (D-0032)**: ordered stack `drop_shadow` / `blur` / `glow`,
   one per kind, applied to the node and its subtree as one offscreen layer.
-  Parameters are animatable channels (`drop_shadow.blur`, `glow.radius`,
-  `drop_shadow.offset.x`); the stack itself is the `effects` override
-  (comma-separated kinds) and `effect_add`/`effect_remove`/`effect_move`
-  commands. DSL: `node.effect(kind, **params)` (add/update, idempotent) and
-  `node.effect_stack("a,b")` (bulk rebuild, used by bake). Bake folds params
-  as `var.effect("blur", radius=6)` / `var.key("blur.radius", t, v)` and the
-  stack as `var.effect_stack("glow,blur")`.
-  Rendered since pin 7a9b7fd through `push_layer_2d_with_effects`.
+  Params are animatable channels (`blur.radius`, `drop_shadow.offset.x`); the
+  stack is the `effects` override. Rendered since pin 7a9b7fd through
+  `push_layer_2d_with_effects` (sigma = radius/2, shadow behind the content,
+  outer glow).
+- **Masks (D-0033)**: `node.mask(source, mode="alpha"|"luma", invert=False)`,
+  `node.mask(None)` clears. The source is hidden from the normal stream and
+  drawn in world space as the coverage of the masked node's layer (a child of
+  the masked node moves with it). Order: content → effects → mask → opacity/
+  blend, so a shadow is clipped and a blur on the source feathers. The editor
+  stores the `mask` override (`"<source>:<alpha|luma>:<true|false>"`), with
+  `mask_set`/`mask_clear`, an inspector Mask section (source picker, mode,
+  invert, clear) and layers badges. Masks render in stills and the preview
+  since pin e8b9ba7.
 - Keyframes per axis; animated vectors are always keyed per axis (`pos.x`).
 - In-app screenshots: `preview --screenshot <png>` and `ctl screenshot(...)`;
   `scripts/ui_shot.ps1 [-Commands ...] [-Select ROW]`.
 - **GPU tests**: `motioner_testkit::gpu::lock()` serializes them; the normal
   `cargo test --workspace` gate is green without `--test-threads=1`.
 
-## Review fixes from Phase 4 (done at Phase 5 start)
-
-- `engine-text-gradient` and `engine-composite` are **deleted** from
-  `motioner_render` (`default = []`; only `live` remains). Text gradients and
-  all seven composite modes are unconditional.
-- `golden_blend.rs` and `golden_gradients.rs` never skip: any render error,
-  `Unsupported` included, fails the test.
-- Engine clone mojibake repaired in `ferrous_2d/render/renderer.rs` and
-  `ferrous_engine/runner/events.rs`; comments translated to English in
-  `ShapeInstance` (no project names). All 13 rustc warnings in
-  `ferrous_engine` are gone.
-- UTF-8 discipline: read/write with Python `encoding='utf-8'` (or the editor
-  tools). The console is cp850 and shows correct UTF-8 as mojibake; verify
-  with `open(..., encoding='utf-8')`, not with PowerShell `Select-String`.
-
 ## Goldens
 
 - `hello_f120.png` (byte-identical), `blend_f30.png`,
-  `gradients_f30/f105.png`, plus three Phase 5 stills:
-  `effects_shadow_f0.png`, `effects_blur_f30.png`, `effects_glow_f60.png`.
-- `examples/effects.motion` shows one effect per beat (shadow at frame 0,
-  blur at 30, glow at 60) by keying `drop_shadow.opacity`, `blur.radius` and
-  `glow.intensity`; the effect goldens assert each isolation.
-- `golden_effects.rs` has the pixel assertions on the stills and the render
-  comparison of the three frames (runs on every test run).
+  `gradients_f30/f105.png`, three effect stills (`effects_shadow_f0`,
+  `effects_blur_f30`, `effects_glow_f60`) and two mask stills:
+  `masks_alpha_reveal_f36.png` (a white bar wipes a headline plate in) and
+  `masks_luma_invert_f150.png` (a grey disc is a translucent window over a
+  gradient card). `golden_masks.rs` validates the pixels and compares the
+  render against both stills.
+- `examples/masks.motion` has both beats and explicit ids (`headline`, `wipe`,
+  `card`, `spot`).
 
 ## Gotchas
 
-- **PowerShell**: double-quoted strings expand `` `n `` but keep `\n` literal;
-  single-quoted keep both. Native args drop unescaped `"`, which breaks
-  `ctl select("@288")`; use `--select ROW` instead (ROW is the outline index:
-  roots in reverse order, row 0 is the bottom-most node).
+- **PowerShell**: double-quoted strings and here-strings expand backticks and
+  `$`, so never pass Python code containing `` ` ``, `\"` or `${...}` through
+  `python -c @"..."@`; write a `.py` script with the editor tool instead.
+  Native args drop unescaped `"`, which breaks `ctl select("@288")`; use
+  `--select ROW` instead (ROW is the outline index: roots in reverse order,
+  row 0 is the bottom-most node).
 - `scripts/ui_shot.ps1` escapes quotes but the outer PowerShell invocation may
   still strip them; prefer `-Select`.
 - 8 GB RAM: cargo needs `-j 2`; `CARGO_INCREMENTAL=0`.
 - `core.autocrlf=true`: working copies CRLF; engine files edited with Python
-  `newline=''` keep their EOL; convert the flagged ones back to CRLF.
+  `newline=''` keep their EOL.
 - Disk: keep C: above 5 GB; clean `target/debug/incremental` below 6 GB.
-- Clippy pedantic: `option_option`, `float_cmp`, `similar_names`,
-  `implicit_clone`, `items_after_statements`, `doc_markdown`,
-  `too_many_arguments` are denied.
-- The inspector starts with **Composite/Blend**, then **Effects** (one ops row
-  per effect with Up/Dn/Del, parameter rows with stopwatches, and an Add
-  effect row with Shadow/Blur/Glow tiles), then Transform and content.
+- Clippy pedantic: `too_many_lines` is easy to hit (add an `#[allow]` with a
+  reason when a function is one linear pass), plus `option_option`,
+  `float_cmp`, `similar_names`, `implicit_clone`, `items_after_statements`,
+  `doc_markdown`, `too_many_arguments`, `struct_excessive_bools`.
+- The inspector order is Composite (Blend grid) → Effects → **Mask** (source
+  picker, Alpha/Luma, Off/On/Clear) → Transform → content.
 - Engine clippy `-D warnings` still fails on pre-existing lints in
-  `ferrous_engine` (27) — use `--no-deps` on the crates touched.
+  `ferrous_engine` — use `--no-deps` on the crates touched.
 
 ## FerrousEngine state
 
-- Pin `e9fb90d` (gradients + text gradients + blend composites), pushed.
-- **Uncommitted in the clone** (16 paths):
-  - `crates/ferrous_2d/src/render/effects.rs`: `Effect2d`, `BlurKernel2d`,
-    `gaussian_kernel`, `BlurUniform2d`/`EffectUniform2d`, `MAX_BLUR_TAPS=48`,
-    `MAX_BLUR_RADIUS=48`, `MAX_EFFECTS_PER_LAYER=8`, kernel unit tests.
-  - `pipeline.rs`: `BlurEffectPipeline`, `EffectCompositePipeline`,
-    `uniform_entry`.
-  - `assets/shaders/effect_blur_2d.wgsl`, `effect_composite_2d.wgsl`.
-  - `renderer_core.rs`: `LayerRecord.effects`, `push_layer_2d_with_effects`,
-    `LayerError::{InvalidEffect, TooManyEffects}`, effect pipelines and two
-    scratch textures per layer, ping-pong chain, per-pass uniform pool, and a
-    **bug fix**: the layered path is chosen by `frame_uses_layers`, not by the
-    pooled `layers_2d` (otherwise the first frame after one that used layers
-    renders only the clear).
-  - `headless.rs`: `push_layer_with_effects`.
-  - `types.rs`: `LayerError` variants, `ShapeInstance` docs in English.
-  - `ferrous_engine/src/renderer.rs`, `runner/events.rs`: warnings cleaned.
-  - Docs: `crates/ferrous_2d/docs/effects.md`, `README.md`, `mkdocs.yml`.
-  - Tests/example: `tests/pure2d_effects.rs` (6 tests: identity, blur spread,
-    shadow, glow, group opacity, typed errors),
-    `examples/pure2d_effects.rs` (writes `brain/pure2d_effects.png`).
-  - Clippy (`ferrous_2d`, `ferrous_renderer`, `--all-targets --no-deps -D
-    warnings`) and all their tests are green.
-- Golden `hello_f120.png` SHA `c2173bad...` (still byte-identical).
+- Pin `e8b9ba7` (masks; before it `7a9b7fd`, effects: shadow behind the
+  content, sigma = radius/2, outer glow). Committed and pushed (14 paths):
+  - `crates/ferrous_2d/src/render/types.rs`: `MaskMode2d`, `Mask2d`,
+    `MaskUniform2d`, four mask `LayerError` variants.
+  - `crates/ferrous_2d/src/render/pipeline.rs`: `MaskPipeline`.
+  - `assets/shaders/mask_2d.wgsl`.
+  - `crates/ferrous_renderer/src/renderer_core.rs`: `LayerRecord.role/mask/
+    mask_source`, `push_layer_2d_masked`, `begin_mask_2d`, `end_mask_2d`,
+    `pop_layer_2d` misuse handling, `plan_layer_stream` (source planned and
+    ordered before the masked layer, never composited), `run_layer_mask`
+    (mask pass into the effect scratch, then copy back), `ensure_effect_targets`
+    for masked layers, unbalanced-mask cleanup.
+  - `crates/ferrous_renderer/src/headless.rs`: `push_masked_layer`,
+    `begin_mask`, `end_mask`.
+  - `crates/ferrous_2d/docs/masks.md`, `docs/README.md`, `mkdocs.yml`.
+  - `crates/ferrous_renderer/tests/pure2d_masks.rs` (8 tests: alpha 0.5, luma
+    grey, inverted alpha and luma, mask+opacity+multiply, mask clips a shadow,
+    feathered source, nested masks, typed misuse).
+  - Project-name cleanup: `cad_capture.rs`, `render_config.rs`,
+    `graphics.rs`, `render_context.rs`, `docs/readback.md`; the unused
+    `assert_send` test helper now asserts `RenderContext<'_>`.
+  - Green: clippy `ferrous_2d`/`ferrous_renderer` `--all-targets --no-deps -D
+    warnings`, their tests, `cargo check -p ferrous_engine --all-targets` (0
+    warnings), diff free of mojibake.
+- The pin's `engine/ferrous/.../ferrous_ui_core/src/text_field_state.rs` still
+  has a pre-existing mojibake line (pin content, not touched).
 
 ## Reference machine
 
@@ -154,15 +147,15 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 - Chrome is an immediate painter on the engine `GuiBatch`; tokens in
   `theme.rs` are the only colour literals.
 - One key-marker language (`widgets::key_marker`).
-- The inspector order is Composite → Effects → Transform → content → Layer.
-- Gradient stops add one row pair each ("Stop N offset"/"Stop N colour").
+- The inspector order is Composite → Effects → Mask → Transform → content.
+- Mask rows: Source cycles through `Document::can_mask` candidates, Mode is
+  Alpha/Luma, Invert is Off/On/Clear (Clear removes the mask).
+- Layers rows draw a mask badge for the masked node and its source
+  (`OutlineRow.mask_role`).
 
 ## Last relevant session
 
-Phase 5 (effects) complete up to the pin: review fixes, engine effect API and
-passes in the clone, Motioner model/DSL/eval/commands/inspector/query/bake,
-three effect goldens, typed `Unsupported`, captures `out/ui/p5-effects-*`.
-Engine committed as 9aaa2b6 + e2b14a9 + 7a9b7fd (shadow behind the content, CSS-strength blur sigma = radius/2, outer glow) and pinned; the reviewer wired
-`push_layer_2d_with_effects` in `motioner_render`, removed the precheck and the
-ignored test, and the three effect stills now render and match. Next: Phase 6
-(masks and track mattes).
+Phase 6 (masks) landed: engine mask pass and 8 tests (FerrousEngine e8b9ba7,
+the pin), Motioner core/eval/DSL/render/editor/bake/query and two goldens.
+The reviewer removed the `engine-masks` gap with the bump. Next: Phase 7
+(typography).

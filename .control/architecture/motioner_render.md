@@ -15,10 +15,16 @@ documented `LivePainter` exception.
 - `paint_plan` opens one engine layer per `PlanLayer` range and closes it
   after the range; a node's blend and effects therefore apply to its whole
   subtree: `crates/motioner_render/src/frame.rs:120-210`.
-- `Feature::Effect` / `RenderError::Unsupported` - the pinned engine has no
-  effect passes (D-0032), so `render` refuses any plan with an effect chain
-  before painting: `crates/motioner_render/src/frame.rs:70-82`.
-  rendering: `crates/motioner_render/src/frame.rs:109-156`.
+- Effects render through `push_layer_2d_with_effects` since pin 7a9b7fd
+  (D-0032) and masks through `push_layer_2d_masked` since pin e8b9ba7
+  (D-0033). `Feature::Mask` / `RenderError::Unsupported` is no longer raised.
+  rendering: `crates/motioner_render/src/frame.rs:150-320`.
+- `paint_plan` also walks each `PlanLayer.mask` range: it increases the layer
+  masked, draws the content items, begins the mask source at `mask.start`,
+  draws its items (which may include their own layers and effects), ends it and
+  pops, so a blurred source feathers the edge and a shadow is clipped -
+  `crates/motioner_render/src/frame.rs:150-320`,
+  `crates/motioner_render/src/lib.rs:88-290`.
 - `shapes` — resolved rects/circles to `ShapeInstance`; content sizes and
   paints arrive already sampled by the evaluator:
   `crates/motioner_render/src/shapes.rs:26-125`.

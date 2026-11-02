@@ -38,7 +38,14 @@ in the workspace and never touches the file system or a GPU.
 - `Effect` / `EffectChannel` - the ordered effect stack (drop shadow, blur,
   glow), one effect per kind, with every parameter an animatable channel
   named `<kind>.<param>` (D-0032): `crates/motioner_core/src/effect.rs:1-260`.
-  `Document::set_effect_stack` rebuilds the stack from an `effects` override
+  - `MaskSpec` / `MaskMode` - a node's mask: source node, `alpha` or `luma`
+  coverage and `invert` (D-0033). `Document::set_mask` validates the source
+  (no self, no ancestor, no cycle; `can_mask` is the same rule) and
+  `is_mask_source` tells evaluation which nodes are hidden from the normal
+  stream. The `mask` override stores `"<source>:<mode>:<invert>"` or `"none"`:
+  `crates/motioner_core/src/mask.rs:1-118`,
+  `crates/motioner_core/src/document.rs:560-700`.
+`Document::set_effect_stack` rebuilds the stack from an `effects` override
   while preserving parameters: `crates/motioner_core/src/document.rs:580-740`.
 - `OverrideSet` — the editor's edit layer and its canonical text (D-0022):
   `crates/motioner_core/src/overrides.rs:114-266`.
