@@ -17,7 +17,9 @@ documented `LivePainter` exception.
   subtree: `crates/motioner_render/src/frame.rs:120-210`.
 - Effects render through `push_layer_2d_with_effects` since pin 7a9b7fd
   (D-0032) and masks through `push_layer_2d_masked` since pin e8b9ba7
-  (D-0033). `Feature::Mask` / `RenderError::Unsupported` is no longer raised.
+  (D-0033). `Feature::Mask` / `RenderError::Unsupported` is no longer raised;
+  styled text, block layout and per-glyph drawing render since pin 06a8adf
+  (D-0034); `Feature::TextLayout` is no longer raised.
   rendering: `crates/motioner_render/src/frame.rs:150-320`.
 - `paint_plan` also walks each `PlanLayer.mask` range: it increases the layer
   masked, draws the content items, begins the mask source at `mask.start`,
@@ -37,6 +39,13 @@ documented `LivePainter` exception.
   `crates/motioner_render/src/paths.rs:30-320`.
 - `text` — glyph models and missing-glyph counting:
   `crates/motioner_render/src/text.rs`.
+- `fonts` — `FontSet` lookup (project faces first, bundled Inter/Roboto last),
+  nearest-weight warnings, and `CpuTextMetrics`, the GPU-free
+  `motioner_core::TextMetrics` implementation used by `text_width`/`text_bounds`
+  (D-0034): `crates/motioner_render/src/fonts.rs`.
+- Styled text (`tracking`, `line_height`, `\n`, per-glyph `GlyphDraw2d`)
+  goes through `draw_text_2d_styled` / `draw_glyphs_2d`:
+  `crates/motioner_render/src/frame.rs`.
 
 ## Diagram
 
@@ -49,8 +58,11 @@ Not needed: the plan is a flat list and the painter walks it twice.
   light; the golden tolerance is shared.
 - D-0029 — vector paths, the tessellation cache and the lyon dependency.
 - D-0031 — blended nodes render inside an engine layer; overlay/darken/lighten need the backdrop composite and return Unsupported until the pin bump.
-- D-0030 A?? gradients are a per-frame table (`gradients`), `RenderError::Unsupported` while the pin lacks the pass, and the `engine-gradients` feature wires it.
+- D-0030 — gradients are a per-frame table (`gradients`), rendered since pin
+  e9fb90d.
+- D-0034 — Inter 400/600/700, project-first font lookup, CPU measurement via
+  `TextMetrics`, and per-character animators (rendered since pin 06a8adf).
 
 ## Documentation status
 
-partial — last verified: 2026-11-01
+partial — last verified: 2026-11-02
