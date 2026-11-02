@@ -121,15 +121,40 @@ impl Editor {
                 rate,
             );
         }
-        for field in content_fields(n.content()) {
-            if !field.is_animatable() {
+        for channel in channels::node_channels(document, node) {
+            if matches!(channel, channels::Channel::Transform(_, _)) {
                 continue;
             }
-            let channel = channels::Channel::Content(field);
-            let name = field.name();
+            let name = channel.name();
             channel_json(j, document, node, channel, &name, frame, rate);
         }
         j.end_object();
+        j.key("effects").begin_array();
+        for effect in n.effects() {
+            j.begin_object();
+            j.key("kind").string(effect.kind().name());
+            j.key("params").begin_object();
+            for &param in effect.kind().params() {
+                let axes: &[Option<motioner_core::Axis>] = if param.is_vector() {
+                    &[Some(motioner_core::Axis::X), Some(motioner_core::Axis::Y)]
+                } else {
+                    &[None]
+                };
+                for &axis in axes {
+                    let Ok(effect_channel) =
+                        motioner_core::EffectChannel::new(effect.kind(), param, axis)
+                    else {
+                        continue;
+                    };
+                    let channel = channels::Channel::Effect(effect_channel);
+                    let name = channel.name();
+                    channel_json(j, document, node, channel, &name, frame, rate);
+                }
+            }
+            j.end_object();
+            j.end_object();
+        }
+        j.end_array();
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
             let name = field.name();

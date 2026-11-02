@@ -3,11 +3,10 @@
 //! Seven swatches, one per blend mode, over a known #808080 plate.  Each tile
 //! carries a darker and a lighter half so darken and lighten are both visible.
 //!
-//! Backdrop-aware modes (overlay, darken, lighten) need the `FerrousEngine`
-//! composite pass.  On the current pin the renderer refuses the frame with a
-//! typed `Unsupported` error, so this test skips cleanly; once the pin is bumped
-//! and `engine-composite` is enabled it compares the still with the D-0028
-//! policy (at most 2 per channel, at most 0.1 % of pixels above 2).
+//! The pinned engine composites all seven modes, so the frame always renders;
+//! it compares the still with the D-0028 policy (at most 2 per channel, at most
+//! 0.1 % of pixels above 2).  A typed `Unsupported` error is a failure: this
+//! golden must never be skipped.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -58,15 +57,8 @@ fn blend_swatches_match_the_golden() -> Result<(), Box<dyn Error>> {
         Err(other) => panic!("renderer creation failed: {other}"),
     };
     let mut actual = Vec::new();
-    match renderer.render(&document, &plan, &mut actual) {
-        Ok(_) => {}
-        Err(RenderError::Unsupported { .. }) => {
-            eprintln!(
-                "skipping blend golden: the pinned engine has no backdrop composite (D-0031)"
-            );
-            return Ok(());
-        }
-        Err(other) => panic!("render failed: {other}"),
+    if let Err(other) = renderer.render(&document, &plan, &mut actual) {
+        panic!("render failed: {other}");
     }
 
     let decoder = png::Decoder::new(std::io::Cursor::new(GOLDEN));

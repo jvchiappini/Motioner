@@ -3,8 +3,8 @@
 //! resolve against the state at the start of a drag while one is open.
 
 use motioner_core::{
-    split_property, Axis, ContentField, Document, Ease, Frame, NodeId, OverrideAction, OverrideSet,
-    OverrideValue, Property, Vec2,
+    split_property, Axis, ContentField, Document, Ease, EffectChannel, EffectKind, Frame, NodeId,
+    OverrideAction, OverrideSet, OverrideValue, Property, Vec2,
 };
 
 use super::{channel_name, channels, Channel, Editor, Gesture};
@@ -68,7 +68,10 @@ impl Editor {
             | Command::Lock { .. }
             | Command::Rename { .. }
             | Command::AssignId { .. }
-            | Command::DeleteOrphan { .. } => layer_edits(command, document, set)?,
+            | Command::DeleteOrphan { .. }
+            | Command::EffectAdd { .. }
+            | Command::EffectRemove { .. }
+            | Command::EffectMove { .. } => layer_edits(command, document, set)?,
             _ => self.key_edits(command, document, keys)?,
         };
         if edits.is_empty() {
@@ -245,6 +248,12 @@ fn layer_edits(
     document: &Document,
     set: &OverrideSet,
 ) -> Result<Vec<EditCommand>, CommandError> {
+    if matches!(
+        command,
+        Command::EffectAdd { .. } | Command::EffectRemove { .. } | Command::EffectMove { .. }
+    ) {
+        return effect_edits(command, document);
+    }
     let rate = document.composition().frame_rate();
     Ok(match command {
         Command::Visible { id, visible } => {
@@ -334,6 +343,92 @@ fn existing_key(
             format!("{id} has no key on {name} at frame {frame}"),
         )
     })
+}
+
+/// Effect stack commands: add, remove and reorder rewrite the `effects`
+/// override; parameter values go through the generic `set`/`edit`/`key`.
+fn effect_edits(command: &Command, document: &Document) -> Result<Vec<EditCommand>, CommandError> {
+    let (Command::EffectAdd { id, kind }
+    | Command::EffectRemove { id, kind }
+    | Command::EffectMove { id, kind, .. }) = command
+    else {
+        return Err(CommandError::new(
+            ErrorKind::Refused,
+            "not an effect command",
+        ));
+    };
+    let node = channels::node_of(document, id)?;
+    let stack: Vec<EffectKind> = document
+        .node(node)
+        .map(|node| {
+            node.effects()
+                .iter()
+                .map(motioner_core::Effect::kind)
+                .collect()
+        })
+        .unwrap_or_default();
+    match command {
+        Command::EffectAdd { .. } => {
+            if stack.contains(kind) {
+                return Err(CommandError::new(
+                    ErrorKind::BadValue,
+                    format!("{id} already has a '{}' effect", kind.name()),
+                ));
+            }
+            let mut kinds = stack;
+            kinds.push(*kind);
+            Ok(vec![effect_stack_edit(id, &kinds)])
+        }
+        Command::EffectRemove { .. } => {
+            if !stack.contains(kind) {
+                return Err(CommandError::new(
+                    ErrorKind::BadValue,
+                    format!("{id} has no '{}' effect", kind.name()),
+                ));
+            }
+            let kinds = stack
+                .into_iter()
+                .filter(|candidate| candidate != kind)
+                .collect::<Vec<_>>();
+            Ok(vec![effect_stack_edit(id, &kinds)])
+        }
+        Command::EffectMove { index, .. } => {
+            let Some(from) = stack.iter().position(|candidate| candidate == kind) else {
+                return Err(CommandError::new(
+                    ErrorKind::BadValue,
+                    format!("{id} has no '{}' effect", kind.name()),
+                ));
+            };
+            if *index >= stack.len() {
+                return Err(CommandError::new(
+                    ErrorKind::BadArgument,
+                    format!(
+                        "effect index {index} is out of range: {id} has {} effect(s)",
+                        stack.len()
+                    ),
+                ));
+            }
+            let mut kinds = stack;
+            let moved = kinds.remove(from);
+            kinds.insert(*index, moved);
+            Ok(vec![effect_stack_edit(id, &kinds)])
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// The override that rewrites a layer's effect stack.
+fn effect_stack_edit(id: &str, kinds: &[EffectKind]) -> EditCommand {
+    let list = kinds
+        .iter()
+        .map(|kind| kind.name())
+        .collect::<Vec<_>>()
+        .join(",");
+    EditCommand::SetValue {
+        id: id.to_owned(),
+        property: motioner_core::EFFECTS.to_owned(),
+        value: OverrideValue::Text(list),
+    }
 }
 
 /// Moves for the selected keys: shifted by `delta`, with a new ease or
@@ -467,6 +562,8 @@ fn set_value(
     if property != "blend"
         && Property::from_name(property).is_none()
         && ContentField::from_name(property).is_none()
+        && EffectChannel::from_name(property).is_none()
+        && property != motioner_core::EFFECTS
     {
         return Err(CommandError::new(
             ErrorKind::UnknownProperty,

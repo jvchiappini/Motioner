@@ -56,6 +56,12 @@ impl Command {
                 args
             }
             Self::Pan { dx, dy } => vec![format_number(*dx), format_number(*dy)],
+            Self::EffectAdd { id, kind } | Self::EffectRemove { id, kind } => {
+                vec![quote(id), quote(kind.name())]
+            }
+            Self::EffectMove { id, kind, index } => {
+                vec![quote(id), quote(kind.name()), index.to_string()]
+            }
             Self::PrevKey { id, property }
             | Self::NextKey { id, property }
             | Self::Stopwatch { id, property }

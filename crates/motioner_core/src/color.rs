@@ -48,6 +48,12 @@ impl Color {
         Self { r, g, b, a: 255 }
     }
 
+    /// Creates a colour with straight alpha.
+    #[must_use]
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
     /// Parses `#rrggbb` or `#rrggbbaa` (hex digits are case-insensitive).
     ///
     /// # Errors

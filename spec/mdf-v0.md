@@ -198,6 +198,34 @@ sRGB byte. Setting a solid colour replaces the gradient; setting
 `fill="none"` clears it. `cap` and `join` stay discrete, and a gradient
 itself is not keyed as one value — key its stops instead.
 
+### 7.3 Effects
+
+`node.effect(kind, **params)` adds an effect to a node's ordered stack, or
+updates the parameters of an effect already present (the call is idempotent, so
+a bake can append it). A node holds at most one effect of each kind, and the
+order of the calls is the order of application:
+
+| kind | parameters |
+|---|---|
+| `drop_shadow` | `color`, `offset=(x, y)`, `blur`, `opacity` |
+| `blur` | `radius` |
+| `glow` | `color`, `radius`, `intensity` |
+
+```
+card = rect(300, 180, radius=16, fill="#E0E7F0")
+card.effect("drop_shadow", color="#000000B3", offset=(10, 12), blur=10, opacity=0.7)
+title.effect("glow", color="#33F2E6", radius=14, intensity=0.9)
+group.effect("blur", radius=9)
+```
+
+An effect applies to the node **and its whole subtree**: the subtree renders
+into one offscreen layer, the chain runs over that image, and the layer
+composites with the node's blend mode. Every parameter is an animatable
+channel named `<kind>.<param>` (`offset` adds `.x`/`.y`), so
+`key("drop_shadow.blur", 1.0, 20)`, overrides and the editor's stopwatches work
+on it without special cases. Colours are `#RRGGBB[AA]`; radii are non-negative
+pixels; `opacity` is `0..1`, `intensity` is added light. See D-0032.
+
 3D nodes add `target`, `fov`, `intensity`, `material`, `cast_shadow` and
 similar properties. NLE nodes add clip points and track assignment.
 

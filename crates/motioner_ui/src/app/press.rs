@@ -241,6 +241,58 @@ impl PreviewApp {
                     value: OverrideValue::Text(mode.name().to_owned()),
                 });
             }
+            Some(inspect::RowValue::EffectAdd) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                let kind = [
+                    motioner_core::EffectKind::DropShadow,
+                    motioner_core::EffectKind::Blur,
+                    motioner_core::EffectKind::Glow,
+                ][segment.min(2)];
+                self.run(&Command::EffectAdd { id, kind });
+            }
+            Some(&inspect::RowValue::EffectOps { kind }) => {
+                let Some(node) = self.editor.selected() else {
+                    return;
+                };
+                let id = self.editor.node_identity(node);
+                let stack = self
+                    .editor
+                    .session()
+                    .document()
+                    .and_then(|document| document.node(node))
+                    .map(|node| {
+                        node.effects()
+                            .iter()
+                            .map(motioner_core::Effect::kind)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let Some(index) = stack.iter().position(|candidate| candidate == &kind) else {
+                    return;
+                };
+                match segment {
+                    0 if index > 0 => {
+                        self.run(&Command::EffectMove {
+                            id,
+                            kind,
+                            index: index - 1,
+                        });
+                    }
+                    1 if index + 1 < stack.len() => {
+                        self.run(&Command::EffectMove {
+                            id,
+                            kind,
+                            index: index + 1,
+                        });
+                    }
+                    2 => {
+                        self.run(&Command::EffectRemove { id, kind });
+                    }
+                    _ => {}
+                }
+            }
             Some(inspect::RowValue::Align { .. }) => {
                 let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
                     return;

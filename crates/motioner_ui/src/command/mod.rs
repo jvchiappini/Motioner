@@ -24,7 +24,7 @@
 
 use std::fmt;
 
-use motioner_core::{Ease, Frame, FrameRate, OverrideValue};
+use motioner_core::{Ease, EffectKind, Frame, FrameRate, OverrideValue};
 
 /// A point in time: seconds (as in the overrides file) or an exact frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -329,6 +329,29 @@ pub enum Command {
         /// Its key time, for key and unkey entries.
         time: Option<Time>,
     },
+    /// Add an effect of `kind` to a layer's stack.
+    EffectAdd {
+        /// Node identity.
+        id: String,
+        /// The effect kind.
+        kind: EffectKind,
+    },
+    /// Remove an effect from a layer's stack.
+    EffectRemove {
+        /// Node identity.
+        id: String,
+        /// The effect kind.
+        kind: EffectKind,
+    },
+    /// Move an effect to `index` in the stack (0 is applied first).
+    EffectMove {
+        /// Node identity.
+        id: String,
+        /// The effect kind.
+        kind: EffectKind,
+        /// New position in the stack.
+        index: usize,
+    },
     /// Undo the last edit (Ctrl+Z).
     Undo,
     /// Redo (Ctrl+Shift+Z, Ctrl+Y).
@@ -387,6 +410,9 @@ pub enum CommandKind {
     Rename,
     AssignId,
     DeleteOrphan,
+    EffectAdd,
+    EffectRemove,
+    EffectMove,
     Undo,
     Redo,
     Bake,
@@ -394,7 +420,7 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 52] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -441,6 +467,9 @@ impl CommandKind {
         Self::Rename,
         Self::AssignId,
         Self::DeleteOrphan,
+        Self::EffectAdd,
+        Self::EffectRemove,
+        Self::EffectMove,
         Self::Undo,
         Self::Redo,
         Self::Bake,
@@ -496,6 +525,9 @@ impl CommandKind {
             Self::Rename => "rename",
             Self::AssignId => "assign_id",
             Self::DeleteOrphan => "delete_orphan",
+            Self::EffectAdd => "effect_add",
+            Self::EffectRemove => "effect_remove",
+            Self::EffectMove => "effect_move",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::Bake => "bake",
@@ -558,6 +590,9 @@ impl CommandKind {
             Self::Rename => "rename(id, name)",
             Self::AssignId => "assign_id(from, to)",
             Self::DeleteOrphan => "delete_orphan(id, property, time=None)",
+            Self::EffectAdd => "effect_add(id, kind)",
+            Self::EffectRemove => "effect_remove(id, kind)",
+            Self::EffectMove => "effect_move(id, kind, index)",
             Self::Undo => "undo()",
             Self::Redo => "redo()",
             Self::Bake => "bake(id, ...)",
@@ -586,6 +621,9 @@ impl CommandKind {
                 | Self::Rename
                 | Self::AssignId
                 | Self::DeleteOrphan
+                | Self::EffectAdd
+                | Self::EffectRemove
+                | Self::EffectMove
         )
     }
 }
@@ -641,6 +679,9 @@ impl Command {
             Self::Rename { .. } => CommandKind::Rename,
             Self::AssignId { .. } => CommandKind::AssignId,
             Self::DeleteOrphan { .. } => CommandKind::DeleteOrphan,
+            Self::EffectAdd { .. } => CommandKind::EffectAdd,
+            Self::EffectRemove { .. } => CommandKind::EffectRemove,
+            Self::EffectMove { .. } => CommandKind::EffectMove,
             Self::Undo => CommandKind::Undo,
             Self::Redo => CommandKind::Redo,
             Self::Bake(_) => CommandKind::Bake,

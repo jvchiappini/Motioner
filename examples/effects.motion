@@ -1,0 +1,52 @@
+# Layer effects: drop shadow, blur and glow (Phase 5).
+#
+# Three cards over a dark field.  The left card casts a soft shadow, the
+# centre card is a blurred group (two overlapping discs read as one soft
+# blob), and the right disc carries a cyan glow.  Each effect applies to the
+# whole node: the blurred group is one offscreen layer, not two blurred discs.
+
+comp(name="Effects", width=960, height=540, fps=60, duration=2.0)
+
+bg = rect(960, 540, fill="#0E1116")
+bg.pos = (480, 270)
+
+# Left: a card with a soft, offset shadow.
+shadow_card = group()
+shadow_card.pos = (230, 250)
+shadow_card.effect("drop_shadow", color="#000000B3", offset=(10, 12), blur=10, opacity=0.7)
+card = rect(170, 140, radius=18, fill="#E0E7F0")
+shadow_card.add(card)
+dot = circle(28, fill="#FF6B4D")
+shadow_card.add(dot)
+
+# Centre: a blurred group (two overlapping discs).
+blur_group = group()
+blur_group.pos = (480, 250)
+blur_group.effect("blur", radius=9)
+a = circle(52, fill="#338CFF")
+a.pos = (-24, -18)
+b = circle(52, fill="#FF8A73")
+b.pos = (24, 18)
+blur_group.add(a, b)
+
+# Right: a dark disc with a cyan glow.
+glow_group = group()
+glow_group.pos = (730, 250)
+glow_group.effect("glow", color="#33F2E6", radius=14, intensity=0.9)
+glow_dot = circle(44, fill="#0A1418")
+glow_group.add(glow_dot)
+
+# One effect per beat: the three goldens isolate each one.
+shadow_card.key("drop_shadow.opacity", 0.0, 0.7)
+shadow_card.key("drop_shadow.opacity", 0.5, 0.0)
+blur_group.key("blur.radius", 0.0, 0.0)
+blur_group.key("blur.radius", 0.5, 9.0)
+blur_group.key("blur.radius", 1.0, 0.0)
+glow_group.key("glow.intensity", 0.0, 0.0)
+glow_group.key("glow.intensity", 0.5, 0.0)
+glow_group.key("glow.intensity", 1.0, 0.9)
+
+title = text("Layer effects", size=30, color="#F2F5FA", align="center")
+title.pos = (480, 70)
+subtitle = text("drop shadow - group blur - glow", size=15, color="#C9D1DC", align="center")
+subtitle.pos = (480, 105)

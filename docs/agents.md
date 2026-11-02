@@ -42,9 +42,21 @@ Every one of them prints **one JSON object per line** on stdout.
   property, not a content channel: `set(id, "blend", "multiply")` or
   `edit(id, "blend", "overlay")` write a static override; it cannot be keyed.
   `query` reports `blend` per node and the inspector offers the seven modes as
-  a segmented grid. Rendering: normal/add/multiply/screen composite through an
-  offscreen layer; overlay/darken/lighten need the engine's backdrop pass and
-  return a typed `Unsupported` error until the pin is bumped.
+  a segmented grid. All seven modes composite through an engine offscreen
+  layer.
+- **Effects** (D-0032): a node carries an ordered stack with at most one of
+  each kind: `drop_shadow`, `blur`, `glow`. Add and reorder them with
+  `effect_add(id, kind)`, `effect_remove(id, kind)` and
+  `effect_move(id, kind, index)`; the stack is stored as one `effects`
+  override (`set(id, "effects", "drop_shadow,glow")`) that rebuilds the stack
+  and preserves parameters. Parameters are animatable channels named
+  `<kind>.<param>`: `drop_shadow.color` (colour), `drop_shadow.offset.x` /
+  `.y`, `drop_shadow.blur`, `drop_shadow.opacity`, `blur.radius`,
+  `glow.color` (colour), `glow.radius`, `glow.intensity`. They work with
+  `set`, `edit`, `key`, `unkey`, `stopwatch` and `toggle_key` like any other
+  channel, and `query` reports `effects` as an array of
+  `{kind, params: {<name>: {value, keys}}}`. Effects apply to the node **and
+  its subtree** as one offscreen layer, in `render`, `still` and `preview`.
 - **Gradients** (D-0030): `fill`/`stroke`/text `color` may be a gradient
   instead of a colour. A gradient adds one pair of channels per stop:
   `fill_stop<n>_offset` (0..1), `fill_stop<n>_color`, and
@@ -152,6 +164,9 @@ Space+drag over the canvas pans.
 | `rename(id, name)` | rename a layer (empty removes the name) |
 | `assign_id(from, to)` | move every override of one identity to another (the Rebind action does this with the suggested node) |
 | `delete_orphan(id, property, time=None)` | × in the orphans list |
+| `effect_add(id, kind)` | the Shadow/Blur/Glow tiles in the inspector Effects section |
+| `effect_remove(id, kind)` | the remove tile of an effect row |
+| `effect_move(id, kind, index)` | the up/down tiles of an effect row |
 | `undo()`, `redo()` | Ctrl+Z, Ctrl+Y |
 | `bake(id, ...)` | fold overrides into the program (all ids when none) |
 

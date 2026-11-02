@@ -145,6 +145,19 @@ impl CommandKind {
                 property: "opacity".to_owned(),
                 time: Some(Time::Seconds(0.5)),
             },
+            Self::EffectAdd => Command::EffectAdd {
+                id: id(),
+                kind: motioner_core::EffectKind::Blur,
+            },
+            Self::EffectRemove => Command::EffectRemove {
+                id: id(),
+                kind: motioner_core::EffectKind::Glow,
+            },
+            Self::EffectMove => Command::EffectMove {
+                id: id(),
+                kind: motioner_core::EffectKind::DropShadow,
+                index: 1,
+            },
             Self::Undo => Command::Undo,
             Self::Redo => Command::Redo,
             Self::Bake => Command::Bake(vec![id(), "card".to_owned()]),

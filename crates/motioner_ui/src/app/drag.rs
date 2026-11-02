@@ -114,6 +114,7 @@ impl PreviewApp {
                 channel_name(property, axis)
             }
             FieldTarget::Content(field) => field.name().clone(),
+            FieldTarget::Effect(channel) => channel.name(),
             _ => return None,
         };
         Some(Command::Edit {

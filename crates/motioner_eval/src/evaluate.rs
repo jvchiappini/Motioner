@@ -1,22 +1,28 @@
 //! Frame evaluation: document plus frame to render plan.
 
 use motioner_core::{
-    DashSpec, Document, Frame, Gradient, NodeContent, NodeId, PaintSpec, TrimSpec,
+    BlendMode, DashSpec, Document, Effect, Frame, Gradient, Node, NodeContent, NodeId, PaintSpec,
+    TrimSpec,
 };
 
 use crate::affine::Affine2;
 use crate::curve::{sample, sample_vec2};
 use crate::plan::{
-    ItemShape, RenderItem, RenderPlan, ResolvedFill, ResolvedGradient, ResolvedPaint, ResolvedPath,
-    ResolvedStop, ResolvedStroke,
+    EffectValue, ItemShape, PlanLayer, RenderItem, RenderPlan, ResolvedFill, ResolvedGradient,
+    ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
 };
 
-/// A node waiting to be visited, with its parent's resolved state.
+/// One entry of the traversal stack.
 #[derive(Debug, Clone, Copy)]
-struct Pending {
-    id: NodeId,
-    parent_transform: Affine2,
-    parent_opacity: f64,
+enum Pending {
+    /// Visit a node, with its parent's resolved state.
+    Visit {
+        id: NodeId,
+        parent_transform: Affine2,
+        parent_opacity: f64,
+    },
+    /// Close the layer opened for the node at the given index.
+    CloseLayer { index: usize },
 }
 
 /// Evaluates documents into render plans.
@@ -52,13 +58,27 @@ impl Evaluator {
         plan.height = composition.height();
         plan.background = Some(composition.background());
         plan.items.clear();
+        plan.layers.clear();
         plan.gradients.clear();
         plan.non_finite_items = 0;
 
         self.stack.clear();
         self.push_children(document.roots(), Affine2::IDENTITY, 1.0);
         while let Some(pending) = self.stack.pop() {
-            let Some(node) = document.node(pending.id) else {
+            let (pending_id, parent_transform, parent_opacity) = match pending {
+                Pending::Visit {
+                    id,
+                    parent_transform,
+                    parent_opacity,
+                } => (id, parent_transform, parent_opacity),
+                Pending::CloseLayer { index } => {
+                    if let Some(layer) = plan.layers.get_mut(index) {
+                        layer.end = plan.items.len();
+                    }
+                    continue;
+                }
+            };
+            let Some(node) = document.node(pending_id) else {
                 continue;
             };
             // A hidden node is not drawn, and neither is anything below it:
@@ -73,14 +93,28 @@ impl Evaluator {
                 sample_vec2(&props.scale, frame),
                 sample_vec2(&props.anchor, frame),
             );
-            let transform = pending.parent_transform.then(local);
-            let opacity = pending.parent_opacity * sample(&props.opacity, frame).clamp(0.0, 1.0);
+            let transform = parent_transform.then(local);
+            let opacity = parent_opacity * sample(&props.opacity, frame).clamp(0.0, 1.0);
             if !transform.is_finite() || !opacity.is_finite() {
                 plan.non_finite_items = plan.non_finite_items.saturating_add(1);
                 continue;
             }
             if opacity <= 0.0 {
                 continue;
+            }
+            // A node with effects or a non-normal blend renders its subtree
+            // into an offscreen layer.  The layer opens before the node's own
+            // item and closes after the last descendant.
+            if !node.effects().is_empty() || node.blend() != BlendMode::Normal {
+                let index = plan.layers.len();
+                plan.layers.push(PlanLayer {
+                    node: node.id(),
+                    start: plan.items.len(),
+                    end: plan.items.len(),
+                    blend: node.blend(),
+                    effects: resolved_effects(node, frame),
+                });
+                self.stack.push(Pending::CloseLayer { index });
             }
             if let Some(shape) = item_shape(node.content(), frame, plan) {
                 plan.items.push(RenderItem {
@@ -93,16 +127,42 @@ impl Evaluator {
             }
             self.push_children(node.children(), transform, opacity);
         }
+        // A layer whose subtree draws nothing is not a layer at all.
+        plan.layers.retain(|layer| !layer.is_empty());
     }
 
     /// Pushes nodes so that the first one is popped first.
     fn push_children(&mut self, ids: &[NodeId], parent_transform: Affine2, parent_opacity: f64) {
-        self.stack.extend(ids.iter().rev().map(|&id| Pending {
-            id,
-            parent_transform,
-            parent_opacity,
-        }));
+        self.stack
+            .extend(ids.iter().rev().map(|&id| Pending::Visit {
+                id,
+                parent_transform,
+                parent_opacity,
+            }));
     }
+}
+
+/// Samples a node's effect stack, in application order.
+fn resolved_effects(node: &Node, frame: Frame) -> Vec<EffectValue> {
+    node.effects()
+        .iter()
+        .map(|effect| match effect {
+            Effect::DropShadow(effect) => EffectValue::DropShadow {
+                color: sample(&effect.color, frame),
+                offset: sample_vec2(&effect.offset, frame),
+                blur: sample(&effect.blur, frame),
+                opacity: sample(&effect.opacity, frame),
+            },
+            Effect::Blur(effect) => EffectValue::Blur {
+                radius: sample(&effect.radius, frame),
+            },
+            Effect::Glow(effect) => EffectValue::Glow {
+                color: sample(&effect.color, frame),
+                radius: sample(&effect.radius, frame),
+                intensity: sample(&effect.intensity, frame),
+            },
+        })
+        .collect()
 }
 
 fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Option<ItemShape> {
@@ -608,5 +668,63 @@ mod tests {
             panic!("a text item");
         };
         assert_eq!(gradient, Some(0));
+    }
+
+    #[test]
+    fn an_effect_wraps_the_whole_subtree() {
+        let mut doc = document();
+        let group = doc.add_node(NodeContent::Group).unwrap();
+        let first = square(&mut doc);
+        let second = square(&mut doc);
+        doc.reparent(first, group).unwrap();
+        doc.reparent(second, group).unwrap();
+        doc.add_effect(group, motioner_core::EffectKind::Blur)
+            .unwrap();
+
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.items().len(), 2);
+        assert_eq!(plan.layers().len(), 1);
+        let layer = &plan.layers()[0];
+        assert_eq!(layer.node, group);
+        assert_eq!((layer.start, layer.end), (0, 2));
+        assert_eq!(layer.effects.len(), 1);
+        assert!(matches!(layer.effects[0], EffectValue::Blur { .. }));
+        assert_eq!(plan.first_effect_node(), Some(group));
+    }
+
+    #[test]
+    fn nested_layers_close_in_order() {
+        let mut doc = document();
+        let outer = doc.add_node(NodeContent::Group).unwrap();
+        let inner = doc.add_node(NodeContent::Group).unwrap();
+        let leaf = square(&mut doc);
+        doc.reparent(inner, outer).unwrap();
+        doc.reparent(leaf, inner).unwrap();
+        doc.set_blend(outer, BlendMode::Multiply).unwrap();
+        doc.add_effect(inner, motioner_core::EffectKind::Glow)
+            .unwrap();
+
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.items().len(), 1);
+        assert_eq!(plan.layers().len(), 2);
+        // Opening order: outer first, then inner; both wrap the leaf.
+        assert_eq!(plan.layers()[0].node, outer);
+        assert_eq!((plan.layers()[0].start, plan.layers()[0].end), (0, 1));
+        assert_eq!(plan.layers()[1].node, inner);
+        assert_eq!((plan.layers()[1].start, plan.layers()[1].end), (0, 1));
+        assert!(plan.layers()[0].effects.is_empty());
+        assert!(!plan.layers()[1].effects.is_empty());
+    }
+
+    #[test]
+    fn empty_effect_layers_are_dropped() {
+        let mut doc = document();
+        let group = doc.add_node(NodeContent::Group).unwrap();
+        doc.add_effect(group, motioner_core::EffectKind::DropShadow)
+            .unwrap();
+        let plan = evaluate(&doc, 0);
+        assert!(plan.items().is_empty());
+        assert!(plan.layers().is_empty());
+        assert_eq!(plan.first_effect_node(), None);
     }
 }

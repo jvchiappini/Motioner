@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use motioner_core::{Ease, OverrideValue, Vec2};
+use motioner_core::{Ease, EffectKind, OverrideValue, Vec2};
 use motioner_dsl::ast::{Argument, Expr, ExprKind, StmtKind, UnaryOp};
 
 use super::{Command, CommandError, CommandKind, ErrorKind, KeySpec, Panel, Time};
@@ -218,11 +218,36 @@ impl Command {
             },
             CommandKind::Undo => Self::Undo,
             CommandKind::Redo => Self::Redo,
+            CommandKind::EffectAdd => Self::EffectAdd {
+                id: a.string("id")?,
+                kind: effect_kind(&a.string("kind")?)?,
+            },
+            CommandKind::EffectRemove => Self::EffectRemove {
+                id: a.string("id")?,
+                kind: effect_kind(&a.string("kind")?)?,
+            },
+            CommandKind::EffectMove => Self::EffectMove {
+                id: a.string("id")?,
+                kind: effect_kind(&a.string("kind")?)?,
+                index: usize::try_from(a.int("index")?).map_err(|_| {
+                    CommandError::new(ErrorKind::BadArgument, "'index' must be zero or above")
+                })?,
+            },
             CommandKind::Bake => Self::Bake(a.rest_strings()?),
         };
         a.finish()?;
         Ok(command)
     }
+}
+
+/// Parses an effect kind name from a command argument.
+fn effect_kind(name: &str) -> Result<EffectKind, CommandError> {
+    EffectKind::from_name(name).ok_or_else(|| {
+        CommandError::new(
+            ErrorKind::BadArgument,
+            format!("unknown effect kind {name:?}; expected drop_shadow, blur or glow"),
+        )
+    })
 }
 
 /// Typed access to a call's arguments, positional first, then keywords.

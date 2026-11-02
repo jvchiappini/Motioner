@@ -119,6 +119,8 @@ pub(crate) enum NodeMethod {
     Key,
     Add,
     Id,
+    Effect,
+    EffectStack,
 }
 
 impl NodeMethod {
@@ -127,6 +129,8 @@ impl NodeMethod {
             "key" => Some(Self::Key),
             "add" => Some(Self::Add),
             "id" => Some(Self::Id),
+            "effect" => Some(Self::Effect),
+            "effect_stack" => Some(Self::EffectStack),
             _ => None,
         }
     }
@@ -136,6 +140,8 @@ impl NodeMethod {
             Self::Key => "key",
             Self::Add => "add",
             Self::Id => "id",
+            Self::Effect => "effect",
+            Self::EffectStack => "effect_stack",
         }
     }
 }

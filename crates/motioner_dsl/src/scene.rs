@@ -8,9 +8,10 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use motioner_core::{
-    BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease,
-    FrameRate, Gradient, LineCap, LineJoin, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry,
-    PathPoint, Property, PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
+    BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease, Effect,
+    EffectChannel, EffectKind, EffectParam, EffectValueInput, FrameRate, Gradient, LineCap,
+    LineJoin, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint, Property,
+    PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -543,7 +544,156 @@ impl Scene {
             NodeMethod::Key => self.key(id, args),
             NodeMethod::Add => self.add_children(id, &args),
             NodeMethod::Id => self.assign_id(id, args),
+            NodeMethod::Effect => self.effect(id, args),
+            NodeMethod::EffectStack => self.effect_stack(id, args),
         }
+    }
+
+    /// `node.effect(kind, **params)`: adds the effect if absent and writes the
+    /// parameters that were supplied (D-0028 section 3).
+    ///
+    /// The call is idempotent, so bake can append `node.effect("blur",
+    /// radius=12)` without duplicating the effect.  Parameters are animatable
+    /// channels: `node.key("blur.radius", time, value)` keys them.
+    ///
+    /// Supported arguments: `drop_shadow` takes `color`, `offset`, `blur` and
+    /// `opacity`; `blur` takes `radius`; `glow` takes `color`, `radius` and
+    /// `intensity`.
+    fn effect(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = [
+            "kind",
+            "color",
+            "offset",
+            "blur",
+            "opacity",
+            "radius",
+            "intensity",
+        ];
+        let bound = bind("effect", &params, 1, args)?;
+        let kind_name = bound.string_or(0, "")?;
+        let kind = EffectKind::from_name(&kind_name).ok_or_else(|| {
+            HostError::new(
+                ErrorCategory::Unsupported,
+                format!("unknown effect kind {kind_name:?}; expected drop_shadow, blur or glow"),
+            )
+        })?;
+        let supplied = [
+            (1_usize, EffectParam::Color),
+            (2, EffectParam::Offset),
+            (3, EffectParam::Blur),
+            (4, EffectParam::Opacity),
+            (5, EffectParam::Radius),
+            (6, EffectParam::Intensity),
+        ];
+        for (index, param) in supplied {
+            if bound.get(index).is_some() && !kind.accepts(param) {
+                return Err(HostError::type_error(format!(
+                    "effect(): '{}' does not take '{}'",
+                    kind.name(),
+                    param.name()
+                )));
+            }
+        }
+        if self.document()?.node(id).is_none() {
+            return Err(HostError::value_error(format!("unknown node {id}")));
+        }
+        let exists = self
+            .document()?
+            .node(id)
+            .is_some_and(|node| node.effect(kind).is_some());
+        if !exists {
+            self.document_mut()?
+                .push_effect(id, Effect::new(kind))
+                .map_err(|error| core_error(&error))?;
+        }
+        if let (true, Some(source)) = (bound.get(1).is_some(), bound.source(1)) {
+            let color = bound.color_or(1, Color::BLACK)?;
+            let channel = EffectChannel {
+                kind,
+                param: EffectParam::Color,
+                axis: None,
+            };
+            self.write_effect_param(id, channel, EffectValueInput::Color(color), source)?;
+        }
+        if let (true, Some(source)) = (bound.get(2).is_some(), bound.source(2)) {
+            let offset = as_vec2(bound.get(2).unwrap())
+                .ok_or_else(|| HostError::type_error("effect(): 'offset' expects two numbers"))?;
+            for (axis, value) in [
+                (motioner_core::Axis::X, offset.x),
+                (motioner_core::Axis::Y, offset.y),
+            ] {
+                let channel = EffectChannel {
+                    kind,
+                    param: EffectParam::Offset,
+                    axis: Some(axis),
+                };
+                self.write_effect_param(id, channel, EffectValueInput::Number(value), source)?;
+            }
+        }
+        for (index, param) in [
+            (3_usize, EffectParam::Blur),
+            (4, EffectParam::Opacity),
+            (5, EffectParam::Radius),
+            (6, EffectParam::Intensity),
+        ] {
+            if let (true, Some(source)) = (bound.get(index).is_some(), bound.source(index)) {
+                let number = bound.number(index)?;
+                let channel = EffectChannel {
+                    kind,
+                    param,
+                    axis: None,
+                };
+                self.write_effect_param(id, channel, EffectValueInput::Number(number), source)?;
+            }
+        }
+        Ok(Value::Node(id))
+    }
+
+    /// `node.effect_stack("blur,glow")`: rebuilds the stack in that order.
+    ///
+    /// The bulk form of [`Scene::effect`], used by `bake` and by agents: kinds
+    /// missing from the list are removed, new ones are added with their
+    /// defaults, and the parameters of the ones that stay are preserved.
+    fn effect_stack(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("effect_stack", &["kinds"], 1, args)?;
+        let list = bound.string_or(0, "")?;
+        let mut kinds = Vec::new();
+        for name in list
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let kind = EffectKind::from_name(name).ok_or_else(|| {
+                HostError::value_error(format!(
+                    "effect_stack(): unknown effect kind {name:?}; expected drop_shadow, blur or glow"
+                ))
+            })?;
+            if kinds.contains(&kind) {
+                return Err(HostError::value_error(format!(
+                    "effect_stack(): {name:?} appears twice"
+                )));
+            }
+            kinds.push(kind);
+        }
+        self.document_mut()?
+            .set_effect_stack(id, &kinds)
+            .map_err(|error| core_error(&error))?;
+        Ok(Value::Node(id))
+    }
+
+    /// Writes one static effect parameter and records where it came from.
+    fn write_effect_param(
+        &mut self,
+        id: NodeId,
+        channel: EffectChannel,
+        value: EffectValueInput,
+        source: (Span, Option<Literal>),
+    ) -> HostResult<()> {
+        self.document_mut()?
+            .set_effect(id, channel, value)
+            .map_err(|error| core_error(&error))?;
+        self.record(id, &channel.name(), Some(source));
+        Ok(())
     }
 
     /// Gives a node an explicit identity: `node.id("name")`.
@@ -560,6 +710,16 @@ impl Scene {
     fn key(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
         let bound = bind("key", &["property", "time", "value", "ease"], 3, args)?;
         let property_name = bound.string_or(0, "")?;
+        if let Some(channel) = EffectChannel::from_name(&property_name) {
+            return self.key_effect(id, channel, &property_name, &bound);
+        }
+        if let Some((kind, rest)) = property_name.split_once('.') {
+            if EffectKind::from_name(kind).is_some() && rest.ends_with(".offset") {
+                return Err(HostError::value_error(format!(
+                    "key(): '{property_name}' needs an axis ('{property_name}.x' or '{property_name}.y')"
+                )));
+            }
+        }
         let (base, axis) = split_axis(&property_name);
         if let Some(field) = ContentField::from_name(base) {
             return self.key_content(id, field, &property_name, axis, &bound);
@@ -660,6 +820,49 @@ impl Scene {
     }
 
     /// The frame and ease of a `key(...)` call, with the ease's source span.
+    /// `node.key("glow.radius", time, value)` on an effect parameter.
+    fn key_effect(
+        &mut self,
+        id: NodeId,
+        channel: EffectChannel,
+        property_name: &str,
+        bound: &Bound<'_>,
+    ) -> HostResult<Value> {
+        let time = bound.number(1)?;
+        if !time.is_finite() {
+            return Err(HostError::value_error(
+                "key(): 'time' must be a finite number of seconds",
+            ));
+        }
+        let value = match channel.param {
+            EffectParam::Color => {
+                let color = bound.color_or(2, Color::BLACK)?;
+                EffectValueInput::Color(color)
+            }
+            EffectParam::Offset if channel.axis.is_none() => {
+                return Err(HostError::value_error(format!(
+                    "key(): '{property_name}' needs an axis ('{property_name}.x' or '{property_name}.y')"
+                )))
+            }
+            _ => EffectValueInput::Number(bound.number(2)?),
+        };
+        let timing = self.key_timing(bound, time)?;
+        let Some(node) = self.document()?.node(id) else {
+            return Err(HostError::value_error(format!("unknown node {id}")));
+        };
+        if node.effect(channel.kind).is_none() {
+            return Err(HostError::value_error(format!(
+                "key(): '{property_name}' needs a '{}' effect on this layer",
+                channel.kind.name()
+            )));
+        }
+        self.document_mut()?
+            .add_effect_keyframe(id, channel, timing.frame, value, timing.ease)
+            .map_err(|error| core_error(&error))?;
+        self.record_key(id, property_name, &timing, bound.source(2));
+        Ok(Value::None)
+    }
+
     fn key_timing(&self, bound: &Bound<'_>, time: f64) -> HostResult<KeyTiming> {
         let ease_name = bound.string_or(3, "linear")?;
         let ease = Ease::from_name(&ease_name).ok_or_else(|| {

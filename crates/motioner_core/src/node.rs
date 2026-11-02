@@ -1088,6 +1088,7 @@ pub struct Node {
     pub(crate) content: NodeContent,
     pub(crate) transform: Transform,
     pub(crate) blend: BlendMode,
+    pub(crate) effects: Vec<crate::effect::Effect>,
     pub(crate) identity: NodeIdentity,
     pub(crate) visible: bool,
 }
@@ -1143,5 +1144,20 @@ impl Node {
     #[must_use]
     pub fn blend(&self) -> BlendMode {
         self.blend
+    }
+
+    /// The ordered effect stack (bottom to top).
+    ///
+    /// Empty for a node without effects. At most one effect of each
+    /// [`EffectKind`](crate::EffectKind) can be present.
+    #[must_use]
+    pub fn effects(&self) -> &[crate::effect::Effect] {
+        &self.effects
+    }
+
+    /// The effect of `kind`, if the node has it.
+    #[must_use]
+    pub fn effect(&self, kind: crate::EffectKind) -> Option<&crate::effect::Effect> {
+        self.effects.iter().find(|effect| effect.is_kind(kind))
     }
 }

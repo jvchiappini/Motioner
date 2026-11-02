@@ -14,6 +14,7 @@ use std::fmt::Write as _;
 use crate::animation::{Axis, Ease};
 use crate::color::Color;
 use crate::document::Document;
+use crate::effect::{EffectChannel, EffectParam, EffectValueInput};
 use crate::math::Vec2;
 use crate::node::{BlendMode, ContentField, ContentValue, Property, PropertyValue, TextAlign};
 use crate::path::{LineCap, LineJoin};
@@ -25,6 +26,13 @@ pub const VISIBLE: &str = "visible";
 pub const LOCKED: &str = "locked";
 /// The property name used by display-name overrides (editor-only).
 pub const NAME: &str = "name";
+/// The property name that carries the ordered effect stack (D-0028).
+///
+/// The value is a comma-separated list of effect kind names in application
+/// order, e.g. `"drop_shadow,glow"`.  It sorts before every effect parameter
+/// when overrides are applied, so parameter overrides always find their
+/// effect.
+pub const EFFECTS: &str = "effects";
 
 /// A value written by an override.
 #[derive(Debug, Clone, PartialEq)]
@@ -213,7 +221,13 @@ impl OverrideSet {
     /// document effect and are never issues.
     pub fn apply(&self, document: &mut Document) -> Vec<OverrideIssue> {
         let mut issues = Vec::new();
-        for index in 0..self.entries.len() {
+        // Effect stacks are rebuilt first: a parameter override must find its
+        // effect already present.
+        let order: Vec<usize> = (0..self.entries.len())
+            .filter(|&index| self.entries[index].property == EFFECTS)
+            .chain((0..self.entries.len()).filter(|&index| self.entries[index].property != EFFECTS))
+            .collect();
+        for index in order {
             if let Some(issue) = self.apply_entry(document, index) {
                 issues.push(issue);
             }
@@ -243,14 +257,19 @@ impl OverrideSet {
     #[must_use]
     pub fn to_mdf(&self, rate: FrameRate) -> String {
         let mut sorted: Vec<&OverrideEntry> = self.entries.iter().collect();
+        // `effects` (the stack) sorts before every parameter of that stack, so
+        // applying the file in order finds the effect before its parameters.
+        let rank = |entry: &OverrideEntry| u8::from(entry.property != EFFECTS);
         sorted.sort_by(|a, b| {
             (
                 a.id.as_str(),
+                rank(a),
                 a.property.as_str(),
                 a.frame().unwrap_or(Frame::MIN),
             )
                 .cmp(&(
                     b.id.as_str(),
+                    rank(b),
                     b.property.as_str(),
                     b.frame().unwrap_or(Frame::MIN),
                 ))
@@ -270,6 +289,12 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
     let Some(node) = document.find(&entry.id) else {
         return Err(format!("no node has the identity {:?}", entry.id));
     };
+    if entry.property == EFFECTS {
+        let OverrideAction::Set(OverrideValue::Text(list)) = &entry.action else {
+            return Err("'effects' expects a comma-separated list of effect kinds".to_owned());
+        };
+        return apply_effect_stack(document, node, list);
+    }
     let (base, axis) = split_property(&entry.property);
     match &entry.action {
         OverrideAction::Visible(visible) => document
@@ -279,7 +304,18 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
         OverrideAction::Set(_) if entry.property == LOCKED || entry.property == NAME => Ok(()),
         OverrideAction::Set(value) => set_value(document, node, &entry.property, value),
         OverrideAction::Key { frame, value, ease } => {
-            if let Some(axis) = axis {
+            if let Some(channel) = EffectChannel::from_name(&entry.property) {
+                let value = effect_value(channel, value).map_err(|reason| {
+                    format!(
+                        "'{}' cannot take {}: {reason}",
+                        entry.property,
+                        describe(value)
+                    )
+                })?;
+                document
+                    .add_effect_keyframe(node, channel, *frame, value, *ease)
+                    .map_err(|error| error.to_string())
+            } else if let Some(axis) = axis {
                 let property = vector_property(base, &entry.property)?;
                 let OverrideValue::Number(number) = value else {
                     return Err(format!("'{}.{}' expects a number", base, axis.name()));
@@ -317,7 +353,11 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
             }
         }
         OverrideAction::Unkey { frame } => {
-            if let Some(axis) = axis {
+            if let Some(channel) = EffectChannel::from_name(&entry.property) {
+                document
+                    .remove_effect_keyframe(node, channel, *frame)
+                    .map_err(|error| error.to_string())
+            } else if let Some(axis) = axis {
                 let property = vector_property(base, &entry.property)?;
                 document
                     .remove_axis_keyframe(node, property, axis, *frame)
@@ -373,6 +413,26 @@ fn set_value(
             .set_property(node, property, value)
             .map_err(|error| error.to_string());
     }
+    if let Some(channel) = EffectChannel::from_name(property_name) {
+        let value = effect_value(channel, value).map_err(|reason| {
+            format!(
+                "'{property_name}' cannot take {}: {reason}",
+                describe(value)
+            )
+        })?;
+        return document
+            .set_effect(node, channel, value)
+            .map_err(|error| error.to_string());
+    }
+    if property_name == EFFECTS {
+        let OverrideValue::Text(list) = value else {
+            return Err(format!(
+                "'effects' cannot take {}: expected a list of effect kinds",
+                describe(value)
+            ));
+        };
+        return apply_effect_stack(document, node, list);
+    }
     if property_name == "blend" {
         let OverrideValue::Text(name) = value else {
             return Err(format!(
@@ -398,6 +458,45 @@ fn set_value(
     document
         .set_content(node, field, value)
         .map_err(|error| error.to_string())
+}
+
+/// Rebuilds a node's effect stack from a comma-separated list of kind names.
+fn apply_effect_stack(
+    document: &mut Document,
+    node: crate::node::NodeId,
+    list: &str,
+) -> Result<(), String> {
+    let mut kinds = Vec::new();
+    for name in list
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let kind = crate::EffectKind::from_name(name)
+            .ok_or_else(|| format!("unknown effect kind {name:?}"))?;
+        if kinds.contains(&kind) {
+            return Err(format!("effect kind {name:?} appears twice"));
+        }
+        kinds.push(kind);
+    }
+    document
+        .set_effect_stack(node, &kinds)
+        .map_err(|error| error.to_string())
+}
+
+/// Converts an override value for an effect parameter.
+fn effect_value(
+    channel: EffectChannel,
+    value: &OverrideValue,
+) -> Result<EffectValueInput, &'static str> {
+    match (channel.param, value) {
+        (EffectParam::Color, OverrideValue::Text(text)) => Color::parse_hex(text)
+            .map(EffectValueInput::Color)
+            .map_err(|_| "expected a colour like #RRGGBB"),
+        (EffectParam::Color, _) => Err("expected a colour"),
+        (_, OverrideValue::Number(number)) => Ok(EffectValueInput::Number(*number)),
+        (_, _) => Err("expected a number"),
+    }
 }
 
 fn property_value(

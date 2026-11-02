@@ -106,8 +106,16 @@ pass when the engine pin includes it (D-0030; see `examples/gradients.motion`).
 Nodes blend with `normal`, `add`, `multiply`, `screen`, `overlay`, `darken` and
 `lighten`, chosen from a segmented grid at the top of the inspector and
 overridable with `set(id, "blend", "multiply")` (D-0031; see
-`examples/blend.motion`). The backdrop-aware modes render through an engine
-layer composite and report a typed `Unsupported` error until the pin is bumped.
+`examples/blend.motion`). All seven modes render through the engine layer
+composite.
+Nodes also carry ordered effects: `node.effect("drop_shadow", color, offset,
+blur, opacity)`, `node.effect("blur", radius)` and `node.effect("glow", color,
+radius, intensity)`. Every parameter is an animatable channel
+(`drop_shadow.blur`, `glow.radius`, `drop_shadow.offset.x`), the effects apply
+to the node and its subtree as one offscreen layer, and the inspector has an
+Effects section with add/reorder/remove tiles (D-0032; see
+`examples/effects.motion`). Rendering waits for the engine effect passes in the
+pin and reports a typed `Unsupported` error until then.
 The canvas zooms around the
 pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
 `F` or a click on the zoom pill; zoom and pan are view state and never change

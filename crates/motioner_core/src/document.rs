@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::animation::{Animatable, AnimatableVec2, Axis, Ease, Keyframe};
 use crate::bounds;
 use crate::color::Color;
+use crate::effect::{Effect, EffectChannel, EffectChannelMut, EffectKind, EffectValueInput};
 use crate::error::CoreError;
 use crate::gradient::{PaintSlot, StopPart};
 use crate::math::Vec2;
@@ -210,6 +211,7 @@ impl Document {
             content,
             transform: Transform::default(),
             blend: BlendMode::Normal,
+            effects: Vec::new(),
             identity,
             visible: true,
         });
@@ -565,6 +567,242 @@ impl Document {
     pub fn set_blend(&mut self, id: NodeId, blend: BlendMode) -> Result<(), CoreError> {
         self.require(id)?;
         self.nodes[id.index()].blend = blend;
+        Ok(())
+    }
+
+    /// Adds an effect of `kind` with default parameters at the top of the
+    /// stack.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`] for an unknown ID and
+    /// [`CoreError::DuplicateEffect`] when the node already has that kind.
+    pub fn add_effect(&mut self, id: NodeId, kind: EffectKind) -> Result<(), CoreError> {
+        self.push_effect(id, Effect::new(kind))
+    }
+
+    /// Adds a prepared effect at the top of the stack.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Document::add_effect`].
+    pub fn push_effect(&mut self, id: NodeId, effect: Effect) -> Result<(), CoreError> {
+        self.require(id)?;
+        let kind = effect.kind();
+        if self.nodes[id.index()].effect(kind).is_some() {
+            return Err(CoreError::DuplicateEffect { kind: kind.name() });
+        }
+        self.nodes[id.index()].effects.push(effect);
+        Ok(())
+    }
+
+    /// Replaces the effect stack with `kinds`, preserving the parameters of
+    /// effects that stay.
+    ///
+    /// Effects whose kind is absent from `kinds` are dropped; effects that
+    /// appear only in `kinds` are added with their defaults.  This is what an
+    /// `effects` override writes, so reordering in the editor survives a
+    /// reload.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`] for an unknown ID and
+    /// [`CoreError::DuplicateEffect`] when `kinds` repeats a kind.
+    pub fn set_effect_stack(&mut self, id: NodeId, kinds: &[EffectKind]) -> Result<(), CoreError> {
+        self.require(id)?;
+        let mut existing = std::mem::take(&mut self.nodes[id.index()].effects);
+        let mut next = Vec::with_capacity(kinds.len());
+        for (position, kind) in kinds.iter().enumerate() {
+            if kinds[..position].contains(kind) {
+                return Err(CoreError::DuplicateEffect { kind: kind.name() });
+            }
+            let effect = existing
+                .iter()
+                .position(|effect| effect.is_kind(*kind))
+                .map_or_else(|| Effect::new(*kind), |index| existing.remove(index));
+            next.push(effect);
+        }
+        self.nodes[id.index()].effects = next;
+        Ok(())
+    }
+
+    /// Removes the effect of `kind`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`] for an unknown ID and
+    /// [`CoreError::MissingEffect`] when the node has no such effect.
+    pub fn remove_effect(&mut self, id: NodeId, kind: EffectKind) -> Result<(), CoreError> {
+        self.require(id)?;
+        let effects = &mut self.nodes[id.index()].effects;
+        let Some(index) = effects.iter().position(|effect| effect.is_kind(kind)) else {
+            return Err(CoreError::MissingEffect { kind: kind.name() });
+        };
+        effects.remove(index);
+        Ok(())
+    }
+
+    /// Moves the effect of `kind` to `index` in the stack.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`] for an unknown ID,
+    /// [`CoreError::MissingEffect`] when the node has no such effect and
+    /// [`CoreError::InvalidEffectOrder`] for an out-of-range index.
+    pub fn move_effect(
+        &mut self,
+        id: NodeId,
+        kind: EffectKind,
+        index: usize,
+    ) -> Result<(), CoreError> {
+        self.require(id)?;
+        let effects = &mut self.nodes[id.index()].effects;
+        if index >= effects.len() {
+            return Err(CoreError::InvalidEffectOrder {
+                index,
+                len: effects.len(),
+            });
+        }
+        let Some(from) = effects.iter().position(|effect| effect.is_kind(kind)) else {
+            return Err(CoreError::MissingEffect { kind: kind.name() });
+        };
+        let effect = effects.remove(from);
+        effects.insert(index, effect);
+        Ok(())
+    }
+
+    /// Sets the static value of an effect parameter.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`], [`CoreError::MissingEffect`] when the node
+    /// has no effect of the channel's kind, [`CoreError::InvalidContentValue`]
+    /// for a value of the wrong shape or out of range, and
+    /// [`CoreError::WrongAxis`] for a missing or unexpected axis.
+    pub fn set_effect(
+        &mut self,
+        id: NodeId,
+        channel: EffectChannel,
+        value: EffectValueInput,
+    ) -> Result<(), CoreError> {
+        self.write_effect(id, channel, value, Write::Static)
+    }
+
+    /// Adds (or replaces) a keyframe on an effect parameter.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Document::set_effect`], plus
+    /// [`CoreError::FrameOutOfRange`] when `frame` is outside the allowed
+    /// range.
+    pub fn add_effect_keyframe(
+        &mut self,
+        id: NodeId,
+        channel: EffectChannel,
+        frame: Frame,
+        value: EffectValueInput,
+        ease: Ease,
+    ) -> Result<(), CoreError> {
+        self.write_effect(id, channel, value, Write::Key(frame, ease))
+    }
+
+    /// Removes an effect parameter's keyframe at `frame`, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownNode`], [`CoreError::MissingEffect`] and
+    /// [`CoreError::FrameOutOfRange`].
+    pub fn remove_effect_keyframe(
+        &mut self,
+        id: NodeId,
+        channel: EffectChannel,
+        frame: Frame,
+    ) -> Result<(), CoreError> {
+        if !frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
+        self.require(id)?;
+        let node = &mut self.nodes[id.index()];
+        let Some(effect) = node
+            .effects
+            .iter_mut()
+            .find(|effect| effect.is_kind(channel.kind))
+        else {
+            return Err(CoreError::MissingEffect {
+                kind: channel.kind.name(),
+            });
+        };
+        match effect.channel_mut(channel.param, channel.axis) {
+            Some(EffectChannelMut::Number(animatable)) => {
+                animatable.remove_key(frame);
+                Ok(())
+            }
+            Some(EffectChannelMut::Color(animatable)) => {
+                animatable.remove_key(frame);
+                Ok(())
+            }
+            None => Err(CoreError::InvalidContentValue {
+                field: channel.name(),
+                reason: "not a parameter of this effect",
+            }),
+        }
+    }
+
+    fn write_effect(
+        &mut self,
+        id: NodeId,
+        channel: EffectChannel,
+        value: EffectValueInput,
+        write: Write,
+    ) -> Result<(), CoreError> {
+        if let Write::Key(frame, _) = write {
+            if !frame_within_bounds(frame) {
+                return Err(CoreError::FrameOutOfRange { frame });
+            }
+        }
+        self.require(id)?;
+        check_effect_value(channel, value)?;
+        let node = &mut self.nodes[id.index()];
+        let Some(effect) = node
+            .effects
+            .iter_mut()
+            .find(|effect| effect.is_kind(channel.kind))
+        else {
+            return Err(CoreError::MissingEffect {
+                kind: channel.kind.name(),
+            });
+        };
+        let Some(target) = effect.channel_mut(channel.param, channel.axis) else {
+            return Err(CoreError::InvalidContentValue {
+                field: channel.name(),
+                reason: "not a parameter of this effect",
+            });
+        };
+        match (target, value) {
+            (EffectChannelMut::Number(animatable), EffectValueInput::Number(number)) => match write
+            {
+                Write::Static => animatable.set_value(number),
+                Write::Key(frame, ease) => animatable.insert_key(Keyframe {
+                    frame,
+                    value: number,
+                    ease,
+                }),
+            },
+            (EffectChannelMut::Color(animatable), EffectValueInput::Color(color)) => match write {
+                Write::Static => animatable.set_value(color),
+                Write::Key(frame, ease) => animatable.insert_key(Keyframe {
+                    frame,
+                    value: color,
+                    ease,
+                }),
+            },
+            _ => {
+                return Err(CoreError::InvalidContentValue {
+                    field: channel.name(),
+                    reason: "expected a number",
+                })
+            }
+        }
         Ok(())
     }
 
@@ -1108,6 +1346,45 @@ fn set_number(
     check_number(field, value, positive)?;
     target.set_value(value);
     Ok(())
+}
+
+/// Validates one effect parameter write.
+fn check_effect_value(channel: EffectChannel, value: EffectValueInput) -> Result<(), CoreError> {
+    use crate::effect::EffectParam;
+    let invalid = |reason: &'static str| CoreError::InvalidContentValue {
+        field: channel.name(),
+        reason,
+    };
+    match (channel.param, value) {
+        (EffectParam::Color, EffectValueInput::Color(_)) => Ok(()),
+        (
+            EffectParam::Blur | EffectParam::Radius | EffectParam::Opacity | EffectParam::Intensity,
+            EffectValueInput::Number(number),
+        ) => {
+            if !number.is_finite() {
+                return Err(invalid("must be a finite number"));
+            }
+            match channel.param {
+                EffectParam::Opacity if !(0.0..=1.0).contains(&number) => {
+                    Err(invalid("must be a number from 0 to 1"))
+                }
+                EffectParam::Blur | EffectParam::Radius if number < 0.0 => {
+                    Err(invalid("must be zero or above"))
+                }
+                EffectParam::Intensity if number < 0.0 => Err(invalid("must be zero or above")),
+                _ => Ok(()),
+            }
+        }
+        (EffectParam::Offset, EffectValueInput::Number(number)) => {
+            if number.is_finite() {
+                Ok(())
+            } else {
+                Err(invalid("must be a finite number"))
+            }
+        }
+        (EffectParam::Color, _) => Err(invalid("expected a colour")),
+        _ => Err(invalid("expected a number")),
+    }
 }
 
 fn check_number(field: ContentField, value: f64, positive: bool) -> Result<(), CoreError> {

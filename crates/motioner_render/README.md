@@ -303,3 +303,21 @@ What the checked frames show:
   orientation (visually the same square pose), title and circles unchanged.
 - **299** (5 s, last frame): same as frame 240; the animation has reached its
   final pose.
+
+## Layers, blend modes and effects
+
+A plan item with a non-normal blend mode, or a node with an effect chain,
+renders inside an engine offscreen layer. `paint_plan` opens the layers in
+`RenderPlan::layers()` before their first item and closes them after their
+last one, so a group's blend and its effects apply to the whole subtree, and
+nested layers nest correctly. The layer composites with the node's
+`CompositeMode2d` (D-0031); the engine's backdrop-aware modes copy the
+destination into a scratch texture first.
+
+Effects (`Effect2d`: blur, drop shadow, glow; D-0032) are expressed on the
+same layer: `paint_plan` maps each sampled `motioner_eval::EffectValue` to
+the engine's `Effect2d` (straight linear colour; radii and offsets scaled from
+composition pixels by the view) and opens the layer with
+`push_layer_2d_with_effects`. A layer the engine rejects (invalid parameters)
+is not opened, so its draws composite directly and it is never popped. See
+the engine's `crates/ferrous_2d/docs/effects.md` for the passes.

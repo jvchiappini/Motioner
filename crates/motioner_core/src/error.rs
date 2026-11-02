@@ -116,6 +116,23 @@ pub enum CoreError {
         /// Why it was rejected.
         reason: &'static str,
     },
+    /// The node already carries an effect of this kind.
+    DuplicateEffect {
+        /// The repeated kind name.
+        kind: &'static str,
+    },
+    /// The node carries no effect of this kind.
+    MissingEffect {
+        /// The requested kind name.
+        kind: &'static str,
+    },
+    /// The node has no effect of this kind.
+    InvalidEffectOrder {
+        /// The requested position.
+        index: usize,
+        /// Number of effects in the stack.
+        len: usize,
+    },
 }
 
 impl fmt::Display for CoreError {
@@ -187,6 +204,14 @@ impl fmt::Display for CoreError {
             Self::InvalidContentValue { field, reason } => {
                 write!(f, "'{field}' is invalid: {reason}")
             }
+            Self::DuplicateEffect { kind } => {
+                write!(f, "the node already has a '{kind}' effect")
+            }
+            Self::MissingEffect { kind } => write!(f, "the node has no '{kind}' effect"),
+            Self::InvalidEffectOrder { index, len } => write!(
+                f,
+                "effect position {index} is out of range: the stack has {len} effect(s)"
+            ),
         }
     }
 }

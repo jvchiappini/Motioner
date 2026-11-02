@@ -10,8 +10,8 @@
 //! input, no window, no GPU.
 
 use motioner_core::{
-    Color, Composition, ContentField, ContentValue, Document, Frame, NodeContent, NodeId,
-    OverrideSet, Property, TextAlign, Transform,
+    Color, Composition, ContentField, ContentValue, Document, EffectChannel, EffectKind,
+    EffectParam, Frame, NodeContent, NodeId, OverrideSet, Property, TextAlign, Transform,
 };
 use motioner_eval::sample;
 
@@ -48,6 +48,8 @@ pub enum FieldTarget {
     Transform(Property, Axis),
     /// A content field.
     Content(ContentField),
+    /// An effect parameter (D-0028 section 3).
+    Effect(EffectChannel),
     /// The text of a text layer.
     Text,
     /// The horizontal alignment of a text layer.
@@ -91,15 +93,18 @@ pub enum ChannelTarget {
     Transform(Property, Option<motioner_core::Axis>),
     /// A content field.
     Content(ContentField),
+    /// An effect parameter.
+    Effect(EffectChannel),
 }
 
 impl ChannelTarget {
-    /// The override name of the channel (`pos.x`, `fill`).
+    /// The override name of the channel (`pos.x`, `fill`, `blur.radius`).
     #[must_use]
     pub fn name(self) -> String {
         match self {
             Self::Transform(property, axis) => crate::editor::channel_name(property, axis),
             Self::Content(field) => field.name().clone(),
+            Self::Effect(channel) => channel.name(),
         }
     }
 }
@@ -155,6 +160,13 @@ pub enum RowValue {
         /// The current mode.
         mode: motioner_core::BlendMode,
     },
+    /// The up/down/remove tiles of one effect row.
+    EffectOps {
+        /// The effect the row belongs to.
+        kind: EffectKind,
+    },
+    /// The three add-effect tiles (shadow, blur, glow).
+    EffectAdd,
     /// A three-state segmented control.
     Align {
         /// What an edit writes.
@@ -794,6 +806,151 @@ fn display_name(
     Some(String::new())
 }
 
+/// One effect-parameter inspector channel.
+fn effect_channel(
+    document: &Document,
+    node: NodeId,
+    channel: EffectChannel,
+    frame: Frame,
+) -> Channel {
+    let frames =
+        crate::editor::channels::keys(document, node, crate::editor::Channel::Effect(channel));
+    Channel {
+        target: ChannelTarget::Effect(channel),
+        keyed: !frames.is_empty(),
+        on_key: frames.contains(&frame),
+        frames,
+    }
+}
+
+/// The sampled number of an effect parameter.
+fn effect_number(document: &Document, node: NodeId, channel: EffectChannel, frame: Frame) -> f64 {
+    match crate::editor::channels::sampled(
+        document,
+        node,
+        crate::editor::Channel::Effect(channel),
+        frame,
+    ) {
+        Some(motioner_core::OverrideValue::Number(number)) => number,
+        _ => 0.0,
+    }
+}
+
+/// The sampled colour of an effect parameter.
+fn effect_colour(document: &Document, node: NodeId, channel: EffectChannel, frame: Frame) -> Color {
+    match crate::editor::channels::sampled(
+        document,
+        node,
+        crate::editor::Channel::Effect(channel),
+        frame,
+    ) {
+        Some(motioner_core::OverrideValue::Text(text)) => {
+            Color::parse_hex(&text).unwrap_or(Color::BLACK)
+        }
+        _ => Color::BLACK,
+    }
+}
+
+/// The Effects section: one operation row per effect, its parameter rows and
+/// the add-effect tiles.
+fn effect_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
+    let Some(n) = document.node(node) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for effect in n.effects() {
+        let kind = effect.kind();
+        rows.push(row(
+            "Effects",
+            kind.label(),
+            RowValue::EffectOps { kind },
+            None,
+        ));
+        for &param in kind.params() {
+            match param {
+                EffectParam::Color => {
+                    let channel = EffectChannel {
+                        kind,
+                        param,
+                        axis: None,
+                    };
+                    let color = effect_colour(document, node, channel, frame);
+                    rows.push(row(
+                        "Effects",
+                        "Colour",
+                        RowValue::Color {
+                            target: FieldTarget::Effect(channel),
+                            color,
+                            text: hex(color),
+                        },
+                        Some(effect_channel(document, node, channel, frame)),
+                    ));
+                }
+                EffectParam::Offset => {
+                    for (label, axis) in [
+                        ("Offset X", motioner_core::Axis::X),
+                        ("Offset Y", motioner_core::Axis::Y),
+                    ] {
+                        let channel = EffectChannel {
+                            kind,
+                            param,
+                            axis: Some(axis),
+                        };
+                        rows.push(row(
+                            "Effects",
+                            label,
+                            RowValue::Single(field(
+                                FieldTarget::Effect(channel),
+                                axis_label(axis),
+                                effect_number(document, node, channel, frame),
+                                1.0,
+                                "",
+                            )),
+                            Some(effect_channel(document, node, channel, frame)),
+                        ));
+                    }
+                }
+                _ => {
+                    let channel = EffectChannel {
+                        kind,
+                        param,
+                        axis: None,
+                    };
+                    let label = match param {
+                        EffectParam::Blur => "Blur",
+                        EffectParam::Opacity => "Opacity",
+                        EffectParam::Radius => "Radius",
+                        EffectParam::Intensity => "Intensity",
+                        _ => "Value",
+                    };
+                    rows.push(row(
+                        "Effects",
+                        label,
+                        RowValue::Single(field(
+                            FieldTarget::Effect(channel),
+                            "",
+                            effect_number(document, node, channel, frame),
+                            1.0,
+                            "",
+                        )),
+                        Some(effect_channel(document, node, channel, frame)),
+                    ));
+                }
+            }
+        }
+    }
+    rows.push(row("Effects", "Add effect", RowValue::EffectAdd, None));
+    rows
+}
+
+/// "X" or "Y" for an effect offset field.
+fn axis_label(axis: motioner_core::Axis) -> &'static str {
+    match axis {
+        motioner_core::Axis::X => "X",
+        motioner_core::Axis::Y => "Y",
+    }
+}
+
 /// The rows shown for `node` at `frame`, or `None` if the node is gone.
 ///
 /// `fallback_name` is the outline's generated name ("Circle 3"); a `name`
@@ -818,6 +975,8 @@ pub fn inspect_node(
         },
         None,
     )];
+    // Effects sit next to Blend: both are whole-node properties.
+    rows.extend(effect_rows(document, node, frame));
     rows.extend(transform_rows(n.transform(), frame));
     rows.extend(content_rows(document, node, n.content(), frame));
     let name = display_name(document, node, overrides)
@@ -1077,6 +1236,12 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
             RowValue::Blend { .. } => {
                 segments = blend_tiles(Rect::new(left, y + row_h, rect.w, blend_grid_height(m)), m);
             }
+            RowValue::EffectOps { .. } | RowValue::EffectAdd => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
             RowValue::ReadOnly(_) => {
                 fields.push((
                     Rect::new(value_x, field_y, value_w, field_h),
@@ -1317,6 +1482,36 @@ mod tests {
         let text = inspect_node(&document, document.roots()[0], 0, None, "Title").unwrap();
         assert!(text.rows.iter().any(|r| r.label == "Text"));
         assert!(text.rows.iter().any(|r| r.label == "Align"));
+    }
+
+    #[test]
+    fn effect_rows_show_operations_and_parameters() {
+        let mut document = hello();
+        let node = document.roots()[0];
+        document
+            .add_effect(node, motioner_core::EffectKind::Blur)
+            .unwrap();
+        let channel = EffectChannel {
+            kind: motioner_core::EffectKind::Blur,
+            param: EffectParam::Radius,
+            axis: None,
+        };
+        document
+            .set_effect(node, channel, motioner_core::EffectValueInput::Number(12.0))
+            .unwrap();
+        let model = inspect_node(&document, node, 0, None, "Title").unwrap();
+        assert!(model.rows.iter().any(|row| row.label == "Blur"));
+        assert!(model.rows.iter().any(|row| row.label == "Radius"));
+        assert!(model
+            .rows
+            .iter()
+            .any(|row| matches!(row.value, RowValue::EffectAdd)));
+        let radius = field_of(&model, "Radius");
+        assert!(matches!(radius.value, RowValue::Single(_)));
+        assert!(radius
+            .channel
+            .as_ref()
+            .is_some_and(|channel| !channel.keyed));
     }
 
     #[test]

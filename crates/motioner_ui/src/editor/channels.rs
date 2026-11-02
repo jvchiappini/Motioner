@@ -9,7 +9,7 @@
 
 use motioner_core::{
     split_property, Animatable, AnimatableVec2, Axis, Color, ContentChannel, ContentField,
-    Document, Ease, Frame, NodeId, OverrideValue, Property, Transform,
+    Document, Ease, EffectChannel, EffectParam, Frame, NodeId, OverrideValue, Property, Transform,
 };
 
 use crate::command::{CommandError, ErrorKind};
@@ -33,6 +33,8 @@ pub enum Channel {
     Transform(Property, Option<Axis>),
     /// A content field (no axes).
     Content(ContentField),
+    /// An effect parameter, with its axis for the offset (D-0028 section 3).
+    Effect(EffectChannel),
 }
 
 impl Channel {
@@ -42,6 +44,7 @@ impl Channel {
         match self {
             Self::Transform(property, axis) => channel_name(property, axis),
             Self::Content(field) => field.name().clone(),
+            Self::Effect(channel) => channel.name(),
         }
     }
 
@@ -51,6 +54,7 @@ impl Channel {
         match self {
             Self::Transform(property, _) => property.name().to_owned(),
             Self::Content(field) => field.name(),
+            Self::Effect(channel) => channel.base_name(),
         }
     }
 
@@ -60,6 +64,7 @@ impl Channel {
         match self {
             Self::Transform(_, axis) => axis,
             Self::Content(_) => None,
+            Self::Effect(channel) => channel.axis,
         }
     }
 
@@ -67,6 +72,12 @@ impl Channel {
     #[must_use]
     pub const fn is_content(self) -> bool {
         matches!(self, Self::Content(_))
+    }
+
+    /// Whether this is an effect parameter channel.
+    #[must_use]
+    pub const fn is_effect(self) -> bool {
+        matches!(self, Self::Effect(_))
     }
 }
 
@@ -94,6 +105,21 @@ pub fn node_channels(document: &Document, node: NodeId) -> Vec<Channel> {
             }
         }
     }
+    if let Some(node) = document.node(node) {
+        for effect in node.effects() {
+            for &param in effect.kind().params() {
+                if param.is_vector() {
+                    for axis in [Axis::X, Axis::Y] {
+                        if let Ok(channel) = EffectChannel::new(effect.kind(), param, Some(axis)) {
+                            channels.push(Channel::Effect(channel));
+                        }
+                    }
+                } else if let Ok(channel) = EffectChannel::new(effect.kind(), param, None) {
+                    channels.push(Channel::Effect(channel));
+                }
+            }
+        }
+    }
     channels
 }
 
@@ -110,6 +136,31 @@ pub fn resolve(
     property: &str,
 ) -> Result<(NodeId, Channel), CommandError> {
     let node = node_of(document, id)?;
+    if let Some(channel) = EffectChannel::from_name(property) {
+        let has = document
+            .node(node)
+            .is_some_and(|node| node.effect(channel.kind).is_some());
+        if !has {
+            return Err(CommandError::new(
+                ErrorKind::UnknownProperty,
+                format!(
+                    "'{property}' needs a '{}' effect on this layer (use effect.add)",
+                    channel.kind.name()
+                ),
+            ));
+        }
+        return Ok((node, Channel::Effect(channel)));
+    }
+    if let Some((kind, _)) = property.split_once('.') {
+        if let Some(kind) = motioner_core::EffectKind::from_name(kind) {
+            if kind.accepts(EffectParam::Offset) && property.ends_with(".offset") {
+                return Err(CommandError::new(
+                    ErrorKind::UnknownProperty,
+                    format!("'{property}' needs an axis ('{property}.x' or '{property}.y')"),
+                ));
+            }
+        }
+    }
     let (base, axis) = split_property(property);
     if let Some(field) = ContentField::from_name(base) {
         if axis.is_some() {
@@ -221,6 +272,23 @@ pub fn keys(document: &Document, node: NodeId, channel: Channel) -> Vec<Frame> {
             .channel(field)
             .map(|value| value.key_frames())
             .unwrap_or_default(),
+        Channel::Effect(channel) => effect_channel(node, channel)
+            .map(|value| value.key_frames())
+            .unwrap_or_default(),
+    }
+}
+
+/// The channel of an effect parameter, as a content-shaped read.
+fn effect_channel(
+    node: &motioner_core::Node,
+    channel: EffectChannel,
+) -> Option<ContentChannel<'_>> {
+    match node
+        .effect(channel.kind)?
+        .channel_ref(channel.param, channel.axis)?
+    {
+        motioner_core::EffectChannelRef::Number(value) => Some(ContentChannel::Number(value)),
+        motioner_core::EffectChannelRef::Color(value) => Some(ContentChannel::Color(value)),
     }
 }
 
@@ -246,6 +314,15 @@ pub fn eases(document: &Document, node: NodeId, channel: Channel) -> Vec<Ease> {
                     value.keys().iter().map(|k| k.ease).collect()
                 }
             }),
+        Channel::Effect(channel) => {
+            effect_channel(node, channel).map_or_else(Vec::new, |value| match value {
+                ContentChannel::Number(value) => value.keys().iter().map(|k| k.ease).collect(),
+                ContentChannel::Color(value) => value.keys().iter().map(|k| k.ease).collect(),
+                ContentChannel::OptionalColor(value) => {
+                    value.keys().iter().map(|k| k.ease).collect()
+                }
+            })
+        }
     }
 }
 
@@ -271,6 +348,20 @@ pub fn sampled(
         }
         Channel::Content(field) => {
             let channel = node.content().channel(field)?;
+            Some(match channel {
+                ContentChannel::Number(value) => {
+                    OverrideValue::Number(motioner_eval::sample(value, frame))
+                }
+                ContentChannel::Color(value) => {
+                    OverrideValue::Text(motioner_eval::sample(value, frame).to_hex())
+                }
+                ContentChannel::OptionalColor(value) => {
+                    colour_value(motioner_eval::sample(value, frame))
+                }
+            })
+        }
+        Channel::Effect(channel) => {
+            let channel = effect_channel(node, channel)?;
             Some(match channel {
                 ContentChannel::Number(value) => {
                     OverrideValue::Number(motioner_eval::sample(value, frame))
@@ -378,6 +469,23 @@ pub fn key_at(
             ))
         }
         Channel::Content(field) => match node.content().channel(field)? {
+            ContentChannel::Number(value) => value
+                .keys()
+                .iter()
+                .find(|k| k.frame == frame)
+                .map(|k| (OverrideValue::Number(k.value), k.ease)),
+            ContentChannel::Color(value) => value
+                .keys()
+                .iter()
+                .find(|k| k.frame == frame)
+                .map(|k| (OverrideValue::Text(k.value.to_hex()), k.ease)),
+            ContentChannel::OptionalColor(value) => value
+                .keys()
+                .iter()
+                .find(|k| k.frame == frame)
+                .map(|k| (colour_value(k.value), k.ease)),
+        },
+        Channel::Effect(channel) => match effect_channel(node, channel)? {
             ContentChannel::Number(value) => value
                 .keys()
                 .iter()

@@ -453,3 +453,115 @@ fn path_layers_have_channels_rows_and_stopwatches() {
         ErrorKind::UnknownProperty
     );
 }
+
+#[test]
+fn effect_commands_add_reorder_remove_and_edit_parameters() {
+    let (mut editor, _dir) = hello_editor("effects");
+    let kinds = |editor: &Editor| {
+        let document = editor.session().document().expect("document");
+        document
+            .node(document.find(TITLE).unwrap())
+            .unwrap()
+            .effects()
+            .iter()
+            .map(|effect| effect.kind().name())
+            .collect::<Vec<_>>()
+    };
+    run(
+        &mut editor,
+        "effect_add(\"@288\", \"drop_shadow\")\neffect_add(\"@288\", \"blur\")\neffect_add(\"@288\", \"glow\")",
+    );
+    assert_eq!(kinds(&editor), ["drop_shadow", "blur", "glow"]);
+
+    // The stack is an override, so it survives a reload.
+    assert_eq!(
+        editor
+            .session()
+            .overrides()
+            .get(TITLE, "effects", None)
+            .unwrap()
+            .action,
+        OverrideAction::Set(OverrideValue::Text("drop_shadow,blur,glow".to_owned()))
+    );
+
+    run(&mut editor, "effect_move(\"@288\", \"glow\", 0)");
+    assert_eq!(kinds(&editor), ["glow", "drop_shadow", "blur"]);
+    run(&mut editor, "effect_remove(\"@288\", \"drop_shadow\")");
+    assert_eq!(kinds(&editor), ["glow", "blur"]);
+
+    // Parameters are normal animatable channels.
+    run(&mut editor, "edit(\"@288\", \"blur.radius\", 12)");
+    let radius = {
+        let document = editor.session().document().expect("document");
+        let node = document.node(document.find(TITLE).unwrap()).unwrap();
+        node.effect(motioner_core::EffectKind::Blur)
+            .and_then(
+                |effect| match effect.channel_ref(motioner_core::EffectParam::Radius, None) {
+                    Some(motioner_core::EffectChannelRef::Number(value)) => Some(value.value()),
+                    _ => None,
+                },
+            )
+            .unwrap()
+    };
+    assert!((radius - 12.0).abs() < 1e-9, "radius {radius}");
+    assert_eq!(
+        editor
+            .session()
+            .overrides()
+            .get(TITLE, "blur.radius", None)
+            .unwrap()
+            .action,
+        OverrideAction::Set(OverrideValue::Number(12.0))
+    );
+
+    run(&mut editor, "key(\"@288\", \"blur.radius\", 1.0, 4)");
+    let json = editor.query_json(Some(TITLE)).unwrap();
+    assert!(json.contains("\"blur.radius\":{\"value\":4"), "{json}");
+    assert!(json.contains("\"kind\":\"glow\""), "{json}");
+
+    assert_eq!(
+        error(&mut editor, "effect_add(\"@288\", \"blur\")"),
+        ErrorKind::BadValue
+    );
+    assert_eq!(
+        error(&mut editor, "effect_remove(\"@288\", \"drop_shadow\")"),
+        ErrorKind::BadValue
+    );
+    assert_eq!(
+        error(&mut editor, "effect_move(\"@288\", \"blur\", 9)"),
+        ErrorKind::BadArgument
+    );
+}
+
+#[test]
+fn effect_parameters_key_through_the_generic_commands() {
+    let (mut editor, _dir) = hello_editor("effect_keys");
+    run(
+        &mut editor,
+        "effect_add(\"@288\", \"drop_shadow\")\nkey(\"@288\", \"drop_shadow.offset.x\", 1.0, 20)",
+    );
+    let document = editor.session().document().expect("document");
+    let node = document.node(document.find(TITLE).unwrap()).unwrap();
+    let keys = node
+        .effect(motioner_core::EffectKind::DropShadow)
+        .and_then(|effect| {
+            effect.channel_ref(
+                motioner_core::EffectParam::Offset,
+                Some(motioner_core::Axis::X),
+            )
+        })
+        .map(|channel| match channel {
+            motioner_core::EffectChannelRef::Number(value) => value.keys().len(),
+            motioner_core::EffectChannelRef::Color(_) => 0,
+        })
+        .unwrap();
+    assert_eq!(keys, 1);
+    assert_eq!(
+        error(&mut editor, "key(\"@288\", \"drop_shadow.offset\", 1.0, 4)"),
+        ErrorKind::UnknownProperty
+    );
+    assert_eq!(
+        error(&mut editor, "edit(\"@288\", \"wobble.radius\", 4)"),
+        ErrorKind::UnknownProperty
+    );
+}

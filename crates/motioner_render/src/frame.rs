@@ -12,10 +12,10 @@
 
 use std::collections::HashMap;
 
-use ferrous_2d::render::FontId2d;
+use ferrous_2d::render::{Effect2d, FontId2d, MAX_EFFECTS_PER_LAYER};
 use ferrous_renderer::headless::{HarnessError, Pure2dHarness, DEFAULT_FORMAT};
 use motioner_core::{Color, Document, NodeContent, NodeId, TextAlign};
-use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan};
+use motioner_eval::{Affine2, EffectValue, ItemShape, RenderItem, RenderPlan};
 
 use crate::paths::PathCache;
 use crate::space::{self, to_f32};
@@ -69,20 +69,6 @@ pub(crate) fn render(
         return Err(RenderError::SizeMismatch {
             expected: (renderer.width, renderer.height),
             actual: (plan.width(), plan.height()),
-        });
-    }
-    #[cfg(not(feature = "engine-text-gradient"))]
-    if let Some(node) = plan.first_text_gradient_node() {
-        return Err(RenderError::Unsupported {
-            feature: crate::Feature::Gradient,
-            node: Some(node),
-        });
-    }
-    #[cfg(not(feature = "engine-composite"))]
-    if let Some(item) = plan.items().iter().find(|item| item.blend.needs_backdrop()) {
-        return Err(RenderError::Unsupported {
-            feature: crate::Feature::BlendMode,
-            node: Some(item.node),
         });
     }
     apply_clear(renderer, plan.background());
@@ -149,10 +135,34 @@ pub(crate) fn paint_plan(
         non_finite_items: plan.non_finite_items(),
         ..PaintStats::default()
     };
-    for item in plan.items() {
-        let layered = item.blend != motioner_core::BlendMode::Normal;
-        if layered {
-            canvas.push_layer(1.0, item.blend, space::z_for(z_index, total));
+    // Effect radii and offsets are composition pixels; scale them with the
+    // view so a zoomed preview matches the export.
+    let effect_scale = space::to_f32(space::world_unit_scale(flip));
+    // Each open layer remembers whether the engine accepted it, so a rejected
+    // push (invalid effect) is never popped.
+    let mut open: Vec<(&motioner_eval::PlanLayer, bool)> = Vec::new();
+    let mut next_layer = 0usize;
+    for (item_index, item) in plan.items().iter().enumerate() {
+        // Layers open before their first item and close after their last one.
+        // A group without content opens at the same index as its first child,
+        // so several layers can start here (parents first).
+        while let Some(layer) = plan.layers().get(next_layer) {
+            if layer.start != item_index {
+                break;
+            }
+            let mut effects = [Effect2d::Blur { radius: 0.0 }; MAX_EFFECTS_PER_LAYER];
+            let count = layer.effects.len().min(MAX_EFFECTS_PER_LAYER);
+            for (slot, effect) in effects.iter_mut().zip(&layer.effects) {
+                *slot = engine_effect(effect, effect_scale);
+            }
+            let pushed = canvas.push_layer(
+                1.0,
+                layer.blend,
+                space::z_for(z_index, total),
+                &effects[..count],
+            );
+            open.push((layer, pushed));
+            next_layer += 1;
         }
         match item.shape {
             ItemShape::Text {
@@ -193,11 +203,52 @@ pub(crate) fn paint_plan(
                 );
             }
         }
-        if layered {
-            canvas.pop_layer();
+        while let Some(&(layer, pushed)) = open.last() {
+            if layer.end != item_index + 1 {
+                break;
+            }
+            if pushed {
+                canvas.pop_layer();
+            }
+            open.pop();
         }
     }
     stats
+}
+
+/// Maps one sampled document effect to the engine effect (D-0032).
+///
+/// Colours go to straight linear RGBA; radii and offsets are scaled from
+/// composition pixels to the target by `scale`.
+fn engine_effect(effect: &EffectValue, scale: f32) -> Effect2d {
+    match *effect {
+        EffectValue::DropShadow {
+            color,
+            offset,
+            blur,
+            opacity,
+        } => Effect2d::DropShadow {
+            color: space::linear_rgba(color, 1.0),
+            offset: [
+                space::to_f32(offset.x) * scale,
+                space::to_f32(offset.y) * scale,
+            ],
+            blur: space::to_f32(blur) * scale,
+            opacity: space::to_f32(opacity),
+        },
+        EffectValue::Blur { radius } => Effect2d::Blur {
+            radius: space::to_f32(radius) * scale,
+        },
+        EffectValue::Glow {
+            color,
+            radius,
+            intensity,
+        } => Effect2d::Glow {
+            color: space::linear_rgba(color, 1.0),
+            radius: space::to_f32(radius) * scale,
+            intensity: space::to_f32(intensity),
+        },
+    }
 }
 
 fn apply_clear(renderer: &mut FrameRenderer, background: Color) {

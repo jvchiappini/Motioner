@@ -2,7 +2,8 @@
 //! with, and the command typing into it commits.
 
 use motioner_core::{
-    Axis, ContentField, NodeContent, OverrideAction, OverrideValue, Property, TextAlign,
+    Axis, ContentField, EffectParam, NodeContent, OverrideAction, OverrideValue, Property,
+    TextAlign,
 };
 
 use super::{channel_name, channels, Editor};
@@ -31,6 +32,16 @@ impl Editor {
             FieldTarget::Content(field) => {
                 channels::sampled_number(document, node, field, self.frame())
             }
+            FieldTarget::Effect(channel) => match channels::sampled(
+                document,
+                node,
+                super::Channel::Effect(channel),
+                self.frame(),
+            )? {
+                OverrideValue::Number(number) => Some(number),
+                OverrideValue::Vec2(vector) => Some(vector.x),
+                OverrideValue::Text(_) => None,
+            },
             _ => None,
         }
     }
@@ -65,6 +76,15 @@ impl Editor {
                 field @ (ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_)),
             ) => match channels::sampled_colour(document, node, field, self.frame()) {
                 channels::SampledColour::Colour(color) => inspect::hex(color),
+                _ => String::new(),
+            },
+            FieldTarget::Effect(channel) => match channels::sampled(
+                document,
+                node,
+                super::Channel::Effect(channel),
+                self.frame(),
+            ) {
+                Some(OverrideValue::Text(text)) => text,
                 _ => String::new(),
             },
             FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
@@ -142,6 +162,15 @@ impl Editor {
             ) => {
                 motioner_core::Color::parse_hex(trimmed).ok()?;
                 (field.name(), OverrideValue::Text(trimmed.to_owned()))
+            }
+
+            FieldTarget::Effect(channel) if channel.param == EffectParam::Color => {
+                motioner_core::Color::parse_hex(trimmed).ok()?;
+                (channel.name(), OverrideValue::Text(trimmed.to_owned()))
+            }
+            FieldTarget::Effect(channel) => {
+                let value: f64 = trimmed.parse().ok().filter(|v: &f64| v.is_finite())?;
+                (channel.name(), OverrideValue::Number(value))
             }
             FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
                 ("text".to_owned(), OverrideValue::Text(text.to_owned()))

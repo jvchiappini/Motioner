@@ -4,13 +4,12 @@
 //! hexagon stroke and the ribbon half drawn. Frame 105 shows the finished
 //! ribbon and the animated stop offsets.
 //!
-//! The glyph fill is a gradient too, which needs the `Pure2D` text pass: on the
-//! current pin the renderer refuses the frame with a typed `Unsupported`
-//! error, so the test skips cleanly until the pin bump. With
-//! `engine-text-gradient` enabled every frame here runs and compares with the
-//! D-0028 policy: at most 2 per channel, at most 0.1 % of pixels above 2. The
-//! banding check walks a line inside the card and bounds the step between
-//! neighbouring pixels; dithering keeps flat ramps off the contour.
+//! The glyph fill is a gradient too, drawn by the `Pure2D` text pass. Every
+//! frame compares with the D-0028 policy: at most 2 per channel, at most 0.1 %
+//! of pixels above 2. A typed `Unsupported` error is a failure: this golden
+//! must never be skipped. The banding check walks a line inside the card and
+//! bounds the step between neighbouring pixels; dithering keeps flat ramps off
+//! the contour.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -80,15 +79,8 @@ fn gradients_match_the_golden_stills() -> Result<(), Box<dyn Error>> {
             }
         };
         let mut actual = Vec::new();
-        match renderer.render(&document, &plan, &mut actual) {
-            Ok(_) => {}
-            Err(RenderError::Unsupported { .. }) => {
-                eprintln!(
-                    "skipping gradient golden: the pinned engine has no gradient pass (D-0030)"
-                );
-                return Ok(());
-            }
-            Err(other) => panic!("render failed: {other}"),
+        if let Err(other) = renderer.render(&document, &plan, &mut actual) {
+            panic!("frame {frame}: render failed: {other}");
         }
 
         let decoder = png::Decoder::new(std::io::Cursor::new(golden));

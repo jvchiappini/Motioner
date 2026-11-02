@@ -211,6 +211,26 @@ fn draw_value(
         RowValue::Align { align, .. } => align_segments(p, v, segments, *align, item),
         RowValue::Ease { current } => ease_tiles(p, v, segments, *current, item),
         RowValue::Blend { mode, .. } => blend_tiles(p, v, segments, *mode, item),
+        RowValue::EffectOps { .. } => label_tiles(p, v, segments, &["Up", "Dn", "Del"], item),
+        RowValue::EffectAdd => {
+            label_tiles(p, v, segments, &["Shadow", "Blur", "Glow"], item);
+        }
+    }
+}
+
+/// Three equal tiles with a centered label; the hovered one is highlighted.
+fn label_tiles(p: &mut Painter<'_>, v: &View<'_>, tiles: &[Rect], labels: &[&str], item: usize) {
+    let t = *p.theme;
+    for (segment, (rect, label)) in tiles.iter().zip(labels).enumerate() {
+        let state = v.interaction(Hit::InspectSegment { item, segment });
+        let fill = if state.hovered {
+            t.control_hover
+        } else {
+            t.raised
+        };
+        p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
+        let style = p.style(type_scale::BODY, t.text_muted);
+        p.text_in(label, *rect, Align::Center, &style);
     }
 }
 

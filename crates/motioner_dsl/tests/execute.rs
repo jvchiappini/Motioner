@@ -531,3 +531,83 @@ fn gradient_errors_are_reported() {
     assert_eq!(error.category, ErrorCategory::Value);
     assert!(error.message.contains("stops"), "{error}");
 }
+
+#[test]
+fn effects_parse_update_and_keep_their_stack_order() {
+    let document = build(
+        "\
+n = rect(10, 10)
+n.effect(\"drop_shadow\", color=\"#00000080\", offset=(4, 6), blur=8, opacity=0.5)
+n.effect(\"blur\", radius=3)
+n.effect(\"glow\", color=\"#66E0FF\", radius=10, intensity=1.5)
+n.effect(\"blur\", radius=5)
+",
+    );
+    let node = document.node(document.roots()[0]).unwrap();
+    let kinds: Vec<&str> = node.effects().iter().map(|e| e.kind().name()).collect();
+    assert_eq!(kinds, ["drop_shadow", "blur", "glow"]);
+    let blur = node.effect(motioner_core::EffectKind::Blur).unwrap();
+    assert!((number_value(blur, motioner_core::EffectParam::Radius) - 5.0).abs() < 1e-9);
+    let shadow = node.effect(motioner_core::EffectKind::DropShadow).unwrap();
+    assert!((number_value(shadow, motioner_core::EffectParam::Opacity) - 0.5).abs() < 1e-9);
+    let glow = node.effect(motioner_core::EffectKind::Glow).unwrap();
+    assert!((number_value(glow, motioner_core::EffectParam::Intensity) - 1.5).abs() < 1e-9);
+}
+
+#[test]
+fn effect_parameters_key_and_override() {
+    let document = build(
+        "\
+n = rect(10, 10)
+n.effect(\"blur\", radius=2)
+n.key(\"blur.radius\", 1.0, 12)
+o = rect(10, 10)
+o.effect(\"drop_shadow\")
+o.key(\"drop_shadow.offset.x\", 1.0, 20)
+",
+    );
+    let first = document.nodes().next().unwrap();
+    let blur = first.effect(motioner_core::EffectKind::Blur).unwrap();
+    assert_eq!(
+        number_channel(blur, motioner_core::EffectParam::Radius)
+            .keys()
+            .len(),
+        1
+    );
+    let second = document.nodes().nth(1).unwrap();
+    let shadow = second
+        .effect(motioner_core::EffectKind::DropShadow)
+        .unwrap();
+    let Some(motioner_core::EffectChannelRef::Number(offset)) = shadow.channel_ref(
+        motioner_core::EffectParam::Offset,
+        Some(motioner_core::Axis::X),
+    ) else {
+        panic!("not a number channel");
+    };
+    assert_eq!(offset.keys().len(), 1);
+}
+
+#[test]
+fn effect_errors_are_typed() {
+    let error = fail("n = rect(1, 1)\nn.effect(\"wobble\")\n");
+    assert_eq!(error.category, ErrorCategory::Unsupported);
+    assert!(error.message.contains("drop_shadow"), "{error}");
+    let error = fail("n = rect(1, 1)\nn.effect(\"blur\", radius=1, color=\"#FFFFFF\")\n");
+    assert_eq!(error.category, ErrorCategory::Type);
+    let error = fail("n = rect(1, 1)\nn.effect(\"blur\")\nn.key(\"blur.radius\", 0.0, -1)\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+}
+
+fn number_channel(
+    effect: &motioner_core::Effect,
+    param: motioner_core::EffectParam,
+) -> &motioner_core::Animatable<f64> {
+    match effect.channel_ref(param, None) {
+        Some(motioner_core::EffectChannelRef::Number(value)) => value,
+        _ => panic!("not a number channel"),
+    }
+}
+
+fn number_value(effect: &motioner_core::Effect, param: motioner_core::EffectParam) -> f64 {
+    number_channel(effect, param).value()
+}

@@ -526,17 +526,16 @@ fn shape_gradients_render_across_the_fill() {
 }
 
 #[test]
-#[cfg(not(feature = "engine-text-gradient"))]
-fn text_gradients_are_refused_with_a_typed_unsupported_error() {
+fn text_gradients_render_across_the_line() {
     let _gpu = motioner_testkit::gpu::lock();
-    let Some(mut renderer) = try_renderer(64, 64) else {
+    let Some(mut renderer) = try_renderer(256, 64) else {
         return;
     };
-    let mut document = composition(64, 64, BLACK);
-    let id = add_text(&mut document, "A", 40.0, WHITE, TextAlign::Center);
+    let mut document = composition(256, 64, BLACK);
+    let id = add_text(&mut document, "MOTIONER", 40.0, WHITE, TextAlign::Center);
     let gradient = motioner_core::Gradient::linear(
-        Vec2::new(-20.0, 0.0),
-        Vec2::new(20.0, 0.0),
+        Vec2::new(-120.0, 0.0),
+        Vec2::new(120.0, 0.0),
         [(0.0, RED), (1.0, BLUE)],
     )
     .unwrap();
@@ -547,17 +546,25 @@ fn text_gradients_are_refused_with_a_typed_unsupported_error() {
             motioner_core::ContentValue::Gradient(Some(gradient)),
         )
         .unwrap();
+    set_position(&mut document, id, 128.0, 32.0);
     let plan = evaluate(&document, 0);
     let mut out = Vec::new();
-    let error = renderer.render(&document, &plan, &mut out).unwrap_err();
-    assert_eq!(
-        error,
-        RenderError::Unsupported {
-            feature: motioner_render::Feature::Gradient,
-            node: Some(id)
+    renderer.render(&document, &plan, &mut out).unwrap();
+    let mut reddish = 0u32;
+    let mut bluish = 0u32;
+    for x in 0..256 {
+        for y in 0..64 {
+            let p = pixel(&out, 256, x, y);
+            if i32::from(p[0]) > i32::from(p[2]) + 30 {
+                reddish += 1;
+            }
+            if i32::from(p[2]) > i32::from(p[0]) + 30 {
+                bluish += 1;
+            }
         }
-    );
-    assert!(error.to_string().contains("gradient"));
+    }
+    assert!(reddish > 50, "left of the line should be red: {reddish}");
+    assert!(bluish > 50, "right of the line should be blue: {bluish}");
 }
 
 #[test]
@@ -567,49 +574,71 @@ fn fixed_blend_modes_render_through_layers() {
         return;
     };
     let grey = Color::rgb(128, 128, 128);
+    let source = Color::rgb(192, 192, 192);
     let mut document = composition(64, 64, grey);
-    let id = add_rect(&mut document, 64.0, 64.0, 0.0, filled(grey));
+    let id = add_rect(&mut document, 64.0, 64.0, 0.0, filled(source));
     set_position(&mut document, id, 32.0, 32.0);
+
+    // Normal first: the plain batched path, no layer.
+    let plan = evaluate(&document, 0);
+    let mut normal_frame = Vec::new();
+    renderer
+        .render(&document, &plan, &mut normal_frame)
+        .unwrap();
+    let untouched = pixel(&normal_frame, 64, 32, 32);
+    assert!(
+        (184..=200).contains(&untouched[0]),
+        "normal keeps the source: {untouched:?}"
+    );
+
+    // Multiply opens a layer and darkens the source over the grey backdrop:
+    // linear 0.527 * 0.216 = 0.114 -> 0x5F.
     document.set_blend(id, BlendMode::Multiply).unwrap();
     let plan = evaluate(&document, 0);
     let mut out = Vec::new();
     renderer.render(&document, &plan, &mut out).unwrap();
     let multiplied = pixel(&out, 64, 32, 32);
     assert!(
-        multiplied[0] < 110,
-        "multiply should darken grey: {multiplied:?}"
-    );
-
-    document.set_blend(id, BlendMode::Normal).unwrap();
-    let plan = evaluate(&document, 0);
-    let mut normal = Vec::new();
-    renderer.render(&document, &plan, &mut normal).unwrap();
-    let plain_pixel = pixel(&normal, 64, 32, 32);
-    assert!(
-        (120..=136).contains(&plain_pixel[0]),
-        "normal keeps the grey: {plain_pixel:?}"
+        (88..=104).contains(&multiplied[0]),
+        "multiply should darken the source: {multiplied:?}"
     );
 }
 
 #[test]
-#[cfg(not(feature = "engine-composite"))]
-fn backdrop_blends_are_refused_with_a_typed_unsupported_error() {
+fn backdrop_blend_modes_render_through_layers() {
     let _gpu = motioner_testkit::gpu::lock();
     let Some(mut renderer) = try_renderer(64, 64) else {
         return;
     };
-    let mut document = composition(64, 64, BLACK);
-    let id = add_rect(&mut document, 32.0, 32.0, 0.0, filled(WHITE));
+    // Overlay is conditioned on the straight linear source: 0xC0 is 0.527
+    // linear, above 0.5, so it screens the 0.051 backdrop:
+    // 1 - 2 * (1 - 0.051) * (1 - 0.527) = 0.103 -> 0x5A.
+    let backdrop = Color::rgb(64, 64, 64);
+    let source = Color::rgb(192, 192, 192);
+    let mut document = composition(64, 64, backdrop);
+    let id = add_rect(&mut document, 32.0, 32.0, 0.0, filled(source));
+    set_position(&mut document, id, 32.0, 32.0);
+
+    // Normal first: no layer, the plain batched path.
+    let plan = evaluate(&document, 0);
+    let mut normal_frame = Vec::new();
+    renderer
+        .render(&document, &plan, &mut normal_frame)
+        .unwrap();
+    let untouched = pixel(&normal_frame, 64, 32, 32);
+    assert!(
+        (184..=200).contains(&untouched[0]),
+        "normal keeps the source: {untouched:?}"
+    );
+
+    // Then a backdrop-aware mode, which opens a layer mid-frame.
     document.set_blend(id, BlendMode::Overlay).unwrap();
     let plan = evaluate(&document, 0);
     let mut out = Vec::new();
-    let error = renderer.render(&document, &plan, &mut out).unwrap_err();
-    assert_eq!(
-        error,
-        RenderError::Unsupported {
-            feature: motioner_render::Feature::BlendMode,
-            node: Some(id)
-        }
+    renderer.render(&document, &plan, &mut out).unwrap();
+    let sample = pixel(&out, 64, 32, 32);
+    assert!(
+        (84..=100).contains(&sample[0]),
+        "overlay should screen the dark backdrop: {sample:?}"
     );
-    assert!(error.to_string().contains("blend mode"));
 }

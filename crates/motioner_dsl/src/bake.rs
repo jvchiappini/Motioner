@@ -26,9 +26,9 @@
 use std::collections::BTreeMap;
 
 use motioner_core::{
-    format_number, quote, seconds_of, Document, Ease, FrameRate, NodeContent, NodeId,
-    OverrideAction, OverrideEntry, OverrideSet, OverrideValue, Property, Transform, Vec2, LOCKED,
-    NAME, VISIBLE,
+    format_number, quote, seconds_of, Document, Ease, EffectChannel, EffectParam, FrameRate,
+    NodeContent, NodeId, OverrideAction, OverrideEntry, OverrideSet, OverrideValue, Property,
+    Transform, Vec2, LOCKED, NAME, VISIBLE,
 };
 
 use crate::diagnostic::Span;
@@ -114,7 +114,16 @@ fn is_exact(outcome: &BakeOutcome, expected: &Document) -> bool {
 
 /// A document's observable composition, ignoring provenance identities (which
 /// an in-place edit shifts by design).
-fn semantics(document: &Document) -> Vec<(NodeContent, Transform, bool, Option<usize>)> {
+type Semantics = (
+    NodeContent,
+    Transform,
+    motioner_core::BlendMode,
+    Vec<motioner_core::Effect>,
+    bool,
+    Option<usize>,
+);
+
+fn semantics(document: &Document) -> Vec<Semantics> {
     let index = |id: NodeId| document.nodes().position(|node| node.id() == id);
     document
         .nodes()
@@ -122,6 +131,8 @@ fn semantics(document: &Document) -> Vec<(NodeContent, Transform, bool, Option<u
             (
                 node.content().clone(),
                 node.transform().clone(),
+                node.blend(),
+                node.effects().to_vec(),
                 node.is_visible(),
                 node.parent().and_then(index),
             )
@@ -487,19 +498,31 @@ fn bake_entry(
         );
     };
     match &entry.action {
-        OverrideAction::Set(value) => Ok(format!(
-            "{variable}.{} = {}",
-            entry.property,
-            set_value_text(&entry.property, value)
-        )),
+        OverrideAction::Set(value) => {
+            if entry.property == motioner_core::EFFECTS {
+                let OverrideValue::Text(list) = value else {
+                    return Err("'effects' expects a list of effect kinds".to_owned());
+                };
+                return Ok(format!("{variable}.effect_stack({})", quote(list)));
+            }
+            if let Some(channel) = EffectChannel::from_name(&entry.property) {
+                return effect_set_statement(document, node, variable, channel, value);
+            }
+            Ok(format!(
+                "{variable}.{} = {}",
+                entry.property,
+                set_value_text(&entry.property, value)
+            ))
+        }
         OverrideAction::Key { frame, value, ease } => {
             let (base, axis) = motioner_core::split_property(&entry.property);
             if Property::from_name(base).is_none()
                 && !motioner_core::ContentField::from_name(base)
                     .is_some_and(motioner_core::ContentField::is_animatable)
+                && EffectChannel::from_name(&entry.property).is_none()
             {
                 return Err(format!(
-                    "'{}' is not an animatable transform property or content field",
+                    "'{}' is not an animatable transform property, content field or effect parameter",
                     entry.property
                 ));
             }
@@ -531,6 +554,57 @@ fn bake_entry(
             Err("locks are editor-only and have no program statement".to_owned())
         }
     }
+}
+
+/// `var.effect("kind", param=value)` for an effect parameter override.
+///
+/// An offset axis is folded into the pair with the other axis read from the
+/// baked document, because the DSL takes `offset=(x, y)` as one value.
+fn effect_set_statement(
+    document: &Document,
+    node: NodeId,
+    variable: &str,
+    channel: EffectChannel,
+    value: &OverrideValue,
+) -> Result<String, String> {
+    let kind = quote(channel.kind.name());
+    if channel.param == EffectParam::Offset {
+        let OverrideValue::Number(number) = value else {
+            return Err(format!("'{}' expects a number", channel.name()));
+        };
+        let other_axis = if channel.axis == Some(motioner_core::Axis::X) {
+            motioner_core::Axis::Y
+        } else {
+            motioner_core::Axis::X
+        };
+        let other = document
+            .node(node)
+            .and_then(|node| node.effect(channel.kind))
+            .and_then(|effect| effect.channel_ref(EffectParam::Offset, Some(other_axis)))
+            .map_or(0.0, |channel| match channel {
+                motioner_core::EffectChannelRef::Number(value) => value.value(),
+                motioner_core::EffectChannelRef::Color(_) => 0.0,
+            });
+        let pair = if channel.axis == Some(motioner_core::Axis::X) {
+            (*number, other)
+        } else {
+            (other, *number)
+        };
+        return Ok(format!(
+            "{variable}.effect({kind}, offset=({}, {}))",
+            format_number(pair.0),
+            format_number(pair.1)
+        ));
+    }
+    let value = match value {
+        OverrideValue::Text(text) => quote(text),
+        OverrideValue::Number(number) => format_number(*number),
+        OverrideValue::Vec2(pair) => pair_text(*pair),
+    };
+    Ok(format!(
+        "{variable}.effect({kind}, {}={value})",
+        channel.param.name()
+    ))
 }
 
 fn set_value_text(property: &str, value: &OverrideValue) -> String {
@@ -711,6 +785,85 @@ mod tests {
         assert!(baked.program.contains("size=220"), "{}", baked.program);
         assert!(baked.program.contains("color=\"#00FF88\""));
         assert!(!baked.program.contains(MARKER), "nothing was appended");
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(semantics(&actual), semantics(&before));
+    }
+
+    const EFFECTS_SOURCE: &str = "comp(name=\"T\", width=200, height=100, fps=60, duration=2.0)\ncard = rect(40, 40)\ncard.effect(\"drop_shadow\", opacity=0.5, blur=4)\ncard.effect(\"blur\", radius=2)\n";
+
+    #[test]
+    fn bake_folds_effect_parameters_and_the_stack() {
+        let compiled = compile(EFFECTS_SOURCE);
+        let id = id_of(&compiled, compiled.document.roots()[0]);
+        let set = overrides(&[
+            (
+                &id,
+                "blur.radius",
+                OverrideAction::Set(OverrideValue::Number(6.0)),
+            ),
+            (
+                &id,
+                "drop_shadow.offset.x",
+                OverrideAction::Set(OverrideValue::Number(7.0)),
+            ),
+            (
+                &id,
+                motioner_core::EFFECTS,
+                OverrideAction::Set(OverrideValue::Text("glow,blur".to_owned())),
+            ),
+        ]);
+        let before = expected(&compiled, &set);
+        let baked = bake(
+            EFFECTS_SOURCE,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.overrides.is_empty(), "{baked:?}");
+        assert!(
+            baked.program.contains("effect_stack(\"glow,blur\")"),
+            "{}",
+            baked.program
+        );
+        assert!(
+            baked.program.contains("effect(\"blur\", radius=6)"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(semantics(&actual), semantics(&before));
+    }
+
+    #[test]
+    fn bake_folds_a_keyed_effect_parameter() {
+        let compiled = compile(EFFECTS_SOURCE);
+        let id = id_of(&compiled, compiled.document.roots()[0]);
+        let set = overrides(&[(
+            &id,
+            "blur.radius",
+            OverrideAction::Key {
+                frame: 60,
+                value: OverrideValue::Number(9.0),
+                ease: Ease::Linear,
+            },
+        )]);
+        let before = expected(&compiled, &set);
+        let baked = bake(
+            EFFECTS_SOURCE,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.overrides.is_empty(), "{baked:?}");
+        assert!(
+            baked.program.contains("key(\"blur.radius\", 1, 9)"),
+            "{}",
+            baked.program
+        );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
         assert_eq!(semantics(&actual), semantics(&before));
     }

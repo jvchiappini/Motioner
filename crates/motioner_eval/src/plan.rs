@@ -1,7 +1,7 @@
 //! The render plan: a flat, ordered list of resolved draw items.
 
 use motioner_core::{
-    BlendMode, Color, DashSpec, GradientKind, NodeId, PathGeometry, TextAlign, TrimSpec,
+    BlendMode, Color, DashSpec, GradientKind, NodeId, PathGeometry, TextAlign, TrimSpec, Vec2,
 };
 
 use crate::affine::Affine2;
@@ -125,6 +125,64 @@ pub struct RenderItem {
     pub shape: ItemShape,
 }
 
+/// One effect sampled at the frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EffectValue {
+    /// A tinted, blurred, offset copy of the layer drawn behind it.
+    DropShadow {
+        /// Straight sRGB tint, alpha included.
+        color: Color,
+        /// Offset in pixels, Y down.
+        offset: Vec2,
+        /// Blur radius in pixels.
+        blur: f64,
+        /// Shadow opacity in `0.0..=1.0`.
+        opacity: f64,
+    },
+    /// A Gaussian blur of the layer.
+    Blur {
+        /// Blur radius in pixels.
+        radius: f64,
+    },
+    /// A tinted, blurred copy of the layer added as light around it.
+    Glow {
+        /// Straight sRGB tint, alpha included.
+        color: Color,
+        /// Blur radius in pixels.
+        radius: f64,
+        /// Added light strength.
+        intensity: f64,
+    },
+}
+
+/// A subtree rendered into an offscreen layer before it composites.
+///
+/// The layer wraps `items[start..end]`; the range is the node's whole drawn
+/// subtree in paint order, so layers nest properly.  A layer exists when the
+/// node has an effect chain or a non-normal blend mode; without effects it is
+/// the same per-draw grouping the blend modes have always used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanLayer {
+    /// The node that owns the layer.
+    pub node: NodeId,
+    /// First item index in the layer (inclusive).
+    pub start: usize,
+    /// One past the last item index in the layer (exclusive).
+    pub end: usize,
+    /// How the finished layer composites into its parent.
+    pub blend: BlendMode,
+    /// Effect chain, already sampled at the frame.
+    pub effects: Vec<EffectValue>,
+}
+
+impl PlanLayer {
+    /// Whether the layer wraps no draws (and can be skipped).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.end <= self.start
+    }
+}
+
 /// Everything a renderer needs to draw one frame, in paint order.
 ///
 /// A plan is reused across frames: [`crate::Evaluator::evaluate`] clears
@@ -135,6 +193,8 @@ pub struct RenderPlan {
     pub(crate) height: u32,
     pub(crate) background: Option<Color>,
     pub(crate) items: Vec<RenderItem>,
+    /// Offscreen layers wrapping item ranges, in opening order.
+    pub(crate) layers: Vec<PlanLayer>,
     /// Path geometry referenced by [`ItemShape::Path`] items.
     pub(crate) paths: Vec<ResolvedPath>,
     /// Gradients referenced by [`ResolvedFill::Gradient`] values.
@@ -174,6 +234,28 @@ impl RenderPlan {
     #[must_use]
     pub fn items(&self) -> &[RenderItem] {
         &self.items
+    }
+
+    /// Offscreen layers wrapping item ranges, in opening order.
+    ///
+    /// A renderer walks the items and pushes the layers whose `start` is the
+    /// current index, popping them when the index reaches `end`.  Empty layers
+    /// are already filtered out.
+    #[must_use]
+    pub fn layers(&self) -> &[PlanLayer] {
+        &self.layers
+    }
+
+    /// The first node with an effect chain, if any.
+    ///
+    /// Renderers without effect support report a typed unsupported-feature
+    /// error naming this node.
+    #[must_use]
+    pub fn first_effect_node(&self) -> Option<NodeId> {
+        self.layers
+            .iter()
+            .find(|layer| !layer.effects.is_empty())
+            .map(|layer| layer.node)
     }
 
     /// The resolved path at `index`, when the item references one.

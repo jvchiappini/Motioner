@@ -76,36 +76,25 @@ trait Canvas2d {
         align: EngineTextAlign,
     ) -> Option<LineMetrics>;
 
-    /// Opens an offscreen layer for a group of draws (D-0031).
+    /// Opens an offscreen layer for a group of draws (D-0031, D-0032).
     ///
-    /// `blend` is the node's blend mode; the engine layers only need it to
-    /// decide how the finished layer composites.  Advanced modes are rejected
-    /// before painting unless `engine-composite` is enabled.
-    fn push_layer(&mut self, opacity: f64, blend: motioner_core::BlendMode, depth: f32);
+    /// `blend` selects how the finished layer composites into its parent and
+    /// `effects` is the post-process chain run on the layer before that.
+    /// Returns `false` when the engine rejected the layer (nothing was opened,
+    /// so the caller must not pop it).
+    fn push_layer(
+        &mut self,
+        opacity: f64,
+        blend: motioner_core::BlendMode,
+        depth: f32,
+        effects: &[ferrous_2d::render::Effect2d],
+    ) -> bool;
 
     /// Closes the innermost layer.
     fn pop_layer(&mut self);
 }
 
-/// The engine blend state of a fixed-function node mode.
-///
-/// Backdrop-aware modes never reach this function: they are either refused or
-/// composited through `CompositeMode2d` in the layer push.
-#[cfg_attr(feature = "engine-composite", allow(dead_code))]
-fn fixed_blend(blend: motioner_core::BlendMode) -> ferrous_2d::render::BlendMode2d {
-    use motioner_core::BlendMode;
-    match blend {
-        BlendMode::Add => ferrous_2d::render::BlendMode2d::Add,
-        BlendMode::Multiply => ferrous_2d::render::BlendMode2d::Multiply,
-        BlendMode::Screen => ferrous_2d::render::BlendMode2d::Screen,
-        BlendMode::Normal | BlendMode::Overlay | BlendMode::Darken | BlendMode::Lighten => {
-            ferrous_2d::render::BlendMode2d::Normal
-        }
-    }
-}
-
-/// The engine composite mode of a node mode (feature `engine-composite`).
-#[cfg(feature = "engine-composite")]
+/// The engine composite mode of a node mode (D-0031).
 fn composite_blend(blend: motioner_core::BlendMode) -> ferrous_2d::render::CompositeMode2d {
     use ferrous_2d::render::CompositeMode2d;
     use motioner_core::BlendMode;
@@ -135,13 +124,7 @@ impl Canvas2d for Pure2dHarness {
         color: [f32; 4],
         gradient: Option<u32>,
     ) {
-        #[cfg(feature = "engine-text-gradient")]
         self.draw_text_with_gradient(font, text, transform, size_px, align, color, gradient);
-        #[cfg(not(feature = "engine-text-gradient"))]
-        {
-            let _ = gradient;
-            self.draw_text(font, text, transform, size_px, align, color);
-        }
     }
 
     fn measure(
@@ -154,13 +137,20 @@ impl Canvas2d for Pure2dHarness {
         self.measure_text(font, text, size_px, align)
     }
 
-    fn push_layer(&mut self, opacity: f64, blend: motioner_core::BlendMode, depth: f32) {
+    fn push_layer(
+        &mut self,
+        opacity: f64,
+        blend: motioner_core::BlendMode,
+        depth: f32,
+        effects: &[ferrous_2d::render::Effect2d],
+    ) -> bool {
         let opacity = space::to_f32(opacity);
-        #[cfg(feature = "engine-composite")]
         let desc = ferrous_2d::render::Layer2d::new(opacity, composite_blend(blend), depth);
-        #[cfg(not(feature = "engine-composite"))]
-        let desc = ferrous_2d::render::Layer2d::new(opacity, fixed_blend(blend), depth);
-        let _ = Pure2dHarness::push_layer(self, desc);
+        if effects.is_empty() {
+            Pure2dHarness::push_layer(self, desc).is_ok()
+        } else {
+            Pure2dHarness::push_layer_with_effects(self, desc, effects).is_ok()
+        }
     }
 
     fn pop_layer(&mut self) {
@@ -183,13 +173,7 @@ impl Canvas2d for ferrous_renderer::Renderer {
         color: [f32; 4],
         gradient: Option<u32>,
     ) {
-        #[cfg(feature = "engine-text-gradient")]
         self.draw_text_2d_with_gradient(font, text, transform, size_px, align, color, gradient);
-        #[cfg(not(feature = "engine-text-gradient"))]
-        {
-            let _ = gradient;
-            self.draw_text_2d(font, text, transform, size_px, align, color);
-        }
     }
 
     fn measure(
@@ -202,13 +186,20 @@ impl Canvas2d for ferrous_renderer::Renderer {
         self.measure_text_2d(font, text, size_px, align)
     }
 
-    fn push_layer(&mut self, opacity: f64, blend: motioner_core::BlendMode, depth: f32) {
+    fn push_layer(
+        &mut self,
+        opacity: f64,
+        blend: motioner_core::BlendMode,
+        depth: f32,
+        effects: &[ferrous_2d::render::Effect2d],
+    ) -> bool {
         let opacity = space::to_f32(opacity);
-        #[cfg(feature = "engine-composite")]
         let desc = ferrous_2d::render::Layer2d::new(opacity, composite_blend(blend), depth);
-        #[cfg(not(feature = "engine-composite"))]
-        let desc = ferrous_2d::render::Layer2d::new(opacity, fixed_blend(blend), depth);
-        let _ = ferrous_renderer::Renderer::push_layer_2d(self, desc);
+        if effects.is_empty() {
+            ferrous_renderer::Renderer::push_layer_2d(self, desc).is_ok()
+        } else {
+            ferrous_renderer::Renderer::push_layer_2d_with_effects(self, desc, effects).is_ok()
+        }
     }
 
     fn pop_layer(&mut self) {
@@ -282,10 +273,9 @@ pub struct FrameStats {
 /// A drawing feature the pinned engine cannot render yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
-    /// Per-glyph gradient fills in the text pass (pending the engine pin).
-    Gradient,
-    /// A node blend mode that needs backdrop compositing (D-0031).
-    BlendMode,
+    /// A node effect (drop shadow, blur, glow). Not raised since the engine
+    /// pin carries the effect passes; kept for future pin gaps.
+    Effect,
 }
 
 impl Feature {
@@ -293,8 +283,7 @@ impl Feature {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Gradient => "gradient",
-            Self::BlendMode => "blend mode",
+            Self::Effect => "effect",
         }
     }
 }
@@ -352,12 +341,12 @@ impl fmt::Display for RenderError {
             Self::Unsupported { feature, node } => match node {
                 Some(node) => write!(
                     f,
-                    "{} is not supported by the pinned engine yet (node {node}); see D-0030",
+                    "{} is not supported by the pinned engine yet (node {node}); see D-0032",
                     feature.name()
                 ),
                 None => write!(
                     f,
-                    "{} is not supported by the pinned engine yet; see D-0030",
+                    "{} is not supported by the pinned engine yet; see D-0032",
                     feature.name()
                 ),
             },
