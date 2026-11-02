@@ -4,6 +4,9 @@
 //! [`RenderError::NoAdapter`] the test prints the reason and returns, so
 //! CPU-only machines pass without `#[ignore]`. Any other creation error fails.
 
+// Test bodies declare their own W/H constants after taking the GPU lock.
+#![allow(clippy::items_after_statements)]
+
 use motioner_core::{
     Color, Composition, Document, Frame, FrameRate, NodeContent, NodeId, Paint, Property,
     PropertyValue, Stroke, TextAlign, TextContent, Vec2,
@@ -198,6 +201,7 @@ fn render_single_text(
 
 #[test]
 fn background_fills_the_frame() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 64;
     const H: u32 = 48;
     let Some(mut renderer) = try_renderer(W, H) else {
@@ -249,6 +253,7 @@ fn text_then_shapes(renderer: &mut FrameRenderer) -> Vec<u8> {
 
 #[test]
 fn painter_order_is_plan_order() {
+    let _gpu = motioner_testkit::gpu::lock();
     let Some(mut renderer) = try_renderer(300, 300) else {
         return;
     };
@@ -271,6 +276,7 @@ fn painter_order_is_plan_order() {
 
 #[test]
 fn y_axis_points_down() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 300;
     const H: u32 = 300;
     let Some(mut renderer) = try_renderer(W, H) else {
@@ -290,6 +296,7 @@ fn y_axis_points_down() {
 
 #[test]
 fn rotation_and_parent_scale() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 400;
     const H: u32 = 400;
     let Some(mut renderer) = try_renderer(W, H) else {
@@ -316,6 +323,7 @@ fn rotation_and_parent_scale() {
 
 #[test]
 fn stroke_is_centered_on_the_edge() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 400;
     const H: u32 = 400;
     let Some(mut renderer) = try_renderer(W, H) else {
@@ -338,6 +346,7 @@ fn stroke_is_centered_on_the_edge() {
 
 #[test]
 fn opacity_and_linear_color() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 400;
     const H: u32 = 400;
     let Some(mut renderer) = try_renderer(W, H) else {
@@ -362,6 +371,7 @@ fn opacity_and_linear_color() {
 
 #[test]
 fn text_is_upright() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 500;
     const H: u32 = 500;
     let Some(mut renderer) = try_renderer(W, H) else {
@@ -386,6 +396,7 @@ fn text_is_upright() {
 
 #[test]
 fn text_baseline_and_alignment() {
+    let _gpu = motioner_testkit::gpu::lock();
     const W: u32 = 500;
     const H: u32 = 500;
     const ORIGIN: f64 = 250.0;
@@ -457,6 +468,7 @@ fn text_baseline_and_alignment() {
 
 #[test]
 fn same_frame_twice_is_identical() {
+    let _gpu = motioner_testkit::gpu::lock();
     let source = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/hello.motion"
@@ -480,4 +492,39 @@ fn same_frame_twice_is_identical() {
         .unwrap();
     assert_eq!(first.len(), second.len());
     assert_eq!(Sha256::digest(&first), Sha256::digest(&second));
+}
+
+#[test]
+#[cfg(not(feature = "engine-gradients"))]
+fn gradients_are_refused_with_a_typed_unsupported_error() {
+    let _gpu = motioner_testkit::gpu::lock();
+    let Some(mut renderer) = try_renderer(64, 64) else {
+        return;
+    };
+    let mut document = composition(64, 64, BLACK);
+    let id = add_rect(&mut document, 40.0, 40.0, 0.0, filled(WHITE));
+    let gradient = motioner_core::Gradient::linear(
+        Vec2::new(-20.0, 0.0),
+        Vec2::new(20.0, 0.0),
+        [(0.0, RED), (1.0, BLUE)],
+    )
+    .unwrap();
+    document
+        .set_content(
+            id,
+            motioner_core::ContentField::Fill,
+            motioner_core::ContentValue::Gradient(Some(gradient)),
+        )
+        .unwrap();
+    let plan = evaluate(&document, 0);
+    let mut out = Vec::new();
+    let error = renderer.render(&document, &plan, &mut out).unwrap_err();
+    assert_eq!(
+        error,
+        RenderError::Unsupported {
+            feature: motioner_render::Feature::Gradient,
+            node: Some(id)
+        }
+    );
+    assert!(error.to_string().contains("gradient"));
 }

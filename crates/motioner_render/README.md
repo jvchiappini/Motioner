@@ -197,6 +197,28 @@ draw-on line stays pickable.
 `lyon_tessellation` is the only geometry dependency (D-0029); it is already
 in the engine's build graph and adds no new crate to the lockfile.
 
+## Gradients
+
+`ItemShape::Rect`, `Circle`, `Path` and `Text` carry a `ResolvedPaint` whose
+fill/stroke are `ResolvedFill::Solid(Color)` or `ResolvedFill::Gradient(index)`
+into the plan's gradient arena. The evaluator samples each stop's offset and
+colour, clamps the offsets to `0..1` and sorts them (D-0030).
+
+`gradients::GradientTable` turns the arena into the engine's flat vec4 table
+(headers, world-space geometry and one colour/offset pair per stop). The
+transform of the item that owns a gradient maps its local geometry into
+composition space, so a ramp follows its node. A radial gradient under a
+non-uniform scale uses the x-axis scale (the engine pass draws a circle).
+
+The pinned engine has no per-pixel gradient in the Pure2D pass, so
+`FrameRenderer::render` returns `RenderError::Unsupported {
+Feature::Gradient, node }` when the plan uses one; nothing silently falls
+back to a solid colour. The `engine-gradients` feature uploads the table and
+attaches a base to every shape instance; it requires the engine commit that
+adds `ShapeInstance::with_gradient` and OT table, so it stays off until the
+pin moves. Text gradients are the remaining engine piece and are refused
+even with the feature.
+
 ## Radius and stroke approximations
 
 Corner radii and stroke widths are authored in local pixels and converted to

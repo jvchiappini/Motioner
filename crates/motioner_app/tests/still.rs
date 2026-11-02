@@ -18,6 +18,7 @@ fn temp_dir() -> PathBuf {
 
 #[test]
 fn still_writes_a_1920x1080_png() -> Result<(), Box<dyn Error>> {
+    let _gpu = motioner_testkit::gpu::lock();
     match FrameRenderer::new(1920, 1080) {
         Ok(_) => {}
         Err(RenderError::NoAdapter { message }) => {

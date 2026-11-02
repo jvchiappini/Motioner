@@ -95,7 +95,7 @@ pub enum CoreError {
         /// The node kind ("rect", "text", ...).
         kind: &'static str,
         /// The rejected field name.
-        field: &'static str,
+        field: String,
     },
     /// An axis was given for a scalar property, or a vector write omitted it.
     WrongAxis {
@@ -104,10 +104,15 @@ pub enum CoreError {
         /// The axis suffix, when one was given.
         axis: Option<&'static str>,
     },
+    /// A gradient whose geometry or stops are invalid (D-0030).
+    InvalidGradient {
+        /// Why it was rejected.
+        reason: &'static str,
+    },
     /// A content value of the wrong shape or out of range.
     InvalidContentValue {
         /// The rejected field name.
-        field: &'static str,
+        field: String,
         /// Why it was rejected.
         reason: &'static str,
     },
@@ -178,6 +183,7 @@ impl fmt::Display for CoreError {
                 Some(axis) => write!(f, "property '{property}' has no axis '{axis}'"),
                 None => write!(f, "property '{property}' needs an axis ('x' or 'y')"),
             },
+            Self::InvalidGradient { reason } => write!(f, "invalid gradient: {reason}"),
             Self::InvalidContentValue { field, reason } => {
                 write!(f, "'{field}' is invalid: {reason}")
             }

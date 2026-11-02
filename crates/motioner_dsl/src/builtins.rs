@@ -6,7 +6,9 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use crate::host::{as_integer, bind, f64_from_i64, CallArgs, HostError, HostResult};
+use motioner_core::{Gradient, GradientKind, GradientStop};
+
+use crate::host::{as_integer, as_vec2, bind, f64_from_i64, CallArgs, HostError, HostResult};
 use crate::limits::{Budget, Limits};
 use crate::value::{Builtin, RangeValue, Value};
 
@@ -67,6 +69,7 @@ pub(crate) fn call(
             }
             Ok(Value::Number(value.clamp(low, high)))
         }
+        Builtin::LinearGradient | Builtin::RadialGradient => gradient(builtin, args, budget),
         Builtin::Comp
         | Builtin::Group
         | Builtin::Rect
@@ -80,6 +83,104 @@ pub(crate) fn call(
             builtin.name()
         ))),
     }
+}
+
+/// `linear_gradient(start, end, stops)` / `radial_gradient(center, radius,
+/// stops)` (D-0030).
+fn gradient(builtin: Builtin, args: CallArgs, budget: &mut Budget) -> HostResult<Value> {
+    let linear = builtin == Builtin::LinearGradient;
+    let (name, params) = if linear {
+        ("linear_gradient", ["start", "end", "stops"])
+    } else {
+        ("radial_gradient", ["center", "radius", "stops"])
+    };
+    let bound = bind(name, &params, 3, args)?;
+    let kind = if linear {
+        let start = vec_or_default(bound.get(0), name, "start")?;
+        let end = vec_or_default(bound.get(1), name, "end")?;
+        GradientKind::Linear { start, end }
+    } else {
+        let center = vec_or_default(bound.get(0), name, "center")?;
+        let radius = bound.number(1)?;
+        GradientKind::Radial { center, radius }
+    };
+    let stops = gradient_stops(bound.get(2), name, budget)?;
+    let gradient = Gradient::new(kind, stops)
+        .map_err(|error| HostError::value_error(format!("{name}(): {error}")))?;
+    Ok(Value::Gradient(Rc::new(gradient)))
+}
+
+fn vec_or_default(
+    value: Option<&Value>,
+    function: &str,
+    param: &str,
+) -> HostResult<motioner_core::Vec2> {
+    let Some(value) = value else {
+        return Err(HostError::type_error(format!(
+            "{function}() is missing required argument '{param}'"
+        )));
+    };
+    as_vec2(value).ok_or_else(|| {
+        HostError::type_error(format!(
+            "{function}(): '{param}' expects an (x, y) pair, got {}",
+            value.type_name()
+        ))
+    })
+}
+
+/// Parses `[(offset, "#rrggbb"), ...]` stops.
+fn gradient_stops(
+    value: Option<&Value>,
+    function: &str,
+    budget: &mut Budget,
+) -> HostResult<Vec<GradientStop>> {
+    let Some(value) = value else {
+        return Err(HostError::type_error(format!(
+            "{function}() is missing required argument 'stops'"
+        )));
+    };
+    let items = match value {
+        Value::List(items) | Value::Tuple(items) => items.borrow().clone(),
+        other => {
+            return Err(HostError::type_error(format!(
+                "{function}(): 'stops' must be a list of (offset, colour) pairs, got {}",
+                other.type_name()
+            )))
+        }
+    };
+    budget.charge_items(items.len())?;
+    items
+        .iter()
+        .map(|item| {
+            let pair = match item {
+                Value::List(pair) | Value::Tuple(pair) => pair.borrow().clone(),
+                other => {
+                    return Err(HostError::type_error(format!(
+                        "{function}(): a stop must be an (offset, colour) pair, got {}",
+                        other.type_name()
+                    )))
+                }
+            };
+            let [offset, color] = pair.as_slice() else {
+                return Err(HostError::value_error(format!(
+                    "{function}(): a stop must be an (offset, colour) pair"
+                )));
+            };
+            let Value::Number(offset) = offset else {
+                return Err(HostError::type_error(format!(
+                    "{function}(): a stop offset must be a number"
+                )));
+            };
+            let Value::Str(color) = color else {
+                return Err(HostError::type_error(format!(
+                    "{function}(): a stop colour must be a string"
+                )));
+            };
+            let color = motioner_core::Color::parse_hex(color)
+                .map_err(|error| HostError::value_error(format!("{function}(): {error}")))?;
+            Ok(GradientStop::new(*offset, color))
+        })
+        .collect()
 }
 
 /// Number of items in a string (characters), list, tuple or range.

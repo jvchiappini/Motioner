@@ -104,7 +104,7 @@ impl Editor {
                     .unwrap_or(Ease::Linear);
                 vec![EditCommand::SetKey {
                     id: id.clone(),
-                    property: channel.base().to_owned(),
+                    property: channel.base().clone(),
                     axis: channel.axis(),
                     frame: at,
                     value,
@@ -117,7 +117,7 @@ impl Editor {
                 existing_key(document, node, channel, at, id, property)?;
                 vec![EditCommand::RemoveKey {
                     id: id.clone(),
-                    property: channel.base().to_owned(),
+                    property: channel.base().clone(),
                     axis: channel.axis(),
                     frame: at,
                 }]
@@ -193,7 +193,7 @@ impl Editor {
                 let (node, channel) = channels::resolve(document, id, property)?;
                 vec![EditCommand::ToggleStopwatch {
                     id: id.clone(),
-                    property: channel.base().to_owned(),
+                    property: channel.base().clone(),
                     axis: channel.axis(),
                     frame,
                     value: channels::sampled(document, node, channel, frame)
@@ -225,7 +225,7 @@ impl Editor {
                     .filter(|channel| !channels::keys(document, node, *channel).contains(&frame))
                     .map(|channel| EditCommand::SetKey {
                         id: id.clone(),
-                        property: channel.base().to_owned(),
+                        property: channel.base().clone(),
                         axis: channel.axis(),
                         frame,
                         value: channels::sampled(document, node, channel, frame)
@@ -374,14 +374,14 @@ fn toggle_key(
     if channels::keys(document, node, channel).contains(&frame) {
         EditCommand::RemoveKey {
             id: id.to_owned(),
-            property: channel.base().to_owned(),
+            property: channel.base().clone(),
             axis: channel.axis(),
             frame,
         }
     } else {
         EditCommand::SetKey {
             id: id.to_owned(),
-            property: channel.base().to_owned(),
+            property: channel.base().clone(),
             axis: channel.axis(),
             frame,
             value: channels::sampled(document, node, channel, frame)
@@ -526,7 +526,7 @@ fn edit_value(
         .into_iter()
         .map(|(channel, value)| EditCommand::SetKey {
             id: id.to_owned(),
-            property: channel.base().to_owned(),
+            property: channel.base().clone(),
             axis: channel.axis(),
             frame,
             value,

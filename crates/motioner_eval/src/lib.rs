@@ -13,4 +13,7 @@ mod plan;
 pub use affine::Affine2;
 pub use curve::{ease, sample, sample_vec2, Interpolate};
 pub use evaluate::Evaluator;
-pub use plan::{ItemShape, RenderItem, RenderPlan, ResolvedPath};
+pub use plan::{
+    ItemShape, RenderItem, RenderPlan, ResolvedFill, ResolvedGradient, ResolvedPaint, ResolvedPath,
+    ResolvedStop, ResolvedStroke,
+};

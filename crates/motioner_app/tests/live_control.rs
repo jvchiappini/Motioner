@@ -38,6 +38,7 @@ fn ctl(endpoint: &Path, request: &str) -> String {
 
 #[test]
 fn ctl_drives_a_running_editor() {
+    let _gpu = motioner_testkit::gpu::lock();
     match FrameRenderer::new(64, 64) {
         Ok(_) => {}
         Err(RenderError::NoAdapter { message }) => {

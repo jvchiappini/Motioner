@@ -10,8 +10,8 @@
 //! input, no window, no GPU.
 
 use motioner_core::{
-    Color, Composition, ContentField, Document, Frame, NodeContent, NodeId, OverrideSet, Property,
-    TextAlign, Transform,
+    Color, Composition, ContentField, ContentValue, Document, Frame, NodeContent, NodeId,
+    OverrideSet, Property, TextAlign, Transform,
 };
 use motioner_eval::sample;
 
@@ -64,7 +64,7 @@ pub struct Field {
     /// What an edit writes.
     pub target: FieldTarget,
     /// Short label inside the field ("X", "W", "").
-    pub label: &'static str,
+    pub label: String,
     /// The property value (scale 1.0, opacity 0.0..=1.0).
     pub value: f64,
     /// The text shown and edited (percent for scale and opacity).
@@ -99,7 +99,7 @@ impl ChannelTarget {
     pub fn name(self) -> String {
         match self {
             Self::Transform(property, axis) => crate::editor::channel_name(property, axis),
-            Self::Content(field) => field.name().to_owned(),
+            Self::Content(field) => field.name().clone(),
         }
     }
 }
@@ -170,7 +170,7 @@ pub struct Row {
     /// Section this row belongs to; the panel draws a header when it changes.
     pub section: &'static str,
     /// Row label.
-    pub label: &'static str,
+    pub label: String,
     /// The value(s).
     pub value: RowValue,
     /// Animatable channel, when the row has a stopwatch and diamonds.
@@ -224,7 +224,7 @@ fn field(
 ) -> Field {
     Field {
         target,
-        label,
+        label: label.to_owned(),
         value,
         text: display(value, factor),
         factor,
@@ -265,13 +265,13 @@ fn content_channel(
 }
 fn row(
     section: &'static str,
-    label: &'static str,
+    label: impl Into<String>,
     value: RowValue,
     channel: Option<Channel>,
 ) -> Row {
     Row {
         section,
-        label,
+        label: label.into(),
         value,
         channel,
     }
@@ -544,7 +544,7 @@ fn text_rows(
     text: &motioner_core::TextContent,
     frame: Frame,
 ) -> Vec<Row> {
-    vec![
+    let mut rows = vec![
         row(
             "Text",
             "Text",
@@ -587,51 +587,91 @@ fn text_rows(
             },
             None,
         ),
-    ]
+    ];
+    if let Some(gradient) = &text.gradient {
+        rows.extend(gradient_rows(
+            document,
+            node,
+            frame,
+            "Text",
+            motioner_core::PaintSlot::Fill,
+            gradient.len(),
+        ));
+    }
+    rows
 }
 
 fn paint_rows(document: &Document, node: NodeId, frame: Frame, fill: bool) -> Vec<Row> {
     let mut rows = Vec::new();
+    let content = document.node(node).map(motioner_core::Node::content);
     if fill {
-        rows.push(match colour_of(document, node, ContentField::Fill, frame) {
-            Some(color) => row(
-                "Fill",
-                "Fill",
-                RowValue::Color {
-                    target: FieldTarget::Content(ContentField::Fill),
-                    color,
-                    text: hex(color),
-                },
-                Some(content_channel(document, node, ContentField::Fill, frame)),
-            ),
-            None => row(
-                "Fill",
-                "Fill",
-                RowValue::ReadOnly("None".to_owned()),
-                Some(content_channel(document, node, ContentField::Fill, frame)),
-            ),
+        let stops = content.map_or(0, |content| {
+            content.gradient_stop_count(motioner_core::PaintSlot::Fill)
         });
+        if stops > 0 {
+            rows.extend(gradient_rows(
+                document,
+                node,
+                frame,
+                "Fill",
+                motioner_core::PaintSlot::Fill,
+                stops,
+            ));
+        } else {
+            rows.push(match colour_of(document, node, ContentField::Fill, frame) {
+                Some(color) => row(
+                    "Fill",
+                    "Fill",
+                    RowValue::Color {
+                        target: FieldTarget::Content(ContentField::Fill),
+                        color,
+                        text: hex(color),
+                    },
+                    Some(content_channel(document, node, ContentField::Fill, frame)),
+                ),
+                None => row(
+                    "Fill",
+                    "Fill",
+                    RowValue::ReadOnly("None".to_owned()),
+                    Some(content_channel(document, node, ContentField::Fill, frame)),
+                ),
+            });
+        }
     }
-    rows.push(
-        match colour_of(document, node, ContentField::Stroke, frame) {
-            Some(color) => row(
-                "Fill",
-                "Stroke",
-                RowValue::Color {
-                    target: FieldTarget::Content(ContentField::Stroke),
-                    color,
-                    text: hex(color),
-                },
-                Some(content_channel(document, node, ContentField::Stroke, frame)),
-            ),
-            None => row(
-                "Fill",
-                "Stroke",
-                RowValue::ReadOnly("None".to_owned()),
-                Some(content_channel(document, node, ContentField::Stroke, frame)),
-            ),
-        },
-    );
+    let stroke_stops = content.map_or(0, |content| {
+        content.gradient_stop_count(motioner_core::PaintSlot::Stroke)
+    });
+    if stroke_stops > 0 {
+        rows.extend(gradient_rows(
+            document,
+            node,
+            frame,
+            "Stroke",
+            motioner_core::PaintSlot::Stroke,
+            stroke_stops,
+        ));
+    } else {
+        rows.push(
+            match colour_of(document, node, ContentField::Stroke, frame) {
+                Some(color) => row(
+                    "Fill",
+                    "Stroke",
+                    RowValue::Color {
+                        target: FieldTarget::Content(ContentField::Stroke),
+                        color,
+                        text: hex(color),
+                    },
+                    Some(content_channel(document, node, ContentField::Stroke, frame)),
+                ),
+                None => row(
+                    "Fill",
+                    "Stroke",
+                    RowValue::ReadOnly("None".to_owned()),
+                    Some(content_channel(document, node, ContentField::Stroke, frame)),
+                ),
+            },
+        );
+    }
     rows.push(row(
         "Fill",
         "Width",
@@ -649,6 +689,69 @@ fn paint_rows(document: &Document, node: NodeId, frame: Frame, fill: bool) -> Ve
             frame,
         )),
     ));
+    rows
+}
+
+/// Rows for one gradient: a summary line and an offset/colour pair per stop
+/// (D-0030). Every stop part is an ordinary content channel, so its row has
+/// the same stopwatch and diamonds as `fill`.
+fn gradient_rows(
+    document: &Document,
+    node: NodeId,
+    frame: Frame,
+    section: &'static str,
+    slot: motioner_core::PaintSlot,
+    stops: usize,
+) -> Vec<Row> {
+    let kind = document
+        .node(node)
+        .and_then(|node| {
+            node.content().static_value(match slot {
+                motioner_core::PaintSlot::Fill => ContentField::Fill,
+                motioner_core::PaintSlot::Stroke => ContentField::Stroke,
+            })
+        })
+        .and_then(|value| match value {
+            ContentValue::Gradient(Some(gradient)) => Some(gradient.kind().name()),
+            _ => None,
+        })
+        .unwrap_or("linear");
+    let mut rows = vec![row(
+        section,
+        "Gradient",
+        RowValue::ReadOnly(format!("{kind}, {stops} stops")),
+        None,
+    )];
+    for index in 0..stops {
+        let Ok(index) = u8::try_from(index) else {
+            break;
+        };
+        let offset = ContentField::stop_field(slot, motioner_core::StopPart::Offset, index);
+        let color = ContentField::stop_field(slot, motioner_core::StopPart::Color, index);
+        rows.push(row(
+            section,
+            format!("Stop {index} Offset"),
+            RowValue::Single(field(
+                FieldTarget::Content(offset),
+                "",
+                number_or_zero(document, node, offset, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, offset, frame)),
+        ));
+        let sampled = colour_of(document, node, color, frame);
+        rows.push(row(
+            section,
+            format!("Stop {index} Colour"),
+            RowValue::Color {
+                target: FieldTarget::Content(color),
+                color: sampled.unwrap_or(Color::WHITE),
+                text: sampled.map_or_else(String::new, hex),
+            },
+            Some(content_channel(document, node, color, frame)),
+        ));
+    }
     rows
 }
 
@@ -1157,7 +1260,7 @@ mod tests {
             .find(|r| r.kind == crate::NodeKind::Rect)
             .unwrap();
         let model = inspect_node(&document, rect.node, 0, None, "Rect 1").unwrap();
-        let labels: Vec<_> = model.rows.iter().map(|r| r.label).collect();
+        let labels: Vec<&str> = model.rows.iter().map(|r| r.label.as_str()).collect();
         assert!(labels.contains(&"Size"));
         assert!(labels.contains(&"Radius"));
         assert!(labels.contains(&"Fill"));

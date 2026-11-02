@@ -7,11 +7,18 @@
 
 use std::rc::Rc;
 
-use motioner_core::{Color, Vec2};
+use motioner_core::{Color, Gradient, Vec2};
 
 use crate::diagnostic::{ErrorCategory, Span};
 use crate::origins::Literal;
 use crate::value::Value;
+
+/// A paint argument: a solid colour or a gradient (D-0030).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PaintInput {
+    Color(Color),
+    Gradient(Rc<Gradient>),
+}
 
 /// A host-side error. The interpreter attaches the span and call stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +182,23 @@ impl Bound<'_> {
     }
 
     /// A color string, `None`, or the default when omitted.
+    /// A colour, a gradient, or `None` for a paint argument (D-0030).
+    pub fn optional_paint(
+        &self,
+        index: usize,
+        default: Option<PaintInput>,
+    ) -> HostResult<Option<PaintInput>> {
+        match self.get(index) {
+            None => Ok(default),
+            Some(Value::None) => Ok(None),
+            Some(Value::Str(s)) => Color::parse_hex(s)
+                .map(|color| Some(PaintInput::Color(color)))
+                .map_err(|e| HostError::value_error(format!("{}(): {e}", self.function))),
+            Some(Value::Gradient(gradient)) => Ok(Some(PaintInput::Gradient(Rc::clone(gradient)))),
+            Some(other) => Err(self.mismatch(index, "a colour, a gradient or None", other)),
+        }
+    }
+
     pub fn optional_color(
         &self,
         index: usize,

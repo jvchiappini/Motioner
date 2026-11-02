@@ -1,0 +1,48 @@
+# mdf: 0.1
+#
+# Phase 3 example: linear and radial gradients with animatable stops (D-0030).
+# Render with:
+#   cargo run -p motioner_app -- render examples/gradients.motion --out out/gradients.mp4
+
+comp(name="Gradients", width=960, height=540, fps=60, duration=2.0,
+     background="#0A0912")
+
+# A big card with a three-stop linear gradient and a soft radial sheen on top.
+card = rect(560, 320, radius=28,
+            fill=linear_gradient(start=(-280, -160), end=(280, 160),
+                                 stops=[(0, "#141026"), (0.55, "#3A2A6B"), (1, "#FF5A6E")]))
+card.id("card")
+card.pos = (480, 270)
+
+# The highlight rotates its stops while the card sits still.
+sheen = circle(150,
+               fill=radial_gradient(center=(0, 0), radius=150,
+                                    stops=[(0, "#FFFFFFB0"), (0.45, "#7C5CFF50"), (1, "#00000000")]))
+sheen.id("sheen")
+sheen.pos = (360, 210)
+sheen.key("fill_stop1_offset", 0.0, 0.35, ease="cubic_in_out")
+sheen.key("fill_stop1_offset", 2.0, 0.6, ease="cubic_in_out")
+
+# A gradient-stroked hexagon: the stroke stops animate too.
+ring = polygon(6, 120, fill=None,
+               stroke=linear_gradient(start=(0, -120), end=(0, 120),
+                                      stops=[(0, "#5CDBC5"), (1, "#FF5A6E")]),
+               stroke_width=10, join="round")
+ring.id("ring")
+ring.pos = (760, 350)
+ring.key("rotation", 0.0, 0.0)
+ring.key("rotation", 2.0, 60.0, ease="linear")
+
+# A half-drawn gradient ribbon: trim plus a moving gradient window.
+ribbon = path([(-200, 0), (-100, -60, 0, 0, 40, 40), (0, 0),
+               (100, 60, -40, -30, 0, 0), (200, 0)],
+              closed=False, fill=None,
+              stroke=linear_gradient(start=(-200, 0), end=(200, 0),
+                                     stops=[(0, "#16121F"), (0.5, "#7C5CFF"), (1, "#FFFFFF")]),
+              stroke_width=14, cap="round")
+ribbon.id("ribbon")
+ribbon.pos = (480, 470)
+ribbon.key("trim_end", 0.0, 0.05, ease="cubic_out")
+ribbon.key("trim_end", 1.5, 1.0, ease="cubic_out")
+ribbon.key("stroke_stop1_offset", 0.5, 0.2, ease="quad_in_out")
+ribbon.key("stroke_stop1_offset", 2.0, 0.8, ease="quad_in_out")

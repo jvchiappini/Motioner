@@ -125,12 +125,14 @@ impl Editor {
                 continue;
             }
             let channel = channels::Channel::Content(field);
-            channel_json(j, document, node, channel, field.name(), frame, rate);
+            let name = field.name();
+            channel_json(j, document, node, channel, &name, frame, rate);
         }
         j.end_object();
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
-            j.key(field.name());
+            let name = field.name();
+            j.key(&name);
             content_value(j, document, node, field);
         }
         j.end_object();
@@ -336,10 +338,48 @@ fn content_value(
         Some(motioner_core::ContentValue::Color(color)) => {
             j.opt_string(color.map(motioner_core::Color::to_hex).as_deref());
         }
-        None => {
+        Some(motioner_core::ContentValue::Gradient(Some(gradient))) => {
+            gradient_json(j, &gradient);
+        }
+        Some(motioner_core::ContentValue::Gradient(None)) | None => {
             j.null();
         }
     }
+}
+
+/// Writes a gradient as `{"kind": "linear", "start": [x, y], ...}` (D-0030).
+fn gradient_json(j: &mut Json, gradient: &motioner_core::Gradient) {
+    use motioner_core::GradientKind;
+    j.begin_object();
+    j.key("kind").string(gradient.kind().name());
+    match gradient.kind() {
+        GradientKind::Linear { start, end } => {
+            j.key("start").begin_array();
+            j.number(start.x);
+            j.number(start.y);
+            j.end_array();
+            j.key("end").begin_array();
+            j.number(end.x);
+            j.number(end.y);
+            j.end_array();
+        }
+        GradientKind::Radial { center, radius } => {
+            j.key("center").begin_array();
+            j.number(center.x);
+            j.number(center.y);
+            j.end_array();
+            j.key("radius").number(radius);
+        }
+    }
+    j.key("stops").begin_array();
+    for stop in gradient.stops() {
+        j.begin_array();
+        j.number(stop.offset.value());
+        j.string(&stop.color.value().to_hex());
+        j.end_array();
+    }
+    j.end_array();
+    j.end_object();
 }
 
 #[cfg(test)]

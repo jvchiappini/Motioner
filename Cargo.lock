@@ -1738,6 +1738,7 @@ dependencies = [
  "motioner_eval",
  "motioner_io",
  "motioner_render",
+ "motioner_testkit",
  "motioner_ui",
  "png 0.17.16",
 ]
@@ -1779,6 +1780,7 @@ dependencies = [
  "motioner_core",
  "motioner_dsl",
  "motioner_eval",
+ "motioner_testkit",
  "sha2",
  "wgpu",
 ]
@@ -1806,6 +1808,7 @@ dependencies = [
  "motioner_dsl",
  "motioner_eval",
  "motioner_render",
+ "motioner_testkit",
  "png 0.17.16",
  "sha2",
 ]

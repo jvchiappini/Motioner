@@ -418,9 +418,17 @@ fn content_value(field: ContentField, value: &OverrideValue) -> Result<ContentVa
             | ContentField::TrimEnd
             | ContentField::TrimOffset
             | ContentField::Dash
-            | ContentField::DashOffset,
+            | ContentField::DashOffset
+            | ContentField::FillStopOffset(_)
+            | ContentField::StrokeStopOffset(_),
             OverrideValue::Number(n),
         ) => Ok(ContentValue::Number(*n)),
+        (
+            ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_),
+            OverrideValue::Text(text),
+        ) => Color::parse_hex(text)
+            .map(|color| ContentValue::Color(Some(color)))
+            .map_err(|_| "expected a colour like \"#RRGGBB\""),
         (ContentField::Fill | ContentField::Stroke, OverrideValue::Text(text)) => {
             if text.eq_ignore_ascii_case("none") {
                 Ok(ContentValue::Color(None))

@@ -11,8 +11,9 @@
 
 use ferrous_2d::render::ShapeInstance;
 use motioner_core::Color;
-use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan};
+use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan, ResolvedFill, ResolvedPaint};
 
+use crate::gradients::{self, GradientTable};
 use crate::paths::{self, PathCache};
 use crate::{space, Canvas2d};
 
@@ -51,18 +52,35 @@ pub(crate) fn draw_layers(plan: &RenderPlan, shape: &ItemShape) -> u32 {
 /// A zero-width stroke is treated as absent: the engine's inside ring would
 /// otherwise render a thin anti-aliased line on a stroke the document asked
 /// to make invisible.
-fn has_visible_stroke(paint: &motioner_core::Paint) -> bool {
+fn has_visible_stroke(paint: &ResolvedPaint) -> bool {
     paint.stroke.is_some_and(|stroke| stroke.width > 0.0)
+}
+
+/// The colour to draw when the engine cannot render gradients (D-0030).
+///
+/// The headless renderer refuses gradient plans before reaching this point;
+/// the live preview keeps drawing the first stop so the editor stays usable
+/// while the engine pin is not bumped.
+fn paint_color(plan: &RenderPlan, paint: ResolvedFill) -> Color {
+    match paint {
+        ResolvedFill::Solid(color) => color,
+        ResolvedFill::Gradient(index) => plan
+            .gradient(index)
+            .and_then(|gradient| gradient.stops.first())
+            .map_or(Color::WHITE, |stop| stop.color),
+    }
 }
 
 /// Submits the fill and stroke instances of a shape item, in that order.
 ///
 /// Returns the number of instances submitted. `z_index` advances once per
 /// submitted instance so the caller's draw ordering matches [`draw_count`].
+#[allow(clippy::too_many_arguments)] // the plan, the canvas, the table and its caches
 pub(crate) fn draw_item(
     canvas: &mut impl Canvas2d,
     plan: &RenderPlan,
     cache: &mut PathCache,
+    gradients: &GradientTable,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -80,28 +98,26 @@ pub(crate) fn draw_item(
             let mut draws = 0;
             if let Some(fill) = paint.fill {
                 let style = Style {
-                    color: fill,
+                    color: paint_color(plan, fill),
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                canvas.shape(fill_rect(model, width, height, radius, scale, style));
+                canvas.shape(gradients::paint(
+                    fill_rect(model, width, height, radius, scale, style),
+                    gradients::base_of(gradients, fill),
+                ));
                 *z_index += 1;
                 draws += 1;
             }
             if let Some(stroke) = paint.stroke.filter(|stroke| stroke.width > 0.0) {
                 let style = Style {
-                    color: stroke.color,
+                    color: paint_color(plan, stroke.paint),
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                canvas.shape(stroke_rect(
-                    model,
-                    width,
-                    height,
-                    radius,
-                    scale,
-                    style,
-                    stroke.width,
+                canvas.shape(gradients::paint(
+                    stroke_rect(model, width, height, radius, scale, style, stroke.width),
+                    gradients::base_of(gradients, stroke.paint),
                 ));
                 *z_index += 1;
                 draws += 1;
@@ -112,29 +128,35 @@ pub(crate) fn draw_item(
             let mut draws = 0;
             if let Some(fill) = paint.fill {
                 let style = Style {
-                    color: fill,
+                    color: paint_color(plan, fill),
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                canvas.shape(fill_circle(model, radius, scale, style));
+                canvas.shape(gradients::paint(
+                    fill_circle(model, radius, scale, style),
+                    gradients::base_of(gradients, fill),
+                ));
                 *z_index += 1;
                 draws += 1;
             }
             if let Some(stroke) = paint.stroke.filter(|stroke| stroke.width > 0.0) {
                 let style = Style {
-                    color: stroke.color,
+                    color: paint_color(plan, stroke.paint),
                     opacity: item.opacity,
                     z: space::z_for(*z_index, total),
                 };
-                canvas.shape(stroke_circle(model, radius, scale, style, stroke.width));
+                canvas.shape(gradients::paint(
+                    stroke_circle(model, radius, scale, style, stroke.width),
+                    gradients::base_of(gradients, stroke.paint),
+                ));
                 *z_index += 1;
                 draws += 1;
             }
             draws
         }
-        ItemShape::Path { index } => {
-            draw_path(canvas, plan, cache, item, model, index, z_index, total)
-        }
+        ItemShape::Path { index } => draw_path(
+            canvas, plan, cache, gradients, item, model, index, z_index, total,
+        ),
         ItemShape::Text { .. } => 0,
     }
 }
@@ -146,6 +168,7 @@ fn draw_path(
     canvas: &mut impl Canvas2d,
     plan: &RenderPlan,
     cache: &mut PathCache,
+    gradients: &GradientTable,
     item: &RenderItem,
     model: Affine2,
     index: usize,
@@ -158,10 +181,13 @@ fn draw_path(
     let meshes = cache.meshes(item.node, path);
     let mut draws = 0;
     if let Some(fill) = path.paint.fill.filter(|_| !meshes.fill.is_empty()) {
-        let color = space::linear_rgba(fill, item.opacity);
+        let color = space::linear_rgba(paint_color(plan, fill), item.opacity);
         let z = space::z_for(*z_index, total);
         for triangle in &meshes.fill {
-            canvas.shape(paths::instance(model, triangle, color, z));
+            canvas.shape(gradients::paint(
+                paths::instance(model, triangle, color, z),
+                gradients::base_of(gradients, fill),
+            ));
         }
         *z_index += 1;
         #[allow(clippy::cast_possible_truncation)] // triangle counts fit u32
@@ -174,10 +200,13 @@ fn draw_path(
         .stroke
         .filter(|stroke| stroke.width > 0.0 && !meshes.stroke.is_empty())
     {
-        let color = space::linear_rgba(stroke.color, item.opacity);
+        let color = space::linear_rgba(paint_color(plan, stroke.paint), item.opacity);
         let z = space::z_for(*z_index, total);
         for triangle in &meshes.stroke {
-            canvas.shape(paths::instance(model, triangle, color, z));
+            canvas.shape(gradients::paint(
+                paths::instance(model, triangle, color, z),
+                gradients::base_of(gradients, stroke.paint),
+            ));
         }
         *z_index += 1;
         #[allow(clippy::cast_possible_truncation)] // triangle counts fit u32
@@ -302,13 +331,16 @@ fn instance(
         params: [border, corner_radius, 0.0, 1.0],
         ext0: [0.0; 4],
         ext1: 0.0,
+        #[cfg(feature = "engine-gradients")]
+        gradient: 0,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use motioner_core::{Paint, Stroke};
+    use motioner_core::Stroke;
+    use motioner_eval::{ResolvedFill, ResolvedPaint, ResolvedStroke};
 
     fn style() -> Style {
         Style {
@@ -322,8 +354,14 @@ mod tests {
         f64::from((column[0] * column[0] + column[1] * column[1]).sqrt())
     }
 
-    fn rect_paint(fill: Option<Color>, stroke: Option<Stroke>) -> Paint {
-        Paint { fill, stroke }
+    fn rect_paint(fill: Option<Color>, stroke: Option<Stroke>) -> ResolvedPaint {
+        ResolvedPaint {
+            fill: fill.map(ResolvedFill::Solid),
+            stroke: stroke.map(|stroke| ResolvedStroke {
+                paint: ResolvedFill::Solid(stroke.color),
+                width: stroke.width,
+            }),
+        }
     }
 
     #[test]

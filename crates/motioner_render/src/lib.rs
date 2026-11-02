@@ -20,6 +20,7 @@
 
 mod fit;
 mod frame;
+mod gradients;
 mod paths;
 mod shapes;
 mod space;
@@ -193,6 +194,23 @@ pub struct FrameStats {
     pub cpu_ms: f64,
 }
 
+/// A drawing feature the pinned engine cannot render yet (D-0030).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Feature {
+    /// Per-pixel linear/radial gradients with animatable stops.
+    Gradient,
+}
+
+impl Feature {
+    /// Human name used in errors.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Gradient => "gradient",
+        }
+    }
+}
+
 /// Errors returned while creating a renderer or rendering a frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenderError {
@@ -218,6 +236,16 @@ pub enum RenderError {
         /// Underlying readback error.
         message: String,
     },
+    /// The pinned engine cannot draw this feature yet.
+    ///
+    /// The document is valid and evaluated; only the GPU pass is missing.
+    /// Motioner refuses instead of silently drawing the solid fallback.
+    Unsupported {
+        /// The missing feature.
+        feature: Feature,
+        /// The first node that needs it.
+        node: Option<motioner_core::NodeId>,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -233,6 +261,18 @@ impl fmt::Display for RenderError {
             ),
             Self::Font { message } => write!(f, "font registration failed: {message}"),
             Self::Readback { message } => write!(f, "frame readback failed: {message}"),
+            Self::Unsupported { feature, node } => match node {
+                Some(node) => write!(
+                    f,
+                    "{} is not supported by the pinned engine yet (node {node}); see D-0030",
+                    feature.name()
+                ),
+                None => write!(
+                    f,
+                    "{} is not supported by the pinned engine yet; see D-0030",
+                    feature.name()
+                ),
+            },
         }
     }
 }
@@ -366,6 +406,9 @@ impl LivePainter {
             return PaintStats::default();
         }
         let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
+        let gradients = gradients::GradientTable::build(plan, flip);
+        #[cfg(feature = "engine-gradients")]
+        renderer.set_2d_gradient_table(gradients.slots());
         frame::paint_plan(
             renderer,
             document,
@@ -374,6 +417,7 @@ impl LivePainter {
             self.font,
             &mut self.missing_glyphs,
             &mut self.path_cache,
+            &gradients,
         )
     }
 }

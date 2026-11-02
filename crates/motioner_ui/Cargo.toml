@@ -22,6 +22,7 @@ ferrous_font.workspace = true
 [dev-dependencies]
 png.workspace = true
 sha2.workspace = true
+motioner_testkit.workspace = true
 
 [lints]
 workspace = true

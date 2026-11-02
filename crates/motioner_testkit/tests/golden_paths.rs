@@ -48,6 +48,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[test]
 fn paths_match_the_golden_stills() -> Result<(), Box<dyn Error>> {
+    let _gpu = motioner_testkit::gpu::lock();
     let document = motioner_dsl::run(SOURCE, &motioner_dsl::Limits::default())?;
     let mut evaluator = Evaluator::new();
     let mut plan = RenderPlan::new();

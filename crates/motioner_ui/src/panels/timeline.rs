@@ -681,9 +681,10 @@ fn content_row(
         .map_or_else(String::new, |(document, node)| {
             content_text(document, node, field, v.frame)
         });
-    draw_row_controls(p, v, index, row, &row_rect, field.name(), &value, dim);
+    let name = field_label(field);
+    draw_row_controls(p, v, index, row, &row_rect, &name, &value, dim);
     if field.is_animatable() {
-        draw_row_keys(p, v, row, outline, field.name(), rect, dim);
+        draw_row_keys(p, v, row, outline, &name, rect, dim);
     }
 }
 
@@ -745,18 +746,50 @@ fn channel_label(property: Property, axis: Option<motioner_core::Axis>) -> Strin
     }
 }
 
+/// The row label of a content field; gradient stops read as "Stop 0 offset".
+fn field_label(field: motioner_core::ContentField) -> String {
+    match field.stop() {
+        Some((_, part, index)) => {
+            let part = match part {
+                motioner_core::StopPart::Offset => "offset",
+                motioner_core::StopPart::Color => "colour",
+            };
+            format!("Stop {index} {part}")
+        }
+        None => field.name(),
+    }
+}
+
 fn content_text(
     document: &Document,
     node: NodeId,
     field: motioner_core::ContentField,
     frame: Frame,
 ) -> String {
+    if let Some(motioner_core::ContentValue::Gradient(Some(gradient))) = document
+        .node(node)
+        .and_then(|node| node.content().static_value(field))
+    {
+        return format!("{} gradient", gradient.kind().name());
+    }
     match field {
         motioner_core::ContentField::Fill | motioner_core::ContentField::Stroke => {
             match crate::editor::channels::sampled_colour(document, node, field, frame) {
                 crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
                 crate::editor::channels::SampledColour::Absent => "none".to_owned(),
                 crate::editor::channels::SampledColour::NotColour => "n/a".to_owned(),
+            }
+        }
+        motioner_core::ContentField::FillStopOffset(_)
+        | motioner_core::ContentField::StrokeStopOffset(_) => {
+            crate::editor::channels::sampled_number(document, node, field, frame)
+                .map_or_else(|| "n/a".to_owned(), round)
+        }
+        motioner_core::ContentField::FillStopColor(_)
+        | motioner_core::ContentField::StrokeStopColor(_) => {
+            match crate::editor::channels::sampled_colour(document, node, field, frame) {
+                crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
+                _ => "n/a".to_owned(),
             }
         }
         motioner_core::ContentField::StrokeWidth

@@ -6,10 +6,11 @@ use crate::animation::{Animatable, AnimatableVec2, Axis, Ease, Keyframe};
 use crate::bounds;
 use crate::color::Color;
 use crate::error::CoreError;
+use crate::gradient::{PaintSlot, StopPart};
 use crate::math::Vec2;
 use crate::node::{
-    BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, Property,
-    PropertyValue, Transform,
+    BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, PaintSpec,
+    Property, PropertyValue, Transform,
 };
 use crate::time::{frame_within_bounds, Frame, FrameRate};
 
@@ -275,7 +276,7 @@ impl Document {
     ) -> Result<(), CoreError> {
         let (kind, accepts) = {
             let node = self.require(id)?;
-            (node.content.kind_name(), node.content.accepts(field))
+            (node.content.kind_name(), node.content.field_exists(field))
         };
         if !accepts {
             return Err(CoreError::WrongContentField {
@@ -310,7 +311,7 @@ impl Document {
             return Err(CoreError::FrameOutOfRange { frame });
         }
         let content = self.require(id)?.content.clone();
-        if !content.accepts(field) {
+        if !content.field_exists(field) {
             return Err(CoreError::WrongContentField {
                 kind: content.kind_name(),
                 field: field.name(),
@@ -349,7 +350,7 @@ impl Document {
             return Err(CoreError::FrameOutOfRange { frame });
         }
         let content = self.require(id)?.content.clone();
-        if !content.accepts(field) || !field.is_animatable() {
+        if !content.field_exists(field) || !field.is_animatable() {
             return Err(CoreError::WrongContentField {
                 kind: content.kind_name(),
                 field: field.name(),
@@ -704,6 +705,7 @@ fn content_static_write(
             | NodeContent::Circle { paint, .. }
             | NodeContent::Path { paint, .. } => {
                 paint.fill.set_value(color);
+                paint.fill_gradient = None;
                 Ok(())
             }
             _ => Err(wrong_kind(content, field)),
@@ -713,13 +715,44 @@ fn content_static_write(
             | NodeContent::Circle { paint, .. }
             | NodeContent::Path { paint, .. } => {
                 paint.stroke.set_value(color);
+                paint.stroke_gradient = None;
                 Ok(())
             }
             _ => Err(wrong_kind(content, field)),
         },
+        (ContentField::Fill, ContentValue::Gradient(gradient)) => match content {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => set_gradient(paint, PaintSlot::Fill, gradient),
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Stroke, ContentValue::Gradient(gradient)) => match content {
+            NodeContent::Rect { paint, .. }
+            | NodeContent::Circle { paint, .. }
+            | NodeContent::Path { paint, .. } => set_gradient(paint, PaintSlot::Stroke, gradient),
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Color, ContentValue::Gradient(gradient)) => match content {
+            NodeContent::Text(text) => {
+                if let Some(value) = &gradient {
+                    text.color.set_value(value.fallback_color());
+                }
+                text.gradient = gradient;
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (
+            ContentField::FillStopOffset(_)
+            | ContentField::FillStopColor(_)
+            | ContentField::StrokeStopOffset(_)
+            | ContentField::StrokeStopColor(_),
+            value,
+        ) => write_stop(content, field, value),
         (ContentField::Color, ContentValue::Color(Some(color))) => match content {
             NodeContent::Text(text) => {
                 text.color.set_value(color);
+                text.gradient = None;
                 Ok(())
             }
             _ => Err(wrong_kind(content, field)),
@@ -746,6 +779,7 @@ fn content_static_write(
 }
 
 /// Writes one content keyframe into the matching animatable channel.
+#[allow(clippy::too_many_lines)] // one arm per content field, kept together
 fn content_key_write(
     content: &mut NodeContent,
     field: ContentField,
@@ -815,6 +849,7 @@ fn content_key_write(
             NodeContent::Rect { paint, .. }
             | NodeContent::Circle { paint, .. }
             | NodeContent::Path { paint, .. } => {
+                paint.fill_gradient = None;
                 paint.fill.insert_key(Keyframe {
                     frame,
                     value: color,
@@ -827,6 +862,7 @@ fn content_key_write(
             NodeContent::Rect { paint, .. }
             | NodeContent::Circle { paint, .. }
             | NodeContent::Path { paint, .. } => {
+                paint.stroke_gradient = None;
                 paint.stroke.insert_key(Keyframe {
                     frame,
                     value: color,
@@ -843,6 +879,22 @@ fn content_key_write(
             }),
             _ => return Err(wrong_kind(content, field)),
         },
+        (
+            ContentField::FillStopOffset(_)
+            | ContentField::FillStopColor(_)
+            | ContentField::StrokeStopOffset(_)
+            | ContentField::StrokeStopColor(_),
+            value,
+        ) => key_stop(content, field, frame, value, ease)?,
+        (
+            ContentField::Fill | ContentField::Stroke | ContentField::Color,
+            ContentValue::Gradient(_),
+        ) => {
+            return Err(CoreError::InvalidContentValue {
+                field: field.name(),
+                reason: "a gradient is animated through its stops, not as one value",
+            })
+        }
         _ => {
             return Err(CoreError::InvalidContentValue {
                 field: field.name(),
@@ -853,11 +905,138 @@ fn content_key_write(
     Ok(())
 }
 
+/// Writes a static value into one gradient stop.
+fn write_stop(
+    content: &mut NodeContent,
+    field: ContentField,
+    value: ContentValue,
+) -> Result<(), CoreError> {
+    let (_, part, _) = field.stop().ok_or_else(|| CoreError::InvalidContentValue {
+        field: field.name(),
+        reason: "not a gradient stop field",
+    })?;
+    let stop = stop_mut(content, field).ok_or_else(|| CoreError::InvalidContentValue {
+        field: field.name(),
+        reason: "the layer has no gradient stop at this index",
+    })?;
+    match (part, value) {
+        (StopPart::Offset, ContentValue::Number(value)) => {
+            check_number(field, value, false)?;
+            stop.offset.set_value(value);
+            Ok(())
+        }
+        (StopPart::Color, ContentValue::Color(Some(color))) => {
+            stop.color.set_value(color);
+            Ok(())
+        }
+        _ => Err(CoreError::InvalidContentValue {
+            field: field.name(),
+            reason: "wrong value type for a gradient stop",
+        }),
+    }
+}
+
+/// Writes one keyframe into a gradient stop.
+fn key_stop(
+    content: &mut NodeContent,
+    field: ContentField,
+    frame: Frame,
+    value: ContentValue,
+    ease: Ease,
+) -> Result<(), CoreError> {
+    let (_, part, _) = field.stop().ok_or_else(|| CoreError::InvalidContentValue {
+        field: field.name(),
+        reason: "not a gradient stop field",
+    })?;
+    let stop = stop_mut(content, field).ok_or_else(|| CoreError::InvalidContentValue {
+        field: field.name(),
+        reason: "the layer has no gradient stop at this index",
+    })?;
+    match (part, value) {
+        (StopPart::Offset, ContentValue::Number(value)) => {
+            check_number(field, value, false)?;
+            stop.offset.insert_key(Keyframe { frame, value, ease });
+            Ok(())
+        }
+        (StopPart::Color, ContentValue::Color(Some(color))) => {
+            stop.color.insert_key(Keyframe {
+                frame,
+                value: color,
+                ease,
+            });
+            Ok(())
+        }
+        _ => Err(CoreError::InvalidContentValue {
+            field: field.name(),
+            reason: "wrong value type for a gradient stop",
+        }),
+    }
+}
+
+/// The mutable gradient stop a field addresses, when it exists.
+fn stop_mut(content: &mut NodeContent, field: ContentField) -> Option<&mut crate::GradientStop> {
+    let (slot, _, index) = field.stop()?;
+    match content {
+        NodeContent::Text(text) if slot == PaintSlot::Fill => {
+            text.gradient.as_mut()?.stop_mut(index)
+        }
+        NodeContent::Rect { paint, .. }
+        | NodeContent::Circle { paint, .. }
+        | NodeContent::Path { paint, .. } => paint.gradient_mut(slot)?.stop_mut(index),
+        _ => None,
+    }
+}
+
+/// Sets or clears one paint slot's gradient, keeping a solid fallback.
+fn set_gradient(
+    paint: &mut PaintSpec,
+    slot: PaintSlot,
+    gradient: Option<crate::Gradient>,
+) -> Result<(), CoreError> {
+    if let Some(gradient) = &gradient {
+        if let Some(reason) = gradient.invalid() {
+            return Err(CoreError::InvalidGradient { reason });
+        }
+    }
+    match slot {
+        PaintSlot::Fill => {
+            if let Some(gradient) = gradient {
+                paint.fill.set_value(Some(gradient.fallback_color()));
+                paint.fill_gradient = Some(gradient);
+            } else {
+                paint.fill_gradient = None;
+            }
+        }
+        PaintSlot::Stroke => {
+            if let Some(gradient) = gradient {
+                paint.stroke.set_value(Some(gradient.fallback_color()));
+                paint.stroke_gradient = Some(gradient);
+            } else {
+                paint.stroke_gradient = None;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Removes one content keyframe.
 fn content_key_remove(content: &mut NodeContent, field: ContentField, frame: Frame) {
     let remove = |value: &mut Animatable<f64>| {
-        value.remove_key(frame);
+        let _ = value.remove_key(frame);
     };
+    if let Some((_, part, _)) = field.stop() {
+        if let Some(stop) = stop_mut(content, field) {
+            match part {
+                StopPart::Offset => {
+                    let _ = stop.offset.remove_key(frame);
+                }
+                StopPart::Color => {
+                    let _ = stop.color.remove_key(frame);
+                }
+            }
+        }
+        return;
+    }
     match (content, field) {
         (NodeContent::Rect { width, .. }, ContentField::Width) => remove(width),
         (NodeContent::Rect { height, .. }, ContentField::Height) => remove(height),
@@ -932,10 +1111,14 @@ fn set_number(
 }
 
 fn check_number(field: ContentField, value: f64, positive: bool) -> Result<(), CoreError> {
-    let (ok, reason) = if matches!(
-        field,
-        ContentField::TrimStart | ContentField::TrimEnd | ContentField::TrimOffset
-    ) {
+    let stop_offset = field
+        .stop()
+        .is_some_and(|(_, part, _)| part == StopPart::Offset);
+    let (ok, reason) = if stop_offset
+        || matches!(
+            field,
+            ContentField::TrimStart | ContentField::TrimEnd | ContentField::TrimOffset
+        ) {
         (
             value.is_finite() && (0.0..=1.0).contains(&value),
             "must be a finite number from 0 to 1",
@@ -1307,7 +1490,7 @@ mod tests {
                 ContentValue::Number(-1.0),
                 Ease::Linear
             ),
-            Err(CoreError::InvalidContentValue { field: "width", .. })
+            Err(CoreError::InvalidContentValue { .. })
         ));
         assert!(matches!(
             doc.add_content_keyframe(
@@ -1328,6 +1511,123 @@ mod tests {
                 Ease::Linear
             ),
             Err(CoreError::FrameOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn gradients_set_key_and_clear_through_content_fields() {
+        let (mut doc, id) = rect_doc();
+        let gradient = crate::Gradient::linear(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(100.0, 0.0),
+            [
+                (0.0, Color::BLACK),
+                (0.5, Color::rgb(255, 0, 0)),
+                (1.0, Color::WHITE),
+            ],
+        )
+        .unwrap();
+        doc.set_content(
+            id,
+            ContentField::Fill,
+            ContentValue::Gradient(Some(gradient)),
+        )
+        .unwrap();
+        let content = doc.node(id).unwrap().content();
+        assert_eq!(content.gradient_stop_count(PaintSlot::Fill), 3);
+        assert!(content.field_exists(ContentField::FillStopColor(2)));
+        assert!(!content.field_exists(ContentField::FillStopColor(3)));
+        assert!(matches!(
+            content.static_value(ContentField::Fill),
+            Some(ContentValue::Gradient(Some(_)))
+        ));
+        assert_eq!(
+            content.static_value(ContentField::FillStopColor(1)),
+            Some(ContentValue::Color(Some(Color::rgb(255, 0, 0))))
+        );
+
+        // Stop parts are ordinary channels: static writes and keys.
+        doc.set_content(
+            id,
+            ContentField::FillStopOffset(1),
+            ContentValue::Number(0.8),
+        )
+        .unwrap();
+        doc.add_content_keyframe(
+            id,
+            ContentField::FillStopColor(0),
+            12,
+            ContentValue::Color(Some(Color::rgb(0, 0, 255))),
+            Ease::CubicOut,
+        )
+        .unwrap();
+        assert_eq!(
+            doc.node(id)
+                .unwrap()
+                .content()
+                .channel(ContentField::FillStopColor(0))
+                .unwrap()
+                .key_frames(),
+            vec![12]
+        );
+
+        // A solid colour replaces the gradient exactly like `fill="none"`.
+        doc.set_content(
+            id,
+            ContentField::Fill,
+            ContentValue::Color(Some(Color::rgb(1, 2, 3))),
+        )
+        .unwrap();
+        let content = doc.node(id).unwrap().content();
+        assert_eq!(content.gradient_stop_count(PaintSlot::Fill), 0);
+        assert!(!content.field_exists(ContentField::FillStopColor(0)));
+        assert_eq!(
+            content.static_value(ContentField::Fill),
+            Some(ContentValue::Color(Some(Color::rgb(1, 2, 3))))
+        );
+    }
+
+    #[test]
+    fn invalid_gradients_and_out_of_range_stops_are_rejected() {
+        let (mut doc, id) = rect_doc();
+        assert!(matches!(
+            crate::Gradient::radial(Vec2::ZERO, 0.0, [(0.0, Color::BLACK), (1.0, Color::WHITE)]),
+            Err(CoreError::InvalidGradient { .. })
+        ));
+        assert!(matches!(
+            crate::Gradient::linear(
+                Vec2::ZERO,
+                Vec2::new(1.0, 0.0),
+                [(0.0, Color::BLACK), (2.0, Color::WHITE)]
+            ),
+            Err(CoreError::InvalidGradient { .. })
+        ));
+        let gradient = crate::Gradient::linear(
+            Vec2::ZERO,
+            Vec2::new(1.0, 0.0),
+            [(0.0, Color::BLACK), (1.0, Color::WHITE)],
+        )
+        .unwrap();
+        doc.set_content(
+            id,
+            ContentField::Fill,
+            ContentValue::Gradient(Some(gradient)),
+        )
+        .unwrap();
+        assert!(doc
+            .set_content(
+                id,
+                ContentField::FillStopColor(7),
+                ContentValue::Color(Some(Color::WHITE))
+            )
+            .is_err());
+        assert!(matches!(
+            doc.set_content(
+                id,
+                ContentField::FillStopOffset(0),
+                ContentValue::Number(1.5)
+            ),
+            Err(CoreError::InvalidContentValue { .. })
         ));
     }
 }

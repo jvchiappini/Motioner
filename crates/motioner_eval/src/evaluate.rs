@@ -1,12 +1,15 @@
 //! Frame evaluation: document plus frame to render plan.
 
 use motioner_core::{
-    DashSpec, Document, Frame, NodeContent, NodeId, Paint, PaintSpec, Stroke, TrimSpec,
+    DashSpec, Document, Frame, Gradient, NodeContent, NodeId, PaintSpec, TrimSpec,
 };
 
 use crate::affine::Affine2;
 use crate::curve::{sample, sample_vec2};
-use crate::plan::{ItemShape, RenderItem, RenderPlan, ResolvedPath};
+use crate::plan::{
+    ItemShape, RenderItem, RenderPlan, ResolvedFill, ResolvedGradient, ResolvedPaint, ResolvedPath,
+    ResolvedStop, ResolvedStroke,
+};
 
 /// A node waiting to be visited, with its parent's resolved state.
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +52,7 @@ impl Evaluator {
         plan.height = composition.height();
         plan.background = Some(composition.background());
         plan.items.clear();
+        plan.gradients.clear();
         plan.non_finite_items = 0;
 
         self.stack.clear();
@@ -113,11 +117,11 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
             width: sample(width, frame),
             height: sample(height, frame),
             radius: sample(radius, frame),
-            paint: resolved_paint(paint, frame),
+            paint: resolved_paint(paint, frame, plan),
         }),
         NodeContent::Circle { radius, paint } => Some(ItemShape::Circle {
             radius: sample(radius, frame),
-            paint: resolved_paint(paint, frame),
+            paint: resolved_paint(paint, frame, plan),
         }),
         NodeContent::Path {
             geometry,
@@ -128,6 +132,7 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
             dash,
             dash_offset,
         } => {
+            let resolved = resolved_paint(paint, frame, plan);
             let index = plan.paths.len();
             plan.paths.push(ResolvedPath {
                 geometry: geometry.clone(),
@@ -140,15 +145,25 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
                     length: sample(dash, frame),
                     offset: sample(dash_offset, frame),
                 },
-                paint: resolved_paint(paint, frame),
+                paint: resolved,
             });
             Some(ItemShape::Path { index })
         }
-        NodeContent::Text(text) => Some(ItemShape::Text {
-            size: sample(&text.size, frame),
-            color: sample(&text.color, frame),
-            align: text.align,
-        }),
+        NodeContent::Text(text) => {
+            let (color, gradient) = match text.gradient.as_ref() {
+                Some(gradient) => match resolve_gradient(gradient, frame, plan) {
+                    ResolvedFill::Gradient(index) => (sample(&text.color, frame), Some(index)),
+                    ResolvedFill::Solid(color) => (color, None),
+                },
+                None => (sample(&text.color, frame), None),
+            };
+            Some(ItemShape::Text {
+                size: sample(&text.size, frame),
+                color,
+                gradient,
+                align: text.align,
+            })
+        }
     }
 }
 
@@ -156,22 +171,62 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
 ///
 /// A stroke is drawn only when its colour is present and its width is above
 /// zero, the same rule the constructors use for `stroke_width = 0`.
-fn resolved_paint(spec: &PaintSpec, frame: Frame) -> Paint {
+fn resolved_paint(spec: &PaintSpec, frame: Frame, plan: &mut RenderPlan) -> ResolvedPaint {
     let width = sample(&spec.stroke_width, frame);
-    let stroke = sample(&spec.stroke, frame)
-        .filter(|_| width > 0.0)
-        .map(|color| Stroke { color, width });
-    Paint {
-        fill: sample(&spec.fill, frame),
-        stroke,
+    let fill = match spec.fill_gradient.as_ref() {
+        Some(gradient) => Some(resolve_gradient(gradient, frame, plan)),
+        None => sample(&spec.fill, frame).map(ResolvedFill::Solid),
+    };
+    let stroke = if width > 0.0 {
+        match spec.stroke_gradient.as_ref() {
+            Some(gradient) => Some(ResolvedStroke {
+                paint: resolve_gradient(gradient, frame, plan),
+                width,
+            }),
+            None => sample(&spec.stroke, frame).map(|color| ResolvedStroke {
+                paint: ResolvedFill::Solid(color),
+                width,
+            }),
+        }
+    } else {
+        None
+    };
+    ResolvedPaint { fill, stroke }
+}
+
+/// Samples a gradient's stops and pushes it into the plan arena.
+///
+/// Stops are clamped to `0.0..=1.0` and sorted, so a keyed offset that crosses
+/// a neighbour still produces a valid ramp. A gradient that degenerates to
+/// fewer than two stops falls back to its first colour instead of drawing a
+/// flat ramp.
+fn resolve_gradient(gradient: &Gradient, frame: Frame, plan: &mut RenderPlan) -> ResolvedFill {
+    let mut stops: Vec<ResolvedStop> = gradient
+        .stops()
+        .iter()
+        .map(|stop| ResolvedStop {
+            offset: sample(&stop.offset, frame).clamp(0.0, 1.0),
+            color: sample(&stop.color, frame),
+        })
+        .collect();
+    if stops.len() < 2 {
+        return ResolvedFill::Solid(gradient.fallback_color());
     }
+    stops.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    let index = plan.gradients.len();
+    plan.gradients.push(ResolvedGradient {
+        kind: gradient.kind(),
+        stops,
+    });
+    ResolvedFill::Gradient(index)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use motioner_core::{
-        Color, Composition, Ease, FrameRate, Paint, Property, PropertyValue, Vec2, MAX_ABS_FRAME,
+        Color, Composition, Ease, FrameRate, Paint, Property, PropertyValue, TextAlign,
+        TextContent, Vec2, MAX_ABS_FRAME,
     };
 
     fn document() -> Document {
@@ -395,7 +450,7 @@ mod tests {
     #[test]
     fn paths_are_sampled_into_the_plan_arena() {
         use motioner_core::{
-            ContentField, ContentValue, LineCap, LineJoin, PathGeometry, PathPoint,
+            ContentField, ContentValue, LineCap, LineJoin, PathGeometry, PathPoint, Stroke,
         };
         let mut doc = document();
         let geometry = PathGeometry::new(
@@ -452,5 +507,106 @@ mod tests {
         assert!((path.dash.length - 8.0).abs() < 1e-9);
         assert_eq!(path.geometry.cap(), LineCap::Round);
         assert_eq!(path.paint.stroke.map(|stroke| stroke.width), Some(4.0));
+    }
+
+    #[test]
+    fn gradients_are_sampled_sorted_and_clamped_into_the_plan() {
+        use motioner_core::{ContentField, ContentValue, Ease, Gradient};
+        let mut doc = document();
+        let gradient = Gradient::linear(
+            Vec2::ZERO,
+            Vec2::new(100.0, 0.0),
+            [(0.0, Color::BLACK), (1.0, Color::WHITE)],
+        )
+        .unwrap();
+        let id = doc
+            .add_node(NodeContent::rect(
+                100.0,
+                100.0,
+                0.0,
+                Paint {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                },
+            ))
+            .unwrap();
+        doc.set_content(
+            id,
+            ContentField::Fill,
+            ContentValue::Gradient(Some(gradient)),
+        )
+        .unwrap();
+        // Keying a stop offset past its neighbour still samples a valid ramp.
+        doc.add_content_keyframe(
+            id,
+            ContentField::FillStopOffset(0),
+            0,
+            ContentValue::Number(0.25),
+            Ease::Linear,
+        )
+        .unwrap();
+        doc.add_content_keyframe(
+            id,
+            ContentField::FillStopOffset(1),
+            0,
+            ContentValue::Number(0.75),
+            Ease::Linear,
+        )
+        .unwrap();
+        doc.add_content_keyframe(
+            id,
+            ContentField::FillStopColor(1),
+            0,
+            ContentValue::Color(Some(Color::rgb(255, 0, 0))),
+            Ease::Linear,
+        )
+        .unwrap();
+
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.gradients().len(), 1);
+        let ItemShape::Rect { paint, .. } = plan.items()[0].shape else {
+            panic!("a rect item");
+        };
+        let Some(ResolvedFill::Gradient(index)) = paint.fill else {
+            panic!("a gradient fill");
+        };
+        let gradient = plan.gradient(index).unwrap();
+        assert_eq!(gradient.stops.len(), 2);
+        assert!((gradient.stops[0].offset - 0.25).abs() < 1e-9);
+        assert!((gradient.stops[1].offset - 0.75).abs() < 1e-9);
+        assert_eq!(gradient.stops[1].color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn text_gradients_use_the_same_arena() {
+        use motioner_core::{ContentField, ContentValue, Gradient};
+        let mut doc = document();
+        let id = doc
+            .add_node(NodeContent::Text(TextContent::new(
+                "Hi",
+                "Inter",
+                40.0,
+                Color::WHITE,
+                TextAlign::Left,
+            )))
+            .unwrap();
+        let gradient = Gradient::radial(
+            Vec2::new(20.0, 0.0),
+            40.0,
+            [(0.0, Color::WHITE), (1.0, Color::BLACK)],
+        )
+        .unwrap();
+        doc.set_content(
+            id,
+            ContentField::Color,
+            ContentValue::Gradient(Some(gradient)),
+        )
+        .unwrap();
+        let plan = evaluate(&doc, 0);
+        assert_eq!(plan.gradients().len(), 1);
+        let ItemShape::Text { gradient, .. } = plan.items()[0].shape else {
+            panic!("a text item");
+        };
+        assert_eq!(gradient, Some(0));
     }
 }

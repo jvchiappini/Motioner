@@ -6,6 +6,9 @@
 //! fresh session from disk and compares the documents. The pixel part follows
 //! `tests/live_painter.rs` and skips cleanly without an adapter.
 
+// Test bodies take the GPU lock before their local imports and constants.
+#![allow(clippy::items_after_statements)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -213,6 +216,7 @@ fn undo_redo_survives_a_recompile() {
 
 #[test]
 fn a_hidden_layer_is_not_painted() {
+    let _gpu = motioner_testkit::gpu::lock();
     use ferrous_engine::wgpu::{Color as ClearColor, TextureFormat};
     use ferrous_renderer::headless::Pure2dHarness;
     use motioner_eval::{Evaluator, RenderPlan};

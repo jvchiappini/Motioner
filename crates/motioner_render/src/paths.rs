@@ -320,19 +320,18 @@ pub fn path_bounds(path: &ResolvedPath) -> Option<[f64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use motioner_core::{
-        Color, LineCap as CoreCap, LineJoin as CoreJoin, Paint, PathGeometry, PathPoint, Stroke,
-    };
+    use motioner_core::{Color, LineCap as CoreCap, LineJoin as CoreJoin, PathGeometry, PathPoint};
+    use motioner_eval::{ResolvedFill, ResolvedPaint, ResolvedStroke};
 
     fn path(geometry: PathGeometry, fill: bool, stroke: Option<f64>) -> ResolvedPath {
         ResolvedPath {
             geometry,
             trim: TrimSpec::FULL,
             dash: DashSpec::default(),
-            paint: Paint {
-                fill: fill.then_some(Color::WHITE),
-                stroke: stroke.map(|width| Stroke {
-                    color: Color::WHITE,
+            paint: ResolvedPaint {
+                fill: fill.then_some(ResolvedFill::Solid(Color::WHITE)),
+                stroke: stroke.map(|width| ResolvedStroke {
+                    paint: ResolvedFill::Solid(Color::WHITE),
                     width,
                 }),
             },

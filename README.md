@@ -99,7 +99,11 @@ lines like transform rows, and their colours interpolate in linear-light sRGB
 `star`, `arc`) are filled and stroked with anti-aliased tessellation and have
 animatable `trim_start`/`trim_end`/`trim_offset`/`dash`/`dash_offset`, so a
 line draws itself and a dash pattern marches (D-0029; see
-`examples/paths.motion`). The canvas zooms around the
+`examples/paths.motion`). Paint gradients (`linear_gradient`,
+`radial_gradient`) use animatable stop offsets and colours, show one row per
+stop in the timeline and inspector, and render through the Pure2D gradient
+pass when the engine pin includes it (D-0030; see `examples/gradients.motion`).
+The canvas zooms around the
 pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
 `F` or a click on the zoom pill; zoom and pan are view state and never change
 a rendered frame (D-0026). Selection is shared by the canvas, the lists and

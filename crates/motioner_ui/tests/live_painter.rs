@@ -101,6 +101,7 @@ fn golden_rgba() -> Vec<u8> {
 
 #[test]
 fn live_painter_matches_the_golden_frame() {
+    let _gpu = motioner_testkit::gpu::lock();
     let _guard = GPU_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -143,6 +144,7 @@ fn live_painter_matches_the_golden_frame() {
 
 #[test]
 fn letterboxed_live_painter_matches_flat_regions_of_the_golden_at_half_scale() {
+    let _gpu = motioner_testkit::gpu::lock();
     let _guard = GPU_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

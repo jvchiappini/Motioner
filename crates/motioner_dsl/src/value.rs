@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use motioner_core::NodeId;
+use motioner_core::{Gradient, NodeId};
 
 use crate::ast::FunctionDef;
 use crate::host::{HostError, HostResult};
@@ -65,11 +65,13 @@ pub(crate) enum Builtin {
     Polygon,
     Star,
     Arc,
+    LinearGradient,
+    RadialGradient,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 22] = [
+    pub const ALL: [(Self, &'static str); 24] = [
         (Self::Range, "range"),
         (Self::Len, "len"),
         (Self::Min, "min"),
@@ -92,6 +94,8 @@ impl Builtin {
         (Self::Polygon, "polygon"),
         (Self::Star, "star"),
         (Self::Arc, "arc"),
+        (Self::LinearGradient, "linear_gradient"),
+        (Self::RadialGradient, "radial_gradient"),
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -214,6 +218,7 @@ pub(crate) enum Value {
     Builtin(Builtin),
     Node(NodeId),
     Method(NodeId, NodeMethod),
+    Gradient(Rc<Gradient>),
 }
 
 impl Value {
@@ -239,6 +244,7 @@ impl Value {
             Self::Range(_) => "range",
             Self::Function(_) | Self::Builtin(_) | Self::Method(..) => "function",
             Self::Node(_) => "node",
+            Self::Gradient(_) => "gradient",
         }
     }
 
@@ -251,7 +257,11 @@ impl Value {
             Self::Str(s) => !s.is_empty(),
             Self::List(items) | Self::Tuple(items) => !items.is_empty(),
             Self::Range(range) => range.len() > 0,
-            Self::Function(_) | Self::Builtin(_) | Self::Node(_) | Self::Method(..) => true,
+            Self::Function(_)
+            | Self::Builtin(_)
+            | Self::Node(_)
+            | Self::Method(..)
+            | Self::Gradient(_) => true,
         }
     }
 
@@ -332,6 +342,7 @@ impl Value {
             (Self::Function(a), Self::Function(b)) => Ok(Rc::ptr_eq(a, b)),
             (Self::Builtin(a), Self::Builtin(b)) => Ok(a == b),
             (Self::Node(a), Self::Node(b)) => Ok(a == b),
+            (Self::Gradient(a), Self::Gradient(b)) => Ok(a == b),
             (Self::Method(a, m), Self::Method(b, n)) => Ok(a == b && m == n),
             _ => Ok(false),
         }
@@ -394,6 +405,11 @@ impl Value {
             Self::Method(id, m) => {
                 push_checked(out, &format!("<method {} of node {id}>", m.name()), limits)
             }
+            Self::Gradient(gradient) => push_checked(
+                out,
+                &format!("<{} gradient>", gradient.kind().name()),
+                limits,
+            ),
         }
     }
 

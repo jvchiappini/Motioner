@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::animation::{Animatable, AnimatableVec2};
 use crate::color::Color;
+use crate::gradient::{Gradient, PaintSlot, StopPart};
 use crate::math::Vec2;
 use crate::path::{LineCap, LineJoin, PathGeometry};
 use crate::time::Frame;
@@ -127,10 +128,22 @@ pub enum ContentField {
     Cap,
     /// Path stroke join style (discrete).
     Join,
+    /// Offset of fill stop `n` (`fill_stop<n>_offset`, D-0030).
+    FillStopOffset(u8),
+    /// Colour of fill stop `n` (`fill_stop<n>_color`).
+    FillStopColor(u8),
+    /// Offset of stroke stop `n` (`stroke_stop<n>_offset`).
+    StrokeStopOffset(u8),
+    /// Colour of stroke stop `n` (`stroke_stop<n>_color`).
+    StrokeStopColor(u8),
 }
 
 impl ContentField {
-    /// Every field with its override property name.
+    /// The static fields with their override property name.
+    ///
+    /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
+    /// [`ContentField::from_name`] and describe them with
+    /// [`ContentField::name`].
     pub const ALL: [(Self, &'static str); 17] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
@@ -161,21 +174,78 @@ impl ContentField {
     }
 
     /// Looks up a field by its override property name.
+    ///
+    /// Accepts the static names in [`ContentField::ALL`] and the dynamic
+    /// gradient-stop names (`fill_stop0_offset`, `stroke_stop2_color`).
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .find(|(_, candidate)| *candidate == name)
-            .map(|(field, _)| *field)
+        if let Some((field, _)) = Self::ALL.iter().find(|(_, candidate)| *candidate == name) {
+            return Some(*field);
+        }
+        let (slot, rest) = if let Some(rest) = name.strip_prefix("fill_stop") {
+            (PaintSlot::Fill, rest)
+        } else {
+            (PaintSlot::Stroke, name.strip_prefix("stroke_stop")?)
+        };
+        let (index, part) = if let Some(index) = rest.strip_suffix("_offset") {
+            (index, StopPart::Offset)
+        } else {
+            (rest.strip_suffix("_color")?, StopPart::Color)
+        };
+        let index = index.parse::<u8>().ok()?;
+        Some(Self::stop_field(slot, part, index))
     }
 
     /// The override property name of this field.
     #[must_use]
-    pub fn name(self) -> &'static str {
-        Self::ALL
-            .iter()
-            .find(|(field, _)| *field == self)
-            .map_or("?", |(_, name)| name)
+    pub fn name(self) -> String {
+        match self.stop() {
+            Some((slot, part, index)) => {
+                let slot = match slot {
+                    PaintSlot::Fill => "fill",
+                    PaintSlot::Stroke => "stroke",
+                };
+                let part = match part {
+                    StopPart::Offset => "offset",
+                    StopPart::Color => "color",
+                };
+                format!("{slot}_stop{index}_{part}")
+            }
+            None => Self::ALL
+                .iter()
+                .find(|(field, _)| *field == self)
+                .map_or("?", |(_, name)| name)
+                .to_owned(),
+        }
+    }
+
+    /// The gradient stop this field addresses, if any.
+    #[must_use]
+    pub const fn stop(self) -> Option<(PaintSlot, StopPart, usize)> {
+        match self {
+            Self::FillStopOffset(index) => {
+                Some((PaintSlot::Fill, StopPart::Offset, index as usize))
+            }
+            Self::FillStopColor(index) => Some((PaintSlot::Fill, StopPart::Color, index as usize)),
+            Self::StrokeStopOffset(index) => {
+                Some((PaintSlot::Stroke, StopPart::Offset, index as usize))
+            }
+            Self::StrokeStopColor(index) => {
+                Some((PaintSlot::Stroke, StopPart::Color, index as usize))
+            }
+            _ => None,
+        }
+    }
+
+    /// Builds the dynamic field for one gradient stop part.
+    #[must_use]
+    pub const fn stop_field(slot: PaintSlot, part: StopPart, index: u8) -> Self {
+        match (slot, part) {
+            (PaintSlot::Fill, StopPart::Offset) => Self::FillStopOffset(index),
+            (PaintSlot::Fill, StopPart::Color) => Self::FillStopColor(index),
+            (PaintSlot::Stroke, StopPart::Offset) => Self::StrokeStopOffset(index),
+            (PaintSlot::Stroke, StopPart::Color) => Self::StrokeStopColor(index),
+        }
     }
 }
 
@@ -186,6 +256,9 @@ pub enum ContentValue {
     Number(f64),
     /// A colour for `fill`, `stroke`, `color`; `None` clears an optional one.
     Color(Option<Color>),
+    /// A gradient for `fill`, `stroke` or text `color`; `None` clears it
+    /// (D-0030).
+    Gradient(Option<Gradient>),
     /// Text for `text`.
     Text(String),
     /// Alignment for `align`.
@@ -281,6 +354,10 @@ pub struct PaintSpec {
     pub stroke: Animatable<Option<Color>>,
     /// Outline width in pixels (`stroke_width`).
     pub stroke_width: Animatable<f64>,
+    /// Interior gradient (D-0030); takes precedence over `fill` when present.
+    pub fill_gradient: Option<Gradient>,
+    /// Outline gradient (D-0030); takes precedence over `stroke` when present.
+    pub stroke_gradient: Option<Gradient>,
 }
 
 impl PaintSpec {
@@ -291,6 +368,8 @@ impl PaintSpec {
             fill: Animatable::new(fill),
             stroke: Animatable::new(stroke),
             stroke_width: Animatable::new(stroke_width),
+            fill_gradient: None,
+            stroke_gradient: None,
         }
     }
 
@@ -302,6 +381,8 @@ impl PaintSpec {
             fill: Animatable::new(paint.fill),
             stroke: Animatable::new(stroke.map(|stroke| stroke.color)),
             stroke_width: Animatable::new(stroke.map_or(0.0, |stroke| stroke.width)),
+            fill_gradient: None,
+            stroke_gradient: None,
         }
     }
 
@@ -317,8 +398,33 @@ impl PaintSpec {
         Self::new(None, None, 0.0)
     }
 
+    /// The gradient of one paint slot, if it has one.
+    #[must_use]
+    pub fn gradient(&self, slot: PaintSlot) -> Option<&Gradient> {
+        match slot {
+            PaintSlot::Fill => self.fill_gradient.as_ref(),
+            PaintSlot::Stroke => self.stroke_gradient.as_ref(),
+        }
+    }
+
+    /// The mutable gradient of one paint slot.
+    #[must_use]
+    pub fn gradient_mut(&mut self, slot: PaintSlot) -> Option<&mut Gradient> {
+        match slot {
+            PaintSlot::Fill => self.fill_gradient.as_mut(),
+            PaintSlot::Stroke => self.stroke_gradient.as_mut(),
+        }
+    }
+
     /// The pointer to the channel of one paint field, if it is one.
     pub(crate) fn channel(&self, field: ContentField) -> Option<ContentChannel<'_>> {
+        if let Some((slot, part, index)) = field.stop() {
+            let stop = self.gradient(slot)?.stop(index)?;
+            return Some(match part {
+                StopPart::Offset => ContentChannel::Number(&stop.offset),
+                StopPart::Color => ContentChannel::Color(&stop.color),
+            });
+        }
         match field {
             ContentField::Fill => Some(ContentChannel::OptionalColor(&self.fill)),
             ContentField::Stroke => Some(ContentChannel::OptionalColor(&self.stroke)),
@@ -366,6 +472,8 @@ pub struct TextContent {
     pub color: Animatable<Color>,
     /// Horizontal alignment.
     pub align: TextAlign,
+    /// Glyph fill gradient (D-0030); takes precedence over color when present.
+    pub gradient: Option<Gradient>,
 }
 
 impl TextContent {
@@ -384,6 +492,7 @@ impl TextContent {
             size: Animatable::new(size),
             color: Animatable::new(color),
             align,
+            gradient: None,
         }
     }
 }
@@ -517,43 +626,111 @@ impl NodeContent {
     }
 
     /// Whether [`ContentField`] can be written to this kind of content.
+    ///
+    /// This is the kind-level check. Gradient stop fields additionally need
+    /// the addressed gradient to exist; use [`NodeContent::field_exists`] for
+    /// a write.
     #[must_use]
     pub const fn accepts(&self, field: ContentField) -> bool {
+        let stop = matches!(
+            field,
+            ContentField::FillStopOffset(_)
+                | ContentField::FillStopColor(_)
+                | ContentField::StrokeStopOffset(_)
+                | ContentField::StrokeStopColor(_)
+        );
         match self {
             Self::Group => false,
-            Self::Rect { .. } => matches!(
-                field,
-                ContentField::Width
-                    | ContentField::Height
-                    | ContentField::Radius
-                    | ContentField::Fill
-                    | ContentField::Stroke
-                    | ContentField::StrokeWidth
-            ),
-            Self::Circle { .. } => matches!(
-                field,
-                ContentField::Radius
-                    | ContentField::Fill
-                    | ContentField::Stroke
-                    | ContentField::StrokeWidth
-            ),
-            Self::Path { .. } => matches!(
-                field,
-                ContentField::Fill
-                    | ContentField::Stroke
-                    | ContentField::StrokeWidth
-                    | ContentField::TrimStart
-                    | ContentField::TrimEnd
-                    | ContentField::TrimOffset
-                    | ContentField::Dash
-                    | ContentField::DashOffset
-                    | ContentField::Cap
-                    | ContentField::Join
-            ),
-            Self::Text(_) => matches!(
-                field,
-                ContentField::Text | ContentField::Size | ContentField::Color | ContentField::Align
-            ),
+            Self::Rect { .. } => {
+                stop || matches!(
+                    field,
+                    ContentField::Width
+                        | ContentField::Height
+                        | ContentField::Radius
+                        | ContentField::Fill
+                        | ContentField::Stroke
+                        | ContentField::StrokeWidth
+                )
+            }
+            Self::Circle { .. } => {
+                stop || matches!(
+                    field,
+                    ContentField::Radius
+                        | ContentField::Fill
+                        | ContentField::Stroke
+                        | ContentField::StrokeWidth
+                )
+            }
+            Self::Path { .. } => {
+                stop || matches!(
+                    field,
+                    ContentField::Fill
+                        | ContentField::Stroke
+                        | ContentField::StrokeWidth
+                        | ContentField::TrimStart
+                        | ContentField::TrimEnd
+                        | ContentField::TrimOffset
+                        | ContentField::Dash
+                        | ContentField::DashOffset
+                        | ContentField::Cap
+                        | ContentField::Join
+                )
+            }
+            Self::Text(_) => {
+                matches!(
+                    field,
+                    ContentField::FillStopOffset(_) | ContentField::FillStopColor(_)
+                ) || matches!(
+                    field,
+                    ContentField::Text
+                        | ContentField::Size
+                        | ContentField::Color
+                        | ContentField::Align
+                )
+            }
+        }
+    }
+
+    /// Number of stops in one paint slot's gradient (0 when it has none).
+    #[must_use]
+    pub fn gradient_stop_count(&self, slot: PaintSlot) -> usize {
+        match self {
+            Self::Text(text) if slot == PaintSlot::Fill => {
+                text.gradient.as_ref().map_or(0, Gradient::len)
+            }
+            Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. } => {
+                paint.gradient(slot).map_or(0, Gradient::len)
+            }
+            Self::Text(_) | Self::Group => 0,
+        }
+    }
+
+    /// Whether `field` addresses something this content actually has.
+    ///
+    /// Unlike [`NodeContent::accepts`], a gradient stop field is only present
+    /// when the target slot has a gradient and the index is in range.
+    #[must_use]
+    pub fn field_exists(&self, field: ContentField) -> bool {
+        if !self.accepts(field) {
+            return false;
+        }
+        let Some((slot, _, index)) = field.stop() else {
+            return true;
+        };
+        match self {
+            Self::Text(text) => {
+                slot == PaintSlot::Fill
+                    && text
+                        .gradient
+                        .as_ref()
+                        .is_some_and(|gradient| index < gradient.len())
+            }
+            Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. } => {
+                paint
+                    .gradient(slot)
+                    .is_some_and(|gradient| index < gradient.len())
+            }
+            Self::Group => false,
         }
     }
 
@@ -561,7 +738,7 @@ impl NodeContent {
     /// field or the field is not animatable (`text`, `align`).
     #[must_use]
     pub fn channel<'a>(&'a self, field: ContentField) -> Option<ContentChannel<'a>> {
-        if !self.accepts(field) || !field.is_animatable() {
+        if !self.field_exists(field) || !field.is_animatable() {
             return None;
         }
         let number = |value: &'a Animatable<f64>| Some(ContentChannel::Number(value));
@@ -570,6 +747,14 @@ impl NodeContent {
             (Self::Rect { height, .. }, ContentField::Height) => number(height),
             (Self::Rect { radius, .. } | Self::Circle { radius, .. }, ContentField::Radius) => {
                 number(radius)
+            }
+            (Self::Text(text), field) if field.stop().is_some() => {
+                let (_, part, index) = field.stop()?;
+                let stop = text.gradient.as_ref()?.stop(index)?;
+                Some(match part {
+                    StopPart::Offset => ContentChannel::Number(&stop.offset),
+                    StopPart::Color => ContentChannel::Color(&stop.color),
+                })
             }
             (Self::Rect { paint, .. } | Self::Circle { paint, .. }, field) => paint.channel(field),
             (
@@ -600,6 +785,19 @@ impl NodeContent {
     /// The static value of `field`, ignoring keyframes.
     #[must_use]
     pub fn static_value(&self, field: ContentField) -> Option<ContentValue> {
+        if let Some((slot, part, index)) = field.stop() {
+            let stop = match self {
+                Self::Text(text) => text.gradient.as_ref()?.stop(index)?,
+                Self::Rect { paint, .. }
+                | Self::Circle { paint, .. }
+                | Self::Path { paint, .. } => paint.gradient(slot)?.stop(index)?,
+                Self::Group => return None,
+            };
+            return Some(match part {
+                StopPart::Offset => ContentValue::Number(stop.offset.value()),
+                StopPart::Color => ContentValue::Color(Some(stop.color.value())),
+            });
+        }
         match (self, field) {
             (Self::Rect { width, .. }, ContentField::Width) => {
                 Some(ContentValue::Number(width.value()))
@@ -613,11 +811,17 @@ impl NodeContent {
             (
                 Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. },
                 ContentField::Fill,
-            ) => Some(ContentValue::Color(paint.fill.value())),
+            ) => Some(match &paint.fill_gradient {
+                Some(gradient) => ContentValue::Gradient(Some(gradient.clone())),
+                None => ContentValue::Color(paint.fill.value()),
+            }),
             (
                 Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. },
                 ContentField::Stroke,
-            ) => Some(ContentValue::Color(paint.stroke.value())),
+            ) => Some(match &paint.stroke_gradient {
+                Some(gradient) => ContentValue::Gradient(Some(gradient.clone())),
+                None => ContentValue::Color(paint.stroke.value()),
+            }),
             (
                 Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. },
                 ContentField::StrokeWidth,
@@ -645,9 +849,10 @@ impl NodeContent {
             },
             (Self::Text(text), ContentField::Text) => Some(ContentValue::Text(text.text.clone())),
             (Self::Text(text), ContentField::Size) => Some(ContentValue::Number(text.size.value())),
-            (Self::Text(text), ContentField::Color) => {
-                Some(ContentValue::Color(Some(text.color.value())))
-            }
+            (Self::Text(text), ContentField::Color) => Some(match &text.gradient {
+                Some(gradient) => ContentValue::Gradient(Some(gradient.clone())),
+                None => ContentValue::Color(Some(text.color.value())),
+            }),
             (Self::Text(text), ContentField::Align) => Some(ContentValue::Align(text.align)),
             _ => None,
         }
@@ -658,11 +863,20 @@ impl NodeContent {
     pub(crate) fn invalid_field(&self) -> Option<&'static str> {
         let bad = |value: f64| !value.is_finite() || value < 0.0;
         let bad_paint = |paint: &PaintSpec| {
-            bad(paint.stroke_width.value()) || {
-                // Keyed colours carry no numeric constraint; keyed widths are
-                // validated when they are written.
-                paint.stroke_width.keys().iter().any(|key| bad(key.value))
-            }
+            bad(paint.stroke_width.value())
+                || paint
+                    .fill_gradient
+                    .as_ref()
+                    .is_some_and(|g| g.invalid().is_some())
+                || paint
+                    .stroke_gradient
+                    .as_ref()
+                    .is_some_and(|g| g.invalid().is_some())
+                || {
+                    // Keyed colours carry no numeric constraint; keyed widths
+                    // are validated when they are written.
+                    paint.stroke_width.keys().iter().any(|key| bad(key.value))
+                }
         };
         match self {
             Self::Group => None,
@@ -714,7 +928,15 @@ impl NodeContent {
             }
             Self::Text(text) => {
                 let size = text.size.value();
-                (bad(size) || size == 0.0).then_some("size")
+                if text
+                    .gradient
+                    .as_ref()
+                    .is_some_and(|g| g.invalid().is_some())
+                {
+                    Some("color")
+                } else {
+                    (bad(size) || size == 0.0).then_some("size")
+                }
             }
         }
     }

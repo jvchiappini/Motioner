@@ -37,13 +37,22 @@ Every one of them prints **one JSON object per line** on stdout.
   `"#RRGGBBAA"`; `fill`/`stroke` also take `"none"`. `align` is `"left"`,
   `"center"` or `"right"`; `cap` is `"butt"`, `"round"` or `"square"`;
   `join` is `"miter"`, `"bevel"` or `"round"`.
+- **Gradients** (D-0030): `fill`/`stroke`/text `color` may be a gradient
+  instead of a colour. A gradient adds one pair of channels per stop:
+  `fill_stop<n>_offset` (0..1), `fill_stop<n>_color`, and
+  `stroke_stop<n>_offset` / `stroke_stop<n>_color` for the stroke. `query`
+  reports the gradient as an object (`kind`, `start`/`end` or
+  `center`/`radius`, `stops`) and the stop channels like any other channel.
+  The gradient structure itself is authored in MDF; the editor and `edit`
+  change stop colours and offsets.
 - **Animatable content fields** (D-0028): every field above except `text`,
   `align`, `cap` and `join` is a channel with no axes. `key(id, "fill", t, "#FF0000")`,
   `stopwatch(id, "size")` and `edit(id, "width", 420)` work exactly like
   transform channels; the timeline and inspector show the same stopwatch and
-  diamonds. Colours interpolate in linear-light sRGB, so a keyed red→green
+  diamonds. Colours interpolate in linear-light sRGB, so a keyed red-green
   midpoint is `#BCBC00`, not `#808000`; keying a colour to `"none"` holds
-  the previous value until that key.
+  the previous value until that key. A gradient cannot be keyed as one
+  value: key its stops (`key(id, "fill_stop1_color", t, "#00FF00")`).
 
 ## Command syntax
 

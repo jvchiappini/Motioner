@@ -71,11 +71,32 @@ pub(crate) fn render(
             actual: (plan.width(), plan.height()),
         });
     }
-
+    let unsupported = {
+        #[cfg(not(feature = "engine-gradients"))]
+        {
+            plan.first_gradient_node()
+        }
+        #[cfg(feature = "engine-gradients")]
+        {
+            plan.first_text_gradient_node()
+        }
+    };
+    if let Some(node) = unsupported {
+        return Err(RenderError::Unsupported {
+            feature: crate::Feature::Gradient,
+            node: Some(node),
+        });
+    }
     apply_clear(renderer, plan.background());
     renderer.harness.begin_frame();
 
     let flip = space::composition_flip(renderer.width, renderer.height);
+    let gradients = crate::gradients::GradientTable::build(plan, flip);
+    #[cfg(feature = "engine-gradients")]
+    renderer
+        .harness
+        .renderer_mut()
+        .set_2d_gradient_table(gradients.slots());
     let stats = paint_plan(
         &mut renderer.harness,
         document,
@@ -84,6 +105,7 @@ pub(crate) fn render(
         renderer.font,
         &mut renderer.missing_glyphs,
         &mut renderer.path_cache,
+        &gradients,
     );
 
     let report = renderer.harness.render_frame();
@@ -109,6 +131,7 @@ pub(crate) fn render(
 /// `flip` maps composition pixels to world space, including any [`crate::ViewFit`]
 /// letterboxing. `font` and `missing_glyphs` are owned by the caller so the
 /// per-node glyph measurement cache survives across frames.
+#[allow(clippy::too_many_arguments)] // the plan, the canvas and its caches, kept explicit
 pub(crate) fn paint_plan(
     canvas: &mut impl Canvas2d,
     document: &Document,
@@ -117,6 +140,7 @@ pub(crate) fn paint_plan(
     font: FontId2d,
     missing_glyphs: &mut HashMap<NodeId, u32>,
     path_cache: &mut PathCache,
+    gradients: &crate::gradients::GradientTable,
 ) -> PaintStats {
     let mut total = 0u32;
     for item in plan.items() {
@@ -130,7 +154,9 @@ pub(crate) fn paint_plan(
     };
     for item in plan.items() {
         match item.shape {
-            ItemShape::Text { size, color, align } => {
+            ItemShape::Text {
+                size, color, align, ..
+            } => {
                 if let Some(missing) = draw_text(
                     canvas,
                     document,
@@ -149,8 +175,16 @@ pub(crate) fn paint_plan(
                 }
             }
             _ => {
-                stats.shape_draws +=
-                    shapes::draw_item(canvas, plan, path_cache, item, flip, &mut z_index, total);
+                stats.shape_draws += shapes::draw_item(
+                    canvas,
+                    plan,
+                    path_cache,
+                    gradients,
+                    item,
+                    flip,
+                    &mut z_index,
+                    total,
+                );
             }
         }
     }

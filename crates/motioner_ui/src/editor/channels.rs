@@ -41,15 +41,15 @@ impl Channel {
     pub fn name(self) -> String {
         match self {
             Self::Transform(property, axis) => channel_name(property, axis),
-            Self::Content(field) => field.name().to_owned(),
+            Self::Content(field) => field.name().clone(),
         }
     }
 
     /// The property name written in edit commands (`pos`, `fill`).
     #[must_use]
-    pub fn base(self) -> &'static str {
+    pub fn base(self) -> String {
         match self {
-            Self::Transform(property, _) => property.name(),
+            Self::Transform(property, _) => property.name().to_owned(),
             Self::Content(field) => field.name(),
         }
     }
@@ -88,8 +88,8 @@ pub fn node_channels(document: &Document, node: NodeId) -> Vec<Channel> {
         .map(|(property, axis)| Channel::Transform(property, axis))
         .collect();
     if let Some(content) = document.node(node).map(motioner_core::Node::content) {
-        for (field, _) in ContentField::ALL {
-            if field.is_animatable() && content.accepts(field) {
+        for field in crate::timeline_model::content_fields(content) {
+            if field.is_animatable() {
                 channels.push(Channel::Content(field));
             }
         }
@@ -122,7 +122,7 @@ pub fn resolve(
             .node(node)
             .map(motioner_core::Node::content)
             .ok_or_else(|| unknown_property(property))?;
-        if !field.is_animatable() || !content.accepts(field) {
+        if !field.is_animatable() || !content.field_exists(field) {
             return Err(CommandError::new(
                 ErrorKind::UnknownProperty,
                 format!(

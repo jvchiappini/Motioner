@@ -19,13 +19,18 @@ glam.workspace = true
 lyon_tessellation = "1.0"
 
 [features]
-default = []
+default = ["engine-gradients"]
+# Gradients in the Pure2D pass (D-0030). The pinned FerrousEngine (857b9df)
+# has the gradient pass, so this is on by default; the feature is removed
+# once the non-gradient path is gone.
+engine-gradients = []
 # Enables `LivePainter`, the only public API that names a `ferrous_renderer`
 # type. Off by default so headless consumers keep an engine-free API boundary.
 live = []
 
 [dev-dependencies]
 motioner_dsl.workspace = true
+motioner_testkit.workspace = true
 sha2.workspace = true
 
 [lints]

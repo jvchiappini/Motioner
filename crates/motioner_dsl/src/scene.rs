@@ -9,12 +9,14 @@ use std::rc::Rc;
 
 use motioner_core::{
     BlendMode, Color, Composition, ContentField, ContentValue, CoreError, Document, Ease,
-    FrameRate, LineCap, LineJoin, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry,
+    FrameRate, Gradient, LineCap, LineJoin, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry,
     PathPoint, Property, PropertyValue, Stroke, TextAlign, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
-use crate::host::{as_integer, as_vec2, bind, vec2_value, Bound, CallArgs, HostError, HostResult};
+use crate::host::{
+    as_integer, as_vec2, bind, vec2_value, Bound, CallArgs, HostError, HostResult, PaintInput,
+};
 use crate::origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
 use crate::value::{Builtin, NodeMethod, Value};
 
@@ -125,14 +127,16 @@ impl Scene {
                     "stroke_width",
                 ];
                 let bound = bind("rect", &params, 2, args)?;
+                let paint = paint(&bound, 3)?;
                 let content = NodeContent::rect(
                     bound.number(0)?,
                     bound.number(1)?,
                     bound.number_or(2, 0.0)?,
-                    paint(&bound, 3)?,
+                    paint.paint,
                 );
                 let node = self.create(content, site)?;
                 if let Value::Node(id) = node {
+                    self.apply_gradients(id, paint)?;
                     for (index, property) in [
                         (0, "width"),
                         (1, "height"),
@@ -149,9 +153,11 @@ impl Scene {
             Builtin::Circle => {
                 let params = ["radius", "fill", "stroke", "stroke_width"];
                 let bound = bind("circle", &params, 1, args)?;
-                let content = NodeContent::circle(bound.number(0)?, paint(&bound, 1)?);
+                let paint = paint(&bound, 1)?;
+                let content = NodeContent::circle(bound.number(0)?, paint.paint);
                 let node = self.create(content, site)?;
                 if let Value::Node(id) = node {
+                    self.apply_gradients(id, paint)?;
                     for (index, property) in [
                         (0, "radius"),
                         (1, "fill"),
@@ -223,15 +229,26 @@ impl Scene {
                 "text(): unknown align {align_name:?}; use \"left\", \"center\" or \"right\""
             ))
         })?;
+        let color = bound.optional_paint(3, Some(PaintInput::Color(Color::WHITE)))?;
+        let (color, gradient) = split_paint(color);
         let content = NodeContent::Text(TextContent::new(
             content.to_string(),
             bound.string_or(1, "Inter")?.to_string(),
             bound.number_or(2, 48.0)?,
-            bound.color_or(3, Color::WHITE)?,
+            color.unwrap_or(Color::WHITE),
             align,
         ));
         let node = self.create(content, site)?;
         if let Value::Node(id) = node {
+            if let Some(gradient) = gradient {
+                self.document_mut()?
+                    .set_content(
+                        id,
+                        ContentField::Color,
+                        ContentValue::Gradient(Some(gradient)),
+                    )
+                    .map_err(|error| core_error(&error))?;
+            }
             for (index, property) in [(0, "text"), (2, "size"), (3, "color"), (4, "align")] {
                 self.record(id, property, bound.source(index));
             }
@@ -283,7 +300,7 @@ impl Scene {
                 self.document_mut()?
                     .set_content(id, field, ContentValue::Number(value))
                     .map_err(|error| core_error(&error))?;
-                self.record(id, field.name(), bound.source(index));
+                self.record(id, &field.name(), bound.source(index));
             }
         }
         Ok(node)
@@ -379,8 +396,9 @@ impl Scene {
         geometry.set_cap(cap);
         geometry.set_join(join);
         let paint = path_paint(bound, paint_at)?;
-        let node = self.create(NodeContent::path(geometry, paint), site)?;
+        let node = self.create(NodeContent::path(geometry, paint.paint), site)?;
         if let Value::Node(id) = node {
+            self.apply_gradients(id, paint)?;
             for (index, property) in [
                 (paint_at, "fill"),
                 (paint_at + 1, "stroke"),
@@ -404,6 +422,29 @@ impl Scene {
         self.document
             .as_ref()
             .ok_or_else(|| HostError::value_error("call comp(...) before using nodes"))
+    }
+
+    /// Attaches the gradients a constructor received (D-0030).
+    fn apply_gradients(&mut self, id: NodeId, args: PaintArgs) -> HostResult<()> {
+        if let Some(gradient) = args.fill_gradient {
+            self.document_mut()?
+                .set_content(
+                    id,
+                    ContentField::Fill,
+                    ContentValue::Gradient(Some(gradient)),
+                )
+                .map_err(|error| core_error(&error))?;
+        }
+        if let Some(gradient) = args.stroke_gradient {
+            self.document_mut()?
+                .set_content(
+                    id,
+                    ContentField::Stroke,
+                    ContentValue::Gradient(Some(gradient)),
+                )
+                .map_err(|error| core_error(&error))?;
+        }
+        Ok(())
     }
 
     fn create(&mut self, content: NodeContent, site: &CreationSite) -> HostResult<Value> {
@@ -471,7 +512,7 @@ impl Scene {
             let accepts = self
                 .document()?
                 .node(id)
-                .is_some_and(|node| node.content().accepts(field));
+                .is_some_and(|node| node.content().field_exists(field));
             if !accepts {
                 return Err(unknown_attribute(name));
             }
@@ -697,18 +738,42 @@ fn split_axis(property: &str) -> (&str, Option<motioner_core::Axis>) {
     (property, None)
 }
 
+/// Paint arguments: solid fallbacks plus the gradients they replace (D-0030).
+struct PaintArgs {
+    paint: Paint,
+    fill_gradient: Option<Gradient>,
+    stroke_gradient: Option<Gradient>,
+}
+
 /// Reads optional `fill`, `stroke` and `stroke_width` starting at `first`.
-fn paint(bound: &Bound<'_>, first: usize) -> HostResult<Paint> {
-    let fill = bound.optional_color(first, Some(Color::WHITE))?;
-    let stroke_color = bound.optional_color(first + 1, None)?;
+fn paint(bound: &Bound<'_>, first: usize) -> HostResult<PaintArgs> {
+    let fill = bound.optional_paint(first, Some(PaintInput::Color(Color::WHITE)))?;
+    let stroke_color = bound.optional_paint(first + 1, None)?;
     let stroke_width = bound.number_or(first + 2, 0.0)?;
+    let (fill, fill_gradient) = split_paint(fill);
+    let (stroke_color, stroke_gradient) = split_paint(stroke_color);
     let stroke = stroke_color
         .filter(|_| stroke_width != 0.0)
         .map(|color| Stroke {
             color,
             width: stroke_width,
         });
-    Ok(Paint { fill, stroke })
+    Ok(PaintArgs {
+        paint: Paint { fill, stroke },
+        fill_gradient,
+        stroke_gradient,
+    })
+}
+
+/// Splits a paint argument into its solid fallback and its gradient.
+fn split_paint(input: Option<PaintInput>) -> (Option<Color>, Option<Gradient>) {
+    match input {
+        None => (None, None),
+        Some(PaintInput::Color(color)) => (Some(color), None),
+        Some(PaintInput::Gradient(gradient)) => {
+            (Some(gradient.fallback_color()), Some((*gradient).clone()))
+        }
+    }
 }
 
 /// Reads `path()` points: each is `(x, y)` or
@@ -757,17 +822,23 @@ fn path_points(value: &Value) -> HostResult<Vec<PathPoint>> {
 
 /// Reads optional `fill`, `stroke` and `stroke_width` starting at `first`,
 /// with the path defaults (no fill, white 2 px stroke).
-fn path_paint(bound: &Bound<'_>, first: usize) -> HostResult<Paint> {
-    let fill = bound.optional_color(first, None)?;
-    let stroke_color = bound.optional_color(first + 1, Some(Color::WHITE))?;
+fn path_paint(bound: &Bound<'_>, first: usize) -> HostResult<PaintArgs> {
+    let fill = bound.optional_paint(first, None)?;
+    let stroke_color = bound.optional_paint(first + 1, Some(PaintInput::Color(Color::WHITE)))?;
     let stroke_width = bound.number_or(first + 2, 2.0)?;
+    let (fill, fill_gradient) = split_paint(fill);
+    let (stroke_color, stroke_gradient) = split_paint(stroke_color);
     let stroke = stroke_color
         .filter(|_| stroke_width != 0.0)
         .map(|color| Stroke {
             color,
             width: stroke_width,
         });
-    Ok(Paint { fill, stroke })
+    Ok(PaintArgs {
+        paint: Paint { fill, stroke },
+        fill_gradient,
+        stroke_gradient,
+    })
 }
 
 /// Maps a decimal or integer fps to an exact rational frame rate.
@@ -828,7 +899,7 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
     Some(match content.static_value(field)? {
         ContentValue::Number(number) => Value::Number(number),
         ContentValue::Color(Some(color)) => Value::Str(Rc::from(color.to_hex())),
-        ContentValue::Color(None) => Value::None,
+        ContentValue::Color(None) | ContentValue::Gradient(None) => Value::None,
         ContentValue::Text(text) => Value::Str(Rc::from(text)),
         ContentValue::Align(align) => Value::Str(Rc::from(match align {
             TextAlign::Left => "left",
@@ -837,6 +908,7 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
         })),
         ContentValue::Cap(cap) => Value::Str(Rc::from(cap.name())),
         ContentValue::Join(join) => Value::Str(Rc::from(join.name())),
+        ContentValue::Gradient(Some(gradient)) => Value::Gradient(Rc::new(gradient)),
     })
 }
 
@@ -862,14 +934,28 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::TrimEnd
         | ContentField::TrimOffset
         | ContentField::Dash
-        | ContentField::DashOffset => number(value),
-        ContentField::Fill | ContentField::Stroke | ContentField::Color => match value {
-            Value::None if field != ContentField::Color => Ok(ContentValue::Color(None)),
+        | ContentField::DashOffset
+        | ContentField::FillStopOffset(_)
+        | ContentField::StrokeStopOffset(_) => number(value),
+        ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_) => match value {
             Value::Str(text) => Color::parse_hex(text)
                 .map(|color| ContentValue::Color(Some(color)))
                 .map_err(|error| HostError::value_error(format!("{}(): {error}", field.name()))),
             other => Err(HostError::type_error(format!(
                 "'{}' expects a colour string, got {}",
+                field.name(),
+                other.type_name()
+            ))),
+        },
+        ContentField::Fill | ContentField::Stroke | ContentField::Color => match value {
+            Value::None if field != ContentField::Color => Ok(ContentValue::Color(None)),
+            Value::None => Ok(ContentValue::Gradient(None)),
+            Value::Str(text) => Color::parse_hex(text)
+                .map(|color| ContentValue::Color(Some(color)))
+                .map_err(|error| HostError::value_error(format!("{}(): {error}", field.name()))),
+            Value::Gradient(gradient) => Ok(ContentValue::Gradient(Some((**gradient).clone()))),
+            other => Err(HostError::type_error(format!(
+                "'{}' expects a colour string or a gradient, got {}",
                 field.name(),
                 other.type_name()
             ))),

@@ -235,6 +235,56 @@ impl TimelineRows {
 /// The content rows a node of this kind shows.
 #[must_use]
 pub fn content_fields(content: &NodeContent) -> Vec<ContentField> {
+    let mut out = Vec::new();
+    for field in base_fields(content) {
+        match field {
+            ContentField::Fill | ContentField::Stroke => {
+                let slot = if field == ContentField::Fill {
+                    motioner_core::PaintSlot::Fill
+                } else {
+                    motioner_core::PaintSlot::Stroke
+                };
+                if content.gradient_stop_count(slot) > 0 {
+                    push_gradient_rows(&mut out, content, slot);
+                } else {
+                    out.push(field);
+                }
+            }
+            ContentField::Color => {
+                out.push(field);
+                if content.gradient_stop_count(motioner_core::PaintSlot::Fill) > 0 {
+                    push_gradient_rows(&mut out, content, motioner_core::PaintSlot::Fill);
+                }
+            }
+            _ => out.push(field),
+        }
+    }
+    out
+}
+
+/// Adds `fill_stop<n>_offset` / `fill_stop<n>_color` rows for one gradient.
+fn push_gradient_rows(
+    fields: &mut Vec<ContentField>,
+    content: &NodeContent,
+    slot: motioner_core::PaintSlot,
+) {
+    for index in 0..content.gradient_stop_count(slot) {
+        if let Ok(index) = u8::try_from(index) {
+            fields.push(ContentField::stop_field(
+                slot,
+                motioner_core::StopPart::Offset,
+                index,
+            ));
+            fields.push(ContentField::stop_field(
+                slot,
+                motioner_core::StopPart::Color,
+                index,
+            ));
+        }
+    }
+}
+
+fn base_fields(content: &NodeContent) -> Vec<ContentField> {
     match content {
         NodeContent::Group => Vec::new(),
         NodeContent::Rect { .. } => vec![

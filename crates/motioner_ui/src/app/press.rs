@@ -395,7 +395,7 @@ impl PreviewApp {
                 axis,
             } => Some((self.row_id(outline)?, channel_name(property, axis))),
             RowKind::Content { outline, field } => {
-                Some((self.row_id(outline)?, field.name().to_owned()))
+                Some((self.row_id(outline)?, field.name().clone()))
             }
             RowKind::Layer { .. } => None,
         }
@@ -435,7 +435,7 @@ impl PreviewApp {
             }],
             RowKind::Content { field, .. } => vec![KeySpec {
                 id,
-                property: field.name().to_owned(),
+                property: field.name().clone(),
                 time: Time::Frame(frame),
             }],
         };

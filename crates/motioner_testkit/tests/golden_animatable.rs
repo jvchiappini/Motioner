@@ -39,6 +39,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[test]
 fn frame_45_matches_the_golden_still() -> Result<(), Box<dyn Error>> {
+    let _gpu = motioner_testkit::gpu::lock();
     assert_eq!(
         hex(&Sha256::digest(GOLDEN_PNG)),
         GOLDEN_SHA256,

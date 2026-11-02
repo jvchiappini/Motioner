@@ -110,7 +110,7 @@ fn draw_item(p: &mut Painter<'_>, v: &View<'_>, index: usize, item: &Item) {
                 draw_stopwatch(p, v, index, row, *stopwatch);
             }
             let label_style = p.style(type_scale::BODY, t.text_muted);
-            p.text_in(row.label, *label, Align::Left, &label_style);
+            p.text_in(&row.label, *label, Align::Left, &label_style);
             if let Some(diamond) = diamond {
                 draw_diamond(p, v, index, row, *diamond);
             }
@@ -190,12 +190,12 @@ fn draw_value(
         }
         RowValue::Pair { left, right } => {
             for (field, value) in fields.iter().zip([left, right]) {
-                numeric_field(p, v, *field, value.label, &value.text, value.suffix);
+                numeric_field(p, v, *field, &value.label, &value.text, value.suffix);
             }
         }
         RowValue::Single(value) => {
             if let Some(field) = fields.first() {
-                numeric_field(p, v, *field, value.label, &value.text, value.suffix);
+                numeric_field(p, v, *field, &value.label, &value.text, value.suffix);
             }
         }
         RowValue::Color { color, text, .. } => {

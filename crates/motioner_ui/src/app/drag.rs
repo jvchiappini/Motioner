@@ -113,7 +113,7 @@ impl PreviewApp {
                 };
                 channel_name(property, axis)
             }
-            FieldTarget::Content(field) => field.name().to_owned(),
+            FieldTarget::Content(field) => field.name().clone(),
             _ => return None,
         };
         Some(Command::Edit {

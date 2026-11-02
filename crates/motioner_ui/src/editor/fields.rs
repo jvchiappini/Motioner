@@ -61,6 +61,12 @@ impl Editor {
                     _ => String::new(),
                 }
             }
+            FieldTarget::Content(
+                field @ (ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_)),
+            ) => match channels::sampled_colour(document, node, field, self.frame()) {
+                channels::SampledColour::Colour(color) => inspect::hex(color),
+                _ => String::new(),
+            },
             FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
                 match document.node(node).map(motioner_core::Node::content) {
                     Some(NodeContent::Text(text)) => text.text.clone(),
@@ -114,7 +120,7 @@ impl Editor {
             }
             FieldTarget::Content(field) if is_numeric_field(field) => {
                 let value: f64 = trimmed.parse().ok().filter(|v: &f64| v.is_finite())?;
-                (field.name().to_owned(), OverrideValue::Number(value))
+                (field.name().clone(), OverrideValue::Number(value))
             }
             FieldTarget::Content(field @ (ContentField::Fill | ContentField::Stroke)) => {
                 if !trimmed.eq_ignore_ascii_case("none")
@@ -123,13 +129,19 @@ impl Editor {
                     return None;
                 }
                 (
-                    field.name().to_owned(),
+                    field.name().clone(),
                     OverrideValue::Text(trimmed.to_owned()),
                 )
             }
             FieldTarget::Content(ContentField::Color) => {
                 motioner_core::Color::parse_hex(trimmed).ok()?;
                 ("color".to_owned(), OverrideValue::Text(trimmed.to_owned()))
+            }
+            FieldTarget::Content(
+                field @ (ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_)),
+            ) => {
+                motioner_core::Color::parse_hex(trimmed).ok()?;
+                (field.name(), OverrideValue::Text(trimmed.to_owned()))
             }
             FieldTarget::Content(ContentField::Text) | FieldTarget::Text => {
                 ("text".to_owned(), OverrideValue::Text(text.to_owned()))
@@ -148,7 +160,7 @@ impl Editor {
                     motioner_core::LineJoin::from_name(trimmed)?;
                 }
                 (
-                    field.name().to_owned(),
+                    field.name().clone(),
                     OverrideValue::Text(trimmed.to_owned()),
                 )
             }
@@ -206,5 +218,7 @@ fn is_numeric_field(field: ContentField) -> bool {
             | ContentField::TrimOffset
             | ContentField::Dash
             | ContentField::DashOffset
+            | ContentField::FillStopOffset(_)
+            | ContentField::StrokeStopOffset(_)
     )
 }

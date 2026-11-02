@@ -13,6 +13,7 @@ mod animation;
 mod color;
 mod document;
 mod error;
+mod gradient;
 mod math;
 mod node;
 mod overrides;
@@ -25,6 +26,7 @@ pub use animation::{Animatable, AnimatableVec2, Axis, Ease, Keyframe};
 pub use color::{Color, ColorParseError};
 pub use document::{Composition, Document, MAX_CANVAS_SIZE};
 pub use error::CoreError;
+pub use gradient::{Gradient, GradientKind, GradientStop, PaintSlot, StopPart, MAX_GRADIENT_STOPS};
 pub use math::Vec2;
 pub use node::{
     is_valid_identity_name, BlendMode, ContentChannel, ContentField, ContentValue, Node,

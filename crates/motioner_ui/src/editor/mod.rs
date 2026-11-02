@@ -411,7 +411,7 @@ impl Editor {
             };
             model.rows.push(inspect::Row {
                 section: "Keys",
-                label: "Ease",
+                label: "Ease".to_owned(),
                 value: inspect::RowValue::Ease { current },
                 channel: None,
             });

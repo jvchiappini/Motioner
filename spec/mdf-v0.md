@@ -118,6 +118,8 @@ The v0 surface:
 | `polygon(sides, radius, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Regular polygon |
 | `star(points, inner, outer, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Star |
 | `arc(radius, start=0, end=360, fill=None, stroke="#ffffff", stroke_width=2, cap="round", join="round")` | Circular arc |
+| `linear_gradient(start=(0, 0), end=(100, 0), stops=[(0, "#000000"), (1, "#ffffff")])` | Linear paint |
+| `radial_gradient(center=(0, 0), radius=100, stops=[(0, "#ffffff"), (1, "#000000")])` | Radial paint |
 | `text(content, font="Inter", size=48, color="#ffffff", align="left")` | Text |
 | `latex(expression, size=48, color="#ffffff", display=False)` | LaTeX math |
 | `image(source, width=None, height=None, fit="contain")` | Image |
@@ -136,7 +138,10 @@ Common node members:
 - Content fields: `width`, `height`, `radius`, `fill`, `stroke`,
   `stroke_width` (rect/circle/path); `trim_start`, `trim_end`,
   `trim_offset`, `dash`, `dash_offset`, `cap`, `join` (path); `text`,
-  `size`, `color`, `align` (text).
+  `size`, `color`, `align` (text). A paint gradient adds
+  `fill_stop<n>_offset`, `fill_stop<n>_color`, `stroke_stop<n>_offset` and
+  `stroke_stop<n>_color` per stop; text gradients use the fill stop fields
+  with `color` as the gradient.
 - `clip_in`, `clip_out`, `time_remap`.
 - Methods: `add(*nodes)`, `remove()`, `key(property, time, value, ease="linear")`,
   `ease(name)`, `mask(node)`, `effect(kind, **params)`.
@@ -163,6 +168,33 @@ the After Effects trim-path model, so `key("trim_end", 0.0, 0.0)` +
 `key("trim_end", 1.0, 1.0)` draws a line on. `dash` is the on-length in
 local pixels (the gap is equal) and `dash_offset` shifts the pattern. Both
 are animatable. See D-0029.
+
+### 7.2 Gradients
+
+`linear_gradient(start, end, stops)` and `radial_gradient(center, radius,
+stops)` are paint values accepted by `fill`, `stroke` and text `color`
+(D-0030). `stops` is a list of `(offset, "#rrggbb[aa]")` pairs, 2 to 16 of
+them; offsets are `0..=1` and are sorted when the ramp is sampled, so a
+keyed offset may cross a neighbour. Two stops at one offset make a hard
+edge. Gradient geometry is authored in the node's local pixels: moving,
+rotating or scaling the node transforms the ramp with it.
+
+The stop offset and colour are ordinary content channels:
+
+```
+card = rect(400, 240, fill=linear_gradient(
+    start=(-200, 0), end=(200, 0),
+    stops=[(0, "#141026"), (0.6, "#7C5CFF"), (1, "#FF5A6E")]))
+card.key("fill_stop1_color", 0.0, "#7C5CFF")
+card.key("fill_stop1_color", 1.0, "#5CDBC5", ease="cubic_out")
+card.key("fill_stop1_offset", 0.0, 0.3)
+```
+
+Interpolation is linear-light sRGB per channel, alpha included, exactly
+like `Color::lerp`. A pixel exactly at a stop offset shows the authored
+sRGB byte. Setting a solid colour replaces the gradient; setting
+`fill="none"` clears it. `cap` and `join` stay discrete, and a gradient
+itself is not keyed as one value — key its stops instead.
 
 3D nodes add `target`, `fov`, `intensity`, `material`, `cast_shadow` and
 similar properties. NLE nodes add clip points and track assignment.

@@ -448,3 +448,76 @@ fn path_rejects_bad_points_and_discrete_keys() {
     assert_eq!(error.category, ErrorCategory::Value);
     assert!(error.message.contains("discrete"), "{error}");
 }
+
+#[test]
+fn gradients_build_key_and_override() {
+    let document = build(
+        "r = rect(200, 120, radius=16, \
+         fill=linear_gradient(start=(0, 0), end=(200, 0), \
+                              stops=[(0, \"#16121F\"), (0.6, \"#7C5CFF\"), (1, \"#FF5A6E\")]), \
+         stroke=radial_gradient(center=(0, 0), radius=80, \
+                                stops=[(0, \"#FFFFFF\"), (1, \"#00000000\")]), \
+         stroke_width=6)\n\
+         r.id(\"card\")\n\
+         r.fill_stop1_color = \"#00FF00\"\n\
+         r.key(\"fill_stop0_offset\", 1.0, 0.2, ease=\"cubic_out\")\n\
+         r.key(\"fill_stop2_offset\", 1.0, 0.9)\n",
+    );
+    let id = document.find("card").unwrap();
+    let content = document.node(id).unwrap().content();
+    assert_eq!(
+        content.gradient_stop_count(motioner_core::PaintSlot::Fill),
+        3
+    );
+    assert_eq!(
+        content.gradient_stop_count(motioner_core::PaintSlot::Stroke),
+        2
+    );
+    let Some(motioner_core::ContentValue::Gradient(Some(gradient))) =
+        content.static_value(motioner_core::ContentField::Fill)
+    else {
+        panic!("the fill is a gradient");
+    };
+    assert_eq!(
+        gradient.kind(),
+        motioner_core::GradientKind::Linear {
+            start: Vec2::ZERO,
+            end: Vec2::new(200.0, 0.0)
+        }
+    );
+    assert_eq!(
+        content.static_value(motioner_core::ContentField::FillStopColor(1)),
+        Some(motioner_core::ContentValue::Color(Some(
+            motioner_core::Color::rgb(0, 255, 0)
+        )))
+    );
+    assert_eq!(
+        content
+            .channel(motioner_core::ContentField::FillStopOffset(0))
+            .unwrap()
+            .key_frames(),
+        vec![60]
+    );
+    assert_eq!(
+        content
+            .channel(motioner_core::ContentField::FillStopOffset(2))
+            .unwrap()
+            .key_frames(),
+        vec![60]
+    );
+}
+
+#[test]
+fn gradient_errors_are_reported() {
+    let error = fail("r = rect(10, 10, fill=linear_gradient(start=(0, 0), end=(0, 0), stops=[(0, \"#000000\"), (1, \"#FFFFFF\")]))\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("different endpoints"), "{error}");
+    let error = fail("r = rect(10, 10, fill=linear_gradient(start=(0, 0), end=(10, 0), stops=[(0, \"#000000\")]))\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    let error =
+        fail("r = rect(10, 10, fill=linear_gradient(start=(0, 0), end=(10, 0), stops=\"nope\"))\n");
+    assert_eq!(error.category, ErrorCategory::Type);
+    let error = fail("r = rect(10, 10)\nr.key(\"fill\", 0.0, linear_gradient(start=(0, 0), end=(1, 0), stops=[(0, \"#000000\"), (1, \"#FFFFFF\")]))\n");
+    assert_eq!(error.category, ErrorCategory::Value);
+    assert!(error.message.contains("stops"), "{error}");
+}
