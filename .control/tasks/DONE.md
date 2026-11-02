@@ -17,6 +17,7 @@
 - **T-ARCH-0006** — Set up CI, format and lint gates `[alta]` (actualizado 2026-10-31)
 - **T-CORE-0001** — Animatable content properties (width, height, radius, fill, stroke, size, color) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0007** — Vector paths and trim paths (path, polygon, star, arc, trim, dash) `[alta]` (actualizado 2026-11-01)
+- **T-RENDER-0008** — Gradients for fill and stroke (linear and radial, animatable stops) `[alta]` (actualizado 2026-11-01)
 - **T-UI-0001** — First editor window: motioner preview with live viewport, transport, timeline, outline, hot reload `[alta]` (actualizado 2026-10-31)
 - **T-UI-0002** — Professional editor chrome: tokens, painter, icons, layers, canvas, inspector, timeline `[alta]` (actualizado 2026-11-01)
 - **T-UI-0003** — Editing in the editor: overrides, inspector, gizmos, keyframes and undo `[alta]` (actualizado 2026-11-01)
