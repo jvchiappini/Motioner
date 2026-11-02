@@ -6,10 +6,9 @@
 
 // Test bodies declare their own W/H constants after taking the GPU lock.
 #![allow(clippy::items_after_statements)]
-
 use motioner_core::{
-    Color, Composition, Document, Frame, FrameRate, NodeContent, NodeId, Paint, Property,
-    PropertyValue, Stroke, TextAlign, TextContent, Vec2,
+    BlendMode, Color, Composition, Document, Frame, FrameRate, NodeContent, NodeId, Paint,
+    Property, PropertyValue, Stroke, TextAlign, TextContent, Vec2,
 };
 use motioner_eval::{Evaluator, RenderPlan};
 use motioner_render::{FrameRenderer, FrameStats, RenderError};
@@ -196,6 +195,7 @@ fn render_single_text(
     let node = add_text(&mut document, text, size, WHITE, align);
     set_position(&mut document, node, origin.0, origin.1);
     let plan = evaluate(&document, 0);
+    //
     render(renderer, &document, &plan).0
 }
 
@@ -495,14 +495,45 @@ fn same_frame_twice_is_identical() {
 }
 
 #[test]
-#[cfg(not(feature = "engine-gradients"))]
-fn gradients_are_refused_with_a_typed_unsupported_error() {
+fn shape_gradients_render_across_the_fill() {
     let _gpu = motioner_testkit::gpu::lock();
     let Some(mut renderer) = try_renderer(64, 64) else {
         return;
     };
     let mut document = composition(64, 64, BLACK);
-    let id = add_rect(&mut document, 40.0, 40.0, 0.0, filled(WHITE));
+    let id = add_rect(&mut document, 64.0, 64.0, 0.0, filled(WHITE));
+    let gradient = motioner_core::Gradient::linear(
+        Vec2::new(-32.0, 0.0),
+        Vec2::new(32.0, 0.0),
+        [(0.0, RED), (1.0, BLUE)],
+    )
+    .unwrap();
+    document
+        .set_content(
+            id,
+            motioner_core::ContentField::Fill,
+            motioner_core::ContentValue::Gradient(Some(gradient)),
+        )
+        .unwrap();
+    set_position(&mut document, id, 32.0, 32.0);
+    let plan = evaluate(&document, 0);
+    let mut out = Vec::new();
+    renderer.render(&document, &plan, &mut out).unwrap();
+    let left = pixel(&out, 64, 16, 32);
+    let right = pixel(&out, 64, 48, 32);
+    assert!(left[0] > left[2], "left should be red: {left:?}");
+    assert!(right[2] > right[0], "right should be blue: {right:?}");
+}
+
+#[test]
+#[cfg(not(feature = "engine-text-gradient"))]
+fn text_gradients_are_refused_with_a_typed_unsupported_error() {
+    let _gpu = motioner_testkit::gpu::lock();
+    let Some(mut renderer) = try_renderer(64, 64) else {
+        return;
+    };
+    let mut document = composition(64, 64, BLACK);
+    let id = add_text(&mut document, "A", 40.0, WHITE, TextAlign::Center);
     let gradient = motioner_core::Gradient::linear(
         Vec2::new(-20.0, 0.0),
         Vec2::new(20.0, 0.0),
@@ -512,7 +543,7 @@ fn gradients_are_refused_with_a_typed_unsupported_error() {
     document
         .set_content(
             id,
-            motioner_core::ContentField::Fill,
+            motioner_core::ContentField::Color,
             motioner_core::ContentValue::Gradient(Some(gradient)),
         )
         .unwrap();
@@ -527,4 +558,58 @@ fn gradients_are_refused_with_a_typed_unsupported_error() {
         }
     );
     assert!(error.to_string().contains("gradient"));
+}
+
+#[test]
+fn fixed_blend_modes_render_through_layers() {
+    let _gpu = motioner_testkit::gpu::lock();
+    let Some(mut renderer) = try_renderer(64, 64) else {
+        return;
+    };
+    let grey = Color::rgb(128, 128, 128);
+    let mut document = composition(64, 64, grey);
+    let id = add_rect(&mut document, 64.0, 64.0, 0.0, filled(grey));
+    set_position(&mut document, id, 32.0, 32.0);
+    document.set_blend(id, BlendMode::Multiply).unwrap();
+    let plan = evaluate(&document, 0);
+    let mut out = Vec::new();
+    renderer.render(&document, &plan, &mut out).unwrap();
+    let multiplied = pixel(&out, 64, 32, 32);
+    assert!(
+        multiplied[0] < 110,
+        "multiply should darken grey: {multiplied:?}"
+    );
+
+    document.set_blend(id, BlendMode::Normal).unwrap();
+    let plan = evaluate(&document, 0);
+    let mut normal = Vec::new();
+    renderer.render(&document, &plan, &mut normal).unwrap();
+    let plain_pixel = pixel(&normal, 64, 32, 32);
+    assert!(
+        (120..=136).contains(&plain_pixel[0]),
+        "normal keeps the grey: {plain_pixel:?}"
+    );
+}
+
+#[test]
+#[cfg(not(feature = "engine-composite"))]
+fn backdrop_blends_are_refused_with_a_typed_unsupported_error() {
+    let _gpu = motioner_testkit::gpu::lock();
+    let Some(mut renderer) = try_renderer(64, 64) else {
+        return;
+    };
+    let mut document = composition(64, 64, BLACK);
+    let id = add_rect(&mut document, 32.0, 32.0, 0.0, filled(WHITE));
+    document.set_blend(id, BlendMode::Overlay).unwrap();
+    let plan = evaluate(&document, 0);
+    let mut out = Vec::new();
+    let error = renderer.render(&document, &plan, &mut out).unwrap_err();
+    assert_eq!(
+        error,
+        RenderError::Unsupported {
+            feature: motioner_render::Feature::BlendMode,
+            node: Some(id)
+        }
+    );
+    assert!(error.to_string().contains("blend mode"));
 }

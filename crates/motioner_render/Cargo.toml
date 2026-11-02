@@ -19,11 +19,14 @@ glam.workspace = true
 lyon_tessellation = "1.0"
 
 [features]
-default = ["engine-gradients"]
-# Gradients in the Pure2D pass (D-0030). The pinned FerrousEngine (857b9df)
-# has the gradient pass, so this is on by default; the feature is removed
-# once the non-gradient path is gone.
-engine-gradients = []
+default = ["engine-text-gradient", "engine-composite"]
+# Per-glyph gradient fills in the Pure2D text pass. On by default since the
+# pin includes `TextInstance::with_gradient`; delete once unconditional.
+engine-text-gradient = []
+# Backdrop-aware layer composites (overlay, darken, lighten). On by default
+# since the pin includes `CompositeMode2d`/`BackdropCompositePipeline`;
+# delete it once the paths are unconditional.
+engine-composite = []
 # Enables `LivePainter`, the only public API that names a `ferrous_renderer`
 # type. Off by default so headless consumers keep an engine-free API boundary.
 live = []

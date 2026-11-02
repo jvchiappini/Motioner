@@ -148,6 +148,13 @@ pub enum RowValue {
         /// The text.
         text: String,
     },
+    /// The node's blend mode as a seven-tile segmented grid.
+    Blend {
+        /// What an edit writes (`blend`).
+        target: FieldTarget,
+        /// The current mode.
+        mode: motioner_core::BlendMode,
+    },
     /// A three-state segmented control.
     Align {
         /// What an edit writes.
@@ -800,7 +807,18 @@ pub fn inspect_node(
     fallback_name: &str,
 ) -> Option<Model> {
     let n = document.node(node)?;
-    let mut rows = transform_rows(n.transform(), frame);
+    // Blend sits at the top: it is a whole-node property, and the segmented
+    // grid needs the first screenful.
+    let mut rows = vec![row(
+        "Composite",
+        "Blend",
+        RowValue::Blend {
+            target: FieldTarget::None,
+            mode: n.blend(),
+        },
+        None,
+    )];
+    rows.extend(transform_rows(n.transform(), frame));
     rows.extend(content_rows(document, node, n.content(), frame));
     let name = display_name(document, node, overrides)
         .filter(|name| !name.is_empty())
@@ -999,6 +1017,7 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
         }
         let height = match row.value {
             RowValue::Ease { .. } => ease_grid_height(m) + row_h,
+            RowValue::Blend { .. } => blend_grid_height(m) + row_h,
             _ => row_h,
         };
         let rect = Rect::new(left, y, (right - left).max(0.0), height);
@@ -1055,6 +1074,9 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
             RowValue::Ease { .. } => {
                 segments = ease_tiles(Rect::new(left, y + row_h, rect.w, ease_grid_height(m)), m);
             }
+            RowValue::Blend { .. } => {
+                segments = blend_tiles(Rect::new(left, y + row_h, rect.w, blend_grid_height(m)), m);
+            }
             RowValue::ReadOnly(_) => {
                 fields.push((
                     Rect::new(value_x, field_y, value_w, field_h),
@@ -1087,6 +1109,33 @@ fn ease_grid_height(m: Metrics) -> f32 {
     let rows = motioner_core::Ease::ALL.len().div_ceil(EASE_COLUMNS);
     let gap = m.px(size::GRID);
     m.px(EASE_TILE) * rows as f32 + gap * (rows as f32 - 1.0) + m.px(size::GRID)
+}
+
+/// Short labels for the blend tiles, in [`motioner_core::BlendMode::ALL`] order.
+pub const BLEND_LABELS: [&str; 7] = [
+    "Normal", "Add", "Mult", "Screen", "Overlay", "Darken", "Lighten",
+];
+
+/// Height of the blend grid below the "Blend" label.
+fn blend_grid_height(m: Metrics) -> f32 {
+    let rows = motioner_core::BlendMode::ALL.len().div_ceil(4);
+    let gap = m.px(size::GRID);
+    m.px(24.0) * rows as f32 + gap * (rows as f32 - 1.0) + m.px(size::GRID)
+}
+
+/// One tile per blend mode, four per row.
+fn blend_tiles(area: Rect, m: Metrics) -> Vec<Rect> {
+    const COLUMNS: usize = 4;
+    let gap = m.px(size::GRID);
+    let w = ((area.w - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).floor();
+    let h = m.px(24.0);
+    (0..motioner_core::BlendMode::ALL.len())
+        .map(|index| {
+            let column = (index % COLUMNS) as f32;
+            let row = (index / COLUMNS) as f32;
+            Rect::new(area.x + (w + gap) * column, area.y + (h + gap) * row, w, h)
+        })
+        .collect()
 }
 
 /// One tile per ease, in [`motioner_core::Ease::ALL`] order.

@@ -15,7 +15,7 @@ use crate::animation::{Axis, Ease};
 use crate::color::Color;
 use crate::document::Document;
 use crate::math::Vec2;
-use crate::node::{ContentField, ContentValue, Property, PropertyValue, TextAlign};
+use crate::node::{BlendMode, ContentField, ContentValue, Property, PropertyValue, TextAlign};
 use crate::path::{LineCap, LineJoin};
 use crate::time::{Frame, FrameRate};
 
@@ -371,6 +371,19 @@ fn set_value(
         })?;
         return document
             .set_property(node, property, value)
+            .map_err(|error| error.to_string());
+    }
+    if property_name == "blend" {
+        let OverrideValue::Text(name) = value else {
+            return Err(format!(
+                "'blend' cannot take {}: expected a mode name",
+                describe(value)
+            ));
+        };
+        let mode =
+            BlendMode::from_name(name).ok_or_else(|| format!("unknown blend mode {name:?}"))?;
+        return document
+            .set_blend(node, mode)
             .map_err(|error| error.to_string());
     }
     let Some(field) = ContentField::from_name(property_name) else {

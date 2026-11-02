@@ -210,6 +210,7 @@ fn draw_value(
         }
         RowValue::Align { align, .. } => align_segments(p, v, segments, *align, item),
         RowValue::Ease { current } => ease_tiles(p, v, segments, *current, item),
+        RowValue::Blend { mode, .. } => blend_tiles(p, v, segments, *mode, item),
     }
 }
 
@@ -546,4 +547,37 @@ fn text_field(p: &mut Painter<'_>, v: &View<'_>, field: (Rect, FieldTarget), tex
     }
     let style = p.style(type_scale::BODY, p.theme.text_body);
     p.text_in(text, rect.inset_xy(pad, 0.0), Align::Left, &style);
+}
+
+/// The blend mode grid: one tile per mode, four per row; the active mode is
+/// filled with the accent.
+fn blend_tiles(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    tiles: &[Rect],
+    current: motioner_core::BlendMode,
+    item: usize,
+) {
+    let t = *p.theme;
+    for (segment, (rect, mode)) in tiles.iter().zip(motioner_core::BlendMode::ALL).enumerate() {
+        let state = v.interaction(Hit::InspectSegment { item, segment });
+        let active = current == mode;
+        let fill = if active {
+            t.selection
+        } else if state.hovered {
+            t.control_hover
+        } else {
+            t.raised
+        };
+        p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
+        if active {
+            p.stroke_rounded(*rect, t.accent, p.m.px(size::RADIUS_SM), p.m.hairline());
+        }
+        let label = crate::inspect::BLEND_LABELS[segment];
+        let style = p.style(
+            type_scale::CAPTION,
+            if active { t.text } else { t.text_muted },
+        );
+        p.text_in(label, *rect, Align::Center, &style);
+    }
 }

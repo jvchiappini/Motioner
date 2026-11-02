@@ -134,7 +134,9 @@ The v0 surface:
 Common node members:
 
 - `parent`, `children`, `name`, `id`, `enabled`.
-- `pos`, `scale`, `rotation`, `anchor`, `opacity`, `blend`.
+- `pos`, `scale`, `rotation`, `anchor`, `opacity`, `blend` (`"normal"`,
+  `"add"`, `"multiply"`, `"screen"`, `"overlay"`, `"darken"`, `"lighten"`;
+  D-0031).
 - Content fields: `width`, `height`, `radius`, `fill`, `stroke`,
   `stroke_width` (rect/circle/path); `trim_start`, `trim_end`,
   `trim_offset`, `dash`, `dash_offset`, `cap`, `join` (path); `text`,
@@ -448,7 +450,7 @@ for i in range(5):
 1. `use` modules and shared helper files.
 2. Override *statements inside a program* (overrides live in the separate
    `<name>.overrides.motion` file described in §9 and D-0022; that subset is
-   implemented), override diagnostics for blend modes and animated content
+   implemented) and override diagnostics for animated content
    properties, and the cross-file project folder.
 3. `while` loops.
 4. F-strings and advanced formatting helpers.

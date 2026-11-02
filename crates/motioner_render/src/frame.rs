@@ -71,20 +71,18 @@ pub(crate) fn render(
             actual: (plan.width(), plan.height()),
         });
     }
-    let unsupported = {
-        #[cfg(not(feature = "engine-gradients"))]
-        {
-            plan.first_gradient_node()
-        }
-        #[cfg(feature = "engine-gradients")]
-        {
-            plan.first_text_gradient_node()
-        }
-    };
-    if let Some(node) = unsupported {
+    #[cfg(not(feature = "engine-text-gradient"))]
+    if let Some(node) = plan.first_text_gradient_node() {
         return Err(RenderError::Unsupported {
             feature: crate::Feature::Gradient,
             node: Some(node),
+        });
+    }
+    #[cfg(not(feature = "engine-composite"))]
+    if let Some(item) = plan.items().iter().find(|item| item.blend.needs_backdrop()) {
+        return Err(RenderError::Unsupported {
+            feature: crate::Feature::BlendMode,
+            node: Some(item.node),
         });
     }
     apply_clear(renderer, plan.background());
@@ -92,7 +90,6 @@ pub(crate) fn render(
 
     let flip = space::composition_flip(renderer.width, renderer.height);
     let gradients = crate::gradients::GradientTable::build(plan, flip);
-    #[cfg(feature = "engine-gradients")]
     renderer
         .harness
         .renderer_mut()
@@ -153,9 +150,17 @@ pub(crate) fn paint_plan(
         ..PaintStats::default()
     };
     for item in plan.items() {
+        let layered = item.blend != motioner_core::BlendMode::Normal;
+        if layered {
+            canvas.push_layer(1.0, item.blend, space::z_for(z_index, total));
+        }
         match item.shape {
             ItemShape::Text {
-                size, color, align, ..
+                size,
+                color,
+                align,
+                gradient,
+                ..
             } => {
                 if let Some(missing) = draw_text(
                     canvas,
@@ -165,6 +170,7 @@ pub(crate) fn paint_plan(
                     size,
                     color,
                     align,
+                    gradient.and_then(|index| gradients.base(index)),
                     flip,
                     missing_glyphs,
                     &mut z_index,
@@ -186,6 +192,9 @@ pub(crate) fn paint_plan(
                     total,
                 );
             }
+        }
+        if layered {
+            canvas.pop_layer();
         }
     }
     stats
@@ -213,6 +222,7 @@ fn draw_text(
     size: f64,
     color: Color,
     align: TextAlign,
+    gradient: Option<u32>,
     flip: Affine2,
     missing_glyphs: &mut HashMap<NodeId, u32>,
     z_index: &mut u32,
@@ -241,6 +251,7 @@ fn draw_text(
         to_f32(size),
         text::align_to_engine(align),
         space::linear_rgba(color, item.opacity),
+        gradient,
     );
     Some(missing)
 }

@@ -152,6 +152,16 @@ fn functions_do_not_leak_locals() {
     assert_eq!(error.span.line, 6);
 }
 
+#[test]
+fn every_blend_mode_parses_and_round_trips() {
+    for mode in motioner_core::BlendMode::ALL {
+        let name = mode.name();
+        let document = build(&format!("n = rect(1, 1)\nn.blend = \"{name}\"\n"));
+        let node = document.node(document.roots()[0]).unwrap();
+        assert_eq!(node.blend(), mode, "{name}");
+    }
+}
+
 // Exact comparison is intended: the expected values are exactly representable.
 #[allow(clippy::float_cmp)]
 #[test]
@@ -208,7 +218,7 @@ fn scene_api_rejects_invalid_use() {
         ("n = rect(1, 1)\nn.pos = 3\n", ErrorCategory::Type),
         ("n = rect(1, 1)\nn.color = 3\n", ErrorCategory::Name),
         (
-            "n = rect(1, 1)\nn.blend = \"add\"\n",
+            "n = rect(1, 1)\nn.blend = \"wobble\"\n",
             ErrorCategory::Unsupported,
         ),
         (

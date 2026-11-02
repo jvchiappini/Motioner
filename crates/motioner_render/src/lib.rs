@@ -12,7 +12,7 @@
 //! editor can paint the same plan into the window's `Pure2D` pass. The default
 //! build stays engine-free at the API boundary.
 //!
-//! The renderer is deterministic — the only wall-clock value it reports is
+//! The renderer is deterministic â€” the only wall-clock value it reports is
 //! [`FrameStats::cpu_ms`], which is diagnostic and never drives a decision.
 //!
 //! The coordinate, colour, depth and text contracts are documented in the crate
@@ -47,7 +47,7 @@ pub(crate) const ROBOTO: &[u8] =
 /// The single drawing surface abstraction shared by the headless and live
 /// paths.
 ///
-/// Every "plan item → engine draw" decision lives above this trait; the two
+/// Every "plan item â†’ engine draw" decision lives above this trait; the two
 /// implementations only forward to the matching engine method. That is what
 /// guarantees the golden frame and the live preview cannot drift apart.
 trait Canvas2d {
@@ -55,6 +55,7 @@ trait Canvas2d {
     fn shape(&mut self, instance: ShapeInstance);
 
     /// Submits one text line with an already-built model matrix.
+    #[allow(clippy::too_many_arguments)] // the plan item fields, kept flat
     fn text(
         &mut self,
         font: FontId2d,
@@ -63,6 +64,7 @@ trait Canvas2d {
         size_px: f32,
         align: EngineTextAlign,
         color: [f32; 4],
+        gradient: Option<u32>,
     );
 
     /// Measures one text line for the missing-glyph counter.
@@ -73,6 +75,49 @@ trait Canvas2d {
         size_px: f32,
         align: EngineTextAlign,
     ) -> Option<LineMetrics>;
+
+    /// Opens an offscreen layer for a group of draws (D-0031).
+    ///
+    /// `blend` is the node's blend mode; the engine layers only need it to
+    /// decide how the finished layer composites.  Advanced modes are rejected
+    /// before painting unless `engine-composite` is enabled.
+    fn push_layer(&mut self, opacity: f64, blend: motioner_core::BlendMode, depth: f32);
+
+    /// Closes the innermost layer.
+    fn pop_layer(&mut self);
+}
+
+/// The engine blend state of a fixed-function node mode.
+///
+/// Backdrop-aware modes never reach this function: they are either refused or
+/// composited through `CompositeMode2d` in the layer push.
+#[cfg_attr(feature = "engine-composite", allow(dead_code))]
+fn fixed_blend(blend: motioner_core::BlendMode) -> ferrous_2d::render::BlendMode2d {
+    use motioner_core::BlendMode;
+    match blend {
+        BlendMode::Add => ferrous_2d::render::BlendMode2d::Add,
+        BlendMode::Multiply => ferrous_2d::render::BlendMode2d::Multiply,
+        BlendMode::Screen => ferrous_2d::render::BlendMode2d::Screen,
+        BlendMode::Normal | BlendMode::Overlay | BlendMode::Darken | BlendMode::Lighten => {
+            ferrous_2d::render::BlendMode2d::Normal
+        }
+    }
+}
+
+/// The engine composite mode of a node mode (feature `engine-composite`).
+#[cfg(feature = "engine-composite")]
+fn composite_blend(blend: motioner_core::BlendMode) -> ferrous_2d::render::CompositeMode2d {
+    use ferrous_2d::render::CompositeMode2d;
+    use motioner_core::BlendMode;
+    match blend {
+        BlendMode::Normal => CompositeMode2d::Normal,
+        BlendMode::Add => CompositeMode2d::Add,
+        BlendMode::Multiply => CompositeMode2d::Multiply,
+        BlendMode::Screen => CompositeMode2d::Screen,
+        BlendMode::Overlay => CompositeMode2d::Overlay,
+        BlendMode::Darken => CompositeMode2d::Darken,
+        BlendMode::Lighten => CompositeMode2d::Lighten,
+    }
 }
 
 impl Canvas2d for Pure2dHarness {
@@ -88,8 +133,15 @@ impl Canvas2d for Pure2dHarness {
         size_px: f32,
         align: EngineTextAlign,
         color: [f32; 4],
+        gradient: Option<u32>,
     ) {
-        self.draw_text(font, text, transform, size_px, align, color);
+        #[cfg(feature = "engine-text-gradient")]
+        self.draw_text_with_gradient(font, text, transform, size_px, align, color, gradient);
+        #[cfg(not(feature = "engine-text-gradient"))]
+        {
+            let _ = gradient;
+            self.draw_text(font, text, transform, size_px, align, color);
+        }
     }
 
     fn measure(
@@ -100,6 +152,19 @@ impl Canvas2d for Pure2dHarness {
         align: EngineTextAlign,
     ) -> Option<LineMetrics> {
         self.measure_text(font, text, size_px, align)
+    }
+
+    fn push_layer(&mut self, opacity: f64, blend: motioner_core::BlendMode, depth: f32) {
+        let opacity = space::to_f32(opacity);
+        #[cfg(feature = "engine-composite")]
+        let desc = ferrous_2d::render::Layer2d::new(opacity, composite_blend(blend), depth);
+        #[cfg(not(feature = "engine-composite"))]
+        let desc = ferrous_2d::render::Layer2d::new(opacity, fixed_blend(blend), depth);
+        let _ = Pure2dHarness::push_layer(self, desc);
+    }
+
+    fn pop_layer(&mut self) {
+        let _ = Pure2dHarness::pop_layer(self);
     }
 }
 
@@ -116,8 +181,15 @@ impl Canvas2d for ferrous_renderer::Renderer {
         size_px: f32,
         align: EngineTextAlign,
         color: [f32; 4],
+        gradient: Option<u32>,
     ) {
-        self.draw_text_2d(font, text, transform, size_px, align, color);
+        #[cfg(feature = "engine-text-gradient")]
+        self.draw_text_2d_with_gradient(font, text, transform, size_px, align, color, gradient);
+        #[cfg(not(feature = "engine-text-gradient"))]
+        {
+            let _ = gradient;
+            self.draw_text_2d(font, text, transform, size_px, align, color);
+        }
     }
 
     fn measure(
@@ -128,6 +200,19 @@ impl Canvas2d for ferrous_renderer::Renderer {
         align: EngineTextAlign,
     ) -> Option<LineMetrics> {
         self.measure_text_2d(font, text, size_px, align)
+    }
+
+    fn push_layer(&mut self, opacity: f64, blend: motioner_core::BlendMode, depth: f32) {
+        let opacity = space::to_f32(opacity);
+        #[cfg(feature = "engine-composite")]
+        let desc = ferrous_2d::render::Layer2d::new(opacity, composite_blend(blend), depth);
+        #[cfg(not(feature = "engine-composite"))]
+        let desc = ferrous_2d::render::Layer2d::new(opacity, fixed_blend(blend), depth);
+        let _ = ferrous_renderer::Renderer::push_layer_2d(self, desc);
+    }
+
+    fn pop_layer(&mut self) {
+        let _ = ferrous_renderer::Renderer::pop_layer_2d(self);
     }
 }
 
@@ -194,11 +279,13 @@ pub struct FrameStats {
     pub cpu_ms: f64,
 }
 
-/// A drawing feature the pinned engine cannot render yet (D-0030).
+/// A drawing feature the pinned engine cannot render yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
-    /// Per-pixel linear/radial gradients with animatable stops.
+    /// Per-glyph gradient fills in the text pass (pending the engine pin).
     Gradient,
+    /// A node blend mode that needs backdrop compositing (D-0031).
+    BlendMode,
 }
 
 impl Feature {
@@ -207,6 +294,7 @@ impl Feature {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Gradient => "gradient",
+            Self::BlendMode => "blend mode",
         }
     }
 }
@@ -280,7 +368,7 @@ impl fmt::Display for RenderError {
 impl std::error::Error for RenderError {}
 
 impl FrameRenderer {
-    /// Creates a headless renderer for a `width` × `height` composition.
+    /// Creates a headless renderer for a `width` Ã— `height` composition.
     ///
     /// The engine registers the embedded Roboto font once. Other font families
     /// requested by a document fall back to Roboto (see the crate README).
@@ -407,7 +495,6 @@ impl LivePainter {
         }
         let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
         let gradients = gradients::GradientTable::build(plan, flip);
-        #[cfg(feature = "engine-gradients")]
         renderer.set_2d_gradient_table(gradients.slots());
         frame::paint_plan(
             renderer,

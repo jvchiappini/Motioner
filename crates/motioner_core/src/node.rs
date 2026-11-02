@@ -293,22 +293,57 @@ impl fmt::Display for NodeId {
     }
 }
 
-/// How a node composites over the layers below it.
+/// How a node composites over the layers below it (D-0031).
 ///
-/// MDF v0 renders only `Normal` (source-over with straight alpha); other
-/// blend modes are rejected at authoring time instead of being ignored.
+/// The formulas are fixed in D-0028: premultiplied alpha in linear light.
+/// `Normal`, `Add`, `Multiply` and `Screen` are fixed-function GPU blend
+/// states; `Overlay`, `Darken` and `Lighten` need the backdrop, so the renderer
+/// composites them through an offscreen layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BlendMode {
     /// Source-over alpha compositing.
     #[default]
     Normal,
+    /// Additive: `S + B`, source-over coverage.
+    Add,
+    /// Multiplicative: `S * B`.
+    Multiply,
+    /// Screen: `S + B - S * B`.
+    Screen,
+    /// Multiply in the dark half, screen in the light half (conditioned on the
+    /// source colour).
+    Overlay,
+    /// Per-channel minimum.
+    Darken,
+    /// Per-channel maximum.
+    Lighten,
 }
 
 impl BlendMode {
+    /// Every mode, in inspector order.
+    pub const ALL: [Self; 7] = [
+        Self::Normal,
+        Self::Add,
+        Self::Multiply,
+        Self::Screen,
+        Self::Overlay,
+        Self::Darken,
+        Self::Lighten,
+    ];
+
     /// Looks up a blend mode by its MDF name.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        (name == "normal").then_some(Self::Normal)
+        match name {
+            "normal" => Some(Self::Normal),
+            "add" => Some(Self::Add),
+            "multiply" => Some(Self::Multiply),
+            "screen" => Some(Self::Screen),
+            "overlay" => Some(Self::Overlay),
+            "darken" => Some(Self::Darken),
+            "lighten" => Some(Self::Lighten),
+            _ => None,
+        }
     }
 
     /// The MDF name of this blend mode.
@@ -316,7 +351,20 @@ impl BlendMode {
     pub fn name(self) -> &'static str {
         match self {
             Self::Normal => "normal",
+            Self::Add => "add",
+            Self::Multiply => "multiply",
+            Self::Screen => "screen",
+            Self::Overlay => "overlay",
+            Self::Darken => "darken",
+            Self::Lighten => "lighten",
         }
+    }
+
+    /// `true` for the modes that need a destination snapshot
+    /// (`Overlay`, `Darken`, `Lighten`).
+    #[must_use]
+    pub const fn needs_backdrop(self) -> bool {
+        matches!(self, Self::Overlay | Self::Darken | Self::Lighten)
     }
 }
 

@@ -107,6 +107,7 @@ impl Editor {
         j.key("visible").boolean(n.is_visible());
         j.key("drawn").boolean(is_visible_at(document, node, frame));
         j.key("locked").boolean(self.node_locked(node));
+        j.key("blend").string(n.blend().name());
         j.key("channels").begin_object();
         for (property, axis) in CHANNELS {
             let channel = channels::Channel::Transform(property, axis);

@@ -1,10 +1,7 @@
-//! The per-frame gradient table and the instance hook (D-0030).
+//! The per-frame gradient table and the instance hooks (D-0030).
 //!
-//! `Pure2D` has no per-pixel gradient in the pinned engine. With the
-//! `engine-gradients` feature (which requires the pin bump) the renderer
-//! uploads this table into the 2D camera uniform and every shape instance
-//! references one entry. Without it the table is not built and gradients are
-//! refused with [`crate::RenderError::Unsupported`].
+//! The renderer uploads this table into the 2D camera uniform and every shape
+//! instance references one entry; `shape_2d.wgsl` evaluates the ramp.
 //!
 //! Layout, shared with `shape_2d.wgsl`:
 //!
@@ -75,10 +72,6 @@ impl GradientTable {
     }
 
     /// The flat vec4 table uploaded to the engine.
-    ///
-    /// Without `engine-gradients` nothing uploads it, but the unit tests and
-    /// the encoder stay compiled so the layout cannot drift.
-    #[cfg_attr(not(feature = "engine-gradients"), allow(dead_code))]
     #[must_use]
     pub fn slots(&self) -> &[[f32; 4]] {
         &self.slots
@@ -163,21 +156,13 @@ fn record_paint(
     }
 }
 
-/// Points one shape instance at a gradient, when the engine can use one.
-#[cfg(feature = "engine-gradients")]
+/// Points one shape instance at a gradient, or leaves the solid fallback.
 #[must_use]
 pub fn paint(instance: ShapeInstance, base: Option<u32>) -> ShapeInstance {
     match base {
         Some(base) => instance.with_gradient(base),
         None => instance,
     }
-}
-
-/// Without the engine pass, gradients keep the solid fallback below.
-#[cfg(not(feature = "engine-gradients"))]
-#[must_use]
-pub fn paint(instance: ShapeInstance, _base: Option<u32>) -> ShapeInstance {
-    instance
 }
 
 /// The base of one resolved fill of the plan.

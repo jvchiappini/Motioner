@@ -37,6 +37,14 @@ Every one of them prints **one JSON object per line** on stdout.
   `"#RRGGBBAA"`; `fill`/`stroke` also take `"none"`. `align` is `"left"`,
   `"center"` or `"right"`; `cap` is `"butt"`, `"round"` or `"square"`;
   `join` is `"miter"`, `"bevel"` or `"round"`.
+- **Blend mode** (D-0031): `blend` is `"normal"`, `"add"`, `"multiply"`,
+  `"screen"`, `"overlay"`, `"darken"` or `"lighten"`. It is a whole-node
+  property, not a content channel: `set(id, "blend", "multiply")` or
+  `edit(id, "blend", "overlay")` write a static override; it cannot be keyed.
+  `query` reports `blend` per node and the inspector offers the seven modes as
+  a segmented grid. Rendering: normal/add/multiply/screen composite through an
+  offscreen layer; overlay/darken/lighten need the engine's backdrop pass and
+  return a typed `Unsupported` error until the pin is bumped.
 - **Gradients** (D-0030): `fill`/`stroke`/text `color` may be a gradient
   instead of a colour. A gradient adds one pair of channels per stop:
   `fill_stop<n>_offset` (0..1), `fill_stop<n>_color`, and

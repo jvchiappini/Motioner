@@ -47,6 +47,36 @@ fn error(editor: &mut Editor, text: &str) -> ErrorKind {
 const TITLE: &str = "@288";
 
 #[test]
+fn blend_edits_write_a_static_override() {
+    let (mut editor, _dir) = hello_editor("blend");
+    run(&mut editor, "edit(\"@288\", \"blend\", \"multiply\")");
+    assert_eq!(
+        editor
+            .session()
+            .overrides()
+            .get(TITLE, "blend", None)
+            .unwrap()
+            .action,
+        OverrideAction::Set(OverrideValue::Text("multiply".to_owned()))
+    );
+    // Applying the override changes the document node.
+    let document = editor.session().document().expect("document");
+    let id = document.find(TITLE).unwrap();
+    assert_eq!(
+        document.node(id).unwrap().blend(),
+        motioner_core::BlendMode::Multiply
+    );
+    // Query reports the mode.
+    let json = editor.query_json(Some(TITLE)).unwrap();
+    assert!(json.contains("\"blend\":\"multiply\""), "{json}");
+    // A blend cannot be keyed.
+    assert_eq!(
+        error(&mut editor, "key(\"@288\", \"blend\", 1.0, \"multiply\")"),
+        ErrorKind::UnknownProperty
+    );
+}
+
+#[test]
 fn edit_writes_a_static_value_or_a_key_at_the_playhead() {
     let (mut editor, _dir) = hello_editor("edit");
     // Rotation has no keys: a static override.

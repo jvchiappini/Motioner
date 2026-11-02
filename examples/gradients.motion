@@ -33,6 +33,13 @@ ring.pos = (760, 350)
 ring.key("rotation", 0.0, 0.0)
 ring.key("rotation", 2.0, 60.0, ease="linear")
 
+# Gradient text: the glyph fill samples the same table as shapes.
+title = text("GRADIENT", size=64, align="center",
+             color=linear_gradient(start=(-150, 0), end=(150, 0),
+                                 stops=[(0, "#5CDBC5"), (0.5, "#FFFFFF"), (1, "#FF5A6E")]))
+title.id("title")
+title.pos = (480, 500)
+
 # A half-drawn gradient ribbon: trim plus a moving gradient window.
 ribbon = path([(-200, 0), (-100, -60, 0, 0, 40, 40), (0, 0),
                (100, 60, -40, -30, 0, 0), (200, 0)],
@@ -41,7 +48,7 @@ ribbon = path([(-200, 0), (-100, -60, 0, 0, 40, 40), (0, 0),
                                      stops=[(0, "#16121F"), (0.5, "#7C5CFF"), (1, "#FFFFFF")]),
               stroke_width=14, cap="round")
 ribbon.id("ribbon")
-ribbon.pos = (480, 470)
+ribbon.pos = (480, 395)
 ribbon.key("trim_end", 0.0, 0.05, ease="cubic_out")
 ribbon.key("trim_end", 1.5, 1.0, ease="cubic_out")
 ribbon.key("stroke_stop1_offset", 0.5, 0.2, ease="quad_in_out")

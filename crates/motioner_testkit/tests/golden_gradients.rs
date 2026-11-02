@@ -4,13 +4,13 @@
 //! hexagon stroke and the ribbon half drawn. Frame 105 shows the finished
 //! ribbon and the animated stop offsets.
 //!
-//! The pinned engine cannot draw gradients yet (`RenderError::Unsupported`,
-//! see D-0030), so the test skips cleanly until the pin bump. Once the
-//! `engine-gradients` feature is enabled every frame here runs and compares
-//! with the D-0028 policy: at most 2 per channel, at most 0.1 % of pixels
-//! above 2. The banding check walks a line inside the card and bounds the
-//! step between neighbouring pixels; dithering keeps flat ramps off the
-//! contour.
+//! The glyph fill is a gradient too, which needs the `Pure2D` text pass: on the
+//! current pin the renderer refuses the frame with a typed `Unsupported`
+//! error, so the test skips cleanly until the pin bump. With
+//! `engine-text-gradient` enabled every frame here runs and compares with the
+//! D-0028 policy: at most 2 per channel, at most 0.1 % of pixels above 2. The
+//! banding check walks a line inside the card and bounds the step between
+//! neighbouring pixels; dithering keeps flat ramps off the contour.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -24,12 +24,12 @@ const GOLDENS: [(i64, &[u8], &str); 2] = [
     (
         30,
         include_bytes!("../golden/gradients_f30.png"),
-        "466dceb414c5e4ed255084790e29b31ecd58fd44a0d765724cb952d2a70d18a4",
+        "c00a1a41df80b3bc0cc89ac5c63faaa2044f5e2dda00a26d6774f06a390b485d",
     ),
     (
         105,
         include_bytes!("../golden/gradients_f105.png"),
-        "d0c73e827cc3afadc019d5326d838957a602ae4bea09adc245dc0535a382aacf",
+        "ccd98a6a710f6f6622deee48b1ff23ffb96f01be3a265d93cfcb0ffa1edb47c6",
     ),
 ];
 /// Source of the example composition.

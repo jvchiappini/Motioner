@@ -1,0 +1,35 @@
+# One swatch per blend mode over a known grey backdrop (D-0031).
+#
+# Each tile is a #808080 plate carrying a darker (#606060) and a lighter
+# (#A0A0A0) half.  The two tones make every mode visible: darken and lighten
+# need a source on both sides of the backdrop, and overlay switches formula at
+# the source midpoint.  The labels are ordinary text nodes (always normal).
+
+comp(name="Blend modes", width=960, height=540, fps=60, duration=2.0)
+
+bg = rect(960, 540, fill="#808080")
+bg.pos = (480, 270)
+
+modes = ["normal", "add", "multiply", "screen", "overlay", "darken", "lighten"]
+
+i = 0
+for mode in modes:
+    x = 90 + i * 130
+    frame = rect(128, 158, radius=9, fill="#6A6A6A")
+    frame.pos = (x, 240)
+    plate = rect(120, 150, radius=6, fill="#808080")
+    plate.pos = (x, 240)
+    left = rect(60, 150, fill="#606060")
+    left.pos = (x - 30, 240)
+    left.blend = mode
+    right = rect(60, 150, fill="#A0A0A0")
+    right.pos = (x + 30, 240)
+    right.blend = mode
+    label = text(mode, size=14, color="#F0F2F5", align="center")
+    label.pos = (x, 340)
+    i = i + 1
+
+title = text("Blend modes over #808080", size=28, color="#F0F2F5", align="center")
+title.pos = (480, 70)
+subtitle = text("source #606060 / #A0A0A0 - linear light - premultiplied alpha", size=14, color="#E8EAF0", align="center")
+subtitle.pos = (480, 105)

@@ -210,14 +210,16 @@ transform of the item that owns a gradient maps its local geometry into
 composition space, so a ramp follows its node. A radial gradient under a
 non-uniform scale uses the x-axis scale (the engine pass draws a circle).
 
-The pinned engine has no per-pixel gradient in the Pure2D pass, so
-`FrameRenderer::render` returns `RenderError::Unsupported {
-Feature::Gradient, node }` when the plan uses one; nothing silently falls
-back to a solid colour. The `engine-gradients` feature uploads the table and
-attaches a base to every shape instance; it requires the engine commit that
-adds `ShapeInstance::with_gradient` and OT table, so it stays off until the
-pin moves. Text gradients are the remaining engine piece and are refused
-even with the feature.
+The table is uploaded on every frame and both shape and text instances
+reference an entry (`with_gradient`), so gradients are unconditional since the
+pin that carries the Pure2D gradient pass (D-0030). Nothing silently falls
+back to a solid colour except a gradient that does not fit the engine's
+512-slot table.
+
+Until the next pin, text gradients and backdrop-aware blends are gated by the
+temporary `engine-text-gradient` and `engine-composite` features: with the
+default build, `FrameRenderer::render` returns a typed
+`RenderError::Unsupported` for them.
 
 ## Radius and stroke approximations
 

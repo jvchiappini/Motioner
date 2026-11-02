@@ -464,7 +464,10 @@ fn set_value(
             name: name.clone(),
         });
     }
-    if Property::from_name(property).is_none() && ContentField::from_name(property).is_none() {
+    if property != "blend"
+        && Property::from_name(property).is_none()
+        && ContentField::from_name(property).is_none()
+    {
         return Err(CommandError::new(
             ErrorKind::UnknownProperty,
             format!("unknown property '{property}'"),
@@ -542,6 +545,11 @@ fn resolve_if_animatable(
     id: &str,
     property: &str,
 ) -> Result<Option<(NodeId, Channel)>, CommandError> {
+    // Blend modes are discrete node properties; editing one always writes a
+    // static override, never a key (D-0031).
+    if property == "blend" {
+        return Ok(None);
+    }
     match channels::resolve(document, id, property) {
         Ok((node, channel)) => Ok(Some((node, channel))),
         Err(error)

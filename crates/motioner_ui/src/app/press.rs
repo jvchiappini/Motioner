@@ -228,6 +228,19 @@ impl PreviewApp {
                     self.run(&Command::SetEase(*ease));
                 }
             }
+            Some(inspect::RowValue::Blend { .. }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                let Some(mode) = motioner_core::BlendMode::ALL.get(segment) else {
+                    return;
+                };
+                self.run(&Command::Edit {
+                    id,
+                    property: "blend".to_owned(),
+                    value: OverrideValue::Text(mode.name().to_owned()),
+                });
+            }
             Some(inspect::RowValue::Align { .. }) => {
                 let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
                     return;

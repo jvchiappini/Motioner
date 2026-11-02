@@ -103,6 +103,11 @@ line draws itself and a dash pattern marches (D-0029; see
 `radial_gradient`) use animatable stop offsets and colours, show one row per
 stop in the timeline and inspector, and render through the Pure2D gradient
 pass when the engine pin includes it (D-0030; see `examples/gradients.motion`).
+Nodes blend with `normal`, `add`, `multiply`, `screen`, `overlay`, `darken` and
+`lighten`, chosen from a segmented grid at the top of the inspector and
+overridable with `set(id, "blend", "multiply")` (D-0031; see
+`examples/blend.motion`). The backdrop-aware modes render through an engine
+layer composite and report a typed `Unsupported` error until the pin is bumped.
 The canvas zooms around the
 pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
 `F` or a click on the zoom pill; zoom and pan are view state and never change

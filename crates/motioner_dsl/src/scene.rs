@@ -872,7 +872,9 @@ fn blend_mode(value: &Value) -> HostResult<BlendMode> {
     BlendMode::from_name(name).ok_or_else(|| {
         HostError::new(
             ErrorCategory::Unsupported,
-            format!("blend mode {name:?} is not supported in MDF v0; use \"normal\""),
+            format!(
+                "unknown blend mode {name:?}; expected normal, add, multiply, screen, overlay, darken or lighten"
+            ),
         )
     })
 }
