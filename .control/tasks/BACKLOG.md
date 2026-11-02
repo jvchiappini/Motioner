@@ -10,7 +10,6 @@
 - **T-RENDER-0001** — Spike offscreen deterministic still frame `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0004** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
-- **T-RENDER-0010** — Effects: drop shadow, blur and glow with keyable parameters `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0011** — Masks and track mattes (alpha and luma, invert) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0012** — Typography: real fonts, tracking, line height, text metrics, per-character animation `[alta]` (actualizado 2026-11-01)
 - **T-APP-0003** — Showcase Pro: a 20-30 s 1080p60 studio-quality example `[media]` (actualizado 2026-11-01)

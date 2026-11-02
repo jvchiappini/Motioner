@@ -1,19 +1,17 @@
 ---
 id: T-RENDER-0010
 titulo: Effects: drop shadow, blur and glow with keyable parameters
-estado: backlog
+estado: done
 prioridad: alta
 tipo: feature
 creado_por: agente
 asignado_a: agente
 creado: 2026-11-01
-actualizado: 2026-11-01
+actualizado: 2026-11-02
 depende_de: [T-CORE-0001]
 bloqueado_por: null
 version_schema: 1
 ---
-
-
 Soft shadows, blurs and glows are the difference between flat shapes and a
 studio look. Phase 5 adds `node.effect(kind, **params)` with an ordered stack
 that applies to the node and its subtree.
@@ -29,13 +27,20 @@ that applies to the node and its subtree.
 - Tests: blur kernel unit tests; golden stills of shadow, blur and glow.
 
 ## Criterios de aceptacion
-- [ ] Effects parse, key, override, bake and query
-- [ ] Render applies them with a deterministic kernel, or typed `Unsupported`
-- [ ] Three golden stills and kernel tests
-- [ ] Inspector add/remove/reorder commands
-
-## Criterios de aceptacion
-- [ ] 
+- [x] Effects parse, key, override, bake and query
+- [x] Render applies them with a deterministic kernel, or typed `Unsupported`
+- [x] Three golden stills and kernel tests
+- [x] Inspector add/remove/reorder commands
 
 ## Notas del agente
 
+Engine passes live in the clone (D-0032): `Effect2d`, `BlurKernel2d`, the
+separable blur and tint/offset composite shaders, `push_layer_2d_with_effects`.
+Motioner: `motioner_core::effect`, DSL `effect`/`effect_stack`, `PlanLayer`
+ranges, `effects` override, `effect_add/remove/move`, inspector Effects
+section, query, bake, three goldens. On the pin the render is refused with
+`RenderError::Unsupported { feature: Effect }`; the adapter wiring is the
+`push_layer_2d_with_effects` call and the `EffectValue` -> `Effect2d` mapping.
+Also fixed in the clone: a frame after a layered one took the layered path
+with no layers and lost its batched draws (`frame_uses_layers` is now the only
+condition).

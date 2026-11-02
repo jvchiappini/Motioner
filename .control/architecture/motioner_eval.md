@@ -36,6 +36,11 @@ Not needed: one traversal, one output buffer.
 
 - D-0028 â€” content channels, colour space and the golden policy.
 - D-0029 â€” path geometry travels in a plan arena, not inside `ItemShape`.
+- `EffectValue` / `PlanLayer` - a node with effects (or a non-normal blend)
+  wraps its whole drawn subtree in an item range; the plan carries the
+  sampled chain, the blend and the range, so nested effects nest:
+  `crates/motioner_eval/src/plan.rs:130-200` and
+  `crates/motioner_eval/src/evaluate.rs:60-200`.
 - `ResolvedGradient` / the gradient arena - `ResolvedPaint` is
   `fill: Option<ResolvedFill>` (`Solid` or a gradient index) plus a copied
   stroke, so items stay `Copy` while gradient stops live in the plan
