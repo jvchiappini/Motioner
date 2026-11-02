@@ -54,13 +54,22 @@ phase's prompt for opencode.
 5. Quick review: D-0024 (every new action is a `Command` with parity tests
    and docs), no duplication, typed errors, no panics; look at the phase's
    screenshots in `out/ui/`.
+   **FerrousEngine is a general-purpose engine, not a Motioner backend.**
+   Review engine changes as public engine features: generic API with no
+   Motioner/MDF concepts, rustdoc, crate docs in `crates/<crate>/docs` and
+   the `mkdocs.yml` nav, engine tests (and ideally a small example), engine
+   `cargo clippy`/`cargo test` for the touched crates green, no breaking
+   change without a migration note. Flag Motioner-only workarounds that
+   belong in the engine.
 6. Tell me in a few lines: what the phase did, the gate result, problems
    ordered by severity (file:line). Then **ask me** before committing.
 7. When I say so: commit and push by layer (code+docs+examples+goldens,
    then `.control`, then the pin bump as its own commit), ending every
    message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 8. Give me, ready to paste, the short message for opencode's NEXT phase:
-   only that phase, stop at the phase boundary with the gate green, no
+   only that phase, render capabilities built in FerrousEngine as general
+   engine features (API, docs, tests, example) that Motioner consumes,
+   stop at the phase boundary with the gate green, no
    commit/stage/push, fix list from my review first, disk rule (clean
    `target/debug/incremental` below 6 GB, stop below 5 GB), report in
    Spanish with golden SHAs, engine clone state and free disk.
