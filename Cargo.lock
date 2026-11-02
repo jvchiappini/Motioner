@@ -662,6 +662,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "ferrous_ecs",
+ "ferrous_font",
  "glam 0.29.3",
  "log",
  "wgpu",
