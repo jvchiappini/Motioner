@@ -36,6 +36,7 @@ Not needed: the plan is a flat list and the painter walks it twice.
 - D-0028 Ã¢â‚¬â€ keyed colours reach the renderer already interpolated in linear
   light; the golden tolerance is shared.
 - D-0029 Ã¢â‚¬â€ vector paths, the tessellation cache and the lyon dependency.
+- D-0031 — blended nodes render inside an engine layer; overlay/darken/lighten need the backdrop composite and return Unsupported until the pin bump.
 - D-0030 A?? gradients are a per-frame table (`gradients`), `RenderError::Unsupported` while the pin lacks the pass, and the `engine-gradients` feature wires it.
 
 ## Documentation status

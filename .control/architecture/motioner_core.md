@@ -9,19 +9,19 @@ in the workspace and never touches the file system or a GPU.
 
 ## Key components
 
-- `Document` â€” compositions, nodes, roots and the identity index. Every write
+- `Document` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â compositions, nodes, roots and the identity index. Every write
   is validated here: `crates/motioner_core/src/document.rs:122-620`.
-- `NodeContent` â€” what a node draws, with every content property stored as an
+- `NodeContent` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â what a node draws, with every content property stored as an
   animatable channel (`Animatable<f64>`, `Animatable<Color>`,
   `Animatable<Option<Color>>`): `crates/motioner_core/src/node.rs:314-520`.
-- `NodeContent::channel` / `static_value` â€” the one table that maps a
+- `NodeContent::channel` / `static_value` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the one table that maps a
   `ContentField` to its channel or its static value (D-0028):
   `crates/motioner_core/src/node.rs:492-565`.
-- `Document::add_content_keyframe` / `remove_content_keyframe` â€” the validated
+- `Document::add_content_keyframe` / `remove_content_keyframe` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the validated
   path for keyed content fields: `crates/motioner_core/src/document.rs:301-360`.
-- `Color` â€” sRGB with straight alpha, the shared linear-light transfer
+- `Color` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sRGB with straight alpha, the shared linear-light transfer
   function and the interpolation midpoint: `crates/motioner_core/src/color.rs:39-150`.
-- `PathGeometry` â€” authored points with relative BÃ©zier handles, adaptive
+- `PathGeometry` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â authored points with relative BÃƒÆ’Ã‚Â©zier handles, adaptive
   flattening (0.1 px), arc-length trim with wrap, dash splitting, even-odd
   containment and local bounds; the one geometry implementation shared by
   render, bounds and tests (D-0029):
@@ -32,7 +32,10 @@ in the workspace and never touches the file system or a GPU.
   colour channel per stop (D-0030):
   `crates/motioner_core/src/gradient.rs:1-300` and
   `crates/motioner_core/src/node.rs:91-260`.
-- `OverrideSet` â€” the editor's edit layer and its canonical text (D-0022):
+- `BlendMode` - seven node blend modes (normal, add, multiply, screen,
+  overlay, darken, lighten); a discrete node property, overridable, not
+  keyable (D-0031): `crates/motioner_core/src/node.rs:296-375`.
+- `OverrideSet` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the editor's edit layer and its canonical text (D-0022):
   `crates/motioner_core/src/overrides.rs:114-266`.
 
 ## Diagram
@@ -41,12 +44,13 @@ Not needed: the crate is a leaf and its public types are the diagram.
 
 ## Relevant decisions
 
-- D-0022 â€” overrides are keyed by node identity and never edit the program.
-- D-0028 â€” animatable content properties and linear-light colour
+- D-0022 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â overrides are keyed by node identity and never edit the program.
+- D-0028 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â animatable content properties and linear-light colour
   interpolation.
-- D-0027 â€” value origins and the hybrid bake that consumes this model.
-- D-0029 â€” path authoring model and the lyon tessellation backend.
+- D-0027 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â value origins and the hybrid bake that consumes this model.
+- D-0029 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â path authoring model and the lyon tessellation backend.
+- D-0031 - the seven blend modes are a whole-node, non-animatable property.
 
 ## Documentation status
 
-partial â€” last verified: 2026-11-01
+partial ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â last verified: 2026-11-01
