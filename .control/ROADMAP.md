@@ -112,6 +112,12 @@ render queue and performance hardening.
 - D-0015: revenue from donations/sponsors, paid cloud rendering and AI credits.
 - D-0016: LaTeX math typesetting in 1.0.
 - D-0017: 1.0 delivery defaults.
+- D-0036: UI edits write MDF code (overrides as fallback); edit traces feed a small motion-design code model; in-app agent harness on the same command surface.
+- D-0039: motion standard library (themes, relative layout, beats, presets, components) before any training corpus.
+- D-0040: training data, quality rubric, vision data and evaluation targets for the Motioner model.
+- D-0041: agent harness workflow, clarifying questions, vision and providers (incl. Motioner API and local model).
+- D-0042: improvement loop from user signals with opt-in consent and a release gate.
+- D-0043: agent tool catalogue (signatures, results, images, budgets).
 
 ## Remaining implementation details
 
