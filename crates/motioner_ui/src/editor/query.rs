@@ -187,6 +187,21 @@ impl Editor {
             j.end_object();
         }
         j.end_array();
+        if let motioner_core::NodeContent::Image(image) = n.content() {
+            j.key("image").begin_object();
+            j.key("source").string(&image.source);
+            j.key("fit").string(image.fit.name());
+            if let Some(asset) = image.asset {
+                j.key("natural_width").int(i64::from(asset.width));
+                j.key("natural_height").int(i64::from(asset.height));
+                j.key("key").string(&asset.key.to_hex());
+            } else {
+                j.key("natural_width").null();
+                j.key("natural_height").null();
+                j.key("key").null();
+            }
+            j.end_object();
+        }
         j.key("content").begin_object();
         for field in content_fields(n.content()) {
             let name = field.name();
@@ -409,6 +424,9 @@ fn content_value(
         }
         Some(motioner_core::ContentValue::Join(join)) => {
             j.string(join.name());
+        }
+        Some(motioner_core::ContentValue::Fit(fit)) => {
+            j.string(fit.name());
         }
         Some(motioner_core::ContentValue::Color(color)) => {
             j.opt_string(color.map(motioner_core::Color::to_hex).as_deref());

@@ -135,6 +135,10 @@ pub enum ContentField {
     Cap,
     /// Path stroke join style (discrete).
     Join,
+    /// Image source path (discrete, project-relative).
+    Source,
+    /// Image fit mode (discrete).
+    Fit,
     /// Offset of fill stop `n` (`fill_stop<n>_offset`, D-0030).
     FillStopOffset(u8),
     /// Colour of fill stop `n` (`fill_stop<n>_color`).
@@ -151,7 +155,7 @@ impl ContentField {
     /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
     /// [`ContentField::from_name`] and describe them with
     /// [`ContentField::name`].
-    pub const ALL: [(Self, &'static str); 20] = [
+    pub const ALL: [(Self, &'static str); 22] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
@@ -172,17 +176,26 @@ impl ContentField {
         (Self::Align, "align"),
         (Self::Cap, "cap"),
         (Self::Join, "join"),
+        (Self::Source, "source"),
+        (Self::Fit, "fit"),
     ];
 
     /// Whether the field has keyframes (D-0028).
     ///
     /// Content fields are scalar channels: none of them has axes. Text,
-    /// alignment, weight, cap and join are discrete and cannot be animated.
+    /// alignment, weight, cap, join, image source and fit are discrete and
+    /// cannot be animated.
     #[must_use]
     pub const fn is_animatable(self) -> bool {
         !matches!(
             self,
-            Self::Text | Self::Align | Self::Weight | Self::Cap | Self::Join
+            Self::Text
+                | Self::Align
+                | Self::Weight
+                | Self::Cap
+                | Self::Join
+                | Self::Source
+                | Self::Fit
         )
     }
 
@@ -280,6 +293,8 @@ pub enum ContentValue {
     Cap(LineCap),
     /// Stroke join for `join`.
     Join(LineJoin),
+    /// Image fit for `fit`.
+    Fit(ImageFit),
 }
 
 impl NodeId {
@@ -700,7 +715,7 @@ pub struct TextAnimator {
     pub property: CharProperty,
     /// Value before the character starts.
     pub from: CharValue,
-    /// Value once the character finishes.
+    /// Value to reach once the character finishes.
     pub to: CharValue,
     /// First frame of the first character.
     pub start: Frame,
@@ -715,6 +730,12 @@ pub struct TextAnimator {
 }
 
 impl TextAnimator {
+    /// The override property that carries a text node's whole animator list.
+    ///
+    /// The value is the canonical [`TextAnimator::encode_list`] text, so the
+    /// overrides file can hold it as a plain string.
+    pub const OVERRIDE_PROPERTY: &'static str = "text_animators";
+
     /// Validates that `from` and `to` match the property's value kind.
     ///
     /// # Errors
@@ -762,6 +783,141 @@ impl TextAnimator {
             order,
         })
     }
+
+    /// The canonical one-line text of this animator.
+    ///
+    /// Fields are `property:from:to:start:stagger:duration:ease:order`, with
+    /// numbers in the same exact decimal form the overrides file uses.  A list
+    /// joins animators with `;`.
+    #[must_use]
+    pub fn encode(&self) -> String {
+        format!(
+            "{}:{}:{}:{}:{}:{}:{}:{}",
+            self.property.name(),
+            encode_char_value(self.from),
+            encode_char_value(self.to),
+            crate::overrides::format_number(frame_as_f64(self.start)),
+            crate::overrides::format_number(self.stagger),
+            crate::overrides::format_number(self.duration),
+            self.ease.name(),
+            self.order.name()
+        )
+    }
+
+    /// Encodes a whole animator list with [`TextAnimator::encode`].
+    #[must_use]
+    pub fn encode_list(animators: &[Self]) -> String {
+        animators
+            .iter()
+            .map(Self::encode)
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Parses [`TextAnimator::encode`] text (one animator or a `;`-joined
+    /// list).  An empty string is an empty list.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable reason naming the malformed field.
+    pub fn decode_list(text: &str) -> Result<Vec<Self>, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        text.split(';').map(Self::decode).collect()
+    }
+
+    /// Parses one [`TextAnimator::encode`] line.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable reason naming the malformed field.
+    pub fn decode(text: &str) -> Result<Self, String> {
+        let fields: Vec<&str> = text.trim().split(':').collect();
+        if fields.len() != 8 {
+            return Err(format!(
+                "an animator needs 8 ':'-separated fields (property:from:to:start:stagger:duration:ease:order), got {}",
+                fields.len()
+            ));
+        }
+        let property = CharProperty::from_name(fields[0])
+            .ok_or_else(|| format!("unknown animator property {:?}", fields[0]))?;
+        let from = decode_char_value(property, fields[1])?;
+        let to = decode_char_value(property, fields[2])?;
+        let start = parse_frame(fields[3])?;
+        let stagger = parse_number(fields[4], "stagger")?;
+        let duration = parse_number(fields[5], "duration")?;
+        let ease =
+            Ease::from_name(fields[6]).ok_or_else(|| format!("unknown ease {:?}", fields[6]))?;
+        let order = CharOrder::from_name(fields[7])
+            .ok_or_else(|| format!("unknown order {:?}", fields[7]))?;
+        Self::new(property, from, to, start, stagger, duration, ease, order)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// A frame as `f64` (frames stay far below 2^53).
+#[allow(clippy::cast_precision_loss)]
+fn frame_as_f64(frame: Frame) -> f64 {
+    frame as f64
+}
+
+fn encode_char_value(value: CharValue) -> String {
+    match value {
+        CharValue::Number(number) => crate::overrides::format_number(number),
+        CharValue::Vec2(vector) => format!(
+            "({}, {})",
+            crate::overrides::format_number(vector.x),
+            crate::overrides::format_number(vector.y)
+        ),
+        CharValue::Color(color) => color.to_hex(),
+    }
+}
+
+fn decode_char_value(property: CharProperty, text: &str) -> Result<CharValue, String> {
+    match property {
+        CharProperty::Opacity | CharProperty::Scale | CharProperty::Rotation => {
+            Ok(CharValue::Number(parse_number(text, property.name())?))
+        }
+        CharProperty::Offset => {
+            let inner = text
+                .strip_prefix('(')
+                .and_then(|rest| rest.strip_suffix(')'))
+                .ok_or_else(|| format!("offset expects an (x, y) pair, got {text:?}"))?;
+            let (x, y) = inner
+                .split_once(',')
+                .ok_or_else(|| format!("offset expects an (x, y) pair, got {text:?}"))?;
+            Ok(CharValue::Vec2(Vec2::new(
+                parse_number(x, "offset x")?,
+                parse_number(y, "offset y")?,
+            )))
+        }
+        CharProperty::Color => Color::parse_hex(text)
+            .map(CharValue::Color)
+            .map_err(|_| format!("color expects #RRGGBB[AA], got {text:?}")),
+    }
+}
+
+fn parse_number(text: &str, what: &str) -> Result<f64, String> {
+    let value = text
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| format!("{what} expects a number, got {text:?}"))?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(format!("{what} must be finite, got {text:?}"))
+    }
+}
+
+fn parse_frame(text: &str) -> Result<Frame, String> {
+    let value = parse_number(text, "start")?;
+    if value.fract() != 0.0 {
+        return Err(format!("start must be a whole frame, got {text:?}"));
+    }
+    #[allow(clippy::cast_possible_truncation)] // checked to be integral and finite
+    Ok(value as Frame)
 }
 
 /// A reference to one content field's animation channel (D-0028).
@@ -798,6 +954,257 @@ impl ContentChannel<'_> {
             Self::Color(value) => value.keys().iter().map(|key| key.frame).collect(),
             Self::OptionalColor(value) => value.keys().iter().map(|key| key.frame).collect(),
         }
+    }
+}
+
+/// The content key of an image: the SHA-256 of its bytes (D-0035).
+///
+/// Two paths with identical bytes share one key (and one GPU texture); a
+/// changed file is a new key.  The key is computed by the loader, never by the
+/// document or the evaluator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ImageKey([u8; 32]);
+
+impl ImageKey {
+    /// Wraps the 32 bytes of a SHA-256 digest.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The raw digest bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Lower-case hex, the form `query` and the renderer use.
+    #[must_use]
+    pub fn to_hex(&self) -> String {
+        let mut text = String::with_capacity(64);
+        for byte in self.0 {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{byte:02x}");
+        }
+        text
+    }
+}
+
+impl fmt::Display for ImageKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+/// A resolved image: its content key and natural pixel size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImageAsset {
+    /// SHA-256 of the file bytes.
+    pub key: ImageKey,
+    /// Natural width in pixels.
+    pub width: u32,
+    /// Natural height in pixels.
+    pub height: u32,
+}
+
+/// How an image fills its box (D-0035).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ImageFit {
+    /// Letterbox inside the box; the whole image is visible.
+    #[default]
+    Contain,
+    /// Fill the box and crop the overflow through `uv_rect`.
+    Cover,
+    /// Stretch to the box.
+    Fill,
+}
+
+impl ImageFit {
+    /// Every fit with its MDF name.
+    pub const ALL: [(Self, &'static str); 3] = [
+        (Self::Contain, "contain"),
+        (Self::Cover, "cover"),
+        (Self::Fill, "fill"),
+    ];
+
+    /// Looks up a fit by its MDF name.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .find(|(_, candidate)| *candidate == name)
+            .map(|(fit, _)| *fit)
+    }
+
+    /// The MDF name of this fit.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(fit, _)| *fit == self)
+            .map_or("contain", |(_, name)| name)
+    }
+}
+
+/// The destination rectangle and UV crop of one image at one frame.
+///
+/// The rectangle is centred on the node origin.  For `Contain` it is smaller
+/// than the box (the letterbox is transparent); for `Cover` it is the box and
+/// `uv` crops the source; for `Fill` it is the box and `uv` is full.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageLayout {
+    /// Drawn width in local pixels.
+    pub width: f64,
+    /// Drawn height in local pixels.
+    pub height: f64,
+    /// Source crop `[u0, v0, u1, v1]` in UV space.
+    pub uv: [f64; 4],
+}
+
+impl ImageLayout {
+    /// Computes the layout for a sampled box and a natural size.
+    ///
+    /// A zero `box_width` / `box_height` means "natural": both zero uses the
+    /// image's pixel size, one zero keeps the aspect from the other.  An
+    /// unresolved image (no natural size) falls back to a 100×100 box so the
+    /// preview can draw a placeholder.
+    #[must_use]
+    pub fn compute(
+        box_width: f64,
+        box_height: f64,
+        fit: ImageFit,
+        natural: Option<(u32, u32)>,
+    ) -> Self {
+        let (natural_width, natural_height) = natural
+            .map(|(width, height)| (f64::from(width), f64::from(height)))
+            .filter(|(width, height)| *width > 0.0 && *height > 0.0)
+            .unwrap_or((100.0, 100.0));
+        let width = if box_width > 0.0 {
+            box_width
+        } else if box_height > 0.0 {
+            box_height * natural_width / natural_height
+        } else {
+            natural_width
+        };
+        let height = if box_height > 0.0 {
+            box_height
+        } else if box_width > 0.0 {
+            box_width * natural_height / natural_width
+        } else {
+            natural_height
+        };
+        match fit {
+            ImageFit::Fill => Self {
+                width,
+                height,
+                uv: [0.0, 0.0, 1.0, 1.0],
+            },
+            ImageFit::Contain => {
+                let scale = (width / natural_width).min(height / natural_height);
+                Self {
+                    width: natural_width * scale,
+                    height: natural_height * scale,
+                    uv: [0.0, 0.0, 1.0, 1.0],
+                }
+            }
+            ImageFit::Cover => {
+                let scale = (width / natural_width).max(height / natural_height);
+                let visible_width = (width / (natural_width * scale)).clamp(0.0, 1.0);
+                let visible_height = (height / (natural_height * scale)).clamp(0.0, 1.0);
+                let u0 = (1.0 - visible_width) * 0.5;
+                let v0 = (1.0 - visible_height) * 0.5;
+                Self {
+                    width,
+                    height,
+                    uv: [u0, v0, u0 + visible_width, v0 + visible_height],
+                }
+            }
+        }
+    }
+}
+
+/// An image node's content (D-0035).
+///
+/// `source` is a project-relative path.  `asset` is filled by
+/// [`crate::Document::resolve_images`] once the loader has read the bytes;
+/// an unresolved node still evaluates, so the preview can draw a placeholder,
+/// but `still`/`render` refuse it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageContent {
+    /// Project-relative source path.
+    pub source: String,
+    /// Resolved key and natural size, when the loader has seen the file.
+    pub asset: Option<ImageAsset>,
+    /// Destination box width in pixels; `0` keeps the natural width/aspect.
+    pub width: Animatable<f64>,
+    /// Destination box height in pixels; `0` keeps the natural height/aspect.
+    pub height: Animatable<f64>,
+    /// How the image fills its box.
+    pub fit: ImageFit,
+}
+
+impl ImageContent {
+    /// Creates an unresolved image node from a source path.
+    #[must_use]
+    pub fn new(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            asset: None,
+            width: Animatable::new(0.0),
+            height: Animatable::new(0.0),
+            fit: ImageFit::Contain,
+        }
+    }
+}
+
+/// One image that could not be resolved, with the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageIssue {
+    /// The node whose source failed.
+    pub node: NodeId,
+    /// The project-relative path that was tried.
+    pub source: String,
+    /// Why it failed.
+    pub message: String,
+}
+
+/// One decoded image ready for upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedImage {
+    /// The resolved asset (key and natural size).
+    pub asset: ImageAsset,
+    /// Straight-alpha sRGB RGBA8 bytes.
+    pub rgba8: Vec<u8>,
+}
+
+/// Resolves project-relative image paths to content keys and natural sizes.
+///
+/// The loader (`motioner_io`) implements this; core, DSL and eval stay free of
+/// the file system.  `decoded` is the bridge to the renderer's texture upload:
+/// the loader returns every image it has decoded, and the UI converts the
+/// bytes into renderer upload records without naming the loader's types.
+pub trait ImageResolver {
+    /// Resolves one path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable reason for a missing file, an invalid path or
+    /// an undecodable image.
+    fn resolve(&self, source: &str) -> Result<ImageAsset, String>;
+
+    /// Every decoded image, if the resolver keeps bytes.
+    fn decoded(&self) -> Vec<DecodedImage> {
+        Vec::new()
+    }
+}
+
+/// A resolver that rejects every path: the "no assets installed" case.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoImages;
+
+impl ImageResolver for NoImages {
+    fn resolve(&self, _source: &str) -> Result<ImageAsset, String> {
+        Err("no image loader is installed".to_owned())
     }
 }
 
@@ -843,6 +1250,8 @@ pub enum NodeContent {
     },
     /// A text line whose baseline passes through the node origin.
     Text(TextContent),
+    /// A raster image centred on the node origin (D-0035).
+    Image(ImageContent),
 }
 
 impl NodeContent {
@@ -889,6 +1298,7 @@ impl NodeContent {
             Self::Circle { .. } => "circle",
             Self::Path { .. } => "path",
             Self::Text(_) => "text",
+            Self::Image(_) => "image",
         }
     }
 
@@ -958,6 +1368,13 @@ impl NodeContent {
                         | ContentField::Align
                 )
             }
+            Self::Image(_) => matches!(
+                field,
+                ContentField::Width
+                    | ContentField::Height
+                    | ContentField::Source
+                    | ContentField::Fit
+            ),
         }
     }
 
@@ -971,7 +1388,7 @@ impl NodeContent {
             Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. } => {
                 paint.gradient(slot).map_or(0, Gradient::len)
             }
-            Self::Text(_) | Self::Group => 0,
+            Self::Text(_) | Self::Group | Self::Image(_) => 0,
         }
     }
 
@@ -1000,7 +1417,7 @@ impl NodeContent {
                     .gradient(slot)
                     .is_some_and(|gradient| index < gradient.len())
             }
-            Self::Group => false,
+            Self::Group | Self::Image(_) => false,
         }
     }
 
@@ -1050,6 +1467,8 @@ impl NodeContent {
             (Self::Text(text), ContentField::Tracking) => number(&text.tracking),
             (Self::Text(text), ContentField::LineHeight) => number(&text.line_height),
             (Self::Text(text), ContentField::Color) => Some(ContentChannel::Color(&text.color)),
+            (Self::Image(image), ContentField::Width) => number(&image.width),
+            (Self::Image(image), ContentField::Height) => number(&image.height),
             _ => None,
         }
     }
@@ -1063,7 +1482,7 @@ impl NodeContent {
                 Self::Rect { paint, .. }
                 | Self::Circle { paint, .. }
                 | Self::Path { paint, .. } => paint.gradient(slot)?.stop(index)?,
-                Self::Group => return None,
+                Self::Group | Self::Image(_) => return None,
             };
             return Some(match part {
                 StopPart::Offset => ContentValue::Number(stop.offset.value()),
@@ -1135,6 +1554,16 @@ impl NodeContent {
                 None => ContentValue::Color(Some(text.color.value())),
             }),
             (Self::Text(text), ContentField::Align) => Some(ContentValue::Align(text.align)),
+            (Self::Image(image), ContentField::Width) => {
+                Some(ContentValue::Number(image.width.value()))
+            }
+            (Self::Image(image), ContentField::Height) => {
+                Some(ContentValue::Number(image.height.value()))
+            }
+            (Self::Image(image), ContentField::Source) => {
+                Some(ContentValue::Text(image.source.clone()))
+            }
+            (Self::Image(image), ContentField::Fit) => Some(ContentValue::Fit(image.fit)),
             _ => None,
         }
     }
@@ -1221,6 +1650,17 @@ impl NodeContent {
                     Some("tracking")
                 } else if !text.line_height.value().is_finite() || text.line_height.value() <= 0.0 {
                     Some("line_height")
+                } else {
+                    None
+                }
+            }
+            Self::Image(image) => {
+                let width = image.width.value();
+                let height = image.height.value();
+                if bad(width) {
+                    Some("width")
+                } else if bad(height) {
+                    Some("height")
                 } else {
                     None
                 }

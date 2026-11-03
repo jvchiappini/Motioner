@@ -38,8 +38,9 @@ pub use mask::{MaskMode, MaskSpec};
 pub use math::Vec2;
 pub use node::{
     is_valid_identity_name, BlendMode, CharOrder, CharProperty, CharValue, ContentChannel,
-    ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, Paint, PaintSpec,
-    Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Transform,
+    ContentField, ContentValue, DecodedImage, ImageAsset, ImageContent, ImageFit, ImageIssue,
+    ImageKey, ImageLayout, ImageResolver, NoImages, Node, NodeContent, NodeId, NodeIdentity, Paint,
+    PaintSpec, Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Transform,
 };
 pub use overrides::{
     format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,

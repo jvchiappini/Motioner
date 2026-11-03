@@ -9,6 +9,8 @@
 //! world units with [`crate::space::world_unit_scale`]. Under a non-uniform
 //! scale that single factor is an approximation (documented in the README).
 
+use std::collections::HashMap;
+
 use ferrous_2d::render::ShapeInstance;
 use motioner_core::Color;
 use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan, ResolvedFill, ResolvedPaint};
@@ -41,7 +43,7 @@ pub(crate) fn draw_layers(plan: &RenderPlan, shape: &ItemShape) -> u32 {
             u32::from(path.paint.fill.is_some())
                 + u32::from(path.paint.stroke.is_some_and(|stroke| stroke.width > 0.0))
         }
-        ItemShape::Text { .. } => 1,
+        ItemShape::Text { .. } | ItemShape::Image { .. } => 1,
     }
 }
 
@@ -81,6 +83,8 @@ pub(crate) fn draw_item(
     plan: &RenderPlan,
     cache: &mut PathCache,
     gradients: &GradientTable,
+    images: &crate::ImageSet,
+    image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -158,7 +162,124 @@ pub(crate) fn draw_item(
             canvas, plan, cache, gradients, item, model, index, z_index, total,
         ),
         ItemShape::Text { .. } => 0,
+        ItemShape::Image {
+            key,
+            width,
+            height,
+            uv,
+        } => draw_image(
+            canvas,
+            images,
+            image_textures,
+            item,
+            model,
+            key,
+            width,
+            height,
+            uv,
+            z_index,
+            total,
+        ),
     }
+}
+
+/// Submits one image sprite, or a checker placeholder when it is unresolved.
+#[allow(clippy::too_many_arguments)] // the item's resolved state, kept flat
+fn draw_image(
+    canvas: &mut impl Canvas2d,
+    images: &crate::ImageSet,
+    image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
+    item: &RenderItem,
+    model: Affine2,
+    key: Option<motioner_core::ImageKey>,
+    width: f64,
+    height: f64,
+    uv: [f64; 4],
+    z_index: &mut u32,
+    total: u32,
+) -> u32 {
+    let Some(key) = key else {
+        return draw_placeholder(canvas, item, model, width, height, z_index, total);
+    };
+    let Some(image) = images.get(&key) else {
+        return 0;
+    };
+    let texture_id = match image_textures.get(&key) {
+        Some(&id) => id,
+        None => match canvas.register_image(image) {
+            Ok(id) => {
+                image_textures.insert(key, id);
+                id
+            }
+            Err(_) => return draw_placeholder(canvas, item, model, width, height, z_index, total),
+        },
+    };
+    let transform = space::model_mat4(model, width, height, space::z_for(*z_index, total));
+    *z_index += 1;
+    canvas.draw_image(
+        texture_id,
+        ferrous_2d::render::SpriteInstance {
+            transform_c0: transform.x_axis.into(),
+            transform_c1: transform.y_axis.into(),
+            transform_c2: transform.z_axis.into(),
+            transform_c3: transform.w_axis.into(),
+            color: space::linear_rgba(Color::WHITE, item.opacity),
+            uv_rect: [
+                space::to_f32(uv[0]),
+                space::to_f32(uv[1]),
+                space::to_f32(uv[2] - uv[0]),
+                space::to_f32(uv[3] - uv[1]),
+            ],
+            properties: [0.0; 4],
+        },
+    );
+    1
+}
+
+/// A checker plus an outline for an image whose source is unresolved.
+fn draw_placeholder(
+    canvas: &mut impl Canvas2d,
+    item: &RenderItem,
+    model: Affine2,
+    width: f64,
+    height: f64,
+    z_index: &mut u32,
+    total: u32,
+) -> u32 {
+    let scale = space::world_unit_scale(model);
+    let light = Style {
+        color: Color::rgb(58, 62, 70),
+        opacity: item.opacity,
+        z: 0.0,
+    };
+    let dark = Style {
+        color: Color::rgb(38, 41, 47),
+        opacity: item.opacity,
+        z: 0.0,
+    };
+    let mut draws = 0;
+    let cell_width = width * 0.5;
+    let cell_height = height * 0.5;
+    for (index, style) in [light, dark, dark, light].into_iter().enumerate() {
+        let x = if index % 2 == 0 { -0.25 } else { 0.25 } * width;
+        let y = if index < 2 { -0.25 } else { 0.25 } * height;
+        let cell = model.then(Affine2::translation(motioner_core::Vec2::new(x, y)));
+        let style = Style {
+            z: space::z_for(*z_index, total),
+            ..style
+        };
+        canvas.shape(fill_rect(cell, cell_width, cell_height, 0.0, scale, style));
+        *z_index += 1;
+        draws += 1;
+    }
+    let outline = Style {
+        color: Color::rgb(120, 128, 140),
+        opacity: item.opacity,
+        z: space::z_for(*z_index, total),
+    };
+    canvas.shape(stroke_rect(model, width, height, 0.0, scale, outline, 2.0));
+    *z_index += 1;
+    draws + 1
 }
 
 /// Submits one path's fill and stroke triangles; `z_index` advances once per

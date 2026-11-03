@@ -13,6 +13,7 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -151,6 +152,7 @@ pub struct PreviewSession {
     write_at: Instant,
     /// Text this editor last wrote or read, to recognise its own write.
     last_overrides_text: String,
+    images: Rc<dyn motioner_core::ImageResolver>,
 }
 
 impl PreviewSession {
@@ -178,6 +180,7 @@ impl PreviewSession {
             dirty: None,
             write_at: Instant::now(),
             last_overrides_text: String::new(),
+            images: Rc::new(motioner_core::NoImages),
         }
     }
 
@@ -192,6 +195,17 @@ impl PreviewSession {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Installs the image resolver used by `image()` nodes (D-0035).
+    pub fn set_image_resolver(&mut self, resolver: Rc<dyn motioner_core::ImageResolver>) {
+        self.images = resolver;
+    }
+
+    /// Every decoded image, for the live painter's texture uploads.
+    #[must_use]
+    pub fn decoded_images(&self) -> Vec<motioner_core::DecodedImage> {
+        self.images.decoded()
     }
 
     /// The overrides file path.
@@ -313,7 +327,8 @@ impl PreviewSession {
         }
     }
 
-    fn accept(&mut self, compiled: Compiled) {
+    fn accept(&mut self, mut compiled: Compiled) {
+        let issues = compiled.document.resolve_images(self.images.as_ref());
         self.document = Some(compiled.document);
         self.overrides = compiled.overrides;
         self.warnings = compiled
@@ -321,6 +336,17 @@ impl PreviewSession {
             .iter()
             .map(DiagnosticInfo::from_diagnostic)
             .collect();
+        for issue in issues {
+            self.warnings.push(DiagnosticInfo {
+                message: format!(
+                    "image {:?} (node {}): {}",
+                    issue.source, issue.node, issue.message
+                ),
+                line: 0,
+                column: 0,
+                warning: true,
+            });
+        }
         self.generation = self.generation.saturating_add(1);
         self.plan_frame = None;
     }

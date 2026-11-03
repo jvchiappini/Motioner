@@ -69,11 +69,12 @@ pub(crate) enum Builtin {
     RadialGradient,
     TextWidth,
     TextBounds,
+    Image,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 26] = [
+    pub const ALL: [(Self, &'static str); 27] = [
         (Self::Range, "range"),
         (Self::Len, "len"),
         (Self::Min, "min"),
@@ -100,6 +101,7 @@ impl Builtin {
         (Self::RadialGradient, "radial_gradient"),
         (Self::TextWidth, "text_width"),
         (Self::TextBounds, "text_bounds"),
+        (Self::Image, "image"),
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -127,6 +129,7 @@ pub(crate) enum NodeMethod {
     EffectStack,
     Mask,
     AnimateChars,
+    ClearChars,
 }
 
 impl NodeMethod {
@@ -139,6 +142,7 @@ impl NodeMethod {
             "effect_stack" => Some(Self::EffectStack),
             "mask" => Some(Self::Mask),
             "animate_chars" => Some(Self::AnimateChars),
+            "clear_chars" => Some(Self::ClearChars),
             _ => None,
         }
     }
@@ -152,6 +156,7 @@ impl NodeMethod {
             Self::EffectStack => "effect_stack",
             Self::Mask => "mask",
             Self::AnimateChars => "animate_chars",
+            Self::ClearChars => "clear_chars",
         }
     }
 }

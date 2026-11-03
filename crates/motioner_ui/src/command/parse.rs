@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use motioner_core::{Ease, EffectKind, MaskMode, OverrideValue, Vec2};
+use motioner_core::{CharOrder, CharProperty, Ease, EffectKind, MaskMode, OverrideValue, Vec2};
 use motioner_dsl::ast::{Argument, Expr, ExprKind, StmtKind, UnaryOp};
 
 use super::{Command, CommandError, CommandKind, ErrorKind, KeySpec, Panel, Time};
@@ -245,6 +245,31 @@ impl Command {
             CommandKind::MaskClear => Self::MaskClear {
                 id: a.string("id")?,
             },
+            CommandKind::TextAnimAdd => Self::TextAnimAdd {
+                id: a.string("id")?,
+                property: char_property(&a.string("property")?)?,
+                from: a.value("from")?,
+                to: a.value("to")?,
+                start: a.time("start")?,
+                stagger: a.number("stagger")?,
+                duration: a.number("duration")?,
+                ease: match a.optional_string("ease")? {
+                    Some(name) => Ease::from_name(&name).ok_or_else(|| {
+                        CommandError::new(ErrorKind::BadArgument, format!("unknown ease {name:?}"))
+                    })?,
+                    None => Ease::Linear,
+                },
+                order: match a.optional_string("order")? {
+                    Some(name) => char_order(&name)?,
+                    None => CharOrder::Forward,
+                },
+            },
+            CommandKind::TextAnimRemove => Self::TextAnimRemove {
+                id: a.string("id")?,
+                index: usize::try_from(a.int("index")?).map_err(|_| {
+                    CommandError::new(ErrorKind::BadArgument, "'index' must be zero or above")
+                })?,
+            },
             CommandKind::Bake => Self::Bake(a.rest_strings()?),
         };
         a.finish()?;
@@ -267,6 +292,27 @@ fn effect_kind(name: &str) -> Result<EffectKind, CommandError> {
         CommandError::new(
             ErrorKind::BadArgument,
             format!("unknown effect kind {name:?}; expected drop_shadow, blur or glow"),
+        )
+    })
+}
+
+fn char_property(name: &str) -> Result<CharProperty, CommandError> {
+    CharProperty::from_name(name).ok_or_else(|| {
+        CommandError::new(
+            ErrorKind::BadArgument,
+            format!(
+                "unknown character property {name:?}; expected opacity, offset, scale, \
+                 rotation or color"
+            ),
+        )
+    })
+}
+
+fn char_order(name: &str) -> Result<CharOrder, CommandError> {
+    CharOrder::from_name(name).ok_or_else(|| {
+        CommandError::new(
+            ErrorKind::BadArgument,
+            format!("unknown character order {name:?}; expected forward, reverse or center"),
         )
     })
 }

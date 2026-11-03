@@ -319,6 +319,12 @@ fn base_fields(content: &NodeContent) -> Vec<ContentField> {
             ContentField::Color,
             ContentField::Align,
         ],
+        NodeContent::Image(_) => vec![
+            ContentField::Width,
+            ContentField::Height,
+            ContentField::Source,
+            ContentField::Fit,
+        ],
     }
 }
 

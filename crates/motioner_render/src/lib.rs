@@ -46,6 +46,9 @@ use motioner_eval::RenderPlan;
 pub(crate) const ROBOTO: &[u8] =
     include_bytes!("../../../engine/ferrous/assets/fonts/Roboto-Regular.ttf");
 
+/// Default image-texture budget: 512 MiB of resident GPU bytes.
+pub const DEFAULT_TEXTURE_BUDGET: u64 = 512 * 1024 * 1024;
+
 /// A mask request in Motioner terms.
 ///
 /// The canvas impls translate this into the engine's `Mask2d`.
@@ -55,6 +58,61 @@ pub(crate) struct CanvasMask {
     pub mode: motioner_core::MaskMode,
     /// Whether the coverage is inverted.
     pub invert: bool,
+}
+
+/// A decoded image ready for upload (D-0035).
+#[derive(Debug, Clone)]
+pub struct ImageData {
+    /// Content key (SHA-256 of the file bytes).
+    pub key: motioner_core::ImageKey,
+    /// Natural width in pixels.
+    pub width: u32,
+    /// Natural height in pixels.
+    pub height: u32,
+    /// Straight-alpha sRGB RGBA8, `width * height * 4` bytes.
+    pub rgba8: Vec<u8>,
+}
+
+/// Every decoded image a renderer may draw, keyed by content hash.
+#[derive(Debug, Clone, Default)]
+pub struct ImageSet {
+    images: HashMap<motioner_core::ImageKey, ImageData>,
+}
+
+impl ImageSet {
+    /// An empty set.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds (or replaces) one image.
+    pub fn insert(&mut self, image: ImageData) {
+        self.images.insert(image.key, image);
+    }
+
+    /// The image for `key`, when present.
+    #[must_use]
+    pub fn get(&self, key: &motioner_core::ImageKey) -> Option<&ImageData> {
+        self.images.get(key)
+    }
+
+    /// Number of images.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.images.len()
+    }
+
+    /// Whether the set is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
+    /// Every image in the set.
+    pub fn iter(&self) -> impl Iterator<Item = (&motioner_core::ImageKey, &ImageData)> {
+        self.images.iter()
+    }
 }
 
 /// The single drawing surface abstraction shared by the headless and live
@@ -99,6 +157,17 @@ trait Canvas2d {
 
     /// Draws pre-laid-out glyphs.
     fn glyphs(&mut self, font: FontId2d, glyphs: &[ferrous_2d::render::GlyphDraw2d]);
+
+    /// Uploads one image texture and returns its engine texture id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Image`] when the pinned engine has no image
+    /// support or the upload fails.
+    fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError>;
+
+    /// Queues one sprite quad for an image texture.
+    fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance);
 
     /// Opens an offscreen layer for a group of draws (D-0031, D-0032).
     ///
@@ -207,6 +276,22 @@ impl Canvas2d for Pure2dHarness {
         self.draw_glyphs(font, glyphs);
     }
 
+    fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError> {
+        self.register_texture_2d(
+            image.width,
+            image.height,
+            &image.rgba8,
+            ferrous_2d::render::TextureOptions2d::photo(),
+        )
+        .map_err(|error| RenderError::Image {
+            message: error.to_string(),
+        })
+    }
+
+    fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance) {
+        self.draw_sprite(texture_id, instance);
+    }
+
     fn push_layer(
         &mut self,
         opacity: f64,
@@ -292,6 +377,22 @@ impl Canvas2d for ferrous_renderer::Renderer {
         ferrous_renderer::Renderer::draw_glyphs_2d(self, font, glyphs);
     }
 
+    fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError> {
+        self.register_texture_2d(
+            image.width,
+            image.height,
+            &image.rgba8,
+            ferrous_2d::render::TextureOptions2d::photo(),
+        )
+        .map_err(|error| RenderError::Image {
+            message: error.to_string(),
+        })
+    }
+
+    fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance) {
+        ferrous_renderer::Renderer::draw_sprite_2d(self, texture_id, instance);
+    }
+
     fn push_layer(
         &mut self,
         opacity: f64,
@@ -355,6 +456,9 @@ pub struct FrameRenderer {
     clear: Option<wgpu::Color>,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
     path_cache: paths::PathCache,
+    images: ImageSet,
+    image_textures: HashMap<motioner_core::ImageKey, u32>,
+    texture_budget: u64,
 }
 
 /// Counters returned by one plan paint into a drawing surface.
@@ -409,6 +513,9 @@ pub enum Feature {
     /// Styled text layout (D-0034). No longer raised: the pinned engine
     /// carries block layout. Kept so future pin gaps reuse the mechanism.
     TextLayout,
+    /// Image textures (D-0035). No longer raised: the pinned engine carries
+    /// `Renderer::register_texture_2d`. Kept so future pin gaps reuse it.
+    Images,
 }
 
 impl Feature {
@@ -417,6 +524,7 @@ impl Feature {
     pub const fn name(self) -> &'static str {
         match self {
             Self::TextLayout => "styled text layout",
+            Self::Images => "image textures",
         }
     }
 }
@@ -458,6 +566,23 @@ pub enum RenderError {
         /// The first node that needs it.
         node: Option<motioner_core::NodeId>,
     },
+    /// An image texture could not be uploaded.
+    Image {
+        /// Underlying texture error.
+        message: String,
+    },
+    /// An image node's source was never resolved (missing or invalid file).
+    UnresolvedImage {
+        /// The project-relative path that failed.
+        source: String,
+    },
+    /// The registered image textures exceed the configured budget.
+    TextureBudget {
+        /// Resident bytes.
+        bytes: u64,
+        /// Configured limit.
+        limit: u64,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -486,6 +611,15 @@ impl fmt::Display for RenderError {
                     feature.name()
                 ),
             },
+            Self::Image { message } => write!(f, "image texture upload failed: {message}"),
+            Self::UnresolvedImage { source } => write!(
+                f,
+                "image {source:?} could not be loaded; check that it is a project-relative PNG"
+            ),
+            Self::TextureBudget { bytes, limit } => write!(
+                f,
+                "image textures use {bytes} bytes, above the {limit}-byte budget"
+            ),
         }
     }
 }
@@ -523,6 +657,27 @@ impl FrameRenderer {
     #[must_use]
     pub fn font_set(&self) -> &FontSet {
         &self.fonts
+    }
+
+    /// Replaces the decoded images this renderer may draw (D-0035).
+    ///
+    /// Call it after loading a document; textures are registered lazily on the
+    /// first frame that uses each key and reused by key afterwards.
+    pub fn set_images(&mut self, images: ImageSet) {
+        self.images = images;
+        self.image_textures.clear();
+    }
+
+    /// The configured image-texture budget in bytes.
+    #[must_use]
+    pub fn texture_budget(&self) -> u64 {
+        self.texture_budget
+    }
+
+    /// Sets the image-texture budget; a frame above it fails with
+    /// [`RenderError::TextureBudget`].
+    pub fn set_texture_budget(&mut self, bytes: u64) {
+        self.texture_budget = bytes;
     }
 
     /// Renders one frame and writes exactly `width * height * 4` bytes into
@@ -570,6 +725,8 @@ pub struct LivePainter {
     font_ids: Vec<((String, u16), FontId2d)>,
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
     path_cache: paths::PathCache,
+    images: ImageSet,
+    image_textures: HashMap<motioner_core::ImageKey, u32>,
 }
 
 #[cfg(feature = "live")]
@@ -618,6 +775,8 @@ impl LivePainter {
             font_ids,
             missing_glyphs: HashMap::new(),
             path_cache: paths::PathCache::default(),
+            images: ImageSet::new(),
+            image_textures: HashMap::new(),
         })
     }
 
@@ -625,6 +784,12 @@ impl LivePainter {
     #[must_use]
     pub fn font_set(&self) -> &FontSet {
         &self.fonts
+    }
+
+    /// Replaces the decoded images the preview may draw.
+    pub fn set_images(&mut self, images: ImageSet) {
+        self.images = images;
+        self.image_textures.clear();
     }
 
     /// Drops the cached per-node missing-glyph counts.
@@ -686,6 +851,8 @@ impl LivePainter {
             &mut self.missing_glyphs,
             &mut self.path_cache,
             &gradients,
+            &self.images,
+            &mut self.image_textures,
         )
     }
 }

@@ -10,9 +10,9 @@ use std::rc::Rc;
 use motioner_core::{
     BlendMode, CharOrder, CharProperty, CharValue, Color, Composition, ContentField, ContentValue,
     CoreError, Document, Ease, Effect, EffectChannel, EffectKind, EffectParam, EffectValueInput,
-    FrameRate, Gradient, LineCap, LineJoin, MaskMode, NodeContent, NodeId, NodeIdentity, Paint,
-    PathGeometry, PathPoint, Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent,
-    Vec2, MAX_CANVAS_SIZE,
+    FrameRate, Gradient, ImageContent, ImageFit, LineCap, LineJoin, MaskMode, NodeContent, NodeId,
+    NodeIdentity, Paint, PathGeometry, PathPoint, Property, PropertyValue, Stroke, TextAlign,
+    TextAnimator, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -172,6 +172,7 @@ impl Scene {
                 Ok(node)
             }
             Builtin::Text => self.text(args, site),
+            Builtin::Image => self.image(args, site),
             Builtin::Path => self.path(args, site),
             Builtin::Polygon => self.polygon(args, site),
             Builtin::Star => self.star(args, site),
@@ -284,6 +285,49 @@ impl Scene {
                 (6, "tracking"),
                 (7, "line_height"),
             ] {
+                self.record(id, property, bound.source(index));
+            }
+        }
+        Ok(node)
+    }
+
+    /// `image(source, width=None, height=None, fit="contain")` (D-0035).
+    ///
+    /// `source` is a project-relative path; the loader resolves its key and
+    /// natural size after the program runs.  `width`/`height` are the
+    /// destination box in pixels; `None` or `0` keeps the natural size/aspect.
+    fn image(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = ["source", "width", "height", "fit"];
+        let bound = bind("image", &params, 1, args)?;
+        let source = bound.string_or(0, "")?;
+        if source.is_empty() {
+            return Err(HostError::value_error(
+                "image(): 'source' must be a non-empty project-relative path",
+            ));
+        }
+        let fit_name = bound.string_or(3, "contain")?;
+        let fit = ImageFit::from_name(&fit_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "image(): unknown fit {fit_name:?}; use \"contain\", \"cover\" or \"fill\""
+            ))
+        })?;
+        let mut content = ImageContent::new(source.to_string());
+        content.fit = fit;
+        let dimension = |index: usize, name: &str| -> HostResult<f64> {
+            match bound.get(index) {
+                None | Some(Value::None) => Ok(0.0),
+                Some(Value::Number(number)) => Ok(*number),
+                Some(other) => Err(HostError::type_error(format!(
+                    "image(): '{name}' must be a number or None, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        content.width = motioner_core::Animatable::new(dimension(1, "width")?);
+        content.height = motioner_core::Animatable::new(dimension(2, "height")?);
+        let node = self.create(NodeContent::Image(content), site)?;
+        if let Value::Node(id) = node {
+            for (index, property) in [(0, "source"), (1, "width"), (2, "height"), (3, "fit")] {
                 self.record(id, property, bound.source(index));
             }
         }
@@ -581,7 +625,18 @@ impl Scene {
             NodeMethod::EffectStack => self.effect_stack(id, args),
             NodeMethod::Mask => self.mask(id, args),
             NodeMethod::AnimateChars => self.animate_chars(id, args),
+            NodeMethod::ClearChars => self.clear_chars(id),
         }
+    }
+
+    /// `node.clear_chars()`: removes every per-character animator.
+    ///
+    /// The replacement form `bake` uses before writing a new animator list.
+    fn clear_chars(&mut self, id: NodeId) -> HostResult<Value> {
+        self.document_mut()?
+            .set_text_animators(id, Vec::new())
+            .map_err(|error| core_error(&error))?;
+        Ok(Value::None)
     }
 
     /// `node.animate_chars(property, from, to, start, stagger, duration,
@@ -1262,6 +1317,7 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
         })),
         ContentValue::Cap(cap) => Value::Str(Rc::from(cap.name())),
         ContentValue::Join(join) => Value::Str(Rc::from(join.name())),
+        ContentValue::Fit(fit) => Value::Str(Rc::from(fit.name())),
         ContentValue::Gradient(Some(gradient)) => Value::Gradient(Rc::new(gradient)),
     })
 }
@@ -1302,6 +1358,7 @@ fn char_value(property: CharProperty, value: Option<&Value>, role: &str) -> Host
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per content field, kept together
 fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue> {
     let number = |value: &Value| -> HostResult<ContentValue> {
         match value {
@@ -1395,6 +1452,26 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
                 }),
             other => Err(HostError::type_error(format!(
                 "'join' expects a string, got {}",
+                other.type_name()
+            ))),
+        },
+        ContentField::Source => match value {
+            Value::Str(text) => Ok(ContentValue::Text(text.to_string())),
+            other => Err(HostError::type_error(format!(
+                "'source' expects a project-relative path string, got {}",
+                other.type_name()
+            ))),
+        },
+        ContentField::Fit => match value {
+            Value::Str(text) => ImageFit::from_name(text)
+                .map(ContentValue::Fit)
+                .ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "'fit' must be \"contain\", \"cover\" or \"fill\", got {text:?}"
+                    ))
+                }),
+            other => Err(HostError::type_error(format!(
+                "'fit' expects a string, got {}",
                 other.type_name()
             ))),
         },

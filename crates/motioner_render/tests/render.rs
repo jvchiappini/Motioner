@@ -473,7 +473,9 @@ fn same_frame_twice_is_identical() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/hello.motion"
     ));
-    let document = motioner_dsl::run(source, &motioner_dsl::Limits::default()).unwrap();
+    let metrics = motioner_render::CpuTextMetrics::new(motioner_render::FontSet::bundled());
+    let document =
+        motioner_dsl::run_with_metrics(source, &motioner_dsl::Limits::default(), &metrics).unwrap();
     let mut evaluator = Evaluator::new();
     let mut first_plan = RenderPlan::new();
     let mut second_plan = RenderPlan::new();
@@ -641,4 +643,90 @@ fn backdrop_blend_modes_render_through_layers() {
         (84..=100).contains(&sample[0]),
         "overlay should screen the dark backdrop: {sample:?}"
     );
+}
+
+/// D-0034/D-0035: `text_width` must be the engine's own measurement.
+///
+/// `text_width("AV", font="Inter")` goes through `CpuTextMetrics`, which caches
+/// a `ferrous_font::LayoutData` per face. The value must equal the advance the
+/// renderer lays out with `layout_text_2d`. Inter 400 has no `AV` pair, so a
+/// GPOS pair it does carry (`7_`) proves the kerning path.
+#[test]
+fn text_width_with_inter_matches_the_renderer_layout() {
+    use ferrous_2d::render::TextStyle2d;
+    use ferrous_font::TextAlign as EngineTextAlign;
+    use motioner_core::{ContentField, ContentValue, TextMetrics};
+
+    let _gpu = motioner_testkit::gpu::lock();
+    let source = "\
+comp(name=\"Metrics\", width=200, height=100)
+r = rect(text_width(\"AV\", 100, font=\"Inter\"), 10)
+";
+    let metrics = motioner_render::CpuTextMetrics::new(motioner_render::FontSet::bundled());
+    let document =
+        motioner_dsl::run_with_metrics(source, &motioner_dsl::Limits::default(), &metrics).unwrap();
+    let node = document.roots()[0];
+    let Some(ContentValue::Number(width)) = document
+        .node(node)
+        .unwrap()
+        .content()
+        .static_value(ContentField::Width)
+    else {
+        panic!("the rect has a width");
+    };
+
+    let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let mut harness = match ferrous_renderer::headless::Pure2dHarness::new(
+        200,
+        100,
+        ferrous_renderer::headless::DEFAULT_FORMAT,
+    ) {
+        Ok(harness) => harness,
+        Err(error) => {
+            eprintln!("skipping GPU test: no usable adapter ({error})");
+            return;
+        }
+    };
+    let font = harness
+        .register_font(inter, ferrous_font::charset::latin_western())
+        .unwrap();
+    let mut glyphs = Vec::new();
+    let metrics = harness
+        .layout_text(
+            font,
+            "AV",
+            TextStyle2d {
+                size_px: 100.0,
+                align: EngineTextAlign::Left,
+                tracking: 0.0,
+                line_height: 1.0,
+            },
+            &mut glyphs,
+        )
+        .expect("live font");
+    assert!(
+        (width - f64::from(metrics.width)).abs() < 1e-9,
+        "text_width {width} must equal layout_text_2d {}",
+        metrics.width
+    );
+
+    // Inter 400 has no AV pair (its GPOS covers punctuation, not letters), so
+    // the equality above is the "measurement matches drawing" half. Prove the
+    // GPOS table is actually used with a pair Inter does kern: "7_" is
+    // -0.1587 em in Inter 400, so the width must be below the unkerned sum.
+    // (The engine test proves GPOS-only AV with Roboto minus its kern table.)
+    let metrics = motioner_render::CpuTextMetrics::new(motioner_render::FontSet::bundled());
+    let request = |text: &'static str| motioner_core::TextRequest {
+        text,
+        size: 100.0,
+        font: "Inter",
+        weight: 400,
+        tracking: 0.0,
+        line_height: 1.0,
+        align: TextAlign::Left,
+    };
+    let kerned = metrics.measure(&request("7_")).unwrap().width;
+    let sum = metrics.measure(&request("7")).unwrap().width
+        + metrics.measure(&request("_")).unwrap().width;
+    assert!(kerned < sum, "GPOS must narrow 7_ ({kerned} vs {sum})");
 }

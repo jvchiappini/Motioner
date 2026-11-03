@@ -61,6 +61,8 @@ pub enum Icon {
     Snap,
     /// Masked layer.
     Mask,
+    /// An image layer.
+    Image,
 }
 
 impl Icon {
@@ -73,6 +75,7 @@ impl Icon {
             NodeKind::Circle => Self::Circle,
             NodeKind::Path => Self::Path,
             NodeKind::Text => Self::Text,
+            NodeKind::Image => Self::Image,
         }
     }
 }
@@ -228,6 +231,20 @@ fn layer(
             color,
         ),
         Icon::Rect => p.stroke_rounded(g.r(2.5, 2.5, 11.0, 11.0), color, g.len(2.0), stroke),
+        Icon::Image => {
+            p.stroke_rounded(g.r(2.0, 2.5, 12.0, 11.0), color, g.len(1.5), stroke);
+            p.polygon(
+                &[
+                    g.p(3.5, 12.0),
+                    g.p(6.5, 7.5),
+                    g.p(9.0, 11.0),
+                    g.p(11.0, 9.0),
+                    g.p(12.5, 12.0),
+                ],
+                color,
+            );
+            p.circle(g.x + g.len(10.5), g.y + g.len(5.5), g.len(1.4), color);
+        }
         Icon::Path => {
             p.circle(g.x + g.len(3.0), g.y + g.len(12.0), g.len(1.4), color);
             p.hline(g.x + g.len(3.0), g.x + g.len(7.0), g.y + g.len(12.0), color);

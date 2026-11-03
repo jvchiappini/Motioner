@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use ferrous_renderer::Renderer;
 use motioner_core::{NodeId, OverrideAction, Vec2};
-use motioner_render::{TextExtent, ViewFit};
+use motioner_render::{ImageData, ImageSet, TextExtent, ViewFit};
 
 use super::PreviewApp;
 use crate::bounds::{self, Bounds};
@@ -21,6 +21,20 @@ use crate::panels;
 use crate::theme::size;
 use crate::viewport::Viewport;
 use crate::PreviewSession;
+
+/// Converts the session's decoded images into renderer upload records.
+fn image_set(images: Vec<motioner_core::DecodedImage>) -> ImageSet {
+    let mut set = ImageSet::new();
+    for image in images {
+        set.insert(ImageData {
+            key: image.asset.key,
+            width: image.asset.width,
+            height: image.asset.height,
+            rgba8: image.rgba8,
+        });
+    }
+    set
+}
 
 /// What a canvas click landed on.
 pub(super) enum Pick {
@@ -95,6 +109,14 @@ impl PreviewApp {
         let started = Instant::now();
         // Only a click needs the lock states; do not copy the set every frame.
         let overrides = pick.map(|_| self.editor.session().overrides().clone());
+        let generation = self.editor.session().generation();
+        if self.painter_generation != Some(generation) {
+            let images = self.editor.session().decoded_images();
+            if let Some(painter) = self.painter.as_mut() {
+                painter.set_images(image_set(images));
+            }
+            self.painter_generation = Some(generation);
+        }
         let Some((document, plan)) = self.editor.session_mut().evaluate(frame) else {
             return (out, None);
         };

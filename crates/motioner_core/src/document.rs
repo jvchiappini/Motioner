@@ -168,6 +168,56 @@ impl Document {
         self.nodes.iter()
     }
 
+    /// Resolves every image node's `source` through `resolver`.
+    ///
+    /// The loader reads the bytes, hashes them and returns the key and natural
+    /// size; this method stores the result on the node.  An unresolved node
+    /// (missing file, invalid path, undecodable PNG) keeps `asset = None` and
+    /// is reported in the returned issues, so the preview can draw a
+    /// placeholder and `still`/`render` can fail with the path.
+    ///
+    /// Returns one issue per image that could not be resolved.
+    pub fn resolve_images(
+        &mut self,
+        resolver: &dyn crate::node::ImageResolver,
+    ) -> Vec<crate::node::ImageIssue> {
+        let mut issues = Vec::new();
+        for node in &mut self.nodes {
+            let NodeContent::Image(image) = &mut node.content else {
+                continue;
+            };
+            match resolver.resolve(&image.source) {
+                Ok(asset) => image.asset = Some(asset),
+                Err(message) => {
+                    image.asset = None;
+                    issues.push(crate::node::ImageIssue {
+                        node: node.id,
+                        source: image.source.clone(),
+                        message,
+                    });
+                }
+            }
+        }
+        issues
+    }
+
+    /// The first unresolved image node, if any.
+    ///
+    /// `still`/`render` use this to fail with a typed error before rendering.
+    #[must_use]
+    pub fn first_unresolved_image(&self) -> Option<crate::node::ImageIssue> {
+        self.nodes.iter().find_map(|node| {
+            let NodeContent::Image(image) = &node.content else {
+                return None;
+            };
+            image.asset.is_none().then(|| crate::node::ImageIssue {
+                node: node.id,
+                source: image.source.clone(),
+                message: "the image could not be resolved".to_owned(),
+            })
+        })
+    }
+
     /// The per-character animators of a text node, or `None` for a non-text
     /// node.
     #[must_use]
@@ -1053,10 +1103,12 @@ fn content_static_write(
     match (field, value) {
         (ContentField::Width, ContentValue::Number(v)) => match content {
             NodeContent::Rect { width, .. } => set_number(width, field, v, false),
+            NodeContent::Image(image) => set_number(&mut image.width, field, v, false),
             _ => Err(wrong_kind(content, field)),
         },
         (ContentField::Height, ContentValue::Number(v)) => match content {
             NodeContent::Rect { height, .. } => set_number(height, field, v, false),
+            NodeContent::Image(image) => set_number(&mut image.height, field, v, false),
             _ => Err(wrong_kind(content, field)),
         },
         (ContentField::Radius, ContentValue::Number(v)) => match content {
@@ -1212,6 +1264,24 @@ fn content_static_write(
             }
             _ => Err(wrong_kind(content, field)),
         },
+        (ContentField::Source, ContentValue::Text(source)) => match content {
+            NodeContent::Image(image) => {
+                if image.source != source {
+                    // The key and natural size belong to the old bytes.
+                    image.asset = None;
+                    image.source = source;
+                }
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Fit, ContentValue::Fit(fit)) => match content {
+            NodeContent::Image(image) => {
+                image.fit = fit;
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
         _ => Err(CoreError::InvalidContentValue {
             field: field.name(),
             reason: "wrong value type",
@@ -1235,10 +1305,12 @@ fn content_key_write(
     match (field, value) {
         (ContentField::Width, ContentValue::Number(v)) => match content {
             NodeContent::Rect { width, .. } => width.insert_key(key(v, false)?),
+            NodeContent::Image(image) => image.width.insert_key(key(v, false)?),
             _ => return Err(wrong_kind(content, field)),
         },
         (ContentField::Height, ContentValue::Number(v)) => match content {
             NodeContent::Rect { height, .. } => height.insert_key(key(v, false)?),
+            NodeContent::Image(image) => image.height.insert_key(key(v, false)?),
             _ => return Err(wrong_kind(content, field)),
         },
         (ContentField::Radius, ContentValue::Number(v)) => match content {

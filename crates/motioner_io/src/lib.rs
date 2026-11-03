@@ -13,9 +13,11 @@ mod encode;
 mod error;
 mod fonts;
 mod frame;
+mod images;
 mod png_writer;
 
 pub use encode::{EncodeSummary, FfmpegLocation, Mp4Encoder, VideoSettings};
 pub use error::ExportError;
 pub use fonts::{load_project_fonts, FontLoadError, ProjectFont};
+pub use images::{CachedImages, DecodedImage, ImageError, ImageStore};
 pub use png_writer::write_png;

@@ -181,6 +181,8 @@ Space+drag over the canvas pans.
 | `effect_move(id, kind, index)` | the up/down tiles of an effect row |
 | `mask_set(id, source, mode="alpha", invert=False)` | the Source/Mode/Invert rows of the inspector Mask section |
 | `mask_clear(id)` | the Clear tile of the Mask section |
+| `text_anim_add(id, property, from, to, start, stagger, duration, ease="linear", order="forward")` | the Fade/Rise/Colour tiles of the inspector Animators section |
+| `text_anim_remove(id, index)` | the Del tile of an animator row |
 | `undo()`, `redo()` | Ctrl+Z, Ctrl+Y |
 | `bake(id, ...)` | fold overrides into the program (all ids when none) |
 
@@ -199,10 +201,35 @@ Eases: `linear`, `quad_in`, `quad_out`, `quad_in_out`, `cubic_in`,
 - `node.animate_chars("opacity", 0, 1, start, stagger, duration,
   ease="cubic_out", order="forward")` animates every character. Properties:
   `opacity`, `offset`, `scale`, `rotation`, `color`; orders: `forward`,
-  `reverse`, `center`.
-- Rendering a node that needs multi-line text, tracking or an animator returns
-  `Unsupported("styled text layout")` until the engine pin bump. `query` still
-  reports the document and the channels.
+  `reverse`, `center`. `start`, `stagger` and `duration` are seconds; the
+  document stores frames, so `stagger` and `duration` are rounded to the
+  nearest frame. `node.clear_chars()` removes every animator.
+- The editor stores the whole list as one `text_animators` override, whose
+  value is the canonical encoded list (`property:from:to:start:stagger:
+  duration:ease:order`, `;`-joined, frames). Agents normally use
+  `text_anim_add` / `text_anim_remove`, which rewrite that list; `bake` folds
+  it into `clear_chars()` plus one `animate_chars(...)` per animator.
+- `text_width` / `text_bounds` use the engine's `LayoutData`, the same tables
+  the atlas is built from, so GPOS kerning matches the drawn text.
+
+## Images (D-0035)
+
+- `image(source, width=None, height=None, fit="contain")`; `source` is a
+  project-relative PNG path (absolute paths and `..` are errors). `width` and
+  `height` are the destination box in pixels; `None`/`0` means natural, one
+  dimension keeps the aspect. `fit` is `contain`, `cover` or `fill`.
+- The image key is the SHA-256 of the file bytes. `query` reports
+  `source`, `natural_width`/`natural_height` (when resolved), `width`,
+  `height`, `fit` and `key`; the plan carries the key, the destination rect
+  and `uv_rect`.
+- `set`/`edit`/`key` work by name: `set(id, "source", "assets/logo.png")`,
+  `set(id, "fit", "cover")`, `key(id, "width", 1.0, 240)`. A source change
+  clears the old key and the next compile re-resolves the file.
+- `still`/`render` fail with a typed error naming the path when the file is
+  missing or invalid; `preview` draws a checker/outline placeholder and shows
+  a warning instead.
+- Images are sRGB PNGs; palette, greyscale and 16-bit files are expanded to
+  RGBA8. `gAMA`/`iCCP` are ignored. JPEG/WebP are not supported yet.
 
 ## `motioner query`
 

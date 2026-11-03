@@ -253,6 +253,45 @@ impl PreviewApp {
                 ][segment.min(2)];
                 self.run(&Command::EffectAdd { id, kind });
             }
+            Some(inspect::RowValue::TextAnimAdd) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                let (property, from, to) = match segment.min(2) {
+                    0 => (
+                        motioner_core::CharProperty::Opacity,
+                        OverrideValue::Number(0.0),
+                        OverrideValue::Number(1.0),
+                    ),
+                    1 => (
+                        motioner_core::CharProperty::Offset,
+                        OverrideValue::Vec2(motioner_core::Vec2::new(0.0, 24.0)),
+                        OverrideValue::Vec2(motioner_core::Vec2::new(0.0, 0.0)),
+                    ),
+                    _ => (
+                        motioner_core::CharProperty::Color,
+                        OverrideValue::Text("#FFFFFF".to_owned()),
+                        OverrideValue::Text("#5AB0FF".to_owned()),
+                    ),
+                };
+                self.run(&Command::TextAnimAdd {
+                    id,
+                    property,
+                    from,
+                    to,
+                    start: crate::command::Time::Frame(self.editor.frame()),
+                    stagger: 2.0,
+                    duration: 12.0,
+                    ease: motioner_core::Ease::QuadOut,
+                    order: motioner_core::CharOrder::Forward,
+                });
+            }
+            Some(&inspect::RowValue::TextAnimRemove { index }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                self.run(&Command::TextAnimRemove { id, index });
+            }
             Some(&inspect::RowValue::EffectOps { kind }) => {
                 let Some(node) = self.editor.selected() else {
                     return;

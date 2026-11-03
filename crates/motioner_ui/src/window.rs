@@ -59,6 +59,10 @@ pub struct PreviewOptions {
     /// Faces the preview may use (project plus bundled). The default renders
     /// with the bundled set only.
     pub fonts: Option<motioner_render::FontSet>,
+    /// Resolves image nodes (D-0035). The application supplies the
+    /// project-rooted loader; without one every image stays unresolved and
+    /// draws a placeholder.
+    pub image_resolver: Option<std::rc::Rc<dyn motioner_core::ImageResolver>>,
 }
 
 /// Errors that prevent the preview window from running.
@@ -105,6 +109,9 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     let mut session = PreviewSession::new(path);
     if let Some(metrics) = options.text_metrics.clone() {
         session.set_text_metrics(metrics);
+    }
+    if let Some(resolver) = options.image_resolver.clone() {
+        session.set_image_resolver(resolver);
     }
     match session.reload() {
         Ok(()) | Err(SessionError::Diagnostic(_)) => {}

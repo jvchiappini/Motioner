@@ -1753,6 +1753,7 @@ name = "motioner_dsl"
 version = "0.1.0"
 dependencies = [
  "motioner_core",
+ "motioner_eval",
 ]
 
 [[package]]
@@ -1766,7 +1767,9 @@ dependencies = [
 name = "motioner_io"
 version = "0.1.0"
 dependencies = [
+ "motioner_core",
  "png 0.17.16",
+ "sha2",
 ]
 
 [[package]]
@@ -1781,7 +1784,9 @@ dependencies = [
  "motioner_core",
  "motioner_dsl",
  "motioner_eval",
+ "motioner_io",
  "motioner_testkit",
+ "png 0.17.16",
  "sha2",
  "wgpu",
 ]

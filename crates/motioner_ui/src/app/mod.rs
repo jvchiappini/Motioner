@@ -83,6 +83,8 @@ pub(crate) struct PreviewApp {
     editing: Option<Editing>,
     field_error: Option<FieldTarget>,
     painter: Option<LivePainter>,
+    /// Generation whose images the painter has uploaded.
+    painter_generation: Option<u64>,
     fatal: Rc<RefCell<Option<UiError>>>,
     capture: Capture,
     /// Whether the `--screenshot` capture was queued.
@@ -142,6 +144,7 @@ impl PreviewApp {
             editing: None,
             field_error: None,
             painter: None,
+            painter_generation: None,
             fatal,
             capture: Capture::default(),
             screenshot_queued: false,

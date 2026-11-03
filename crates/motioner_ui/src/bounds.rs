@@ -73,7 +73,7 @@ fn local_box(
     measure: &impl MeasureText,
 ) -> Option<[f64; 4]> {
     match item.shape {
-        ItemShape::Rect { width, height, .. } => {
+        ItemShape::Rect { width, height, .. } | ItemShape::Image { width, height, .. } => {
             Some([-width * 0.5, -height * 0.5, width * 0.5, height * 0.5])
         }
         ItemShape::Circle { radius, .. } => Some([-radius, -radius, radius, radius]),

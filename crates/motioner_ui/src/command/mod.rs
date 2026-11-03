@@ -24,7 +24,7 @@
 
 use std::fmt;
 
-use motioner_core::{Ease, EffectKind, Frame, FrameRate, OverrideValue};
+use motioner_core::{CharOrder, CharProperty, Ease, EffectKind, Frame, FrameRate, OverrideValue};
 
 /// A point in time: seconds (as in the overrides file) or an exact frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -368,6 +368,34 @@ pub enum Command {
         /// Masked node identity.
         id: String,
     },
+    /// Append a per-character animator to a text layer (D-0034).
+    TextAnimAdd {
+        /// Text node identity.
+        id: String,
+        /// Property the animator drives.
+        property: CharProperty,
+        /// Value before the character starts.
+        from: OverrideValue,
+        /// Value once the character finishes.
+        to: OverrideValue,
+        /// First frame of the first character.
+        start: Time,
+        /// Frames between consecutive characters.
+        stagger: f64,
+        /// Frames one character takes.
+        duration: f64,
+        /// Ease of the per-character segment.
+        ease: Ease,
+        /// Character order.
+        order: CharOrder,
+    },
+    /// Remove the per-character animator at `index`.
+    TextAnimRemove {
+        /// Text node identity.
+        id: String,
+        /// Zero-based position in the animator list.
+        index: usize,
+    },
     /// Undo the last edit (Ctrl+Z).
     Undo,
     /// Redo (Ctrl+Shift+Z, Ctrl+Y).
@@ -431,6 +459,8 @@ pub enum CommandKind {
     EffectMove,
     MaskSet,
     MaskClear,
+    TextAnimAdd,
+    TextAnimRemove,
     Undo,
     Redo,
     Bake,
@@ -438,7 +468,7 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 56] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -490,6 +520,8 @@ impl CommandKind {
         Self::EffectMove,
         Self::MaskSet,
         Self::MaskClear,
+        Self::TextAnimAdd,
+        Self::TextAnimRemove,
         Self::Undo,
         Self::Redo,
         Self::Bake,
@@ -550,6 +582,8 @@ impl CommandKind {
             Self::EffectMove => "effect_move",
             Self::MaskSet => "mask_set",
             Self::MaskClear => "mask_clear",
+            Self::TextAnimAdd => "text_anim_add",
+            Self::TextAnimRemove => "text_anim_remove",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::Bake => "bake",
@@ -617,6 +651,10 @@ impl CommandKind {
             Self::EffectMove => "effect_move(id, kind, index)",
             Self::MaskSet => "mask_set(id, source, mode=\"alpha\", invert=False)",
             Self::MaskClear => "mask_clear(id)",
+            Self::TextAnimAdd => {
+                "text_anim_add(id, property, from, to, start, stagger, duration, ease=\"linear\", order=\"forward\")"
+            }
+            Self::TextAnimRemove => "text_anim_remove(id, index)",
             Self::Undo => "undo()",
             Self::Redo => "redo()",
             Self::Bake => "bake(id, ...)",
@@ -650,6 +688,8 @@ impl CommandKind {
                 | Self::EffectMove
                 | Self::MaskSet
                 | Self::MaskClear
+                | Self::TextAnimAdd
+                | Self::TextAnimRemove
         )
     }
 }
@@ -710,6 +750,8 @@ impl Command {
             Self::EffectMove { .. } => CommandKind::EffectMove,
             Self::MaskSet { .. } => CommandKind::MaskSet,
             Self::MaskClear { .. } => CommandKind::MaskClear,
+            Self::TextAnimAdd { .. } => CommandKind::TextAnimAdd,
+            Self::TextAnimRemove { .. } => CommandKind::TextAnimRemove,
             Self::Undo => CommandKind::Undo,
             Self::Redo => CommandKind::Redo,
             Self::Bake(_) => CommandKind::Bake,

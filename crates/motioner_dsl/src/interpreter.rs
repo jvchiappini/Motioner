@@ -576,7 +576,8 @@ impl Interpreter<'_> {
                 | Builtin::Path
                 | Builtin::Polygon
                 | Builtin::Star
-                | Builtin::Arc),
+                | Builtin::Arc
+                | Builtin::Image),
             ) => self.scene.call(builtin, call_args, &self.site(span)),
             Value::Builtin(builtin) => builtins::call(
                 builtin,

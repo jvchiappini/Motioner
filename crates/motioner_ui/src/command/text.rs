@@ -73,6 +73,28 @@ impl Command {
                 quote(mode.name()),
                 bool_text(*invert),
             ],
+            Self::TextAnimAdd {
+                id,
+                property,
+                from,
+                to,
+                start,
+                stagger,
+                duration,
+                ease,
+                order,
+            } => vec![
+                quote(id),
+                quote(property.name()),
+                value_text(from),
+                value_text(to),
+                start.to_text(),
+                format_number(*stagger),
+                format_number(*duration),
+                format!("ease={}", quote(ease.name())),
+                format!("order={}", quote(order.name())),
+            ],
+            Self::TextAnimRemove { id, index } => vec![quote(id), index.to_string()],
             Self::PrevKey { id, property }
             | Self::NextKey { id, property }
             | Self::Stopwatch { id, property }

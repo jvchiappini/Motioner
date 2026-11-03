@@ -181,6 +181,26 @@ glyphs are measured once per text node with `measure_text` and cached on the
 renderer; later frames reuse the cached count. The cache is keyed by `NodeId`
 and assumes one document per renderer, which is how the CLI uses it.
 
+## Images
+
+An image item (`ItemShape::Image`) carries the content key, the destination
+rectangle and the `uv_rect` crop. `FrameRenderer::set_images` takes the decoded
+bytes from `motioner_io`; `paint_plan` uploads each key once through
+`register_texture_2d` (mipmapped, trilinear, premultiplied) and reuses the
+texture id by key across frames. `free_sprite_texture` (or a new image set)
+releases it. `texture_bytes_2d()` is the resident budget and a frame above
+`FrameRenderer::texture_budget` fails with `RenderError::TextureBudget`.
+
+An unresolved image (missing/invalid path) evaluates to a placeholder item:
+the preview draws a checker plus an outline; `still`/`render` check
+`Document::first_unresolved_image` first and return
+`RenderError::UnresolvedImage { source }` with the path. Image textures need
+the engine's `register_texture_2d` (mipmapped, trilinear). `CpuTextMetrics`
+measures through the engine's `ferrous_font::LayoutData`, so `text_width`
+matches what is drawn, GPOS kerning included.
+
+The engine contract (colour space, mip filter, sampler choice, `uv_rect`,
+budget) is documented in `engine/ferrous/crates/ferrous_2d/docs/images.md`.
 ## Vector paths
 
 A path item (`ItemShape::Path`) references a `ResolvedPath` in the plan's

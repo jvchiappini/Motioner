@@ -33,8 +33,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use motioner_core::Document;
 use motioner_dsl::Limits;
 use motioner_eval::{Evaluator, RenderPlan};
-use motioner_io::{write_png, ExportError, FfmpegLocation, Mp4Encoder, VideoSettings};
-use motioner_render::{CpuTextMetrics, FontSet};
+use motioner_io::{write_png, ExportError, FfmpegLocation, ImageStore, Mp4Encoder, VideoSettings};
+use motioner_render::{CpuTextMetrics, FontSet, ImageData, ImageSet};
 use motioner_render::{FrameRenderer, RenderError};
 use std::sync::Arc;
 
@@ -690,6 +690,9 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         control: args.control.clone(),
         text_metrics: Some(Arc::new(CpuTextMetrics::new(fonts.clone()))),
         fonts: Some(fonts),
+        image_resolver: Some(std::rc::Rc::new(motioner_io::CachedImages::new(
+            ImageStore::new(std::env::current_dir().unwrap_or_default()),
+        ))),
     };
     if let Some(path) = &args.screenshot {
         ensure_parent(path)?;
@@ -734,16 +737,40 @@ fn font_families(fonts: &FontSet) -> Vec<String> {
 ///
 /// Returns the source text and the document. An MDF diagnostic becomes
 /// [`Failure::Diagnostic`] so `main` can print it and exit with code 2.
-fn load_document(path: &Path) -> std::result::Result<(String, Document), Failure> {
+fn load_document(path: &Path) -> std::result::Result<(String, Document, ImageStore), Failure> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("cannot read {}", path.display()))
         .map_err(Failure::Error)?;
     let name = path.display().to_string();
     let metrics = CpuTextMetrics::new(project_fonts());
     match motioner_dsl::run_with_metrics(&source, &Limits::default(), &metrics) {
-        Ok(document) => Ok((source, document)),
+        Ok(mut document) => {
+            let store = ImageStore::new(std::env::current_dir().unwrap_or_default());
+            let cached = motioner_io::CachedImages::new(store);
+            for issue in document.resolve_images(&cached) {
+                eprintln!(
+                    "warning: image {} ({}): {}",
+                    issue.source, issue.node, issue.message
+                );
+            }
+            Ok((source, document, cached.into_inner()))
+        }
         Err(diagnostic) => Err(Failure::Diagnostic(diagnostic.render(&source, &name))),
     }
+}
+
+/// Every decoded image as the renderer's upload set.
+fn image_set(store: &ImageStore) -> ImageSet {
+    let mut set = ImageSet::new();
+    for image in store.decoded() {
+        set.insert(ImageData {
+            key: image.key,
+            width: image.width,
+            height: image.height,
+            rgba8: image.rgba8,
+        });
+    }
+    set
 }
 
 /// Creates the output's parent directory when it does not exist.
@@ -792,7 +819,7 @@ fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
 
 /// Prints composition facts for the `info` command.
 fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
-    let (_, document) = load_document(&args.input)?;
+    let (_, document, _images) = load_document(&args.input)?;
     let composition = document.composition();
     let rate = composition.frame_rate();
     let frames = composition.duration();
@@ -831,7 +858,12 @@ fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
 
 /// Renders one frame to a PNG file.
 fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
-    let (_, document) = load_document(&args.input)?;
+    let (_, document, images) = load_document(&args.input)?;
+    if let Some(issue) = document.first_unresolved_image() {
+        return Err(Failure::Error(anyhow!(RenderError::UnresolvedImage {
+            source: issue.source,
+        })));
+    }
     let composition = document.composition();
     if args.frame < 0 || args.frame >= composition.duration() {
         return Err(Failure::Error(anyhow!(
@@ -844,6 +876,7 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
 
     let mut renderer =
         FrameRenderer::with_fonts(composition.width(), composition.height(), project_fonts())?;
+    renderer.set_images(image_set(&images));
     let mut evaluator = Evaluator::new();
     let mut plan = RenderPlan::new();
     let mut rgba = Vec::new();
@@ -868,7 +901,12 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
 
 /// Renders a frame range and streams it to ffmpeg.
 fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
-    let (_, document) = load_document(&args.input)?;
+    let (_, document, images) = load_document(&args.input)?;
+    if let Some(issue) = document.first_unresolved_image() {
+        return Err(Failure::Error(anyhow!(RenderError::UnresolvedImage {
+            source: issue.source,
+        })));
+    }
     let composition = document.composition();
     let duration = composition.duration();
     let from = args.from.unwrap_or(0);
@@ -896,6 +934,7 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
         });
 
     let mut renderer = FrameRenderer::with_fonts(settings.width, settings.height, project_fonts())?;
+    renderer.set_images(image_set(&images));
     let mut encoder = Mp4Encoder::start(&args.output, &settings, &location)?;
     let mut evaluator = Evaluator::new();
     let mut plan = RenderPlan::new();

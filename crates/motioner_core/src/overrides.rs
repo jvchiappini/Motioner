@@ -16,7 +16,9 @@ use crate::color::Color;
 use crate::document::Document;
 use crate::effect::{EffectChannel, EffectParam, EffectValueInput};
 use crate::math::Vec2;
-use crate::node::{BlendMode, ContentField, ContentValue, Property, PropertyValue, TextAlign};
+use crate::node::{
+    BlendMode, ContentField, ContentValue, Property, PropertyValue, TextAlign, TextAnimator,
+};
 use crate::path::{LineCap, LineJoin};
 use crate::time::{Frame, FrameRate};
 
@@ -288,6 +290,7 @@ impl OverrideSet {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per override kind, kept together
 fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), String> {
     let Some(node) = document.find(&entry.id) else {
         return Err(format!("no node has the identity {:?}", entry.id));
@@ -303,6 +306,12 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
             return Err("'mask' expects '<source>:<mode>:<invert>'".to_owned());
         };
         return apply_mask(document, node, text);
+    }
+    if entry.property == TextAnimator::OVERRIDE_PROPERTY {
+        let OverrideAction::Set(OverrideValue::Text(text)) = &entry.action else {
+            return Err("'text_animators' expects the encoded animator list".to_owned());
+        };
+        return apply_text_animators(document, node, text);
     }
     let (base, axis) = split_property(&entry.property);
     match &entry.action {
@@ -451,6 +460,15 @@ fn set_value(
         };
         return apply_mask(document, node, text);
     }
+    if property_name == TextAnimator::OVERRIDE_PROPERTY {
+        let OverrideValue::Text(text) = value else {
+            return Err(format!(
+                "'text_animators' cannot take {}: expected the encoded animator list",
+                describe(value)
+            ));
+        };
+        return apply_text_animators(document, node, text);
+    }
     if property_name == "blend" {
         let OverrideValue::Text(name) = value else {
             return Err(format!(
@@ -496,6 +514,19 @@ fn apply_mask(
         }
         Err(reason) => Err(format!("'mask' cannot take {text:?}: {reason}")),
     }
+}
+
+/// Applies a `text_animators` override: the whole animator list, encoded.
+fn apply_text_animators(
+    document: &mut Document,
+    node: crate::node::NodeId,
+    text: &str,
+) -> Result<(), String> {
+    let animators = TextAnimator::decode_list(text)
+        .map_err(|reason| format!("'text_animators' cannot take {text:?}: {reason}"))?;
+    document
+        .set_text_animators(node, animators)
+        .map_err(|error| error.to_string())
 }
 
 /// Rebuilds a node's effect stack from a comma-separated list of kind names.

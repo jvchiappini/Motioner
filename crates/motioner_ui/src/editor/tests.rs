@@ -653,3 +653,69 @@ fn effect_parameters_key_through_the_generic_commands() {
         ErrorKind::UnknownProperty
     );
 }
+
+#[test]
+fn text_animator_commands_edit_the_whole_list() {
+    let (mut editor, _dir) = hello_editor("text-animators");
+    let animators = |editor: &Editor| {
+        let document = editor.session().document().expect("document");
+        document
+            .text_animators(document.find(TITLE).unwrap())
+            .unwrap_or_default()
+            .to_vec()
+    };
+    assert!(animators(&editor).is_empty());
+
+    run(
+        &mut editor,
+        "text_anim_add(\"@288\", \"opacity\", 0, 1, 0, 2, 12, ease=\"quad_out\")",
+    );
+    run(
+        &mut editor,
+        "text_anim_add(\"@288\", \"offset\", (0, 24), (0, 0), 0, 2, 12, order=\"center\")",
+    );
+    let list = animators(&editor);
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].property, motioner_core::CharProperty::Opacity);
+    assert_eq!(list[1].property, motioner_core::CharProperty::Offset);
+    assert_eq!(list[1].order, motioner_core::CharOrder::Center);
+    assert!((list[0].stagger - 2.0).abs() < 1e-9);
+    assert!((list[0].duration - 12.0).abs() < 1e-9);
+
+    // The whole list is one canonical override, so it survives a reload.
+    let entry = editor
+        .session()
+        .overrides()
+        .get(TITLE, motioner_core::TextAnimator::OVERRIDE_PROPERTY, None)
+        .expect("a text_animators override");
+    let OverrideAction::Set(OverrideValue::Text(text)) = &entry.action else {
+        panic!("expected a text value");
+    };
+    assert_eq!(
+        motioner_core::TextAnimator::decode_list(text).unwrap(),
+        list
+    );
+
+    run(&mut editor, "text_anim_remove(\"@288\", 0)");
+    let list = animators(&editor);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].property, motioner_core::CharProperty::Offset);
+
+    assert_eq!(
+        error(&mut editor, "text_anim_remove(\"@288\", 9)"),
+        ErrorKind::BadValue
+    );
+    assert_eq!(
+        error(
+            &mut editor,
+            "text_anim_add(\"@288\", \"opacity\", (1, 2), 1, 0, 2, 12)"
+        ),
+        ErrorKind::BadValue
+    );
+    assert_eq!(
+        parse_commands("text_anim_add(\"@288\", \"wobble\", 0, 1, 0, 2, 12)")
+            .unwrap_err()
+            .kind,
+        ErrorKind::BadArgument
+    );
+}

@@ -12,3 +12,6 @@ motioner_core.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+motioner_eval.workspace = true

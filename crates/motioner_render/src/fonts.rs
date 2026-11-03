@@ -2,11 +2,14 @@
 //!
 //! A [`FontSet`] is an ordered list of static faces. Bundled faces are always
 //! present; a project can prepend faces loaded from `assets/fonts/`.
-//! [`CpuTextMetrics`] implements `motioner_core::TextMetrics` on top of the
-//! same `ferrous_font` parser the renderer bakes atlases from, so measurement
-//! needs no GPU and no window.
+//! [`CpuTextMetrics`] implements `motioner_core::TextMetrics` on top of
+//! `ferrous_font::LayoutData`, the same CPU tables the renderer's atlases are
+//! built from, so measurement (including GPOS kerning) can never drift from
+//! what is drawn.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use motioner_core::{TextAlign, TextBounds, TextMeasurement, TextMetrics, TextRequest};
 
@@ -191,17 +194,32 @@ impl FontSet {
     }
 }
 
+/// One cached layout table per resolved `(family, weight)`.
+type LayoutCache = Arc<Mutex<HashMap<(String, u16), Arc<FaceLayout>>>>;
+
 /// CPU text measurement backed by a [`FontSet`] (D-0034).
+///
+/// Each resolved face is parsed once and cached; later measurements reuse the
+/// tables. Measurement runs through the engine's `ferrous_font::LayoutData`
+/// block layout, including GPOS kerning. The cache is shared between clones, so the
+/// interpreter thread and the editor can measure through one instance.
 #[derive(Clone, Default)]
 pub struct CpuTextMetrics {
     fonts: FontSet,
+    layouts: LayoutCache,
 }
+
+/// The per-face layout source.
+type FaceLayout = ferrous_font::LayoutData;
 
 impl CpuTextMetrics {
     /// Wraps a font set.
     #[must_use]
     pub fn new(fonts: FontSet) -> Self {
-        Self { fonts }
+        Self {
+            fonts,
+            layouts: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// The wrapped font set.
@@ -209,144 +227,77 @@ impl CpuTextMetrics {
     pub fn fonts(&self) -> &FontSet {
         &self.fonts
     }
+
+    /// The layout tables of one resolved face, parsed on first use.
+    fn layout_for(&self, family: &str, weight: u16, bytes: &[u8]) -> Option<Arc<FaceLayout>> {
+        let key = (family.to_owned(), weight);
+        {
+            let cache = self
+                .layouts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(layout) = cache.get(&key) {
+                return Some(Arc::clone(layout));
+            }
+        }
+        let layout =
+            ferrous_font::LayoutData::from_bytes(bytes, ferrous_font::charset::latin_western())
+                .ok()?;
+        let layout = Arc::new(layout);
+        let mut cache = self
+            .layouts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(key, Arc::clone(&layout));
+        Some(layout)
+    }
 }
 
 impl TextMetrics for CpuTextMetrics {
     fn measure(&self, request: &TextRequest<'_>) -> Option<TextMeasurement> {
         let face = self.fonts.resolve(request.font, request.weight).ok()?;
-        let parser = ferrous_font::FontParser::new(face.bytes.to_vec()).ok()?;
-        Some(measure_parser(&parser, request))
+        let layout = self.layout_for(face.family, face.weight, face.bytes)?;
+        let style = ferrous_font::TextStyle {
+            size_px: to_f32(request.size),
+            align: align_to_engine(request.align),
+            tracking: to_f32(request.tracking),
+            line_height: to_f32(request.line_height),
+        };
+        let metrics = layout.measure_block(request.text, style);
+        Some(TextMeasurement {
+            width: f64::from(metrics.width),
+            line_count: metrics.line_count,
+            height: f64::from(metrics.height),
+            ink: if metrics.ink.is_empty() {
+                TextBounds::empty()
+            } else {
+                TextBounds {
+                    left: f64::from(metrics.ink.left),
+                    top: -f64::from(metrics.ink.top),
+                    right: f64::from(metrics.ink.right),
+                    bottom: -f64::from(metrics.ink.bottom),
+                }
+            },
+            line_advances: metrics
+                .lines
+                .iter()
+                .map(|line| f64::from(line.advance))
+                .collect(),
+        })
     }
 }
 
-/// Measures with the parser directly, mirroring `ferrous_font::layout`'s
-/// block arithmetic (the pinned engine has no block layout yet).
-#[allow(clippy::too_many_lines)] // one linear pass per line: advance, ink, align
-fn measure_parser(parser: &ferrous_font::FontParser, request: &TextRequest<'_>) -> TextMeasurement {
-    let size = if request.size.is_finite() && request.size > 0.0 {
-        request.size
-    } else {
-        0.0
-    };
-    let tracking = if request.tracking.is_finite() {
-        request.tracking
-    } else {
-        0.0
-    };
-    let line_height = if request.line_height.is_finite() && request.line_height > 0.0 {
-        request.line_height
-    } else {
-        1.0
-    };
-    let metrics = parser.metrics();
-    let step = (f64::from(metrics.ascender) - f64::from(metrics.descender)
-        + f64::from(metrics.line_gap))
-        * size
-        * line_height;
-    let ascender = f64::from(metrics.ascender) * size;
-    let descender = f64::from(metrics.descender) * size;
-    let tracking_px = tracking * size;
-    let notdef_advance = f64::from(parser.get_glyph_advance_by_index(0)) * size;
-    let has_notdef = !parser.get_glyph_outline_by_index(0).is_empty();
-
-    let mut width = 0.0f64;
-    let mut ink: Option<TextBounds> = None;
-    let mut line_advances = Vec::new();
-    let mut line_count = 0u32;
-
-    for (line_index, raw) in request.text.split('\n').enumerate() {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        let mut pen = 0.0f64;
-        let mut prev: Option<char> = None;
-        let mut line_ink: Option<TextBounds> = None;
-        let chars: Vec<char> = line.chars().collect();
-        let last = chars.len().saturating_sub(1);
-        for (index, &c) in chars.iter().enumerate() {
-            let after = if index == last { 0.0 } else { tracking_px };
-            if c.is_whitespace() {
-                let advance = if parser.get_glyph_index(c) != 0 {
-                    f64::from(parser.get_glyph_advance(c))
-                } else {
-                    f64::from(parser.get_glyph_advance(' '))
-                };
-                let advance = if advance == 0.0 { 0.3 } else { advance };
-                pen += advance * size + after;
-                prev = None;
-                continue;
-            }
-            let glyph = parser.get_glyph_index(c);
-            let missing = glyph == 0;
-            let (advance, bounds) = if missing {
-                if has_notdef {
-                    (notdef_advance, parser.get_glyph_bounds_by_index(0))
-                } else {
-                    (0.0, None)
-                }
-            } else {
-                (
-                    f64::from(parser.get_glyph_advance_by_index(glyph)) * size,
-                    parser.get_glyph_bounds_by_index(glyph),
-                )
-            };
-            if let Some(left) = prev {
-                pen += f64::from(parser.get_kerning(left, c)) * size;
-            }
-            if let Some(bounds) = bounds {
-                let glyph_ink = TextBounds {
-                    left: pen + f64::from(bounds.left) * size,
-                    top: -(f64::from(bounds.top) * size),
-                    right: pen + f64::from(bounds.right) * size,
-                    bottom: -(f64::from(bounds.bottom) * size),
-                };
-                line_ink = Some(match line_ink {
-                    None => glyph_ink,
-                    Some(acc) => TextBounds {
-                        left: acc.left.min(glyph_ink.left),
-                        top: acc.top.min(glyph_ink.top),
-                        right: acc.right.max(glyph_ink.right),
-                        bottom: acc.bottom.max(glyph_ink.bottom),
-                    },
-                });
-            }
-            pen += advance + after;
-            prev = Some(c);
-        }
-        let shift = match request.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center => -pen * 0.5,
-            TextAlign::Right => -pen,
-        };
-        if let Some(line_ink) = line_ink {
-            let shifted = TextBounds {
-                left: line_ink.left + shift,
-                right: line_ink.right + shift,
-                ..line_ink
-            };
-            ink = Some(match ink {
-                None => shifted,
-                Some(acc) => TextBounds {
-                    left: acc.left.min(shifted.left),
-                    top: acc.top.min(shifted.top),
-                    right: acc.right.max(shifted.right),
-                    bottom: acc.bottom.max(shifted.bottom),
-                },
-            });
-        }
-        width = width.max(pen);
-        line_advances.push(pen);
-        let index = u32::try_from(line_index).unwrap_or(u32::MAX);
-        line_count = line_count.max(index.saturating_add(1));
+/// Maps a Motioner alignment to the engine's identical-named alignment.
+fn align_to_engine(align: TextAlign) -> ferrous_font::TextAlign {
+    match align {
+        TextAlign::Left => ferrous_font::TextAlign::Left,
+        TextAlign::Center => ferrous_font::TextAlign::Center,
+        TextAlign::Right => ferrous_font::TextAlign::Right,
     }
+}
 
-    TextMeasurement {
-        width,
-        line_count: line_count.max(1),
-        height: if size == 0.0 {
-            0.0
-        } else {
-            (ascender - descender) + step * f64::from(line_count.saturating_sub(1))
-        },
-        ink: ink.unwrap_or_default(),
-        line_advances,
-    }
+/// Narrows an `f64` to the engine's `f32` precision.
+#[allow(clippy::cast_possible_truncation)] // deliberate f64 -> f32 engine boundary
+fn to_f32(value: f64) -> f32 {
+    value as f32
 }

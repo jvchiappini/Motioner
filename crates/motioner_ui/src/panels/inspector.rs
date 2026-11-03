@@ -215,6 +215,10 @@ fn draw_value(
         RowValue::EffectAdd => {
             label_tiles(p, v, segments, &["Shadow", "Blur", "Glow"], item);
         }
+        RowValue::TextAnimAdd => {
+            label_tiles(p, v, segments, &["Fade", "Rise", "Colour"], item);
+        }
+        RowValue::TextAnimRemove { .. } => label_tiles(p, v, segments, &["Del"], item),
         RowValue::MaskSource { current, .. } => {
             let label = current.as_deref().unwrap_or("Pick source");
             label_tiles(p, v, segments, &[label], item);

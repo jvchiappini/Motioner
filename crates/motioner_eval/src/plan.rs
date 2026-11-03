@@ -106,6 +106,18 @@ pub enum ItemShape {
         /// Index into [`RenderPlan::paths`].
         index: usize,
     },
+    /// A raster image (D-0035).
+    Image {
+        /// Content key, `None` when the source is unresolved (placeholder).
+        key: Option<motioner_core::ImageKey>,
+        /// Drawn width in local pixels (the destination rectangle is centred
+        /// on the node origin).
+        width: f64,
+        /// Drawn height in local pixels.
+        height: f64,
+        /// Source crop `[u0, v0, u1, v1]` in UV space.
+        uv: [f64; 4],
+    },
 }
 
 /// One path item resolved for a frame: authored geometry, trim, dash and
@@ -381,6 +393,27 @@ impl RenderPlan {
         })
     }
 
+    /// The first image node, if any (D-0035).
+    ///
+    /// Renderers whose pinned engine has no image textures report a typed
+    /// unsupported-feature error naming this node.
+    #[must_use]
+    pub fn first_image_node(&self) -> Option<NodeId> {
+        self.items
+            .iter()
+            .find_map(|item| matches!(item.shape, ItemShape::Image { .. }).then_some(item.node))
+    }
+
+    /// The first unresolved image node, if any.
+    ///
+    /// `still`/`render` use this to fail with the path before drawing.
+    #[must_use]
+    pub fn first_unresolved_image_node(&self) -> Option<NodeId> {
+        self.items.iter().find_map(|item| {
+            matches!(item.shape, ItemShape::Image { key: None, .. }).then_some(item.node)
+        })
+    }
+
     /// Adds a resolved gradient and returns its arena index.
     ///
     /// Evaluation uses this; renderer tests build small plans by hand.
@@ -427,6 +460,7 @@ impl RenderPlan {
                 ItemShape::Rect { paint, .. } | ItemShape::Circle { paint, .. } => gradient(&paint),
                 ItemShape::Path { index } => self.path(index).is_some_and(|p| gradient(&p.paint)),
                 ItemShape::Text { gradient, .. } => gradient.is_some(),
+                ItemShape::Image { .. } => false,
             };
             yes.then_some(item.node)
         })

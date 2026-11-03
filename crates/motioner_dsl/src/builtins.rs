@@ -81,7 +81,8 @@ pub(crate) fn call(
         | Builtin::Path
         | Builtin::Polygon
         | Builtin::Star
-        | Builtin::Arc => Err(HostError::type_error(format!(
+        | Builtin::Arc
+        | Builtin::Image => Err(HostError::type_error(format!(
             "{}() is a scene constructor",
             builtin.name()
         ))),

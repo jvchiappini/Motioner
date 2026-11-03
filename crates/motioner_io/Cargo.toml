@@ -8,7 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+motioner_core.workspace = true
 png.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

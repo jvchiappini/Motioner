@@ -171,6 +171,13 @@ pub enum RowValue {
     },
     /// The three add-effect tiles (shadow, blur, glow).
     EffectAdd,
+    /// Remove the per-character animator at `index`.
+    TextAnimRemove {
+        /// Zero-based position in the animator list.
+        index: usize,
+    },
+    /// The three add-animator tiles (fade, rise, colour).
+    TextAnimAdd,
     /// The mask source picker: clicking the tile cycles the candidates.
     MaskSource {
         /// Current source identity, `None` when the node is not masked.
@@ -462,6 +469,7 @@ fn content_rows(
         NodeContent::Circle { .. } => circle_rows(document, node, frame),
         NodeContent::Path { geometry, .. } => path_rows(document, node, geometry, frame),
         NodeContent::Text(text) => text_rows(document, node, text, frame, font_families),
+        NodeContent::Image(image) => image_rows(document, node, image, frame),
     }
 }
 
@@ -717,6 +725,20 @@ fn text_rows(
             gradient.len(),
         ));
     }
+    for (index, animator) in text.animators.iter().enumerate() {
+        rows.push(row(
+            "Animators",
+            format!("{} #{}", animator.property.name(), index),
+            RowValue::TextAnimRemove { index },
+            None,
+        ));
+    }
+    rows.push(row(
+        "Animators",
+        "Add animator",
+        RowValue::TextAnimAdd,
+        None,
+    ));
     rows
 }
 
@@ -874,6 +896,65 @@ fn gradient_rows(
     rows
 }
 
+/// The Image section: source, natural size, destination box and fit (D-0035).
+fn image_rows(
+    document: &Document,
+    node: NodeId,
+    image: &motioner_core::ImageContent,
+    frame: Frame,
+) -> Vec<Row> {
+    let natural = image.asset.map_or_else(
+        || "unresolved".to_owned(),
+        |asset| format!("{} x {}", asset.width, asset.height),
+    );
+    vec![
+        row(
+            "Image",
+            "Source",
+            RowValue::Text {
+                target: FieldTarget::Content(ContentField::Source),
+                text: image.source.clone(),
+            },
+            None,
+        ),
+        row("Image", "Natural size", RowValue::ReadOnly(natural), None),
+        row(
+            "Image",
+            "Width",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Width),
+                "",
+                image.width.value(),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Width, frame)),
+        ),
+        row(
+            "Image",
+            "Height",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Height),
+                "",
+                image.height.value(),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Height, frame)),
+        ),
+        row(
+            "Image",
+            "Fit",
+            RowValue::Cycle {
+                target: FieldTarget::Content(ContentField::Fit),
+                current: image.fit.name().to_owned(),
+                options: vec!["contain".to_owned(), "cover".to_owned(), "fill".to_owned()],
+            },
+            None,
+        ),
+    ]
+}
+
 /// A one-line kind label for the header.
 #[must_use]
 pub const fn kind_label(content: &NodeContent) -> &'static str {
@@ -883,6 +964,7 @@ pub const fn kind_label(content: &NodeContent) -> &'static str {
         NodeContent::Circle { .. } => "Circle layer",
         NodeContent::Path { .. } => "Path layer",
         NodeContent::Text(_) => "Text layer",
+        NodeContent::Image(_) => "Image layer",
     }
 }
 
@@ -1412,7 +1494,15 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
                     .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
                     .collect();
             }
-            RowValue::MaskSource { .. } | RowValue::Cycle { .. } => {
+            RowValue::TextAnimAdd => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::TextAnimRemove { .. }
+            | RowValue::MaskSource { .. }
+            | RowValue::Cycle { .. } => {
                 segments = vec![Rect::new(value_x, field_y, value_w, field_h)];
             }
             RowValue::MaskMode { .. } => {

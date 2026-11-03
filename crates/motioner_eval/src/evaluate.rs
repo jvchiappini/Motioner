@@ -311,6 +311,20 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
                 animations,
             })
         }
+        NodeContent::Image(image) => {
+            let layout = motioner_core::ImageLayout::compute(
+                sample(&image.width, frame),
+                sample(&image.height, frame),
+                image.fit,
+                image.asset.map(|asset| (asset.width, asset.height)),
+            );
+            Some(ItemShape::Image {
+                key: image.asset.map(|asset| asset.key),
+                width: layout.width,
+                height: layout.height,
+                uv: layout.uv,
+            })
+        }
     }
 }
 

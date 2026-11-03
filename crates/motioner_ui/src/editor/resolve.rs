@@ -3,8 +3,9 @@
 //! resolve against the state at the start of a drag while one is open.
 
 use motioner_core::{
-    split_property, Axis, ContentField, Document, Ease, EffectChannel, EffectKind, Frame, NodeId,
-    OverrideAction, OverrideSet, OverrideValue, Property, Vec2,
+    split_property, Axis, CharProperty, CharValue, Color, ContentField, Document, Ease,
+    EffectChannel, EffectKind, Frame, NodeId, OverrideAction, OverrideSet, OverrideValue, Property,
+    TextAnimator, Vec2,
 };
 
 use super::{channel_name, channels, Channel, Editor, Gesture};
@@ -73,7 +74,9 @@ impl Editor {
             | Command::EffectRemove { .. }
             | Command::EffectMove { .. }
             | Command::MaskSet { .. }
-            | Command::MaskClear { .. } => layer_edits(command, document, set)?,
+            | Command::MaskClear { .. }
+            | Command::TextAnimAdd { .. }
+            | Command::TextAnimRemove { .. } => layer_edits(command, document, set)?,
             _ => self.key_edits(command, document, keys)?,
         };
         if edits.is_empty() {
@@ -258,6 +261,12 @@ fn layer_edits(
     }
     if matches!(command, Command::MaskSet { .. } | Command::MaskClear { .. }) {
         return mask_edits(command, document);
+    }
+    if matches!(
+        command,
+        Command::TextAnimAdd { .. } | Command::TextAnimRemove { .. }
+    ) {
+        return text_animator_edits(command, document);
     }
     let rate = document.composition().frame_rate();
     Ok(match command {
@@ -477,6 +486,112 @@ fn mask_edits(command: &Command, document: &Document) -> Result<Vec<EditCommand>
             }])
         }
         _ => Ok(Vec::new()),
+    }
+}
+
+/// Add or remove a per-character animator (D-0034).
+///
+/// The whole animator list travels as one `text_animators` override, so the
+/// editor and the overrides file always agree on the order.
+fn text_animator_edits(
+    command: &Command,
+    document: &Document,
+) -> Result<Vec<EditCommand>, CommandError> {
+    let (id, current) = match command {
+        Command::TextAnimAdd { id, .. } | Command::TextAnimRemove { id, .. } => {
+            let node = channels::node_of(document, id)?;
+            let Some(animators) = document.text_animators(node) else {
+                return Err(CommandError::new(
+                    ErrorKind::BadValue,
+                    format!("{id} is not a text layer"),
+                ));
+            };
+            (id, animators.to_vec())
+        }
+        _ => return Ok(Vec::new()),
+    };
+    let mut animators = current;
+    match command {
+        Command::TextAnimAdd {
+            property,
+            from,
+            to,
+            start,
+            stagger,
+            duration,
+            ease,
+            order,
+            ..
+        } => {
+            let rate = document.composition().frame_rate();
+            let animator = TextAnimator::new(
+                *property,
+                animator_value(*property, from)?,
+                animator_value(*property, to)?,
+                start.frame(rate)?,
+                *stagger,
+                *duration,
+                *ease,
+                *order,
+            )
+            .map_err(|error| CommandError::new(ErrorKind::BadValue, error.to_string()))?;
+            animators.push(animator);
+        }
+        Command::TextAnimRemove { index, .. } => {
+            if *index >= animators.len() {
+                return Err(CommandError::new(
+                    ErrorKind::BadValue,
+                    format!(
+                        "{id} has {} animator(s); there is no animator at index {index}",
+                        animators.len()
+                    ),
+                ));
+            }
+            animators.remove(*index);
+        }
+        _ => {}
+    }
+    Ok(vec![EditCommand::SetValue {
+        id: id.clone(),
+        property: TextAnimator::OVERRIDE_PROPERTY.to_owned(),
+        value: OverrideValue::Text(TextAnimator::encode_list(&animators)),
+    }])
+}
+
+/// Converts a command value to the animator endpoint kind of `property`.
+fn animator_value(
+    property: CharProperty,
+    value: &OverrideValue,
+) -> Result<CharValue, CommandError> {
+    match (property, value) {
+        (
+            CharProperty::Opacity | CharProperty::Scale | CharProperty::Rotation,
+            OverrideValue::Number(number),
+        ) => Ok(CharValue::Number(*number)),
+        (CharProperty::Offset, OverrideValue::Vec2(vector)) => Ok(CharValue::Vec2(*vector)),
+        (CharProperty::Color, OverrideValue::Text(text)) => {
+            Color::parse_hex(text).map(CharValue::Color).map_err(|_| {
+                CommandError::new(
+                    ErrorKind::BadValue,
+                    format!("'{}' expects a colour like #RRGGBB", property.name()),
+                )
+            })
+        }
+        (
+            CharProperty::Opacity | CharProperty::Scale | CharProperty::Rotation,
+            OverrideValue::Vec2(_) | OverrideValue::Text(_),
+        ) => Err(CommandError::new(
+            ErrorKind::BadValue,
+            format!("'{}' expects a number", property.name()),
+        )),
+        (CharProperty::Offset, _) => Err(CommandError::new(
+            ErrorKind::BadValue,
+            "'offset' expects an (x, y) pair",
+        )),
+        (CharProperty::Color, _) => Err(CommandError::new(
+            ErrorKind::BadValue,
+            "'color' expects a colour like #RRGGBB",
+        )),
     }
 }
 

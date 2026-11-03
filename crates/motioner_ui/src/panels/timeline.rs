@@ -817,7 +817,9 @@ fn content_text(
         motioner_core::ContentField::Text
         | motioner_core::ContentField::Align
         | motioner_core::ContentField::Cap
-        | motioner_core::ContentField::Join => {
+        | motioner_core::ContentField::Join
+        | motioner_core::ContentField::Source
+        | motioner_core::ContentField::Fit => {
             match document
                 .node(node)
                 .and_then(|node| node.content().static_value(field))
@@ -831,6 +833,7 @@ fn content_text(
                 .to_owned(),
                 Some(motioner_core::ContentValue::Cap(cap)) => cap.name().to_owned(),
                 Some(motioner_core::ContentValue::Join(join)) => join.name().to_owned(),
+                Some(motioner_core::ContentValue::Fit(fit)) => fit.name().to_owned(),
                 _ => "n/a".to_owned(),
             }
         }

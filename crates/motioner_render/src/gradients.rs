@@ -131,7 +131,7 @@ fn owning_transforms(plan: &RenderPlan, flip: Affine2) -> Vec<Option<Affine2>> {
                     *slot = Some(world);
                 }
             }
-            ItemShape::Text { gradient: None, .. } => {}
+            ItemShape::Text { gradient: None, .. } | ItemShape::Image { .. } => {}
         }
     }
     transforms

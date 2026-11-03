@@ -53,7 +53,25 @@ pub(crate) fn create(
         clear: None,
         missing_glyphs: HashMap::new(),
         path_cache: PathCache::default(),
+        images: crate::ImageSet::new(),
+        image_textures: HashMap::new(),
+        texture_budget: crate::DEFAULT_TEXTURE_BUDGET,
     })
+}
+
+/// Uploads every decoded image once, before the plan is painted.
+fn prepare_images(
+    canvas: &mut impl Canvas2d,
+    images: &crate::ImageSet,
+    textures: &mut HashMap<motioner_core::ImageKey, u32>,
+) -> Result<(), RenderError> {
+    for (key, image) in images.iter() {
+        if !textures.contains_key(key) {
+            let id = canvas.register_image(image)?;
+            textures.insert(*key, id);
+        }
+    }
+    Ok(())
 }
 
 fn map_harness_error(error: HarnessError) -> RenderError {
@@ -99,6 +117,11 @@ pub(crate) fn render(
         .harness
         .renderer_mut()
         .set_2d_gradient_table(gradients.slots());
+    prepare_images(
+        &mut renderer.harness,
+        &renderer.images,
+        &mut renderer.image_textures,
+    )?;
     let stats = paint_plan(
         &mut renderer.harness,
         document,
@@ -109,9 +132,18 @@ pub(crate) fn render(
         &mut renderer.missing_glyphs,
         &mut renderer.path_cache,
         &gradients,
+        &renderer.images,
+        &mut renderer.image_textures,
     );
 
     let report = renderer.harness.render_frame();
+    let bytes = renderer.harness.renderer().texture_bytes_2d();
+    if bytes > renderer.texture_budget {
+        return Err(RenderError::TextureBudget {
+            bytes,
+            limit: renderer.texture_budget,
+        });
+    }
     renderer
         .harness
         .read_pixels_into(out)
@@ -208,6 +240,8 @@ pub(crate) fn paint_plan(
     missing_glyphs: &mut HashMap<NodeId, u32>,
     path_cache: &mut PathCache,
     gradients: &crate::gradients::GradientTable,
+    images: &crate::ImageSet,
+    image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
 ) -> PaintStats {
     let mut total = 0u32;
     for item in plan.items() {
@@ -317,6 +351,8 @@ pub(crate) fn paint_plan(
                     plan,
                     path_cache,
                     gradients,
+                    images,
+                    image_textures,
                     item,
                     flip,
                     &mut z_index,

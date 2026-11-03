@@ -26,9 +26,9 @@
 use std::collections::BTreeMap;
 
 use motioner_core::{
-    format_number, quote, seconds_of, Document, Ease, EffectChannel, EffectParam, FrameRate,
-    NodeContent, NodeId, OverrideAction, OverrideEntry, OverrideSet, OverrideValue, Property,
-    Transform, Vec2, LOCKED, NAME, VISIBLE,
+    format_number, quote, seconds_of, CharValue, Document, Ease, EffectChannel, EffectParam,
+    FrameRate, NodeContent, NodeId, OverrideAction, OverrideEntry, OverrideSet, OverrideValue,
+    Property, TextAnimator, Transform, Vec2, LOCKED, NAME, VISIBLE,
 };
 
 use crate::diagnostic::Span;
@@ -513,6 +513,12 @@ fn bake_entry(
                 };
                 return mask_set_statement(document, bindings, variable, text);
             }
+            if entry.property == TextAnimator::OVERRIDE_PROPERTY {
+                let OverrideValue::Text(text) = value else {
+                    return Err("'text_animators' expects the encoded animator list".to_owned());
+                };
+                return text_animators_statement(variable, text, rate);
+            }
             if let Some(channel) = EffectChannel::from_name(&entry.property) {
                 return effect_set_statement(document, node, variable, channel, value);
             }
@@ -603,6 +609,48 @@ fn mask_set_statement(
     }
     call.push(')');
     Ok(call)
+}
+
+/// `var.clear_chars()` plus one `var.animate_chars(...)` per animator.
+///
+/// The override replaces the whole list, so the first statement clears whatever
+/// the program authored before appending the baked animators.
+fn text_animators_statement(variable: &str, text: &str, rate: FrameRate) -> Result<String, String> {
+    let animators = TextAnimator::decode_list(text)
+        .map_err(|reason| format!("'text_animators' cannot take {text:?}: {reason}"))?;
+    let mut out = format!("{variable}.clear_chars()");
+    for animator in animators {
+        use std::fmt::Write as _;
+        let _ = write!(
+            out,
+            "\n{variable}.animate_chars({}, {}, {}, {}, {}, {}, ease={}, order={})",
+            quote(animator.property.name()),
+            char_value_text(animator.from),
+            char_value_text(animator.to),
+            format_number(seconds_of(animator.start, rate)),
+            format_number(seconds_f64(animator.stagger, rate)),
+            format_number(seconds_f64(animator.duration, rate)),
+            quote(animator.ease.name()),
+            quote(animator.order.name())
+        );
+    }
+    Ok(out)
+}
+
+/// Seconds of a frame count expressed as `f64` (stagger and duration).
+fn seconds_f64(frames: f64, rate: FrameRate) -> f64 {
+    frames * f64::from(rate.denominator()) / f64::from(rate.numerator())
+}
+
+/// An animator endpoint as MDF source text.
+fn char_value_text(value: CharValue) -> String {
+    match value {
+        CharValue::Number(number) => format_number(number),
+        CharValue::Vec2(vector) => {
+            format!("({}, {})", format_number(vector.x), format_number(vector.y))
+        }
+        CharValue::Color(color) => quote(&color.to_hex()),
+    }
 }
 
 /// `var.effect("kind", param=value)` for an effect parameter override.

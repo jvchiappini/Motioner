@@ -24,6 +24,8 @@ pub enum NodeKind {
     Path,
     /// A text line.
     Text,
+    /// A raster image.
+    Image,
 }
 
 impl NodeKind {
@@ -36,6 +38,7 @@ impl NodeKind {
             Self::Circle => "Circle",
             Self::Path => "Path",
             Self::Text => "Text",
+            Self::Image => "Image",
         }
     }
 
@@ -46,6 +49,7 @@ impl NodeKind {
             NodeContent::Circle { .. } => Self::Circle,
             NodeContent::Path { .. } => Self::Path,
             NodeContent::Text(_) => Self::Text,
+            NodeContent::Image(_) => Self::Image,
         }
     }
 }
@@ -99,7 +103,7 @@ impl MaskRole {
 #[must_use]
 pub fn outline_rows(document: &Document) -> Vec<OutlineRow> {
     let mut rows = Vec::with_capacity(document.len());
-    let mut counters = [0u32; 5];
+    let mut counters = [0u32; 6];
     let roots = document.roots();
     for (index, &root) in roots.iter().enumerate() {
         push_rows(
@@ -119,7 +123,7 @@ fn push_rows(
     id: NodeId,
     depth: u32,
     has_next_sibling: bool,
-    counters: &mut [u32; 5],
+    counters: &mut [u32; 6],
     rows: &mut Vec<OutlineRow>,
 ) {
     let Some(node) = document.node(id) else {
@@ -186,6 +190,7 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
             };
             (name, format!("{} px", number(text.size.value())))
         }
+        NodeContent::Image(image) => (format!("Image {ordinal}"), image.source.clone()),
     }
 }
 
