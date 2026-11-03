@@ -133,6 +133,7 @@ pub struct Editor {
     expanded: BTreeSet<usize>,
     pinned: BTreeSet<usize>,
     only_animated: bool,
+    motion_blur_preview: bool,
     selected: Option<NodeId>,
     selected_keys: Vec<KeyRef>,
     undo: UndoStack,
@@ -158,6 +159,7 @@ impl Editor {
             expanded: BTreeSet::new(),
             pinned: BTreeSet::new(),
             only_animated: false,
+            motion_blur_preview: false,
             selected: None,
             selected_keys: Vec::new(),
             undo: UndoStack::default_limit(),
@@ -283,6 +285,12 @@ impl Editor {
     #[must_use]
     pub fn only_animated(&self) -> bool {
         self.only_animated
+    }
+
+    /// Whether the preview should show motion blur (D-0037).
+    #[must_use]
+    pub const fn motion_blur_preview(&self) -> bool {
+        self.motion_blur_preview
     }
 
     /// The selected node.
@@ -445,6 +453,16 @@ impl Editor {
                 value: inspect::RowValue::Ease { current },
                 channel: None,
             });
+            // A bezier key is not a preset: show its four control numbers.
+            // `set_ease(bezier(...))` edits them (D-0024).
+            if let Some(motioner_core::Ease::Bezier(curve)) = current {
+                model.rows.push(inspect::Row {
+                    section: "Keys",
+                    label: "Bezier".to_owned(),
+                    value: inspect::RowValue::ReadOnly(curve.to_mdf()),
+                    channel: None,
+                });
+            }
         }
         self.inspector = model;
     }

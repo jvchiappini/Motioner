@@ -8,7 +8,7 @@ use motioner_core::{
 };
 
 use crate::affine::Affine2;
-use crate::curve::{sample, sample_vec2};
+use crate::curve::{sample_at, sample_vec2_at};
 use crate::plan::{
     EffectValue, ItemShape, PlanLayer, PlanMask, RenderItem, RenderPlan, ResolvedFill,
     ResolvedGradient, ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
@@ -64,6 +64,23 @@ impl Evaluator {
     /// it; each such skip increments [`RenderPlan::non_finite_items`].
     #[allow(clippy::too_many_lines)] // one pass over the traversal kinds, kept linear
     pub fn evaluate(&mut self, document: &Document, frame: Frame, plan: &mut RenderPlan) {
+        self.evaluate_fractional(document, frame, frame_time(frame), plan);
+    }
+
+    /// Fills `plan` with the items visible at a fractional frame `time`.
+    ///
+    /// `frame` is the integer frame used for the plan metadata (and therefore
+    /// for deterministic caching); `time` is the composition time in frames and
+    /// may be fractional. The integer [`Self::evaluate`] path passes the exact
+    /// `f64` conversion of `frame`, so it stays byte-identical.
+    #[allow(clippy::too_many_lines)] // one traversal of every node kind
+    pub fn evaluate_fractional(
+        &mut self,
+        document: &Document,
+        frame: Frame,
+        time: f64,
+        plan: &mut RenderPlan,
+    ) {
         let composition = document.composition();
         plan.width = composition.width();
         plan.height = composition.height();
@@ -123,13 +140,13 @@ impl Evaluator {
             }
             let props = node.transform();
             let local = Affine2::layer(
-                sample_vec2(&props.position, frame),
-                sample(&props.rotation, frame),
-                sample_vec2(&props.scale, frame),
-                sample_vec2(&props.anchor, frame),
+                sample_vec2_at(&props.position, time),
+                sample_at(&props.rotation, time),
+                sample_vec2_at(&props.scale, time),
+                sample_vec2_at(&props.anchor, time),
             );
             let transform = parent_transform.then(local);
-            let opacity = parent_opacity * sample(&props.opacity, frame).clamp(0.0, 1.0);
+            let opacity = parent_opacity * sample_at(&props.opacity, time).clamp(0.0, 1.0);
             if !transform.is_finite() || !opacity.is_finite() {
                 plan.non_finite_items = plan.non_finite_items.saturating_add(1);
                 continue;
@@ -168,7 +185,7 @@ impl Evaluator {
                     start: plan.items.len(),
                     end: plan.items.len(),
                     blend: node.blend(),
-                    effects: resolved_effects(node, frame),
+                    effects: resolved_effects(node, time),
                     mask,
                 });
                 self.stack.push(Pending::CloseLayer { index });
@@ -190,7 +207,7 @@ impl Evaluator {
                     });
                 }
             }
-            if let Some(shape) = item_shape(node.content(), frame, plan) {
+            if let Some(shape) = item_shape(node.content(), time, plan) {
                 plan.items.push(RenderItem {
                     node: node.id(),
                     transform,
@@ -218,29 +235,29 @@ impl Evaluator {
 }
 
 /// Samples a node's effect stack, in application order.
-fn resolved_effects(node: &Node, frame: Frame) -> Vec<EffectValue> {
+fn resolved_effects(node: &Node, time: f64) -> Vec<EffectValue> {
     node.effects()
         .iter()
         .map(|effect| match effect {
             Effect::DropShadow(effect) => EffectValue::DropShadow {
-                color: sample(&effect.color, frame),
-                offset: sample_vec2(&effect.offset, frame),
-                blur: sample(&effect.blur, frame),
-                opacity: sample(&effect.opacity, frame),
+                color: sample_at(&effect.color, time),
+                offset: sample_vec2_at(&effect.offset, time),
+                blur: sample_at(&effect.blur, time),
+                opacity: sample_at(&effect.opacity, time),
             },
             Effect::Blur(effect) => EffectValue::Blur {
-                radius: sample(&effect.radius, frame),
+                radius: sample_at(&effect.radius, time),
             },
             Effect::Glow(effect) => EffectValue::Glow {
-                color: sample(&effect.color, frame),
-                radius: sample(&effect.radius, frame),
-                intensity: sample(&effect.intensity, frame),
+                color: sample_at(&effect.color, time),
+                radius: sample_at(&effect.radius, time),
+                intensity: sample_at(&effect.intensity, time),
             },
         })
         .collect()
 }
 
-fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Option<ItemShape> {
+fn item_shape(content: &NodeContent, time: f64, plan: &mut RenderPlan) -> Option<ItemShape> {
     match content {
         NodeContent::Group => None,
         NodeContent::Rect {
@@ -249,14 +266,14 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
             radius,
             paint,
         } => Some(ItemShape::Rect {
-            width: sample(width, frame),
-            height: sample(height, frame),
-            radius: sample(radius, frame),
-            paint: resolved_paint(paint, frame, plan),
+            width: sample_at(width, time),
+            height: sample_at(height, time),
+            radius: sample_at(radius, time),
+            paint: resolved_paint(paint, time, plan),
         }),
         NodeContent::Circle { radius, paint } => Some(ItemShape::Circle {
-            radius: sample(radius, frame),
-            paint: resolved_paint(paint, frame, plan),
+            radius: sample_at(radius, time),
+            paint: resolved_paint(paint, time, plan),
         }),
         NodeContent::Path {
             geometry,
@@ -267,18 +284,18 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
             dash,
             dash_offset,
         } => {
-            let resolved = resolved_paint(paint, frame, plan);
+            let resolved = resolved_paint(paint, time, plan);
             let index = plan.paths.len();
             plan.paths.push(ResolvedPath {
                 geometry: geometry.clone(),
                 trim: TrimSpec {
-                    start: sample(trim_start, frame),
-                    end: sample(trim_end, frame),
-                    offset: sample(trim_offset, frame),
+                    start: sample_at(trim_start, time),
+                    end: sample_at(trim_end, time),
+                    offset: sample_at(trim_offset, time),
                 },
                 dash: DashSpec {
-                    length: sample(dash, frame),
-                    offset: sample(dash_offset, frame),
+                    length: sample_at(dash, time),
+                    offset: sample_at(dash_offset, time),
                 },
                 paint: resolved,
             });
@@ -286,11 +303,11 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
         }
         NodeContent::Text(text) => {
             let (color, gradient) = match text.gradient.as_ref() {
-                Some(gradient) => match resolve_gradient(gradient, frame, plan) {
-                    ResolvedFill::Gradient(index) => (sample(&text.color, frame), Some(index)),
+                Some(gradient) => match resolve_gradient(gradient, time, plan) {
+                    ResolvedFill::Gradient(index) => (sample_at(&text.color, time), Some(index)),
                     ResolvedFill::Solid(color) => (color, None),
                 },
-                None => (sample(&text.color, frame), None),
+                None => (sample_at(&text.color, time), None),
             };
             let animations = if text.animators.is_empty() {
                 None
@@ -300,10 +317,10 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
                 Some(index)
             };
             Some(ItemShape::Text {
-                size: sample(&text.size, frame),
+                size: sample_at(&text.size, time),
                 weight: text.weight,
-                tracking: sample(&text.tracking, frame),
-                line_height: sample(&text.line_height, frame),
+                tracking: sample_at(&text.tracking, time),
+                line_height: sample_at(&text.line_height, time),
                 color,
                 gradient,
                 align: text.align,
@@ -313,8 +330,8 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
         }
         NodeContent::Image(image) => {
             let layout = motioner_core::ImageLayout::compute(
-                sample(&image.width, frame),
-                sample(&image.height, frame),
+                sample_at(&image.width, time),
+                sample_at(&image.height, time),
                 image.fit,
                 image.asset.map(|asset| (asset.width, asset.height)),
             );
@@ -332,19 +349,19 @@ fn item_shape(content: &NodeContent, frame: Frame, plan: &mut RenderPlan) -> Opt
 ///
 /// A stroke is drawn only when its colour is present and its width is above
 /// zero, the same rule the constructors use for `stroke_width = 0`.
-fn resolved_paint(spec: &PaintSpec, frame: Frame, plan: &mut RenderPlan) -> ResolvedPaint {
-    let width = sample(&spec.stroke_width, frame);
+fn resolved_paint(spec: &PaintSpec, time: f64, plan: &mut RenderPlan) -> ResolvedPaint {
+    let width = sample_at(&spec.stroke_width, time);
     let fill = match spec.fill_gradient.as_ref() {
-        Some(gradient) => Some(resolve_gradient(gradient, frame, plan)),
-        None => sample(&spec.fill, frame).map(ResolvedFill::Solid),
+        Some(gradient) => Some(resolve_gradient(gradient, time, plan)),
+        None => sample_at(&spec.fill, time).map(ResolvedFill::Solid),
     };
     let stroke = if width > 0.0 {
         match spec.stroke_gradient.as_ref() {
             Some(gradient) => Some(ResolvedStroke {
-                paint: resolve_gradient(gradient, frame, plan),
+                paint: resolve_gradient(gradient, time, plan),
                 width,
             }),
-            None => sample(&spec.stroke, frame).map(|color| ResolvedStroke {
+            None => sample_at(&spec.stroke, time).map(|color| ResolvedStroke {
                 paint: ResolvedFill::Solid(color),
                 width,
             }),
@@ -361,13 +378,13 @@ fn resolved_paint(spec: &PaintSpec, frame: Frame, plan: &mut RenderPlan) -> Reso
 /// a neighbour still produces a valid ramp. A gradient that degenerates to
 /// fewer than two stops falls back to its first colour instead of drawing a
 /// flat ramp.
-fn resolve_gradient(gradient: &Gradient, frame: Frame, plan: &mut RenderPlan) -> ResolvedFill {
+fn resolve_gradient(gradient: &Gradient, time: f64, plan: &mut RenderPlan) -> ResolvedFill {
     let mut stops: Vec<ResolvedStop> = gradient
         .stops()
         .iter()
         .map(|stop| ResolvedStop {
-            offset: sample(&stop.offset, frame).clamp(0.0, 1.0),
-            color: sample(&stop.color, frame),
+            offset: sample_at(&stop.offset, time).clamp(0.0, 1.0),
+            color: sample_at(&stop.color, time),
         })
         .collect();
     if stops.len() < 2 {
@@ -380,6 +397,14 @@ fn resolve_gradient(gradient: &Gradient, frame: Frame, plan: &mut RenderPlan) ->
         stops,
     });
     ResolvedFill::Gradient(index)
+}
+
+/// Converts an integer frame to the fractional time domain exactly.
+fn frame_time(frame: Frame) -> f64 {
+    #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
+    {
+        frame as f64
+    }
 }
 
 #[cfg(test)]

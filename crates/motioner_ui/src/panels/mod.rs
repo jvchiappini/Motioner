@@ -86,6 +86,8 @@ pub struct View<'a> {
     pub hover_bounds: Option<Rect>,
     /// Whether the safe-area guides are shown.
     pub safe_area: bool,
+    /// Whether the preview is showing motion blur (D-0037).
+    pub motion_blur_preview: bool,
     /// Frame-time readouts.
     pub stats: Stats,
     /// Layer list scroll offset in pixels.

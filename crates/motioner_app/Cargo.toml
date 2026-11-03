@@ -14,7 +14,6 @@ path = "src/main.rs"
 [dependencies]
 motioner_core.workspace = true
 motioner_dsl.workspace = true
-motioner_eval.workspace = true
 motioner_io.workspace = true
 motioner_render.workspace = true
 motioner_ui.workspace = true

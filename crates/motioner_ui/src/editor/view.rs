@@ -142,6 +142,13 @@ impl Editor {
                 self.rebuild_timeline();
                 Ok(Outcome::done(format!("only animated {}", on_off(*on))))
             }
+            Command::MotionBlurPreview { on } => {
+                self.motion_blur_preview = *on;
+                Ok(Outcome::done(format!(
+                    "motion blur preview {}",
+                    on_off(*on)
+                )))
+            }
             Command::Zoom(factor) => {
                 if !factor.is_finite() {
                     return Err(CommandError::new(

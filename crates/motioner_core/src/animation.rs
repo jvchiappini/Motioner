@@ -6,6 +6,134 @@
 
 use crate::time::Frame;
 
+/// A CSS `cubic-bezier(x1, y1, x2, y2)` control pair.
+///
+/// The four numbers are quantised to one millionth and stored as `i32`, so
+/// [`Ease`] keeps an honest `Eq`/`Hash`: two beziers are equal exactly when
+/// their displayed numbers are equal.  `x1` and `x2` must lie in `[0, 1]`
+/// (otherwise the curve is not a function of time); `y1` and `y2` may
+/// overshoot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BezierEase {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+}
+
+/// The scale that turns a control value into the stored integer.
+const BEZIER_SCALE: f64 = 1_000_000.0;
+/// Largest control value that fits the quantised `i32` representation.
+const BEZIER_MAX: f64 = 2_000.0;
+
+impl BezierEase {
+    /// Creates a validated cubic-bezier control pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BezierError::XOutOfRange`] when `x1` or `x2` is outside
+    /// `[0, 1]`, [`BezierError::NotFinite`] for a non-finite component and
+    /// [`BezierError::TooLarge`] when `|y|` is above 2000.
+    pub fn new(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, BezierError> {
+        for (value, what) in [(x1, "x1"), (y1, "y1"), (x2, "x2"), (y2, "y2")] {
+            if !value.is_finite() {
+                return Err(BezierError::NotFinite { what });
+            }
+        }
+        for (value, what) in [(x1, "x1"), (x2, "x2")] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(BezierError::XOutOfRange { what, value });
+            }
+        }
+        for (value, what) in [(y1, "y1"), (y2, "y2")] {
+            if value.abs() > BEZIER_MAX {
+                return Err(BezierError::TooLarge { what, value });
+            }
+        }
+        Ok(Self {
+            x1: quantise(x1),
+            y1: quantise(y1),
+            x2: quantise(x2),
+            y2: quantise(y2),
+        })
+    }
+
+    /// The four control values as displayed.
+    #[must_use]
+    pub fn points(self) -> (f64, f64, f64, f64) {
+        (
+            dequantise(self.x1),
+            dequantise(self.y1),
+            dequantise(self.x2),
+            dequantise(self.y2),
+        )
+    }
+
+    /// The MDF call form, `bezier(x1, y1, x2, y2)`.
+    #[must_use]
+    pub fn to_mdf(self) -> String {
+        let (x1, y1, x2, y2) = self.points();
+        format!(
+            "bezier({}, {}, {}, {})",
+            crate::overrides::format_number(x1),
+            crate::overrides::format_number(y1),
+            crate::overrides::format_number(x2),
+            crate::overrides::format_number(y2)
+        )
+    }
+}
+
+/// Why a cubic-bezier control pair is invalid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BezierError {
+    /// A component was NaN or infinite.
+    NotFinite {
+        /// The offending component name.
+        what: &'static str,
+    },
+    /// `x1` or `x2` was outside `[0, 1]`.
+    XOutOfRange {
+        /// The offending component name.
+        what: &'static str,
+        /// The rejected value.
+        value: f64,
+    },
+    /// A `y` component was too large to quantise.
+    TooLarge {
+        /// The offending component name.
+        what: &'static str,
+        /// The rejected value.
+        value: f64,
+    },
+}
+
+impl std::fmt::Display for BezierError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFinite { what } => write!(f, "bezier(): {what} must be finite"),
+            Self::XOutOfRange { what, value } => {
+                write!(f, "bezier(): {what} must be in [0, 1], got {value}")
+            }
+            Self::TooLarge { what, value } => {
+                write!(f, "bezier(): {what} is too large ({value})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BezierError {}
+
+/// Quantises a validated control value, canonicalising `-0.0`.
+#[allow(clippy::cast_possible_truncation)] // range is checked before the call
+fn quantise(value: f64) -> i32 {
+    (value * BEZIER_SCALE).round() as i32
+}
+
+/// Restores a quantised control value.
+fn dequantise(value: i32) -> f64 {
+    f64::from(value) / BEZIER_SCALE
+}
+
 /// Easing applied to the segment that *arrives* at a keyframe.
 ///
 /// For keys `k0` and `k1`, the interpolation from `k0` to `k1` uses
@@ -31,11 +159,26 @@ pub enum Ease {
     BackIn,
     /// Overshoots the target, then settles.
     BackOut,
+    /// Holds the previous value until the arriving key, then jumps.
+    Hold,
+    /// Elastic overshoot, settling with a damped sine.
+    ElasticOut,
+    /// Bounces against the target three times.
+    BounceOut,
+    /// Exponential acceleration and deceleration.
+    ExpoInOut,
+    /// Sinusoidal acceleration and deceleration.
+    SineInOut,
+    /// A CSS `cubic-bezier(x1, y1, x2, y2)` curve.
+    Bezier(BezierEase),
 }
 
 impl Ease {
-    /// Every ease with its MDF name, in declaration order.
-    pub const ALL: [(Self, &'static str); 9] = [
+    /// Every named ease with its MDF name, in declaration order.
+    ///
+    /// A [`Ease::Bezier`] is not a preset: it carries its own four numbers and
+    /// is written as `bezier(...)`.
+    pub const ALL: [(Self, &'static str); 14] = [
         (Self::Linear, "linear"),
         (Self::QuadIn, "quad_in"),
         (Self::QuadOut, "quad_out"),
@@ -45,9 +188,14 @@ impl Ease {
         (Self::CubicInOut, "cubic_in_out"),
         (Self::BackIn, "back_in"),
         (Self::BackOut, "back_out"),
+        (Self::Hold, "hold"),
+        (Self::ElasticOut, "elastic_out"),
+        (Self::BounceOut, "bounce_out"),
+        (Self::ExpoInOut, "expo_in_out"),
+        (Self::SineInOut, "sine_in_out"),
     ];
 
-    /// Looks up an ease by its MDF name (for example `"quad_out"`).
+    /// Looks up a named ease by its MDF name (for example `"quad_out"`).
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
@@ -56,13 +204,47 @@ impl Ease {
             .map(|(ease, _)| *ease)
     }
 
-    /// The MDF name of this ease.
+    /// Builds a cubic-bezier ease.
+    ///
+    /// # Errors
+    ///
+    /// The same validation as [`BezierEase::new`].
+    pub fn bezier(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, BezierError> {
+        BezierEase::new(x1, y1, x2, y2).map(Self::Bezier)
+    }
+
+    /// The MDF name of a named ease; `"bezier"` for a curve.
     #[must_use]
     pub fn name(self) -> &'static str {
         Self::ALL
             .iter()
             .find(|(ease, _)| *ease == self)
-            .map_or("linear", |(_, name)| name)
+            .map_or("bezier", |(_, name)| name)
+    }
+
+    /// The MDF value form: a quoted-name payload for presets and
+    /// `bezier(...)` for a curve.
+    #[must_use]
+    pub fn mdf_value(self) -> String {
+        match self {
+            Self::Bezier(curve) => curve.to_mdf(),
+            other => other.name().to_owned(),
+        }
+    }
+
+    /// The MDF expression form: `"quad_out"` (quoted) or `bezier(...)`.
+    #[must_use]
+    pub fn mdf_literal(self) -> String {
+        match self {
+            Self::Bezier(curve) => curve.to_mdf(),
+            other => crate::overrides::quote(other.name()),
+        }
+    }
+
+    /// Whether this is a cubic-bezier curve.
+    #[must_use]
+    pub const fn is_bezier(self) -> bool {
+        matches!(self, Self::Bezier(_))
     }
 }
 
@@ -311,5 +493,46 @@ mod tests {
             assert_eq!(ease.name(), name);
         }
         assert_eq!(Ease::from_name("bounce"), None);
+    }
+
+    #[test]
+    fn bezier_quantises_and_keeps_eq_hash_honest() {
+        let a = Ease::bezier(0.25, 0.1, 0.25, 1.0).unwrap();
+        let b = Ease::bezier(0.25, 0.1, 0.25, 1.0).unwrap();
+        let c = Ease::bezier(0.25, 0.1, 0.25, 1.000_000_1).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a, c, "differences below 1e-6 quantise together");
+        assert_eq!(a.mdf_value(), "bezier(0.25, 0.1, 0.25, 1)");
+        assert_eq!(a.mdf_literal(), "bezier(0.25, 0.1, 0.25, 1)");
+        assert!(a.is_bezier());
+        // `-0.0` canonicalises to zero.
+        let zero = Ease::bezier(0.0, -0.0, 1.0, 1.0).unwrap();
+        let (x1, y1, _, _) = match zero {
+            Ease::Bezier(curve) => curve.points(),
+            _ => unreachable!(),
+        };
+        assert!(x1.abs() < 1e-12 && y1.abs() < 1e-12);
+    }
+
+    #[test]
+    fn bezier_rejects_out_of_range_x_and_non_finite_values() {
+        assert!(matches!(
+            Ease::bezier(-0.1, 0.0, 0.5, 1.0),
+            Err(BezierError::XOutOfRange { what: "x1", .. })
+        ));
+        assert!(matches!(
+            Ease::bezier(0.5, 0.0, 1.1, 1.0),
+            Err(BezierError::XOutOfRange { what: "x2", .. })
+        ));
+        assert!(matches!(
+            Ease::bezier(0.5, f64::NAN, 0.5, 1.0),
+            Err(BezierError::NotFinite { what: "y1" })
+        ));
+    }
+
+    #[test]
+    fn a_named_ease_literal_is_quoted() {
+        assert_eq!(Ease::Linear.mdf_literal(), "\"linear\"");
+        assert_eq!(Ease::Hold.mdf_value(), "hold");
     }
 }

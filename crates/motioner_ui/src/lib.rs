@@ -39,6 +39,7 @@ mod icons;
 mod input;
 mod inspect;
 mod json;
+mod labels;
 mod layout;
 mod outline;
 mod paint;
@@ -73,6 +74,7 @@ pub use inspect::{
     Header, Item, Layout as InspectLayout, Model as InspectModel, Row, RowValue,
 };
 pub use json::Json;
+pub use labels::{content_label, transform_label};
 pub use layout::{Hit, Layout, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use session::{

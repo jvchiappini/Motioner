@@ -56,6 +56,7 @@ impl CommandKind {
             Self::SafeArea => Command::SafeArea(true),
             Self::Snap => Command::Snap(false),
             Self::OnlyAnimated => Command::OnlyAnimated(true),
+            Self::MotionBlurPreview => Command::MotionBlurPreview { on: true },
             Self::Zoom => Command::Zoom(2.0),
             Self::ZoomFit => Command::ZoomFit,
             Self::ZoomBy => Command::ZoomBy {

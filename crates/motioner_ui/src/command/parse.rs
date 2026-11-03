@@ -127,6 +127,9 @@ impl Command {
             CommandKind::SafeArea => Self::SafeArea(a.boolean("on")?),
             CommandKind::Snap => Self::Snap(a.boolean("on")?),
             CommandKind::OnlyAnimated => Self::OnlyAnimated(a.boolean("on")?),
+            CommandKind::MotionBlurPreview => Self::MotionBlurPreview {
+                on: a.boolean("on")?,
+            },
             CommandKind::Zoom => Self::Zoom(a.number("factor")?),
             CommandKind::ZoomFit => Self::ZoomFit,
             CommandKind::ZoomBy => Self::ZoomBy {
@@ -469,14 +472,32 @@ impl Args {
     }
 
     fn ease(&mut self, name: &str) -> Result<Ease, CommandError> {
-        let text = self.string(name)?;
-        Ease::from_name(&text).ok_or_else(|| {
-            let names: Vec<&str> = Ease::ALL.iter().map(|(_, name)| *name).collect();
-            self.error(format!(
-                "unknown ease {text:?}; use one of {}",
-                names.join(", ")
-            ))
-        })
+        let expr = self.required(name)?;
+        match &expr.kind {
+            ExprKind::Str(text) => Ease::from_name(text).ok_or_else(|| {
+                let names: Vec<&str> = Ease::ALL.iter().map(|(_, name)| *name).collect();
+                self.error(format!(
+                    "unknown ease {text:?}; use one of {} or bezier(...)",
+                    names.join(", ")
+                ))
+            }),
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Name(callee) = &callee.kind else {
+                    return Err(self.error("'ease' must be a name or bezier(...)"));
+                };
+                if callee.as_ref() != "bezier" || args.len() != 4 {
+                    return Err(self.error("the only ease call is bezier(x1, y1, x2, y2)"));
+                }
+                let mut values = [0.0; 4];
+                for (slot, arg) in values.iter_mut().zip(args) {
+                    *slot = number_of(&arg.value)
+                        .ok_or_else(|| self.error("bezier() arguments must be numbers"))?;
+                }
+                Ease::bezier(values[0], values[1], values[2], values[3])
+                    .map_err(|error| self.error(error.to_string()))
+            }
+            _ => Err(self.error("'ease' must be a string or bezier(...)")),
+        }
     }
 
     fn optional_ease(&mut self, name: &str) -> Result<Option<Ease>, CommandError> {

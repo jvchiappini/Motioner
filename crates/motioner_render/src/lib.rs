@@ -488,7 +488,7 @@ pub struct TextExtent {
 }
 
 /// Per-frame counters reported by [`FrameRenderer::render`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FrameStats {
     /// Fill and stroke instances submitted for shape items.
     pub shape_draws: u32,
@@ -516,6 +516,10 @@ pub enum Feature {
     /// Image textures (D-0035). No longer raised: the pinned engine carries
     /// `Renderer::register_texture_2d`. Kept so future pin gaps reuse it.
     Images,
+    /// Temporal accumulation (D-0038). Raised when the `engine-accumulation`
+    /// feature is off, which is the default while the pin predates the engine
+    /// API.
+    Accumulation,
 }
 
 impl Feature {
@@ -525,6 +529,7 @@ impl Feature {
         match self {
             Self::TextLayout => "styled text layout",
             Self::Images => "image textures",
+            Self::Accumulation => "temporal accumulation",
         }
     }
 }
@@ -583,6 +588,11 @@ pub enum RenderError {
         /// Configured limit.
         limit: u64,
     },
+    /// The engine accumulation pass failed (D-0038).
+    Accumulation {
+        /// Underlying typed error.
+        message: String,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -620,6 +630,9 @@ impl fmt::Display for RenderError {
                 f,
                 "image textures use {bytes} bytes, above the {limit}-byte budget"
             ),
+            Self::Accumulation { message } => {
+                write!(f, "temporal accumulation failed: {message}")
+            }
         }
     }
 }
@@ -698,6 +711,25 @@ impl FrameRenderer {
         out: &mut Vec<u8>,
     ) -> Result<FrameStats, RenderError> {
         frame::render(self, document, plan, out)
+    }
+
+    /// Renders integer frame `frame`, honouring `comp(motion_blur=...)`.
+    ///
+    /// With motion blur off this is exactly [`Self::render`] on the integer
+    /// frame. With it on, `samples` sub-frames are evaluated at centred
+    /// sub-frame times and averaged in linear light by the engine.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::Unsupported`] while the `engine-accumulation` feature is
+    /// off, plus every error [`Self::render`] can return.
+    pub fn render_frame(
+        &mut self,
+        document: &Document,
+        frame: motioner_core::Frame,
+        out: &mut Vec<u8>,
+    ) -> Result<FrameStats, RenderError> {
+        frame::render_frame(self, document, frame, out)
     }
 
     /// The name of the GPU adapter the engine selected.

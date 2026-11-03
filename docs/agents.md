@@ -137,6 +137,7 @@ The playhead (`seek`) matters for `edit`, `stopwatch`, `toggle_key` and
 | `select_keys([(id, property, time), ...], add=false)` | click/Shift+click/marquee on diamonds |
 | `clear_keys()` | deselect keys |
 | `safe_area(on)`, `snap(on)`, `only_animated(on)` | G, the magnet, U |
+| `motion_blur_preview(on)` | preview motion-blur indicator (D-0037) |
 | `zoom(factor)` | absolute canvas zoom, `1` = 100 % (clamped to 0.05..32); `1` key |
 | `zoom_fit()` | fit the composition and reset the pan; `F` or a click on the zoom pill |
 | `zoom_by(steps, x=None, y=None)` | Ctrl+wheel over the canvas: ×1.25 per step, keeping the composition point under the pointer fixed |
@@ -187,7 +188,28 @@ Space+drag over the canvas pans.
 | `bake(id, ...)` | fold overrides into the program (all ids when none) |
 
 Eases: `linear`, `quad_in`, `quad_out`, `quad_in_out`, `cubic_in`,
-`cubic_out`, `cubic_in_out`, `back_in`, `back_out`.
+`cubic_out`, `cubic_in_out`, `back_in`, `back_out`, `hold`, `elastic_out`,
+`bounce_out`, `expo_in_out`, `sine_in_out`, and the CSS curve
+`bezier(x1, y1, x2, y2)` (x in `[0, 1]`, y may overshoot). The overrides
+file, `bake` and `query` round-trip every form; `query` prints a bezier as
+`"bezier(0.25, 0.1, 0.25, 1)"`.
+
+### Timing (D-0037)
+
+- `comp(..., motion_blur=False, shutter=180, samples=8)` sets motion blur.
+  `shutter` is in `(0, 360]` degrees and `samples` in `1..=64`; anything else
+  is a span-carrying DSL error. `still` and `render` honour it; the preview
+  is off by default.
+- `motion_blur_preview(on)` toggles the preview indicator (`state()` reports
+  `motion_blur_preview`).
+- `stagger(nodes, property, values, start, step, duration, ease)`: `values`
+  is a list of `(from, to)` pairs (one pair is shared). Node `i` gets a
+  linear key at `start + i*step` and an eased key at
+  `start + i*step + duration`.
+- `node.wiggle(property, seed, frequency, amplitude, start, end)`: one
+  `sine_in_out` key per `1/frequency` seconds, value `base ± amplitude` from a
+  SplitMix64 stream. The same seed gives the same keys; `base` is the
+  property's static value.
 
 `motioner --help` prints the same list from the code, so it cannot drift.
 
@@ -302,7 +324,7 @@ Requests are any command above plus three queries:
 
 | Query | Result |
 |---|---|
-| `state()` | `{"frame","duration","playing","looping","selected","expanded","selected_keys","only_animated","safe_area","snap","zoom","pan","panels":{...},"undo_depth","redo_depth","dirty","errors","warnings"}` |
+| `state()` | `{"frame","duration","playing","looping","selected","expanded","selected_keys","only_animated","motion_blur_preview","safe_area","snap","zoom","pan","panels":{...},"undo_depth","redo_depth","dirty","errors","warnings"}` |
 | `query(node=None)` | the same JSON as `motioner query`, live |
 | `screenshot(path)` | writes the window to a PNG: `{"path","width","height"}` |
 

@@ -88,13 +88,15 @@ fn map_harness_error(error: HarnessError) -> RenderError {
     }
 }
 
-/// Renders one plan into `out` and returns the frame counters.
-pub(crate) fn render(
+/// Paints one plan into the harness target and submits the frame.
+///
+/// The caller decides whether to read the target back (`render`) or accumulate
+/// it as a motion-blur sub-frame (`render_motion_blur`).
+fn render_plan_into_target(
     renderer: &mut FrameRenderer,
     document: &Document,
     plan: &RenderPlan,
-    out: &mut Vec<u8>,
-) -> Result<FrameStats, RenderError> {
+) -> Result<(PaintStats, ferrous_renderer::headless::FrameReport), RenderError> {
     if plan.width() != renderer.width || plan.height() != renderer.height {
         return Err(RenderError::SizeMismatch {
             expected: (renderer.width, renderer.height),
@@ -135,8 +137,11 @@ pub(crate) fn render(
         &renderer.images,
         &mut renderer.image_textures,
     );
-
     let report = renderer.harness.render_frame();
+    Ok((stats, report))
+}
+
+fn read_target(renderer: &mut FrameRenderer, out: &mut Vec<u8>) -> Result<(), RenderError> {
     let bytes = renderer.harness.renderer().texture_bytes_2d();
     if bytes > renderer.texture_budget {
         return Err(RenderError::TextureBudget {
@@ -149,16 +154,111 @@ pub(crate) fn render(
         .read_pixels_into(out)
         .map_err(|error| RenderError::Readback {
             message: error.to_string(),
-        })?;
+        })
+}
 
-    Ok(FrameStats {
-        shape_draws: stats.shape_draws,
-        text_draws: stats.text_draws,
+fn stats_from(paint: PaintStats, report: ferrous_renderer::headless::FrameReport) -> FrameStats {
+    FrameStats {
+        shape_draws: paint.shape_draws,
+        text_draws: paint.text_draws,
         draw_calls: report.draw_calls,
-        missing_glyphs: stats.missing_glyphs,
-        non_finite_items: stats.non_finite_items,
+        missing_glyphs: paint.missing_glyphs,
+        non_finite_items: paint.non_finite_items,
         cpu_ms: report.cpu_ms,
+    }
+}
+
+/// Renders one plan into `out` and returns the frame counters.
+pub(crate) fn render(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    plan: &RenderPlan,
+    out: &mut Vec<u8>,
+) -> Result<FrameStats, RenderError> {
+    let (paint, report) = render_plan_into_target(renderer, document, plan)?;
+    read_target(renderer, out)?;
+    Ok(stats_from(paint, report))
+}
+
+/// Renders integer frame `frame`, honouring the composition's motion blur.
+///
+/// With `motion_blur` off this is exactly [`render`] with an integer plan, so
+/// existing goldens stay byte-identical. With it on, the frame is evaluated at
+/// `samples` sub-frame times centred on the frame and averaged in linear light
+/// through the engine accumulation API.
+pub(crate) fn render_frame(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    frame: Frame,
+    out: &mut Vec<u8>,
+) -> Result<FrameStats, RenderError> {
+    let composition = document.composition();
+    let mut evaluator = motioner_eval::Evaluator::new();
+    let mut plan = RenderPlan::new();
+    if !composition.motion_blur() {
+        evaluator.evaluate(document, frame, &mut plan);
+        return render(renderer, document, &plan, out);
+    }
+    render_motion_blur(renderer, document, frame, &mut evaluator, &mut plan, out)
+}
+
+#[cfg(not(feature = "engine-accumulation"))]
+fn render_motion_blur(
+    _renderer: &mut FrameRenderer,
+    _document: &Document,
+    _frame: Frame,
+    _evaluator: &mut motioner_eval::Evaluator,
+    _plan: &mut RenderPlan,
+    _out: &mut Vec<u8>,
+) -> Result<FrameStats, RenderError> {
+    Err(RenderError::Unsupported {
+        feature: crate::Feature::Accumulation,
+        node: None,
     })
+}
+
+#[cfg(feature = "engine-accumulation")]
+fn render_motion_blur(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    frame: Frame,
+    evaluator: &mut motioner_eval::Evaluator,
+    plan: &mut RenderPlan,
+    out: &mut Vec<u8>,
+) -> Result<FrameStats, RenderError> {
+    let composition = document.composition();
+    let shutter = composition.shutter();
+    let samples = composition.samples();
+    renderer
+        .harness
+        .begin_accumulation_2d()
+        .map_err(|error| RenderError::Accumulation {
+            message: error.to_string(),
+        })?;
+    let mut last = FrameStats::default();
+    for index in 0..samples {
+        let subframe = f64::from(index);
+        let offset = (shutter / 360.0) * ((subframe + 0.5) / f64::from(samples) - 0.5);
+        #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
+        let time = frame as f64 + offset;
+        evaluator.evaluate_fractional(document, frame, time, plan);
+        let (paint, report) = render_plan_into_target(renderer, document, plan)?;
+        renderer
+            .harness
+            .accumulate_frame_2d(1.0)
+            .map_err(|error| RenderError::Accumulation {
+                message: error.to_string(),
+            })?;
+        last = stats_from(paint, report);
+    }
+    renderer
+        .harness
+        .resolve_accumulation_2d()
+        .map_err(|error| RenderError::Accumulation {
+            message: error.to_string(),
+        })?;
+    read_target(renderer, out)?;
+    Ok(last)
 }
 
 /// Registers one atlas per resolved `(family, weight)` the plan uses.

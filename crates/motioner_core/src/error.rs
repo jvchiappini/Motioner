@@ -153,6 +153,14 @@ pub enum CoreError {
         /// The rejected source.
         source: NodeId,
     },
+    /// Motion-blur settings outside `(0, 360]` shutter degrees and
+    /// `1..=64` samples.
+    InvalidMotionBlur {
+        /// Requested shutter in degrees.
+        shutter: f64,
+        /// Requested sub-frame count.
+        samples: u32,
+    },
 }
 
 impl fmt::Display for CoreError {
@@ -242,6 +250,10 @@ impl fmt::Display for CoreError {
             Self::InvalidEffectOrder { index, len } => write!(
                 f,
                 "effect position {index} is out of range: the stack has {len} effect(s)"
+            ),
+            Self::InvalidMotionBlur { shutter, samples } => write!(
+                f,
+                "invalid motion blur: shutter must be in (0, 360] degrees and samples in 1..=64, got {shutter} and {samples}"
             ),
         }
     }

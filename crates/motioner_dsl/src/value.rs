@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use motioner_core::{Gradient, NodeId};
+use motioner_core::{Ease, Gradient, NodeId};
 
 use crate::ast::FunctionDef;
 use crate::host::{HostError, HostResult};
@@ -70,11 +70,13 @@ pub(crate) enum Builtin {
     TextWidth,
     TextBounds,
     Image,
+    Bezier,
+    Stagger,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 27] = [
+    pub const ALL: [(Self, &'static str); 29] = [
         (Self::Range, "range"),
         (Self::Len, "len"),
         (Self::Min, "min"),
@@ -102,6 +104,8 @@ impl Builtin {
         (Self::TextWidth, "text_width"),
         (Self::TextBounds, "text_bounds"),
         (Self::Image, "image"),
+        (Self::Bezier, "bezier"),
+        (Self::Stagger, "stagger"),
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -130,6 +134,7 @@ pub(crate) enum NodeMethod {
     Mask,
     AnimateChars,
     ClearChars,
+    Wiggle,
 }
 
 impl NodeMethod {
@@ -143,6 +148,7 @@ impl NodeMethod {
             "mask" => Some(Self::Mask),
             "animate_chars" => Some(Self::AnimateChars),
             "clear_chars" => Some(Self::ClearChars),
+            "wiggle" => Some(Self::Wiggle),
             _ => None,
         }
     }
@@ -157,6 +163,7 @@ impl NodeMethod {
             Self::Mask => "mask",
             Self::AnimateChars => "animate_chars",
             Self::ClearChars => "clear_chars",
+            Self::Wiggle => "wiggle",
         }
     }
 }
@@ -240,6 +247,7 @@ pub(crate) enum Value {
     Node(NodeId),
     Method(NodeId, NodeMethod),
     Gradient(Rc<Gradient>),
+    Ease(Ease),
 }
 
 impl Value {
@@ -266,6 +274,7 @@ impl Value {
             Self::Function(_) | Self::Builtin(_) | Self::Method(..) => "function",
             Self::Node(_) => "node",
             Self::Gradient(_) => "gradient",
+            Self::Ease(_) => "ease",
         }
     }
 
@@ -282,7 +291,8 @@ impl Value {
             | Self::Builtin(_)
             | Self::Node(_)
             | Self::Method(..)
-            | Self::Gradient(_) => true,
+            | Self::Gradient(_)
+            | Self::Ease(_) => true,
         }
     }
 
@@ -364,6 +374,7 @@ impl Value {
             (Self::Builtin(a), Self::Builtin(b)) => Ok(a == b),
             (Self::Node(a), Self::Node(b)) => Ok(a == b),
             (Self::Gradient(a), Self::Gradient(b)) => Ok(a == b),
+            (Self::Ease(a), Self::Ease(b)) => Ok(a == b),
             (Self::Method(a, m), Self::Method(b, n)) => Ok(a == b && m == n),
             _ => Ok(false),
         }
@@ -431,6 +442,7 @@ impl Value {
                 &format!("<{} gradient>", gradient.kind().name()),
                 limits,
             ),
+            Self::Ease(ease) => push_checked(out, &format!("<ease {}>", ease.mdf_value()), limits),
         }
     }
 

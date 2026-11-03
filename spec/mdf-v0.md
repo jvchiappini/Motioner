@@ -110,7 +110,7 @@ The v0 surface:
 
 | Call | Purpose |
 |---|---|
-| `comp(name, width=1920, height=1080, fps=60, duration=5.0, background="#000000")` | Create the composition |
+| `comp(name, width=1920, height=1080, fps=60, duration=5.0, background="#000000", motion_blur=False, shutter=180, samples=8)` | Create the composition; `shutter` is in `(0, 360]` degrees and `samples` in `1..=64` |
 | `group()` | Empty container |
 | `rect(width, height, radius=0, fill="#ffffff", stroke=None, stroke_width=0)` | Rectangle |
 | `circle(radius, fill="#ffffff", stroke=None, stroke_width=0)` | Circle |
@@ -263,6 +263,21 @@ title.key("opacity", 0.6, 1.0, ease="quad_out")
 
 Keyframe times are in seconds and are converted to frames with the
 composition fps. Values are lists or tuples for vectors.
+
+Ease names: `linear`, `quad_in`, `quad_out`, `quad_in_out`, `cubic_in`,
+`cubic_out`, `cubic_in_out`, `back_in`, `back_out`, `hold`, `elastic_out`,
+`bounce_out`, `expo_in_out`, `sine_in_out`. `ease=bezier(x1, y1, x2, y2)` is
+the CSS cubic-bezier form; `x1` and `x2` must be in `[0, 1]` and `y` may
+overshoot. `hold` keeps the previous value until the arriving key.
+
+`stagger(nodes, property, values, start, step, duration, ease="linear")`
+writes two keys per node: `values` is a list of `(from, to)` pairs (one pair is
+shared), node `i` gets a linear key at `start + i*step` and an eased key at
+`start + i*step + duration`.
+
+`node.wiggle(property, seed, frequency, amplitude, start, end)` writes one
+`sine_in_out` key per `1/frequency` seconds with value `base ± amplitude`
+from a deterministic SplitMix64 stream.
 
 ### 7.1 Text layout, measurement and per-character animation (D-0034)
 

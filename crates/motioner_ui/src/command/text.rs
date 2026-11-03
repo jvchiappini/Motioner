@@ -45,7 +45,8 @@ impl Command {
             | Self::ExpandAll(on)
             | Self::SafeArea(on)
             | Self::Snap(on)
-            | Self::OnlyAnimated(on) => vec![bool_text(*on)],
+            | Self::OnlyAnimated(on)
+            | Self::MotionBlurPreview { on } => vec![bool_text(*on)],
             Self::Zoom(factor) => vec![format_number(*factor)],
             Self::ZoomBy { steps, x, y } => {
                 let mut args = vec![steps.to_string()];
@@ -144,7 +145,7 @@ impl Command {
                     value_text(value),
                 ];
                 if let Some(ease) = ease {
-                    args.push(format!("ease={}", quote(ease.name())));
+                    args.push(format!("ease={}", ease.mdf_literal()));
                 }
                 args
             }
@@ -166,9 +167,9 @@ impl Command {
                 quote(id),
                 quote(property),
                 time.to_text(),
-                quote(ease.name()),
+                ease.mdf_literal(),
             ],
-            Self::SetEase(ease) => vec![quote(ease.name())],
+            Self::SetEase(ease) => vec![ease.mdf_literal()],
             Self::Visible { id, visible: on } | Self::Lock { id, locked: on } => {
                 vec![quote(id), bool_text(*on)]
             }

@@ -21,6 +21,15 @@ cannot drift apart.
 Rendering is deterministic. The only clock-dependent value is
 `FrameStats::cpu_ms`, which the engine measures and this crate merely reports.
 
+`render_frame` evaluates integer `frame` and honours
+`comp(motion_blur=True, shutter=..., samples=...)`: it evaluates the centred
+sub-frame times with `motioner_eval::Evaluator::evaluate_fractional` and
+averages them in linear light through the engine accumulation API. The
+`engine-accumulation` feature is off by default while the pin predates that
+API; with it off, motion blur returns the typed
+`RenderError::Unsupported { feature: Feature::Accumulation, .. }` and the
+integer path is unchanged.
+
 ## Public API
 
 ```rust
@@ -32,6 +41,12 @@ impl FrameRenderer {
         &mut self,
         document: &motioner_core::Document,
         plan: &motioner_eval::RenderPlan,
+        out: &mut Vec<u8>,
+    ) -> Result<FrameStats, RenderError>;
+    pub fn render_frame(
+        &mut self,
+        document: &motioner_core::Document,
+        frame: motioner_core::Frame,
         out: &mut Vec<u8>,
     ) -> Result<FrameStats, RenderError>;
     pub fn adapter_name(&self) -> &str;

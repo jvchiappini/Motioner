@@ -225,6 +225,38 @@ impl Parser {
         Ok(OverrideValue::Number(self.number("a value")?))
     }
 
+    /// An ease value: a quoted preset name or `bezier(x1, y1, x2, y2)`.
+    fn ease_value(&mut self, start: Span) -> Result<Ease, Diagnostic> {
+        if matches!(self.peek().kind, TokenKind::Str(_)) {
+            let name = self.string("the ease name")?;
+            return Ease::from_name(&name).ok_or_else(|| {
+                parse_error(
+                    start,
+                    format!("unknown ease {name:?}; use one of the MDF ease names or bezier(...)"),
+                )
+            });
+        }
+        let token = self.advance();
+        match token.kind {
+            TokenKind::Name(name) if name.as_ref() == "bezier" => {
+                self.expect_op(Op::LParen)?;
+                let x1 = self.number("x1")?;
+                self.expect_op(Op::Comma)?;
+                let y1 = self.number("y1")?;
+                self.expect_op(Op::Comma)?;
+                let x2 = self.number("x2")?;
+                self.expect_op(Op::Comma)?;
+                let y2 = self.number("y2")?;
+                self.expect_op(Op::RParen)?;
+                Ease::bezier(x1, y1, x2, y2).map_err(|error| parse_error(start, error.to_string()))
+            }
+            other => Err(parse_error(
+                token.span,
+                format!("expected an ease name or bezier(...), found {other:?}"),
+            )),
+        }
+    }
+
     fn time_frame(&self, seconds: f64, span: Span) -> Result<i64, Diagnostic> {
         self.rate
             .seconds_to_frame(seconds)
@@ -262,13 +294,7 @@ impl Parser {
                     ));
                 }
                 self.expect_op(Op::Assign)?;
-                let ease_name = self.string("the ease name")?;
-                ease = Ease::from_name(&ease_name).ok_or_else(|| {
-                    parse_error(
-                        start,
-                        format!("unknown ease {ease_name:?}; use one of the MDF ease names"),
-                    )
-                })?;
+                ease = self.ease_value(start)?;
             }
             let end = self.expect_op(Op::RParen)?;
             let frame = self.time_frame(seconds, time_span)?;

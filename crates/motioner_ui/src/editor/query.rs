@@ -263,6 +263,8 @@ impl Editor {
         }
         j.end_array();
         j.key("only_animated").boolean(self.only_animated);
+        j.key("motion_blur_preview")
+            .boolean(self.motion_blur_preview);
         j.key("safe_area").boolean(self.view.safe_area);
         j.key("snap").boolean(self.view.snap);
         match self.view.zoom {
@@ -347,8 +349,11 @@ fn channel_json(
         if let Some((value, _)) = channels::key_at(document, node, channel, *key) {
             value_or_null(j, Some(value));
         }
-        j.key("ease")
-            .string(eases.get(index).map_or("linear", |ease| ease.name()));
+        j.key("ease").string(
+            &eases
+                .get(index)
+                .map_or_else(|| "linear".to_owned(), |ease| ease.mdf_value()),
+        );
         j.end_object();
     }
     j.end_array();

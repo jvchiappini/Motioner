@@ -161,6 +161,11 @@ pub enum Command {
     Snap(bool),
     /// Show only animated properties in the timeline (U toggles it).
     OnlyAnimated(bool),
+    /// Turn motion-blur preview on or off (D-0037); it is off by default.
+    MotionBlurPreview {
+        /// Whether the preview should show motion blur.
+        on: bool,
+    },
     /// Zoom the canvas to an absolute factor (1 = 100 %), clamped to
     /// 0.05..=32 (D-0026).
     Zoom(f64),
@@ -428,6 +433,7 @@ pub enum CommandKind {
     SafeArea,
     Snap,
     OnlyAnimated,
+    MotionBlurPreview,
     Zoom,
     ZoomFit,
     ZoomBy,
@@ -468,7 +474,7 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 56] = [
+    pub const ALL: [Self; 57] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -489,6 +495,7 @@ impl CommandKind {
         Self::SafeArea,
         Self::Snap,
         Self::OnlyAnimated,
+        Self::MotionBlurPreview,
         Self::Zoom,
         Self::ZoomFit,
         Self::ZoomBy,
@@ -551,6 +558,7 @@ impl CommandKind {
             Self::SafeArea => "safe_area",
             Self::Snap => "snap",
             Self::OnlyAnimated => "only_animated",
+            Self::MotionBlurPreview => "motion_blur_preview",
             Self::Zoom => "zoom",
             Self::ZoomFit => "zoom_fit",
             Self::ZoomBy => "zoom_by",
@@ -620,6 +628,7 @@ impl CommandKind {
             Self::SafeArea => "safe_area(on)",
             Self::Snap => "snap(on)",
             Self::OnlyAnimated => "only_animated(on)",
+            Self::MotionBlurPreview => "motion_blur_preview(on)",
             Self::Zoom => "zoom(factor)",
             Self::ZoomFit => "zoom_fit()",
             Self::ZoomBy => "zoom_by(steps, x=None, y=None)",
@@ -719,6 +728,7 @@ impl Command {
             Self::SafeArea(_) => CommandKind::SafeArea,
             Self::Snap(_) => CommandKind::Snap,
             Self::OnlyAnimated(_) => CommandKind::OnlyAnimated,
+            Self::MotionBlurPreview { .. } => CommandKind::MotionBlurPreview,
             Self::Zoom(_) => CommandKind::Zoom,
             Self::ZoomFit => CommandKind::ZoomFit,
             Self::ZoomBy { .. } => CommandKind::ZoomBy,

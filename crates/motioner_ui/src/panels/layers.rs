@@ -164,13 +164,15 @@ fn draw_labels(
         t.text_disabled
     };
     let detail_style = p.style(type_scale::CAPTION, detail_ink);
-    let detail_w = if row.detail.is_empty() {
+    let gap = p.m.px(size::GRID * 2.0);
+    let detail_measure = if row.detail.is_empty() {
         0.0
     } else {
-        p.measure(&row.detail, &detail_style) + p.m.px(size::GRID * 2.0)
+        p.measure(&row.detail, &detail_style)
     };
     let actions_x = v.layout.layer_lock(rect).x;
-    let name_room = (actions_x - p.m.px(size::GRID) - detail_w - text_x).max(0.0);
+    let available = (actions_x - p.m.px(size::GRID) - text_x).max(0.0);
+    let (name_room, detail_room) = label_rooms(available, detail_measure, gap);
     let name_style = p.style(
         type_scale::BODY,
         if !readable {
@@ -187,16 +189,29 @@ fn draw_labels(
         Align::Left,
         &name_style,
     );
-    if detail_w > 0.0 {
+    if detail_room > 0.0 {
+        // The detail starts right after the (possibly ellipsized) name.  It
+        // gets its own clamped width so a long path can never run under the
+        // eye/lock icons.
         let name_w = p.measure(&row.name, &name_style).min(name_room);
-        let detail = Rect::new(
-            text_x + name_w + p.m.px(size::GRID * 2.0),
-            rect.y,
-            detail_w,
-            rect.h,
-        );
+        let detail = Rect::new(text_x + name_w + gap, rect.y, detail_room, rect.h);
         p.text_in(&row.detail, detail, Align::Left, &detail_style);
     }
+}
+
+/// Splits the room between a layer name and its detail text.
+///
+/// The detail keeps at most half of the available width and the name always
+/// gets the rest, so both are ellipsized before the trailing actions.  Returns
+/// `(name_room, detail_room)`; the two never exceed `available` once the gap
+/// between them is added.
+fn label_rooms(available: f32, detail_measure: f32, gap: f32) -> (f32, f32) {
+    if detail_measure <= 0.0 {
+        return (available.max(0.0), 0.0);
+    }
+    let detail_room = (detail_measure + gap).min(available * 0.5);
+    let name_room = (available - detail_room - gap).max(0.0);
+    (name_room, detail_room)
 }
 
 /// Eye and lock stay visible (dimmed) on hidden or locked rows.
@@ -336,5 +351,45 @@ fn empty_state(p: &mut Painter<'_>, body: Rect, v: &View<'_>) {
             Align::Left,
             &hint_style,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::label_rooms;
+
+    #[test]
+    fn a_long_name_never_reaches_the_row_actions() {
+        // 300 px available, a 500 px detail and an 8 px gap: the detail is
+        // clamped to half the row and the name keeps the rest, so the two
+        // rectangles plus the gap stay inside the available width.
+        let (name_room, detail_room) = label_rooms(300.0, 500.0, 8.0);
+        assert!(name_room > 0.0, "the name still gets room");
+        assert!(detail_room > 0.0, "the detail is shown, clamped");
+        assert!(
+            name_room + detail_room + 8.0 <= 300.0 + f32::EPSILON,
+            "labels must end before the eye/lock icons: {name_room} + {detail_room} + 8 > 300"
+        );
+    }
+
+    #[test]
+    fn a_short_detail_leaves_the_rest_of_the_name() {
+        let (name_room, detail_room) = label_rooms(300.0, 40.0, 8.0);
+        assert!((detail_room - 48.0).abs() < 1e-6);
+        assert!((name_room - 244.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_detail_uses_the_whole_width() {
+        let (name_room, detail_room) = label_rooms(200.0, 0.0, 8.0);
+        assert!((name_room - 200.0).abs() < 1e-6);
+        assert!(detail_room.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_zero_width_row_does_not_panic() {
+        let (name_room, detail_room) = label_rooms(0.0, 100.0, 8.0);
+        assert!(name_room.abs() < 1e-6);
+        assert!(detail_room.abs() < 1e-6);
     }
 }

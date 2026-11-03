@@ -25,7 +25,7 @@ mod time;
 
 pub mod bounds;
 
-pub use animation::{Animatable, AnimatableVec2, Axis, Ease, Keyframe};
+pub use animation::{Animatable, AnimatableVec2, Axis, BezierEase, BezierError, Ease, Keyframe};
 pub use color::{Color, ColorParseError};
 pub use document::{Composition, Document, MAX_CANVAS_SIZE};
 pub use effect::{

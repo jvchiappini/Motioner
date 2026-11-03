@@ -352,7 +352,7 @@ fn transform_rows(t: &Transform, frame: Frame) -> Vec<Row> {
     let opacity = sample(&t.opacity, frame).clamp(0.0, 1.0);
     rows.push(row(
         "Transform",
-        "Rotation",
+        crate::labels::transform_label(Property::Rotation, None),
         RowValue::Single(field(
             FieldTarget::Transform(Property::Rotation, Axis::Single),
             "",
@@ -364,7 +364,7 @@ fn transform_rows(t: &Transform, frame: Frame) -> Vec<Row> {
     ));
     rows.push(row(
         "Transform",
-        "Anchor X",
+        crate::labels::transform_label(Property::Anchor, Some(Axis::X.core())),
         RowValue::Single(field(
             FieldTarget::Transform(Property::Anchor, Axis::X),
             "X",
@@ -376,7 +376,7 @@ fn transform_rows(t: &Transform, frame: Frame) -> Vec<Row> {
     ));
     rows.push(row(
         "Transform",
-        "Anchor Y",
+        crate::labels::transform_label(Property::Anchor, Some(Axis::Y.core())),
         RowValue::Single(field(
             FieldTarget::Transform(Property::Anchor, Axis::Y),
             "Y",
@@ -388,7 +388,7 @@ fn transform_rows(t: &Transform, frame: Frame) -> Vec<Row> {
     ));
     rows.push(row(
         "Transform",
-        "Opacity",
+        crate::labels::transform_label(Property::Opacity, None),
         RowValue::Single(field(
             FieldTarget::Transform(Property::Opacity, Axis::Single),
             "",
@@ -408,7 +408,7 @@ fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
     vec![
         row(
             "Transform",
-            "Pos X",
+            crate::labels::transform_label(Property::Position, Some(Axis::X.core())),
             RowValue::Single(field(
                 FieldTarget::Transform(Property::Position, Axis::X),
                 "X",
@@ -420,7 +420,7 @@ fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
         ),
         row(
             "Transform",
-            "Pos Y",
+            crate::labels::transform_label(Property::Position, Some(Axis::Y.core())),
             RowValue::Single(field(
                 FieldTarget::Transform(Property::Position, Axis::Y),
                 "Y",
@@ -432,7 +432,7 @@ fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
         ),
         row(
             "Transform",
-            "Scale X",
+            crate::labels::transform_label(Property::Scale, Some(Axis::X.core())),
             RowValue::Single(field(
                 FieldTarget::Transform(Property::Scale, Axis::X),
                 "W",
@@ -444,7 +444,7 @@ fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
         ),
         row(
             "Transform",
-            "Scale Y",
+            crate::labels::transform_label(Property::Scale, Some(Axis::Y.core())),
             RowValue::Single(field(
                 FieldTarget::Transform(Property::Scale, Axis::Y),
                 "H",
@@ -489,16 +489,16 @@ fn path_rows(
         )),
         None,
     )];
-    for (content_field, label) in [
-        (ContentField::TrimStart, "Trim Start"),
-        (ContentField::TrimEnd, "Trim End"),
-        (ContentField::TrimOffset, "Trim Offset"),
-        (ContentField::Dash, "Dash"),
-        (ContentField::DashOffset, "Dash Offset"),
+    for content_field in [
+        ContentField::TrimStart,
+        ContentField::TrimEnd,
+        ContentField::TrimOffset,
+        ContentField::Dash,
+        ContentField::DashOffset,
     ] {
         rows.push(row(
             "Path",
-            label,
+            crate::labels::content_label(content_field),
             RowValue::Single(field(
                 FieldTarget::Content(content_field),
                 "",
@@ -815,7 +815,7 @@ fn paint_rows(document: &Document, node: NodeId, frame: Frame, fill: bool) -> Ve
     }
     rows.push(row(
         "Fill",
-        "Width",
+        crate::labels::content_label(ContentField::StrokeWidth),
         RowValue::Single(field(
             FieldTarget::Content(ContentField::StrokeWidth),
             "",
@@ -871,7 +871,7 @@ fn gradient_rows(
         let color = ContentField::stop_field(slot, motioner_core::StopPart::Color, index);
         rows.push(row(
             section,
-            format!("Stop {index} Offset"),
+            crate::labels::content_label(offset),
             RowValue::Single(field(
                 FieldTarget::Content(offset),
                 "",
@@ -884,7 +884,7 @@ fn gradient_rows(
         let sampled = colour_of(document, node, color, frame);
         rows.push(row(
             section,
-            format!("Stop {index} Colour"),
+            crate::labels::content_label(color),
             RowValue::Color {
                 target: FieldTarget::Content(color),
                 color: sampled.unwrap_or(Color::WHITE),
@@ -920,7 +920,7 @@ fn image_rows(
         row("Image", "Natural size", RowValue::ReadOnly(natural), None),
         row(
             "Image",
-            "Width",
+            crate::labels::content_label(ContentField::Width),
             RowValue::Single(field(
                 FieldTarget::Content(ContentField::Width),
                 "",
@@ -932,7 +932,7 @@ fn image_rows(
         ),
         row(
             "Image",
-            "Height",
+            crate::labels::content_label(ContentField::Height),
             RowValue::Single(field(
                 FieldTarget::Content(ContentField::Height),
                 "",
@@ -1753,7 +1753,7 @@ mod tests {
         assert!(labels.contains(&"Size"));
         assert!(labels.contains(&"Radius"));
         assert!(labels.contains(&"Fill"));
-        assert!(labels.contains(&"Width"));
+        assert!(labels.contains(&"Stroke width"));
         let text = inspect_node(&document, document.roots()[0], 0, None, "Title", &[]).unwrap();
         assert!(text.rows.iter().any(|r| r.label == "Text"));
         assert!(text.rows.iter().any(|r| r.label == "Align"));

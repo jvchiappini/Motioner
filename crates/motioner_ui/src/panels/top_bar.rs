@@ -120,6 +120,13 @@ fn comp_pills(p: &mut Painter<'_>, v: &View<'_>, document: &motioner_core::Docum
 /// The snapping and safe-area toggles and the zoom readout.
 fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
+    if v.motion_blur_preview {
+        let style = p.style(type_scale::CAPTION, t.accent);
+        let text = "MOTION BLUR";
+        let width = widgets::pill_width(p, text, &style);
+        let x = v.layout.snap_toggle.x - width - p.m.px(size::PAD);
+        widgets::pill(p, x, v.layout.top_bar.center_y(), text, &style, t.raised);
+    }
     let toggle = v.layout.safe_area_toggle;
     let mut state = v.interaction(Hit::Toggle(TopBarToggle::SafeArea));
     state.active = v.safe_area;

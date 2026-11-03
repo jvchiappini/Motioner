@@ -1,0 +1,114 @@
+# Timing (D-0037): professional eases, stagger/wiggle and motion blur.
+#
+# Beat 1 (0.0-2.6 s): one row per ease, all dots moving together. The label
+# names the curve; the dot shows it.
+# Beat 2 (2.8-5.6 s): a staggered row of eight bars and a wiggling badge.
+# Beat 3 (5.8-9.0 s): a fast square with motion blur next to a static reference.
+#
+# Motion blur is on for the whole composition (shutter 180, 8 samples); the
+# slow beats barely blur, the fast square in beat 3 streaks.
+
+comp(name="Timing", width=960, height=540, fps=60, duration=9.0,
+     background="#0B0F16", motion_blur=True, shutter=180, samples=8)
+
+MUTED = "#A9B4C4"
+ACCENT = "#FF5A6E"
+GOLD = "#F2C14E"
+COOL = "#6AD1E3"
+
+# ---- beat 1: ease comparison ----------------------------------------------
+
+beat1 = group()
+beat1.id("timing_beat1")
+beat1.key("opacity", 0.0, 1.0)
+beat1.key("opacity", 2.4, 1.0)
+beat1.key("opacity", 2.6, 0.0)
+
+eases = ["linear", "bezier", "hold", "elastic_out", "bounce_out", "expo_in_out",
+         "sine_in_out"]
+colors = [MUTED, ACCENT, GOLD, COOL, "#B388EB", "#7AE582", "#FFB86C", "#E07A5F"]
+
+for index in range(7):
+    y = 76 + index * 62
+    label = text(eases[index], size=22, color=MUTED, align="left")
+    label.pos = (110, y)
+    beat1.add(label)
+
+    dot = circle(radius=11, fill=colors[index])
+    dot.id("ease_" + eases[index])
+    dot.pos = (300, y)
+    dot.key("pos.x", 0.2, 300)
+    if index == 1:
+        dot.key("pos.x", 2.2, 740, ease=bezier(0.25, 0.1, 0.25, 1))
+    elif index == 2:
+        dot.key("pos.x", 2.2, 740, ease="hold")
+    else:
+        dot.key("pos.x", 2.2, 740, ease=eases[index])
+    beat1.add(dot)
+
+title1 = text("easing", size=26, color="#FFFFFF", align="left")
+title1.pos = (110, 24)
+beat1.add(title1)
+
+# ---- beat 2: stagger and wiggle -------------------------------------------
+
+beat2 = group()
+beat2.id("timing_beat2")
+beat2.key("opacity", 2.8, 0.0)
+beat2.key("opacity", 3.0, 1.0)
+beat2.key("opacity", 5.4, 1.0)
+beat2.key("opacity", 5.6, 0.0)
+
+bars = []
+for index in range(8):
+    bar = rect(42, 20, radius=6, fill=colors[index])
+    bar.pos = (170 + index * 88, 360)
+    bars = bars + [bar]
+    beat2.add(bar)
+
+# One (from, to) pair is reused for every bar; node i starts 0.08 s later.
+stagger(bars, "height", [(20, 130)], 3.1, 0.08, 0.6, ease="back_out")
+
+badge = circle(radius=20, fill=GOLD)
+badge.pos = (480, 458)
+badge.wiggle("pos.x", 7, 3.0, 26, 3.1, 5.4)
+beat2.add(badge)
+
+caption2 = text("stagger(8 bars) + wiggle(badge)", size=22, color=MUTED,
+                align="center")
+caption2.pos = (480, 500)
+beat2.add(caption2)
+
+# ---- beat 3: motion blur ---------------------------------------------------
+
+beat3 = group()
+beat3.id("timing_beat3")
+beat3.key("opacity", 5.8, 0.0)
+beat3.key("opacity", 6.0, 1.0)
+beat3.key("opacity", 8.8, 1.0)
+beat3.key("opacity", 9.0, 0.0)
+
+# A static reference: identical with motion blur on or off.
+reference = rect(120, 120, radius=12, fill="#1B2433")
+reference.id("timing_reference")
+reference.pos = (480, 160)
+beat3.add(reference)
+reference_cross = rect(60, 12, radius=6, fill=COOL)
+reference_cross.pos = (480, 160)
+beat3.add(reference_cross)
+reference_cross_v = rect(12, 60, radius=6, fill=COOL)
+reference_cross_v.pos = (480, 160)
+beat3.add(reference_cross_v)
+
+# The fast square streaks across the frame.
+fast = rect(46, 46, radius=10, fill=ACCENT)
+fast.id("timing_fast")
+fast.pos = (130, 380)
+fast.key("pos.x", 6.55, 130, ease="linear")
+fast.key("pos.x", 6.75, 830)
+beat3.add(fast)
+
+caption3 = text("motion_blur=True - shutter 180 - 8 samples", size=22,
+                color=MUTED, align="center")
+caption3.pos = (480, 470)
+beat3.add(caption3)

@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use motioner_core::Document;
 use motioner_dsl::Limits;
-use motioner_eval::{Evaluator, RenderPlan};
+
 use motioner_io::{write_png, ExportError, FfmpegLocation, ImageStore, Mp4Encoder, VideoSettings};
 use motioner_render::{CpuTextMetrics, FontSet, ImageData, ImageSet};
 use motioner_render::{FrameRenderer, RenderError};
@@ -877,11 +877,8 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
     let mut renderer =
         FrameRenderer::with_fonts(composition.width(), composition.height(), project_fonts())?;
     renderer.set_images(image_set(&images));
-    let mut evaluator = Evaluator::new();
-    let mut plan = RenderPlan::new();
     let mut rgba = Vec::new();
-    evaluator.evaluate(&document, args.frame, &mut plan);
-    renderer.render(&document, &plan, &mut rgba)?;
+    renderer.render_frame(&document, args.frame, &mut rgba)?;
     write_png(
         &args.output,
         composition.width(),
@@ -936,25 +933,18 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
     let mut renderer = FrameRenderer::with_fonts(settings.width, settings.height, project_fonts())?;
     renderer.set_images(image_set(&images));
     let mut encoder = Mp4Encoder::start(&args.output, &settings, &location)?;
-    let mut evaluator = Evaluator::new();
-    let mut plan = RenderPlan::new();
     let mut rgba = Vec::new();
 
     let total = u64::try_from(to - from).unwrap_or(0);
     let started = Instant::now();
-    let mut evaluate_time = Duration::ZERO;
     let mut render_time = Duration::ZERO;
     let mut encode_time = Duration::ZERO;
     let mut missing_glyphs = 0_u64;
     let mut completed = 0_u64;
 
     for frame in from..to {
-        let evaluate_start = Instant::now();
-        evaluator.evaluate(&document, frame, &mut plan);
-        evaluate_time += evaluate_start.elapsed();
-
         let render_start = Instant::now();
-        let stats = renderer.render(&document, &plan, &mut rgba)?;
+        let stats = renderer.render_frame(&document, frame, &mut rgba)?;
         render_time += render_start.elapsed();
         missing_glyphs = missing_glyphs.saturating_add(u64::from(stats.missing_glyphs));
 
@@ -985,7 +975,6 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
         "Rendered {completed} frames in {seconds:.3} s ({} encoded)",
         encode.frames
     );
-    print_average("evaluate", evaluate_time, completed);
     print_average("render+readback", render_time, completed);
     print_average("encode", encode_time, completed);
     println!("Adapter: {}", renderer.adapter_name());

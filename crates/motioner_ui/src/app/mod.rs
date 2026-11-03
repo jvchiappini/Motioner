@@ -659,6 +659,7 @@ impl PreviewApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one immediate-mode paint pass
     fn run_draw_ui(&mut self, dc: &mut DrawContext<'_, '_>) {
         let ctx = &mut *dc.ctx;
         let layout = self.layout.unwrap_or_else(|| {
@@ -718,6 +719,7 @@ impl PreviewApp {
             selection_size: canvas.size,
             hover_bounds: canvas.hover,
             safe_area: editor.view().safe_area,
+            motion_blur_preview: editor.motion_blur_preview(),
             snap: editor.view().snap,
             guides: &self.guides,
             marquee: self.marquee,

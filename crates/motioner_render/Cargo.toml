@@ -23,6 +23,9 @@ default = []
 # Enables `LivePainter`, the only public API that names a `ferrous_renderer`
 # type. Off by default so headless consumers keep an engine-free API boundary.
 live = []
+# Enables the engine temporal-accumulation API (D-0038). Off by default while
+# the pinned engine predates it; the reviewer turns it on after the pin bump.
+engine-accumulation = []
 
 [dev-dependencies]
 motioner_dsl.workspace = true

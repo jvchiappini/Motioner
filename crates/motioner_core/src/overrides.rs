@@ -718,7 +718,7 @@ fn entry_to_text(entry: &OverrideEntry, rate: FrameRate) -> String {
             "override_key({id}, {property}, {}, {}, ease={})",
             format_number(seconds_of(*frame, rate)),
             value_text(value),
-            quote(ease.name())
+            ease.mdf_literal()
         ),
         OverrideAction::Unkey { frame } => format!(
             "override_unkey({id}, {property}, {})",

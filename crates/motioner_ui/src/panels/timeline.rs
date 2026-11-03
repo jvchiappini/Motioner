@@ -688,15 +688,14 @@ fn content_row(
     }
 }
 
-/// The inspector's display name for a transform property.
-fn property_label(property: Property) -> &'static str {
-    match property {
-        Property::Position => "Position",
-        Property::Scale => "Scale",
-        Property::Rotation => "Rotation",
-        Property::Anchor => "Anchor",
-        Property::Opacity => "Opacity",
-    }
+/// The shared inspector/timeline label of a transform channel.
+fn channel_label(property: Property, axis: Option<motioner_core::Axis>) -> String {
+    crate::labels::transform_label(property, axis)
+}
+
+/// The shared inspector/timeline label of a content field.
+fn field_label(field: motioner_core::ContentField) -> String {
+    crate::labels::content_label(field)
 }
 
 fn value_text(
@@ -731,32 +730,6 @@ fn value_text(
         }
         (Property::Rotation, _) => format!("{}\u{00b0}", scalar(&t.rotation)),
         (Property::Opacity, _) => format!("{}%", round(sample(&t.opacity, frame) * 100.0)),
-    }
-}
-
-/// The timeline label of a channel: `Position X`, `Scale Y`, `Rotation`.
-fn channel_label(property: Property, axis: Option<motioner_core::Axis>) -> String {
-    match axis {
-        Some(axis) => format!(
-            "{} {}",
-            property_label(property),
-            axis.name().to_uppercase()
-        ),
-        None => property_label(property).to_owned(),
-    }
-}
-
-/// The row label of a content field; gradient stops read as "Stop 0 offset".
-fn field_label(field: motioner_core::ContentField) -> String {
-    match field.stop() {
-        Some((_, part, index)) => {
-            let part = match part {
-                motioner_core::StopPart::Offset => "offset",
-                motioner_core::StopPart::Color => "colour",
-            };
-            format!("Stop {index} {part}")
-        }
-        None => field.name(),
     }
 }
 

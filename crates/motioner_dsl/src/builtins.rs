@@ -72,6 +72,18 @@ pub(crate) fn call(
             }
             Ok(Value::Number(value.clamp(low, high)))
         }
+        Builtin::Bezier => {
+            let bound = bind("bezier", &["x1", "y1", "x2", "y2"], 4, args)?;
+            let (x1, y1, x2, y2) = (
+                bound.number(0)?,
+                bound.number(1)?,
+                bound.number(2)?,
+                bound.number(3)?,
+            );
+            let ease = motioner_core::Ease::bezier(x1, y1, x2, y2)
+                .map_err(|error| HostError::value_error(error.to_string()))?;
+            Ok(Value::Ease(ease))
+        }
         Builtin::LinearGradient | Builtin::RadialGradient => gradient(builtin, args, budget),
         Builtin::Comp
         | Builtin::Group
@@ -82,7 +94,8 @@ pub(crate) fn call(
         | Builtin::Polygon
         | Builtin::Star
         | Builtin::Arc
-        | Builtin::Image => Err(HostError::type_error(format!(
+        | Builtin::Image
+        | Builtin::Stagger => Err(HostError::type_error(format!(
             "{}() is a scene constructor",
             builtin.name()
         ))),

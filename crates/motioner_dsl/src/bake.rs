@@ -282,10 +282,10 @@ fn plan_in_place(
             }];
             match &origin.ease {
                 Some(current) => {
-                    if current.name != ease.name() {
+                    if current.name != ease.mdf_value() {
                         planned.push(PlannedEdit {
                             span: current.span,
-                            text: quote(ease.name()),
+                            text: ease.mdf_literal(),
                         });
                     }
                 }
@@ -549,7 +549,7 @@ fn bake_entry(
             let ease = if *ease == motioner_core::Ease::Linear {
                 String::new()
             } else {
-                format!(", ease={}", quote(ease.name()))
+                format!(", ease={}", ease.mdf_literal())
             };
             Ok(format!(
                 "{variable}.key({}, {time}, {}{ease})",

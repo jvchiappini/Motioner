@@ -357,6 +357,12 @@ fn ease_label(ease: motioner_core::Ease) -> &'static str {
         Ease::CubicInOut => "Cubic in-out",
         Ease::BackIn => "Back in",
         Ease::BackOut => "Back out",
+        Ease::Hold => "Hold",
+        Ease::ElasticOut => "Elastic out",
+        Ease::BounceOut => "Bounce out",
+        Ease::ExpoInOut => "Expo in-out",
+        Ease::SineInOut => "Sine in-out",
+        Ease::Bezier(_) => "Bezier",
     }
 }
 

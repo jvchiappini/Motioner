@@ -27,6 +27,9 @@ pub struct Composition {
     frame_rate: FrameRate,
     duration: Frame,
     background: Color,
+    motion_blur: bool,
+    shutter: f64,
+    samples: u32,
 }
 
 impl Composition {
@@ -59,7 +62,53 @@ impl Composition {
             frame_rate,
             duration,
             background,
+            motion_blur: false,
+            shutter: 180.0,
+            samples: 8,
         })
+    }
+
+    /// Sets the motion-blur settings (`comp(..., motion_blur=...)`).
+    ///
+    /// The shutter is in degrees and must lie in `(0, 360]`; `samples` is the
+    /// number of sub-frames and must lie in `1..=64`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::InvalidMotionBlur`] for a shutter outside `(0, 360]` or a
+    /// sample count outside `1..=64`.
+    pub fn with_motion_blur(
+        mut self,
+        motion_blur: bool,
+        shutter: f64,
+        samples: u32,
+    ) -> Result<Self, CoreError> {
+        if !shutter.is_finite() || shutter <= 0.0 || shutter > 360.0 || !(1..=64).contains(&samples)
+        {
+            return Err(CoreError::InvalidMotionBlur { shutter, samples });
+        }
+        self.motion_blur = motion_blur;
+        self.shutter = shutter;
+        self.samples = samples;
+        Ok(self)
+    }
+
+    /// Whether `still`/`render` average sub-frames (D-0037).
+    #[must_use]
+    pub const fn motion_blur(&self) -> bool {
+        self.motion_blur
+    }
+
+    /// Shutter opening in degrees, in `(0, 360]`.
+    #[must_use]
+    pub const fn shutter(&self) -> f64 {
+        self.shutter
+    }
+
+    /// Number of sub-frames, in `1..=64`.
+    #[must_use]
+    pub const fn samples(&self) -> u32 {
+        self.samples
     }
 
     /// Composition name.

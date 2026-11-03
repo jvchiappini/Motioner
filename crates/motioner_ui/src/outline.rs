@@ -190,7 +190,20 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
             };
             (name, format!("{} px", number(text.size.value())))
         }
-        NodeContent::Image(image) => (format!("Image {ordinal}"), image.source.clone()),
+        NodeContent::Image(image) => {
+            // The source path can be very long; the layer name is the file
+            // stem and the detail is the natural size (D-0035, phase 9).
+            let stem = std::path::Path::new(&image.source)
+                .file_stem()
+                .and_then(std::ffi::OsStr::to_str)
+                .filter(|stem| !stem.is_empty())
+                .map_or_else(|| format!("Image {ordinal}"), ToOwned::to_owned);
+            let detail = image.asset.map_or_else(
+                || "unresolved".to_owned(),
+                |asset| format!("{} × {}", asset.width, asset.height),
+            );
+            (stem, detail)
+        }
     }
 }
 

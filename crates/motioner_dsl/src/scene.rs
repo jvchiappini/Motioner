@@ -8,16 +8,17 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use motioner_core::{
-    BlendMode, CharOrder, CharProperty, CharValue, Color, Composition, ContentField, ContentValue,
-    CoreError, Document, Ease, Effect, EffectChannel, EffectKind, EffectParam, EffectValueInput,
-    FrameRate, Gradient, ImageContent, ImageFit, LineCap, LineJoin, MaskMode, NodeContent, NodeId,
-    NodeIdentity, Paint, PathGeometry, PathPoint, Property, PropertyValue, Stroke, TextAlign,
-    TextAnimator, TextContent, Vec2, MAX_CANVAS_SIZE,
+    BlendMode, CharOrder, CharProperty, CharValue, Color, Composition, ContentChannel,
+    ContentField, ContentValue, CoreError, Document, Ease, Effect, EffectChannel, EffectKind,
+    EffectParam, EffectValueInput, FrameRate, Gradient, ImageContent, ImageFit, LineCap, LineJoin,
+    MaskMode, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint, Property,
+    PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
 use crate::host::{
-    as_integer, as_vec2, bind, vec2_value, Bound, CallArgs, HostError, HostResult, PaintInput,
+    as_integer, as_vec2, bind, vec2_value, Bound, CallArgs, CallValue, HostError, HostResult,
+    PaintInput,
 };
 use crate::origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
 use crate::value::{Builtin, NodeMethod, Value};
@@ -173,6 +174,7 @@ impl Scene {
             }
             Builtin::Text => self.text(args, site),
             Builtin::Image => self.image(args, site),
+            Builtin::Stagger => self.stagger(args, site),
             Builtin::Path => self.path(args, site),
             Builtin::Polygon => self.polygon(args, site),
             Builtin::Star => self.star(args, site),
@@ -188,7 +190,17 @@ impl Scene {
         if self.document.is_some() {
             return Err(HostError::value_error("comp() can only be called once"));
         }
-        let params = ["name", "width", "height", "fps", "duration", "background"];
+        let params = [
+            "name",
+            "width",
+            "height",
+            "fps",
+            "duration",
+            "background",
+            "motion_blur",
+            "shutter",
+            "samples",
+        ];
         let bound = bind("comp", &params, 1, args)?;
         let max_side = i64::from(MAX_CANVAS_SIZE);
         let side = |index, default| -> HostResult<u32> {
@@ -202,6 +214,20 @@ impl Scene {
                 "comp(): 'duration' must be a positive number of seconds",
             ));
         }
+        let motion_blur = match bound.get(6) {
+            None | Some(Value::None) => false,
+            Some(Value::Bool(value)) => *value,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "comp(): 'motion_blur' must be True or False, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let shutter = bound.number_or(7, 180.0)?;
+        let samples = bound.integer_in(8, 8, 1, 64)?;
+        let samples = u32::try_from(samples)
+            .map_err(|_| HostError::value_error("comp(): 'samples' is out of range"))?;
         let composition = Composition::new(
             bound.string_or(0, "")?.as_ref(),
             side(1, 1920)?,
@@ -212,6 +238,7 @@ impl Scene {
                 .map_err(|error| core_error(&error))?,
             bound.color_or(5, Color::BLACK)?,
         )
+        .and_then(|composition| composition.with_motion_blur(motion_blur, shutter, samples))
         .map_err(|error| core_error(&error))?;
         self.document = Some(Document::new(composition));
         Ok(Value::None)
@@ -626,6 +653,7 @@ impl Scene {
             NodeMethod::Mask => self.mask(id, args),
             NodeMethod::AnimateChars => self.animate_chars(id, args),
             NodeMethod::ClearChars => self.clear_chars(id),
+            NodeMethod::Wiggle => self.wiggle(id, args),
         }
     }
 
@@ -637,6 +665,184 @@ impl Scene {
             .set_text_animators(id, Vec::new())
             .map_err(|error| core_error(&error))?;
         Ok(Value::None)
+    }
+
+    /// `stagger(nodes, property, values, start, step, duration, ease)`.
+    ///
+    /// `values` is a list of `(from, to)` pairs, one per node; a single pair is
+    /// reused for every node. Node `i` gets a linear key at `start + i*step`
+    /// with `from` and a key at `start + i*step + duration` with `to` and
+    /// `ease`. The helper only emits ordinary keys, so it is deterministic and
+    /// bakeable.
+    fn stagger(&mut self, args: CallArgs, _site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "nodes", "property", "values", "start", "step", "duration", "ease",
+        ];
+        let bound = bind("stagger", &params, 4, args)?;
+        let nodes = list_items(bound.get(0), "stagger(): 'nodes' must be a list")?;
+        let property = bound.string_or(1, "")?;
+        let values = list_items(
+            bound.get(2),
+            "stagger(): 'values' must be a list of (from, to) pairs",
+        )?;
+        let start = bound.number_or(3, 0.0)?;
+        let step = bound.number_or(4, 0.1)?;
+        let duration = bound.number_or(5, 0.5)?;
+        if !(start.is_finite() && step.is_finite() && duration.is_finite()) || duration < 0.0 {
+            return Err(HostError::value_error(
+                "stagger(): 'start', 'step' and 'duration' must be finite and duration non-negative",
+            ));
+        }
+        let ease = match bound.get(6) {
+            None | Some(Value::None) => Ease::Linear,
+            Some(Value::Ease(ease)) => *ease,
+            Some(Value::Str(name)) => Ease::from_name(name).ok_or_else(|| {
+                HostError::value_error(format!(
+                    "stagger(): unknown ease {name:?}; use an MDF ease name or bezier(...)"
+                ))
+            })?,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "stagger(): 'ease' must be a string or bezier(...), got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let span = Span::default();
+        for (index, node) in nodes.iter().enumerate() {
+            let Value::Node(id) = node else {
+                return Err(HostError::type_error(
+                    "stagger(): 'nodes' must contain only nodes",
+                ));
+            };
+            let (from, to) = pair_at(&values, index, "stagger()")?;
+            #[allow(clippy::cast_precision_loss)] // a list index is far below 2^53
+            let time = start + index as f64 * step;
+            self.key_value(*id, &property, time, from, Ease::Linear, span)?;
+            self.key_value(*id, &property, time + duration, to, ease, span)?;
+        }
+        Ok(Value::None)
+    }
+
+    /// `node.wiggle(property, seed, frequency, amplitude, start, end)`.
+    ///
+    /// Emits one `sine_in_out` key per `1/frequency` seconds, with the value
+    /// `base ± amplitude` from a documented `SplitMix64` stream. The same seed
+    /// always produces the same keys. `base` is the property's current static
+    /// value (existing keyframes are not sampled).
+    fn wiggle(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = ["property", "seed", "frequency", "amplitude", "start", "end"];
+        let bound = bind("wiggle", &params, 6, args)?;
+        let property = bound.string_or(0, "")?;
+        let seed = bound.integer_in(1, 0, i64::MIN, i64::MAX)?;
+        let frequency = bound.number(2)?;
+        let amplitude = bound.number(3)?;
+        let start = bound.number(4)?;
+        let end = bound.number(5)?;
+        if !(frequency.is_finite() && frequency > 0.0) {
+            return Err(HostError::value_error(
+                "wiggle(): 'frequency' must be a positive number of keys per second",
+            ));
+        }
+        if !(amplitude.is_finite() && amplitude >= 0.0) {
+            return Err(HostError::value_error(
+                "wiggle(): 'amplitude' must be a finite, non-negative number",
+            ));
+        }
+        if !(start.is_finite() && end.is_finite() && end >= start) {
+            return Err(HostError::value_error(
+                "wiggle(): 'start' and 'end' must be finite and end >= start",
+            ));
+        }
+        let base = self.wiggle_base(id, &property)?;
+        let span = bound.source(0).map_or_else(Span::default, |(span, _)| span);
+        let mut state = splitmix64_seed(seed);
+        let step = 1.0 / frequency;
+        let mut time = start;
+        while time <= end + 1e-9 {
+            let random = splitmix64_next(&mut state);
+            let value = amplitude.mul_add(2.0 * random - 1.0, base);
+            self.key_value(
+                id,
+                &property,
+                time,
+                Value::Number(value),
+                Ease::SineInOut,
+                span,
+            )?;
+            time += step;
+        }
+        Ok(Value::None)
+    }
+
+    /// The static numeric value `wiggle` modulates.
+    fn wiggle_base(&self, id: NodeId, property: &str) -> HostResult<f64> {
+        let node = self
+            .document()?
+            .node(id)
+            .ok_or_else(|| HostError::value_error(format!("unknown node {id}")))?;
+        let (base, axis) = motioner_core::split_property(property);
+        if let Some(field) = ContentField::from_name(base) {
+            if let Some(ContentChannel::Number(value)) = node.content().channel(field) {
+                return Ok(value.value());
+            }
+            return Err(HostError::value_error(format!(
+                "wiggle(): '{property}' is not a numeric content channel"
+            )));
+        }
+        match (Property::from_name(base), axis) {
+            (Some(Property::Rotation), None) => Ok(node.transform().rotation.value()),
+            (Some(Property::Opacity), None) => Ok(node.transform().opacity.value()),
+            (Some(Property::Position), Some(axis)) => {
+                Ok(node.transform().position.axis(axis).value())
+            }
+            (Some(Property::Scale), Some(axis)) => Ok(node.transform().scale.axis(axis).value()),
+            (Some(Property::Anchor), Some(axis)) => Ok(node.transform().anchor.axis(axis).value()),
+            (Some(parsed), _) if parsed.is_vector() => Err(HostError::value_error(format!(
+                "wiggle(): '{property}' needs an axis ('{base}.x' or '{base}.y')"
+            ))),
+            _ => Err(HostError::value_error(format!(
+                "wiggle(): unknown animatable property {property:?}"
+            ))),
+        }
+    }
+
+    /// Writes one ordinary key through the same path as `node.key(...)`.
+    fn key_value(
+        &mut self,
+        id: NodeId,
+        property: &str,
+        time: f64,
+        value: Value,
+        ease: Ease,
+        span: Span,
+    ) -> HostResult<()> {
+        let mut args = CallArgs::default();
+        args.positional.push(CallValue {
+            value: Value::Str(Rc::from(property)),
+            span,
+            literal: Some(Literal::Text),
+        });
+        args.positional.push(CallValue {
+            value: Value::Number(time),
+            span,
+            literal: Some(Literal::Number),
+        });
+        args.positional.push(CallValue {
+            value,
+            span,
+            literal: None,
+        });
+        args.keywords.push((
+            Rc::from("ease"),
+            CallValue {
+                value: Value::Ease(ease),
+                span,
+                literal: None,
+            },
+        ));
+        self.key(id, args)?;
+        Ok(())
     }
 
     /// `node.animate_chars(property, from, to, start, stagger, duration,
@@ -1068,26 +1274,34 @@ impl Scene {
     }
 
     fn key_timing(&self, bound: &Bound<'_>, time: f64) -> HostResult<KeyTiming> {
-        let ease_name = bound.string_or(3, "linear")?;
-        let ease = Ease::from_name(&ease_name).ok_or_else(|| {
-            HostError::value_error(format!(
-                "key(): unknown ease {ease_name:?}; available eases are {}",
-                quoted_names(Ease::ALL.iter().map(|(_, n)| *n))
-            ))
-        })?;
+        let ease = match bound.get(3) {
+            None | Some(Value::None) => Ease::Linear,
+            Some(Value::Ease(ease)) => *ease,
+            Some(Value::Str(name)) => Ease::from_name(name).ok_or_else(|| {
+                HostError::value_error(format!(
+                    "key(): unknown ease {name:?}; available eases are {} or bezier(...)",
+                    quoted_names(Ease::ALL.iter().map(|(_, n)| *n))
+                ))
+            })?,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "key(): 'ease' must be a string or bezier(...), got {}",
+                    other.type_name()
+                )))
+            }
+        };
         let frame = self
             .document()?
             .composition()
             .frame_rate()
             .seconds_to_frame(time)
             .map_err(|error| core_error(&error))?;
-        let ease_origin = bound
-            .source(3)
-            .filter(|(_, literal)| *literal == Some(Literal::Text))
-            .map(|(span, _)| EaseOrigin {
+        let ease_origin = bound.source(3).and_then(|(span, literal)| {
+            (literal == Some(Literal::Text) || ease.is_bezier()).then(|| EaseOrigin {
                 span,
-                name: ease_name.to_string(),
-            });
+                name: ease.mdf_value(),
+            })
+        });
         Ok(KeyTiming {
             frame,
             ease,
@@ -1133,6 +1347,56 @@ impl Scene {
         }
         Ok(Value::None)
     }
+}
+
+/// Clones the items of a list or tuple argument.
+fn list_items(value: Option<&Value>, message: &str) -> HostResult<Vec<Value>> {
+    match value {
+        Some(Value::List(items) | Value::Tuple(items)) => Ok(items.borrow().clone()),
+        _ => Err(HostError::type_error(message)),
+    }
+}
+
+/// The `(from, to)` pair for node `index`; a single pair is shared.
+fn pair_at(values: &[Value], index: usize, what: &str) -> HostResult<(Value, Value)> {
+    let pair = if values.len() == 1 {
+        values.first()
+    } else {
+        values.get(index)
+    };
+    let Some(Value::List(items) | Value::Tuple(items)) = pair else {
+        return Err(HostError::type_error(format!(
+            "{what}: 'values' must contain (from, to) pairs"
+        )));
+    };
+    let items = items.borrow();
+    if items.len() != 2 {
+        return Err(HostError::type_error(format!(
+            "{what}: each pair must have exactly two values"
+        )));
+    }
+    Ok((items[0].clone(), items[1].clone()))
+}
+
+/// Seeds a `SplitMix64` stream from an arbitrary 64-bit integer.
+fn splitmix64_seed(seed: i64) -> u64 {
+    #[allow(clippy::cast_sign_loss)] // the bit pattern is what matters
+    {
+        seed as u64
+    }
+}
+
+/// Returns the next `SplitMix64` value as a uniform number in `[0, 1)`.
+fn splitmix64_next(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    // The top 53 bits map exactly onto an f64 mantissa.
+    #[allow(clippy::cast_precision_loss)]
+    let value = (z >> 11) as f64 / 9_007_199_254_740_992.0;
+    value
 }
 
 /// Splits `pos.x` into (`pos`, `Some(X)`); a plain name has no axis.
