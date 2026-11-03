@@ -5,18 +5,15 @@
 //! Frame 400 shows the fast square smeared by motion blur next to a static
 //! reference.
 //!
-//! The motion-blur comparison needs the `engine-accumulation` feature, so it
-//! is compiled only when that feature is on; the pinned hashes and the pixel
-//! assertions always run.
+//! The renders are compared with the goldens within a small GPU tolerance;
+//! the pinned hashes and the pixel assertions are exact.
 
 use std::error::Error;
 use std::fmt::Write as _;
 
-#[cfg(feature = "engine-accumulation")]
 use motioner_render::FrameRenderer;
 use sha2::{Digest, Sha256};
 
-#[cfg(feature = "engine-accumulation")]
 const SOURCE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../examples/timing.motion"
@@ -127,7 +124,6 @@ fn each_still_shows_its_timing_beat() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(feature = "engine-accumulation")]
 #[test]
 fn the_timing_beats_render_like_the_goldens() -> Result<(), Box<dyn Error>> {
     let _gpu = motioner_testkit::gpu::lock();
@@ -165,7 +161,6 @@ fn the_timing_beats_render_like_the_goldens() -> Result<(), Box<dyn Error>> {
 }
 
 /// The static reference is byte-identical with motion blur on and off.
-#[cfg(feature = "engine-accumulation")]
 #[test]
 fn a_static_reference_is_identical_with_motion_blur_on_and_off() -> Result<(), Box<dyn Error>> {
     let _gpu = motioner_testkit::gpu::lock();

@@ -24,11 +24,8 @@ Rendering is deterministic. The only clock-dependent value is
 `render_frame` evaluates integer `frame` and honours
 `comp(motion_blur=True, shutter=..., samples=...)`: it evaluates the centred
 sub-frame times with `motioner_eval::Evaluator::evaluate_fractional` and
-averages them in linear light through the engine accumulation API. The
-`engine-accumulation` feature is off by default while the pin predates that
-API; with it off, motion blur returns the typed
-`RenderError::Unsupported { feature: Feature::Accumulation, .. }` and the
-integer path is unchanged.
+averages them in linear light through the engine accumulation API
+(D-0038). With motion blur off the integer path is unchanged.
 
 ## Public API
 

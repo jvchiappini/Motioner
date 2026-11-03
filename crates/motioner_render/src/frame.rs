@@ -202,22 +202,6 @@ pub(crate) fn render_frame(
     render_motion_blur(renderer, document, frame, &mut evaluator, &mut plan, out)
 }
 
-#[cfg(not(feature = "engine-accumulation"))]
-fn render_motion_blur(
-    _renderer: &mut FrameRenderer,
-    _document: &Document,
-    _frame: Frame,
-    _evaluator: &mut motioner_eval::Evaluator,
-    _plan: &mut RenderPlan,
-    _out: &mut Vec<u8>,
-) -> Result<FrameStats, RenderError> {
-    Err(RenderError::Unsupported {
-        feature: crate::Feature::Accumulation,
-        node: None,
-    })
-}
-
-#[cfg(feature = "engine-accumulation")]
 fn render_motion_blur(
     renderer: &mut FrameRenderer,
     document: &Document,

@@ -516,9 +516,8 @@ pub enum Feature {
     /// Image textures (D-0035). No longer raised: the pinned engine carries
     /// `Renderer::register_texture_2d`. Kept so future pin gaps reuse it.
     Images,
-    /// Temporal accumulation (D-0038). Raised when the `engine-accumulation`
-    /// feature is off, which is the default while the pin predates the engine
-    /// API.
+    /// Temporal accumulation (D-0038). No longer raised: the pinned engine
+    /// carries the accumulation API. Kept so future pin gaps reuse it.
     Accumulation,
 }
 
@@ -721,8 +720,8 @@ impl FrameRenderer {
     ///
     /// # Errors
     ///
-    /// [`RenderError::Unsupported`] while the `engine-accumulation` feature is
-    /// off, plus every error [`Self::render`] can return.
+    /// [`RenderError::Accumulation`] when the engine accumulation pass fails,
+    /// plus every error [`Self::render`] can return.
     pub fn render_frame(
         &mut self,
         document: &Document,
