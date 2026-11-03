@@ -20,7 +20,12 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
 - Prompt 10 is a 12-phase job. **Phases 1-8 are done** (phase 8 images and
   the phase 7 leftovers landed at pin e0cc574). **Phase 9 is done** (easing,
-  motion blur, helpers; D-0037/D-0038). Later phases have their backlog tasks.
+  motion blur, helpers; D-0037/D-0038). **Phase 10 is done** (names, outline
+  filter/collapse/solo/shy, graph editor, 1000-layer performance, live blur
+  preview; D-0044) and its review fixes are done (Part A: engine lines,
+  in-place blur texture, cached chrome, full name paths). **Phase 11 is done**
+  (`examples/showcase_pro.motion`, six goldens, MP4 and contact sheet).
+  Phase 12 remains.
 - **FerrousEngine is a general-purpose engine, not a Motioner backend.** A
   missing render capability is built in the clone as a public engine feature
   with rustdoc, `crates/<crate>/docs/`, an `mkdocs.yml` entry and engine
@@ -72,9 +77,23 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   numbers; `motion_blur_preview(on)` and a top-bar indicator.
 - **Engine accumulation (D-0038)**: `Accumulation2d` in `ferrous_2d`, mirrored
   on `Renderer`, `Pure2dHarness` and `RenderContext`; `Rgba16Float`,
-  premultiplied linear, weighted add, normalised resolve. The clone has it;
-  the pin does not yet, so Motioner gates the render hook behind the
-  `engine-accumulation` feature (off by default, typed `Unsupported`).
+  premultiplied linear, weighted add, normalised resolve. The pin now has it
+  and `engine-accumulation` is gone; `still`/`render` really blur.
+- **Editor quality of life (D-0044)**: `Node::name` + binding-derived defaults
+  (`motioner_dsl::default_name`), `name` override, bake and `query`;
+  `filter_layers`/collapse/`solo`/`shy`/`show_shy` (preview only);
+  `graph_open`/`graph_view`/`move_key_value` and editable bezier fields;
+  virtualised timeline rows + cached `OutlineRow::visible_runs`; optional
+  `alloc-count` feature; live motion-blur preview (`app/blur.rs`) through
+  `FrameRenderer::render_preview_frame`, 4 samples playing / full paused.
+- **Phase 10 review fixes**: graph curve/stems are real anti-aliased
+  `Painter::line` segments sampled per screen column (engine `LINE_BIT`);
+  `graph_open` fits the key range and the caption lives above the plot.
+  `BlurPreview` rewrites its sprite texture in place
+  (`Renderer::update_sprite_texture`) and `FrameRenderer` reuses one
+  `Evaluator`/`RenderPlan`. Timeline values, labels, identity and header/ruler
+  strings are cached; alloc reading is per-thread and always shown with
+  `alloc-count`. Default names use the full loop/call path and a `HashSet`.
 - **Measurement fix**: `ferrous_font::LayoutData` (engine clone) is the CPU
   table source; `FontAtlas` builds through it. `CpuTextMetrics` caches one
   `LayoutData` per face and calls `measure_block`; `measure_parser` is gone.
@@ -97,9 +116,13 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   256 px drawn at 160 px, so the example goes through the mip chain.
 - Timing (D-0037): `timing_eases_f030.png` (hold dot at its old position,
   elastic overshoot) and `timing_motion_blur_f400.png` (0.75-coverage streak,
-  static reference). `motioner_render/tests/golden_timing.rs` pins them; the
-  render comparison and the on/off reference check need
-  `--features engine-accumulation`.
+  static reference). `motioner_render/tests/golden_timing.rs` pins them; both
+  run without a feature after the pin bump.
+- Showcase Pro (Phase 11): `showcase_pro_f180/f330/f600/f810/f1086/f1320.png`
+  (1920x1080) pinned by `motioner_render/tests/golden_showcase_pro.rs`.
+  Deliverables: `out/showcase_pro.mp4` and `out/showcase_pro_sheet.png`.
+- `hello_f120.png` stays byte-identical after Phases 10-11:
+  SHA-256 `C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`.
 
 ## Gotchas
 
@@ -128,7 +151,8 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
 
 ## FerrousEngine state
 
-- Pin `e0cc574` on `feat/pure2d-text-and-readback` (committed and pushed):
+- Pin `7e95367` on `feat/pure2d-text-and-readback` (committed and pushed):
+  temporal accumulation (`Accumulation2d`) and level-zero texture upload.
   - `ferrous_font/src/layout_data.rs`: `LayoutData::from_bytes/from_parser`,
     `layout_font`, `measure_*`/`layout_*`, `into_parts`. `FontAtlas::new` builds
     through it (bit-for-bit measurement test in
@@ -145,14 +169,15 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
     shadow alpha, budget, oversized error).
   - Docs: `crates/ferrous_2d/docs/images.md` (linked from the README and
     `mkdocs.yml`), `ferrous_font/docs/README.md`.
-- **Uncommitted engine work (Phase 9)**: `ferrous_2d/src/render/accumulation.rs`
-  (`Accumulation2d`, `AccumulationError`, `ACCUMULATION_FORMAT`),
-  `assets/shaders/accumulation_2d.wgsl`, mirrors on `Renderer`,
-  `Pure2dHarness`, `RenderContext`; `register_texture_2d` with
-  `mipmaps:false` builds level 0 only (`build_level_zero`); tests
-  `pure2d_accumulation.rs` and the new `pure2d_images.rs` case; docs
-  `crates/ferrous_2d/docs/accumulation.md`. The reviewer must commit this and
-  bump the pin before `engine-accumulation` can be turned on.
+- **Clone commit `6a30e7d` (Phase 10 review fixes, not yet in Motioner history)**:
+  `GuiBatch::line`/`polyline` with `LINE_BIT (1 << 9, shader 0x200)`,
+  round-capped anti-aliased segments in `gui.wgsl`/`gui_web.wgsl`, docs in
+  `ferrous_ui_render/docs/RENDER.md` and two batch tests;
+  `Renderer::update_sprite_texture` with `TextureUpdateError` (in-place
+  `queue.write_texture` for same-size frames), docs in
+  `ferrous_2d/docs/images.md` and the `pure2d_images` test. Motioner's
+  `engine/ferrous` working tree is checked out at `6a30e7d`; the reviewer must
+  commit the pin.
 - **Flaky GPU tests**: the first parallel run after a build can fail with
   `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
   Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
@@ -178,13 +203,19 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-Phase 9 (timing): engine `Accumulation2d` + `build_level_zero` + tests/docs;
-Motioner `BezierEase`/new eases/`evaluate_fractional`/`render_frame`/
-`stagger`/`wiggle`, overrides/bake/query round-trip, editor ease grid and
-`motion_blur_preview`, `examples/timing.motion`, two goldens, preview and
-editor screenshots in `out/ui/`. Part A: image layer names (file stem) and
-row truncation, one label table for inspector/timeline, preview screenshots
-with real textures, engine level-0-only mipmaps. Gate green; feature-on
-clippy and the motion-blur golden were generated against the clone. Next:
-commit the engine clone, bump the pin, turn `engine-accumulation` on, then
-Phase 10.
+Phase 10 review fixes (T-UI-0009): engine line primitive and in-place sprite
+update (clone `6a30e7d`); anti-aliased graph curve/stems sampled per screen
+column, key-fit view and a caption outside the plot; blur preview at 28 ms
+paused full / 9 ms playing 4 samples at both 960x540 and 1080p (the old
+"UI 1 fps" was the one-second first paused render, not idle redraw); cached
+values/labels/chrome with a per-thread alloc reading of 9/frame (engine
+`GuiBatch`, D-0044 amended); names use the full loop/call path.
+
+Phase 11 (T-APP-0003): `examples/showcase_pro.motion` (24 s 1080p60, 80
+nodes, six scenes), six goldens pinned by
+`motioner_render/tests/golden_showcase_pro.rs`, `out/showcase_pro.mp4`
+(1440 frames) and `out/showcase_pro_sheet.png`. Captures
+`out/ui/p10-11-graph-fixed.png`, `p10-12/13-alloc-*`, `fps-960/1080-*`.
+Gate green; `hello_f120.png` still `C2173BAD...` byte-identical. Next:
+Phase 12 (release numbers, docs, final report). Reviewer must commit the
+engine clone and bump the pin.

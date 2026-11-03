@@ -53,6 +53,34 @@ only place that names engine types on the editor side (through
   `motioner_render::path_bounds` and is picked against its fill or stroke
   (`crates/motioner_ui/src/bounds.rs:70-205`).
 
+- Display names (D-0044): `Node::name`, the `name` override, the MDF
+  `node.name` assignment and `motioner_dsl::default_name` for binding-derived
+  labels (full loop path and function-call ordinals). The layers panel and
+  `query` prefer the name and fall back to the kind label
+  (`crates/motioner_ui/src/outline.rs:130-175`).
+- Outline state: `outline::apply_visibility` collapses subtrees and applies
+  `filter_layers` (name, kind, identity; ancestors kept); `solo`/`shy`/
+  `show_shy` are preview-only and reach the painter through
+  `LivePainter::paint_visible` (`crates/motioner_ui/src/editor/mod.rs`,
+  `crates/motioner_render/src/lib.rs`).
+- Graph editor (D-0044): `graph::GraphModel` maps one numeric channel to a
+  plot; keys and bezier handles are hit-tested and every drag becomes one
+  `ease` or `move_key_value` command; the curve is drawn as anti-aliased line
+  segments sampled per screen column, and opening fits the key time/value
+  range with padding (`crates/motioner_ui/src/graph.rs`,
+  `crates/motioner_ui/src/panels/timeline.rs`).
+- Performance: `timeline_model::layout_into` virtualises rows into a reusable
+  buffer; visibility runs are cached per document generation; value texts,
+  channel labels, identity, header/ruler strings and the graph caption are
+  cached and rewritten in place. The optional `alloc-count` feature counts
+  allocations on the UI thread only and always shows the reading (D-0044
+  records the residual 9/frame caused by the engine's per-frame `GuiBatch`).
+- Motion-blur preview (D-0044): `app::blur` renders through the same
+  `FrameRenderer::render_preview_frame` accumulation as `still`/`render`,
+  reuses one `Evaluator`/`RenderPlan`, rewrites its sprite texture in place
+  when the size is unchanged, caches while paused and caps playback at four
+  samples.
+
 ## Diagram
 
 Not needed: the panels read pure models; the app turns input into commands.
