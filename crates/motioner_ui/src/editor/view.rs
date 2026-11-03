@@ -98,10 +98,22 @@ impl Editor {
                 if *open {
                     self.expanded.insert(row);
                     self.pinned.insert(row);
+                    self.collapsed.remove(&row);
                 } else {
                     self.expanded.remove(&row);
                     self.pinned.remove(&row);
+                    if self.outline.get(row).is_some_and(|r| r.has_children) {
+                        self.collapsed.insert(row);
+                    }
                 }
+                crate::outline::apply_visibility(&mut self.outline, &self.collapsed, &self.filter);
+                self.visible = self
+                    .outline
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| row.visible)
+                    .map(|(index, _)| index)
+                    .collect();
                 self.rebuild_timeline();
                 Ok(Outcome::done(format!(
                     "{id} {}",
@@ -112,10 +124,26 @@ impl Editor {
                 if *open {
                     self.expanded = (0..self.outline.len()).collect();
                     self.pinned = self.expanded.clone();
+                    self.collapsed.clear();
                 } else {
                     self.expanded.clear();
                     self.pinned.clear();
+                    self.collapsed = self
+                        .outline
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| row.has_children)
+                        .map(|(index, _)| index)
+                        .collect();
                 }
+                crate::outline::apply_visibility(&mut self.outline, &self.collapsed, &self.filter);
+                self.visible = self
+                    .outline
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| row.visible)
+                    .map(|(index, _)| index)
+                    .collect();
                 self.rebuild_timeline();
                 Ok(Outcome::done(if *open {
                     "all expanded"
@@ -148,6 +176,55 @@ impl Editor {
                     "motion blur preview {}",
                     on_off(*on)
                 )))
+            }
+            Command::Solo { id, on } => {
+                let node = channels::node_of(self.require_document()?, id)?;
+                if *on {
+                    self.solo.insert(node);
+                } else {
+                    self.solo.remove(&node);
+                }
+                Ok(Outcome::done(format!("{id} solo {}", on_off(*on))))
+            }
+            Command::Shy { id, on } => {
+                let node = channels::node_of(self.require_document()?, id)?;
+                if *on {
+                    self.shy.insert(node);
+                } else {
+                    self.shy.remove(&node);
+                }
+                Ok(Outcome::done(format!("{id} shy {}", on_off(*on))))
+            }
+            Command::ShowShy(on) => {
+                self.show_shy = *on;
+                Ok(Outcome::done(format!("show shy {}", on_off(*on))))
+            }
+            Command::FilterLayers(text) => {
+                self.filter.clear();
+                self.filter.push_str(text.trim());
+                self.refresh_models();
+                Ok(Outcome::done(if self.filter.is_empty() {
+                    "filter cleared".to_owned()
+                } else {
+                    format!("filter {:?}", self.filter)
+                }))
+            }
+            Command::GraphOpen { id, property } => {
+                self.open_graph(id, property)?;
+                Ok(Outcome::done(format!("graph {id} {property}")))
+            }
+            Command::GraphClose => {
+                self.close_graph();
+                Ok(Outcome::done("graph closed"))
+            }
+            Command::GraphView {
+                zoom,
+                pan_x,
+                pan_y,
+                zoom_y,
+            } => {
+                self.set_graph_view(*zoom, *pan_x, *pan_y, *zoom_y)?;
+                Ok(Outcome::done("graph view"))
             }
             Command::Zoom(factor) => {
                 if !factor.is_finite() {

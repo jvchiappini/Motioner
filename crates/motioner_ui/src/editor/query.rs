@@ -100,7 +100,7 @@ impl Editor {
         j.key("id").string(n.identity().as_str());
         j.key("explicit_id").boolean(n.identity().is_explicit());
         j.key("kind").string(&kind.to_lowercase());
-        j.key("name").string(name);
+        j.key("name").string(n.name().unwrap_or(name));
         match n.parent().and_then(|parent| document.node(parent)) {
             Some(parent) => j.key("parent").string(parent.identity().as_str()),
             None => j.key("parent").null(),
@@ -265,6 +265,24 @@ impl Editor {
         j.key("only_animated").boolean(self.only_animated);
         j.key("motion_blur_preview")
             .boolean(self.motion_blur_preview);
+        j.key("filter").string(&self.filter);
+        j.key("show_shy").boolean(self.show_shy);
+        match self.graph() {
+            Some(graph) => {
+                j.key("graph").begin_object();
+                j.key("id").string(&graph.id);
+                j.key("property").string(&graph.property);
+                j.key("zoom").number(graph.zoom_x);
+                j.key("zoom_y").number(graph.zoom_y);
+                j.key("pan").begin_array();
+                j.number(graph.pan_x).number(graph.pan_y);
+                j.end_array();
+                j.end_object();
+            }
+            None => {
+                j.key("graph").null();
+            }
+        }
         j.key("safe_area").boolean(self.view.safe_area);
         j.key("snap").boolean(self.view.snap);
         match self.view.zoom {

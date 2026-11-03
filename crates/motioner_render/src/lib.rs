@@ -459,6 +459,10 @@ pub struct FrameRenderer {
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
     texture_budget: u64,
+    /// Reused across frame renders, so a preview does not rebuild the
+    /// evaluator scratch or the plan's item buffers every call.
+    evaluator: motioner_eval::Evaluator,
+    plan: RenderPlan,
 }
 
 /// Counters returned by one plan paint into a drawing surface.
@@ -731,6 +735,40 @@ impl FrameRenderer {
         frame::render_frame(self, document, frame, out)
     }
 
+    /// Renders `frame` through the motion-blur accumulation pass with an
+    /// explicit sample count, regardless of the composition's own flag.
+    ///
+    /// The editor preview calls this while scrubbing and pauses (D-0037
+    /// Part A); `still` and `render` use [`Self::render_frame`], which reads
+    /// the setting from the composition.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::Accumulation`] when the engine accumulation pass fails,
+    /// plus every error [`Self::render`] can return.
+    pub fn render_preview_frame(
+        &mut self,
+        document: &Document,
+        frame: motioner_core::Frame,
+        samples: u32,
+        out: &mut Vec<u8>,
+    ) -> Result<FrameStats, RenderError> {
+        let mut evaluator = std::mem::take(&mut self.evaluator);
+        let mut plan = std::mem::take(&mut self.plan);
+        let stats = frame::render_motion_blur_samples(
+            self,
+            document,
+            frame,
+            samples,
+            &mut evaluator,
+            &mut plan,
+            out,
+        );
+        self.evaluator = evaluator;
+        self.plan = plan;
+        stats
+    }
+
     /// The name of the GPU adapter the engine selected.
     #[must_use]
     pub fn adapter_name(&self) -> &str {
@@ -884,6 +922,41 @@ impl LivePainter {
             &gradients,
             &self.images,
             &mut self.image_textures,
+            None,
+        )
+    }
+
+    /// [`Self::paint`] that skips the given nodes and their subtrees.
+    ///
+    /// Used by the editor's solo/shy preview (D-0044). The render and still
+    /// paths never call it, so editor state cannot change exported pixels.
+    pub fn paint_visible(
+        &mut self,
+        renderer: &mut ferrous_renderer::Renderer,
+        document: &Document,
+        plan: &RenderPlan,
+        fit: ViewFit,
+        hidden: &std::collections::BTreeSet<motioner_core::NodeId>,
+    ) -> PaintStats {
+        if !fit.is_drawable() {
+            return PaintStats::default();
+        }
+        let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
+        let gradients = gradients::GradientTable::build(plan, flip);
+        renderer.set_2d_gradient_table(gradients.slots());
+        frame::paint_plan(
+            renderer,
+            document,
+            plan,
+            flip,
+            self.font,
+            &self.font_ids,
+            &mut self.missing_glyphs,
+            &mut self.path_cache,
+            &gradients,
+            &self.images,
+            &mut self.image_textures,
+            Some(hidden),
         )
     }
 }

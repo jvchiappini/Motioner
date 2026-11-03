@@ -112,11 +112,25 @@ impl PreviewApp {
         let generation = self.editor.session().generation();
         if self.painter_generation != Some(generation) {
             let images = self.editor.session().decoded_images();
+            let set = image_set(images);
             if let Some(painter) = self.painter.as_mut() {
-                painter.set_images(image_set(images));
+                painter.set_images(set.clone());
             }
+            self.blur.set_images(set);
             self.painter_generation = Some(generation);
+            self.blur_generation = Some(generation);
         }
+        let playing = self.editor.transport().is_playing();
+        let blur_on = self.editor.motion_blur_preview()
+            && self
+                .editor
+                .session()
+                .composition()
+                .is_some_and(motioner_core::Composition::motion_blur);
+        let hidden = self
+            .editor
+            .has_preview_filter()
+            .then(|| self.editor.preview_hidden());
         let Some((document, plan)) = self.editor.session_mut().evaluate(frame) else {
             return (out, None);
         };
@@ -124,7 +138,21 @@ impl PreviewApp {
             self.eval_ms = started.elapsed().as_secs_f32() * 1000.0;
         }
         let comp = document.composition();
-        if let Some(painter) = self.painter.as_mut() {
+        if blur_on
+            && hidden.is_none()
+            && self.blur.paint(
+                renderer,
+                document,
+                frame,
+                rect,
+                (layout.window.w, layout.window.h),
+                playing,
+                generation,
+            )
+        {
+            // The accumulated frame is on screen; the selection overlays below
+            // still run against the same document and plan.
+        } else if let Some(painter) = self.painter.as_mut() {
             let fit = ViewFit::contain(
                 f64::from(comp.width()),
                 f64::from(comp.height()),
@@ -132,7 +160,11 @@ impl PreviewApp {
                 f64::from(layout.window.w),
                 f64::from(layout.window.h),
             );
-            painter.paint(renderer, document, plan, fit);
+            if let Some(hidden) = &hidden {
+                painter.paint_visible(renderer, document, plan, fit, hidden);
+            } else {
+                painter.paint(renderer, document, plan, fit);
+            }
         }
         let painter = self.painter.as_ref();
         let renderer_ref = &*renderer;

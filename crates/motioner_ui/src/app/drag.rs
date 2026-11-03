@@ -17,6 +17,7 @@ use crate::theme::size;
 use crate::timeline_model::RowKind;
 
 impl PreviewApp {
+    #[allow(clippy::too_many_lines)] // one arm per drag kind
     pub(super) fn on_drag(&mut self, layout: &Layout, at: (f32, f32), modifiers: Modifiers) {
         let Some(mut drag) = self.pointer.drag.take() else {
             return;
@@ -74,6 +75,59 @@ impl PreviewApp {
                     *delta = frames;
                     self.run(&Command::RetimeKeys(frames));
                 }
+            }
+            Drag::GraphKey {
+                id, property, from, ..
+            } => {
+                if let Some(graph) = self.editor.graph() {
+                    let (frame, value) = graph.value_at(layout.graph_plot(), at.0, at.1);
+                    if frame != *from || value.is_finite() {
+                        self.run(&Command::MoveKeyValue {
+                            id: id.clone(),
+                            property: property.clone(),
+                            from: Time::Frame(*from),
+                            to: Time::Frame(frame),
+                            value: OverrideValue::Number(value),
+                        });
+                    }
+                }
+            }
+            Drag::GraphHandle {
+                model,
+                segment,
+                kind,
+            } => {
+                let plot = layout.graph_plot();
+                let (frame, value) = model.value_at(plot, at.0, at.1);
+                if let Some(curve) = model.drag_handle(*segment, *kind, frame, value) {
+                    let Some(arriving) = model.keys.get(*segment + 1) else {
+                        return;
+                    };
+                    self.run(&Command::Ease {
+                        id: model.id.clone(),
+                        property: model.property.clone(),
+                        time: Time::Frame(arriving.frame),
+                        ease: motioner_core::Ease::Bezier(curve),
+                    });
+                }
+            }
+            Drag::GraphPan { last } => {
+                if let Some(graph) = self.editor.graph() {
+                    let plot = layout.graph_plot();
+                    if plot.w > 0.0 && plot.h > 0.0 {
+                        let dx = f64::from(at.0 - last.0) / f64::from(plot.w);
+                        let dy = f64::from(at.1 - last.1) / f64::from(plot.h);
+                        if dx != 0.0 || dy != 0.0 {
+                            self.run(&Command::GraphView {
+                                zoom: graph.zoom_x,
+                                pan_x: graph.pan_x - dx,
+                                pan_y: graph.pan_y + dy,
+                                zoom_y: Some(graph.zoom_y),
+                            });
+                        }
+                    }
+                }
+                *last = at;
             }
             Drag::Marquee { current, .. } => *current = at,
             Drag::Pan { last } => {
@@ -214,10 +268,16 @@ impl PreviewApp {
                 }
             }
             Some(Drag::Scrub) => self.editor.transport_mut().end_scrub(),
-            Some(Drag::Gizmo(_) | Drag::Keys { .. } | Drag::Field { .. }) => {
+            Some(
+                Drag::Gizmo(_)
+                | Drag::Keys { .. }
+                | Drag::Field { .. }
+                | Drag::GraphKey { .. }
+                | Drag::GraphHandle { .. },
+            ) => {
                 self.editor.end_gesture();
             }
-            Some(Drag::Splitter { .. } | Drag::Pan { .. }) | None => {}
+            Some(Drag::Splitter { .. } | Drag::Pan { .. } | Drag::GraphPan { .. }) | None => {}
         }
         self.pointer.pressed = None;
         self.guides.clear();
@@ -284,6 +344,18 @@ impl PreviewApp {
             }
             return;
         }
+        if matches!(hover, Some(Hit::GraphPlot)) {
+            if let Some(graph) = self.editor.graph() {
+                let factor = if scroll > 0.0 { 1.25 } else { 0.8 };
+                self.run(&Command::GraphView {
+                    zoom: graph.zoom_x * factor,
+                    pan_x: graph.pan_x,
+                    pan_y: graph.pan_y,
+                    zoom_y: Some(graph.zoom_y * factor),
+                });
+            }
+            return;
+        }
         let shift = modifiers.shift;
         let (panel, content, visible) = match hover {
             Some(Hit::Scrub) => {
@@ -295,12 +367,15 @@ impl PreviewApp {
                 Hit::LayerRow(_)
                 | Hit::LayerEye(_)
                 | Hit::LayerLock(_)
+                | Hit::LayerSolo(_)
+                | Hit::LayerShy(_)
+                | Hit::LayerFilter
                 | Hit::OrphanRow(_)
                 | Hit::OrphanDelete(_)
                 | Hit::OrphanRebind(_),
             ) => (
                 PanelId::Layers,
-                self.editor.outline().len() as f32 * layout.row_h
+                self.editor.visible_outline().len() as f32 * layout.row_h
                     + layout.metrics.px(size::GRID * 2.0),
                 layout.layers.body.h,
             ),

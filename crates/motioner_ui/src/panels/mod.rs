@@ -31,6 +31,10 @@ pub struct Stats {
     pub eval_ms: f32,
     /// Frames skipped by playback because the UI could not keep up.
     pub dropped: u64,
+    /// Allocation count (`alloc-count` feature), `0` otherwise.
+    pub allocations: u64,
+    /// Wall time of the last offscreen motion-blur render, in milliseconds.
+    pub blur_ms: f32,
 }
 
 /// A tooltip request: anchor rectangle, label and optional shortcut.
@@ -56,6 +60,8 @@ pub struct View<'a> {
     pub document: Option<&'a Document>,
     /// Outline rows of the document.
     pub outline: &'a [OutlineRow],
+    /// Outline indices visible after collapsing and filtering.
+    pub layer_rows: &'a [usize],
     /// Selected outline row.
     pub selected: Option<usize>,
     /// Element under the pointer.
@@ -110,12 +116,26 @@ pub struct View<'a> {
     pub warnings: &'a [DiagnosticInfo],
     /// Whether the snapping toggle is on.
     pub snap: bool,
+    /// Layer filter text, for the layers panel search box.
+    pub filter: &'a str,
+    /// Solo/shy state per outline index: `(solo, shy)`.
+    pub layer_flags: &'a [(bool, bool)],
+    /// Whether shy layers are globally shown.
+    pub show_shy: bool,
+    /// The open graph editor, when one is shown.
+    pub graph: Option<&'a crate::graph::GraphModel>,
     /// Accent guide lines drawn while snapping.
     pub guides: &'a [crate::gizmo::Guide],
     /// Box-selection rectangle in the track area.
     pub marquee: Option<Rect>,
     /// Timeline rows (layer rows and expanded property rows).
     pub timeline: &'a crate::TimelineRows,
+    /// Cached value text per timeline row, rewritten in place each frame.
+    pub timeline_values: &'a [String],
+    /// Cached layer count for the layers panel header.
+    pub layer_count: &'a str,
+    /// Cached timeline header/ruler strings.
+    pub chrome: &'a crate::panels::timeline::ChromeText,
     /// Laid-out timeline rows for this frame.
     pub timeline_layout: &'a crate::timeline_model::RowsLayout,
     /// Keys selected in the timeline.

@@ -5,8 +5,9 @@
 //! given document, so the outline is stable across reloads that produce the
 //! same program.
 //!
-//! MDF nodes have no user names yet, so rows are named by kind with a running
-//! number ("Circle 3"); text layers use their text. A short `detail` (size or
+//! A row prefers the node's display name (the binding it was created from or
+//! `node.name = ...`); otherwise it is named by kind with a running number
+//! ("Circle 3") and text layers use their text. A short `detail` (size or
 //! radius) is shown beside the name in a dimmer colour.
 
 use motioner_core::{Document, Frame, Node, NodeContent, NodeId, Transform};
@@ -63,6 +64,8 @@ pub struct OutlineRow {
     pub node: NodeId,
     /// Display name ("Circle 3", or the text of a text layer).
     pub name: String,
+    /// The node's stable identity (explicit id or provenance key).
+    pub identity: String,
     /// Short secondary description ("r24", "96 × 96").
     pub detail: String,
     /// Kind of node.
@@ -76,6 +79,13 @@ pub struct OutlineRow {
     pub keyframes: Vec<Frame>,
     /// The node's mask relationship (D-0033), drawn as a badge.
     pub mask_role: MaskRole,
+    /// Whether the layer list and timeline show this row after collapsing and
+    /// filtering. Ancestors of a match stay visible.
+    pub visible: bool,
+    /// Frames where the node and its ancestors are drawn. Computed once per
+    /// document generation so scrolling and filtering never re-sample the
+    /// timeline.
+    pub visible_runs: Vec<crate::timeline_model::VisibleRun>,
 }
 
 /// How a row participates in masks, for the layers-panel badge.
@@ -132,12 +142,14 @@ fn push_rows(
     let kind = NodeKind::of(node.content());
     let counter = &mut counters[kind as usize];
     *counter += 1;
-    let (name, detail) = describe(node.content(), *counter);
+    let (fallback, detail) = describe(node.content(), *counter);
+    let name = node.name().map_or(fallback, str::to_owned);
     let children = node.children();
     rows.push(OutlineRow {
         depth,
         node: id,
         name,
+        identity: node.identity().as_str().to_owned(),
         detail,
         kind,
         has_children: !children.is_empty(),
@@ -149,6 +161,12 @@ fn push_rows(
             (false, true) => MaskRole::Source,
             (false, false) => MaskRole::None,
         },
+        visible: true,
+        visible_runs: crate::timeline_model::visible_runs(
+            document,
+            id,
+            document.composition().duration(),
+        ),
     });
     for (index, &child) in children.iter().enumerate() {
         push_rows(
@@ -205,6 +223,73 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
             (stem, detail)
         }
     }
+}
+
+/// Marks rows hidden by a collapsed ancestor or by the layer filter.
+///
+/// `filter` matches the display name, the kind ("Circle") and the identity
+/// (`@288`, `title`) case-insensitively. A matching row keeps its whole
+/// ancestor chain visible; with no filter every row outside a collapsed
+/// subtree is visible.
+pub fn apply_visibility(
+    rows: &mut [OutlineRow],
+    collapsed: &std::collections::BTreeSet<usize>,
+    filter: &str,
+) {
+    let parents = parent_indices(rows);
+    let query = filter.trim().to_lowercase();
+    let mut keep = vec![true; rows.len()];
+    if query.is_empty() {
+        for index in 0..rows.len() {
+            let mut hidden = false;
+            let mut current = parents[index];
+            while let Some(parent) = current {
+                if collapsed.contains(&parent) {
+                    hidden = true;
+                    break;
+                }
+                current = parents[parent];
+            }
+            keep[index] = !hidden;
+        }
+    } else {
+        let mut matched = vec![false; rows.len()];
+        for (index, row) in rows.iter().enumerate() {
+            matched[index] = row.name.to_lowercase().contains(&query)
+                || row.kind.name().to_lowercase().contains(&query)
+                || row.identity.to_lowercase().contains(&query);
+        }
+        keep.fill(false);
+        for (index, is_match) in matched.iter().enumerate() {
+            if !is_match {
+                continue;
+            }
+            let mut current = Some(index);
+            while let Some(row) = current {
+                keep[row] = true;
+                current = parents[row];
+            }
+        }
+    }
+    for (row, visible) in rows.iter_mut().zip(keep) {
+        row.visible = visible;
+    }
+}
+
+fn parent_indices(rows: &[OutlineRow]) -> Vec<Option<usize>> {
+    let mut parents = vec![None; rows.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        while stack
+            .last()
+            .is_some_and(|&parent| rows[parent].depth >= row.depth)
+        {
+            stack.pop();
+        }
+        parents[index] = stack.last().copied();
+        stack.push(index);
+    }
+    parents
 }
 
 /// Every keyframe frame on the node's channels, sorted and unique.
@@ -267,7 +352,7 @@ mod tests {
         assert_eq!(rows[0].node, document.roots()[0]);
         assert_eq!(rows[0].depth, 0);
         assert_eq!(rows[0].kind, NodeKind::Text);
-        assert_eq!(rows[0].name, "Motioner");
+        assert_eq!(rows[0].name, "title", "the binding gives the default name");
         assert_eq!(rows[0].detail, "160 px");
 
         // Every spinner group is followed by its single rect child.
@@ -285,9 +370,12 @@ mod tests {
             assert_eq!(rows[index + 1].detail, "96 × 96");
             assert!(!rows[index + 1].has_next_sibling, "only child");
         }
-        assert_eq!(rows[6].name, "Group 1");
-        assert_eq!(rows[7].name, "Rect 1");
-        assert_eq!(rows[9].name, "Rect 2");
+        // `spinner` is called twice, so its local bindings carry the call
+        // ordinal (display names disambiguate repeated calls).
+        assert_eq!(rows[6].name, "holder 1");
+        assert_eq!(rows[7].name, "square 1");
+        assert_eq!(rows[8].name, "holder 2");
+        assert_eq!(rows[9].name, "square 2");
         assert!(!rows[8].has_next_sibling, "last root");
     }
 
@@ -306,9 +394,44 @@ mod tests {
             .collect();
         assert_eq!(circles.len(), 5);
         for (index, row) in circles.iter().enumerate() {
-            assert_eq!(row.name, format!("Circle {}", index + 1));
+            assert_eq!(row.name, format!("dot {index}"));
             assert_eq!(row.detail, "r24");
         }
+    }
+
+    #[test]
+    fn a_filter_keeps_matching_rows_and_their_ancestors() {
+        let document = hello();
+        let mut rows = outline_rows(&document);
+        apply_visibility(&mut rows, &std::collections::BTreeSet::new(), "square");
+        let visible: Vec<bool> = rows.iter().map(|row| row.visible).collect();
+        let first_square = rows
+            .iter()
+            .position(|row| row.kind == NodeKind::Rect)
+            .unwrap();
+        assert!(visible[first_square], "the match stays");
+        assert!(
+            visible[first_square - 1],
+            "its group parent stays so the tree still makes sense"
+        );
+        assert!(!visible[0], "an unrelated root is hidden");
+        // The filter matches identities too, not only labels.
+        let identity = rows[0].identity.clone();
+        apply_visibility(&mut rows, &std::collections::BTreeSet::new(), &identity);
+        assert!(rows[0].visible);
+    }
+
+    #[test]
+    fn collapsing_a_group_hides_its_descendants() {
+        let document = hello();
+        let mut rows = outline_rows(&document);
+        let group = rows.iter().position(|row| row.has_children).unwrap();
+        let child = group + 1;
+        let mut collapsed = std::collections::BTreeSet::new();
+        collapsed.insert(group);
+        apply_visibility(&mut rows, &collapsed, "");
+        assert!(rows[group].visible);
+        assert!(!rows[child].visible);
     }
 
     #[test]

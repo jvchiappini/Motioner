@@ -15,8 +15,9 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let panel = v.layout.layers;
     p.fill(panel.rect, t.panel);
-    let count = (!v.outline.is_empty()).then(|| v.outline.len().to_string());
-    crate::widgets::panel_header(p, panel.header, "LAYERS", count.as_deref());
+    let count = (!v.outline.is_empty()).then_some(v.layer_count);
+    crate::widgets::panel_header(p, panel.header, "LAYERS", count);
+    filter_field(p, v);
     p.vline(
         panel.rect.right() - p.m.hairline(),
         panel.rect.y,
@@ -31,14 +32,83 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     }
 
     p.push_clip(body);
-    for (index, row) in v.outline.iter().enumerate() {
-        let rect = v.layout.layer_row(index, v.layer_scroll);
-        if rect.bottom() >= body.y && rect.y <= body.bottom() {
+    let first = visible_start(v.layout, v.layer_scroll, body);
+    for (position, &index) in v.layer_rows.iter().enumerate().skip(first) {
+        let rect = v.layout.layer_row(position, v.layer_scroll);
+        if rect.y > body.bottom() {
+            break;
+        }
+        if let Some(row) = v.outline.get(index) {
             draw_row(p, v, index, row, rect);
         }
     }
     orphans(p, v, body);
     p.pop_clip();
+}
+
+/// The first visible layer row that can intersect the body.
+fn visible_start(layout: &crate::layout::Layout, scroll: f32, body: Rect) -> usize {
+    if layout.row_h <= 0.0 {
+        return 0;
+    }
+    let offset = body.y - layout.layers.body.y - layout.metrics.px(size::GRID) + scroll;
+    usize::try_from((offset / layout.row_h).floor().max(0.0) as i64).unwrap_or(0)
+}
+
+/// The filter box in the layers header; typing goes to `FieldTarget::Filter`.
+fn filter_field(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let shy = v.layout.shy_toggle();
+    p.fill_rounded(
+        shy,
+        if v.show_shy { t.control } else { t.raised },
+        p.m.px(size::RADIUS_SM),
+    );
+    p.text_in(
+        "Y",
+        shy,
+        Align::Center,
+        &p.style(
+            type_scale::CAPTION,
+            if v.show_shy {
+                t.warning
+            } else {
+                t.text_disabled
+            },
+        ),
+    );
+    let rect = v.layout.layer_filter();
+    let editing = v
+        .editing
+        .is_some_and(|editing| matches!(editing.target, crate::inspect::FieldTarget::Filter));
+    p.fill_rounded(
+        rect,
+        if editing { t.control } else { t.raised },
+        p.m.px(size::RADIUS_SM),
+    );
+    let style = p.style(
+        type_scale::CAPTION,
+        if editing {
+            t.text
+        } else if v.filter.is_empty() {
+            t.text_disabled
+        } else {
+            t.text_body
+        },
+    );
+    let text: &str = if editing {
+        v.editing.map_or("", |editing| editing.editor.text())
+    } else if v.filter.is_empty() {
+        "Filter layers"
+    } else {
+        v.filter
+    };
+    p.text_in(
+        text,
+        rect.inset_xy(p.m.px(size::GRID * 1.5), 0.0),
+        Align::Left,
+        &style,
+    );
 }
 
 /// One outline row: highlight, guides, chevron, kind icon, name, detail and
@@ -55,10 +125,13 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
             Hit::LayerRow(i)
                 | Hit::LayerEye(i)
                 | Hit::LayerLock(i)
+                | Hit::LayerSolo(i)
+                | Hit::LayerShy(i)
                 | Hit::LayerChevron(i)
         ) if i == index
     );
     let (visible, locked) = v.layer_states.get(index).copied().unwrap_or((true, true));
+    let (solo, shy) = v.layer_flags.get(index).copied().unwrap_or((false, false));
     let highlight = rect.inset_xy(p.m.px(size::GRID), 0.0);
     if selected {
         p.fill_rounded(highlight, t.selection, p.m.px(size::RADIUS_SM));
@@ -104,8 +177,8 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
         icon_right = badge.right();
     }
     draw_labels(p, v, row, rect, icon_right, selected, visible || !locked);
-    if hovered || selected || !visible || locked {
-        draw_actions(p, v, index, rect, selected, visible, locked);
+    if hovered || selected || !visible || locked || solo || shy {
+        draw_actions(p, v, index, rect, selected, visible, locked, solo, shy);
     }
 }
 
@@ -214,7 +287,8 @@ fn label_rooms(available: f32, detail_measure: f32, gap: f32) -> (f32, f32) {
     (name_room, detail_room)
 }
 
-/// Eye and lock stay visible (dimmed) on hidden or locked rows.
+/// Eye, lock, solo and shy stay visible (dimmed) on hidden or marked rows.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)] // one row's four actions
 fn draw_actions(
     p: &mut Painter<'_>,
     v: &View<'_>,
@@ -223,6 +297,8 @@ fn draw_actions(
     selected: bool,
     visible: bool,
     locked: bool,
+    solo: bool,
+    shy: bool,
 ) {
     let t = *p.theme;
     let surface = over(if selected { t.selection } else { t.panel }, t.panel);
@@ -247,6 +323,26 @@ fn draw_actions(
     };
     let glyph = if locked { Icon::Lock } else { Icon::Unlock };
     icons::draw(p, glyph, lock.inset(p.m.px(3.0)), lock_ink, surface);
+    let solo_rect = v.layout.layer_solo(rect);
+    let shy_rect = v.layout.layer_shy(rect);
+    p.text_in(
+        "S",
+        solo_rect,
+        Align::Center,
+        &p.style(
+            type_scale::CAPTION,
+            if solo { t.accent } else { t.text_disabled },
+        ),
+    );
+    p.text_in(
+        "Y",
+        shy_rect,
+        Align::Center,
+        &p.style(
+            type_scale::CAPTION,
+            if shy { t.warning } else { t.text_disabled },
+        ),
+    );
 }
 /// The collapsible "Orphans" section: overrides whose node is gone.
 fn orphans(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
@@ -254,7 +350,7 @@ fn orphans(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
         return;
     }
     let t = *p.theme;
-    let header = v.layout.orphans_header(v.outline.len(), v.layer_scroll);
+    let header = v.layout.orphans_header(v.layer_rows.len(), v.layer_scroll);
     if header.bottom() < body.y || header.y > body.bottom() {
         return;
     }
@@ -274,7 +370,9 @@ fn orphans(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
         &title,
     );
     for (index, orphan) in v.orphans.iter().enumerate() {
-        let rect = v.layout.orphan_row(index, v.outline.len(), v.layer_scroll);
+        let rect = v
+            .layout
+            .orphan_row(index, v.layer_rows.len(), v.layer_scroll);
         if rect.bottom() < body.y || rect.y > body.bottom() {
             continue;
         }

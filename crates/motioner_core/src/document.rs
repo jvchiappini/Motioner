@@ -401,6 +401,7 @@ impl Document {
             effects: Vec::new(),
             mask: None,
             identity,
+            display_name: None,
             visible: true,
         });
         self.roots.push(id);
@@ -448,6 +449,31 @@ impl Document {
     pub fn set_visible(&mut self, id: NodeId, visible: bool) -> Result<(), CoreError> {
         self.require(id)?;
         self.nodes[id.index()].visible = visible;
+        Ok(())
+    }
+
+    /// Sets the presentation-only display name of a node.
+    ///
+    /// An empty name clears it, which restores the kind-derived label.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID.
+    pub fn set_name(&mut self, id: NodeId, name: &str) -> Result<(), CoreError> {
+        self.require(id)?;
+        let name = name.trim();
+        self.nodes[id.index()].display_name = (!name.is_empty()).then(|| name.to_owned());
+        Ok(())
+    }
+
+    /// Clears a node's display name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnknownNode`] for an unknown ID.
+    pub fn clear_name(&mut self, id: NodeId) -> Result<(), CoreError> {
+        self.require(id)?;
+        self.nodes[id.index()].display_name = None;
         Ok(())
     }
 

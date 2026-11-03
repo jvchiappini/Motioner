@@ -319,6 +319,9 @@ fn apply_entry(document: &mut Document, entry: &OverrideEntry) -> Result<(), Str
             .set_visible(node, *visible)
             .map_err(|error| error.to_string()),
         OverrideAction::Locked(_) => Ok(()),
+        OverrideAction::Set(OverrideValue::Text(name)) if entry.property == NAME => document
+            .set_name(node, name)
+            .map_err(|error| error.to_string()),
         OverrideAction::Set(_) if entry.property == LOCKED || entry.property == NAME => Ok(()),
         OverrideAction::Set(value) => set_value(document, node, &entry.property, value),
         OverrideAction::Key { frame, value, ease } => {

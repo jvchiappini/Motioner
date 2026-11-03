@@ -401,6 +401,59 @@ pub enum Command {
         /// Zero-based position in the animator list.
         index: usize,
     },
+    /// Show only this layer (and its subtree) in the preview; the render and
+    /// still paths ignore it.
+    Solo {
+        /// Node identity.
+        id: String,
+        /// Whether the layer is soloed.
+        on: bool,
+    },
+    /// Hide this layer in the preview unless `show_shy` is on.
+    Shy {
+        /// Node identity.
+        id: String,
+        /// Whether the layer is shy.
+        on: bool,
+    },
+    /// Show shy layers in the preview (editor-only global switch).
+    ShowShy(bool),
+    /// Filter the layers panel and timeline by name, kind or identity.
+    FilterLayers(String),
+    /// Open the graph editor on one numeric channel (double click a timeline
+    /// row).
+    GraphOpen {
+        /// Node identity.
+        id: String,
+        /// Channel name (`pos.x`, `opacity`, `fill`).
+        property: String,
+    },
+    /// Close the graph editor.
+    GraphClose,
+    /// Pan and zoom the graph editor (view state only).
+    GraphView {
+        /// Horizontal zoom factor; `1` shows the whole composition.
+        zoom: f64,
+        /// Horizontal pan in graph units.
+        pan_x: f64,
+        /// Vertical pan in graph value units.
+        pan_y: f64,
+        /// Vertical zoom; `None` uses `zoom`.
+        zoom_y: Option<f64>,
+    },
+    /// Move one key in time and change its value (a graph-editor key drag).
+    MoveKeyValue {
+        /// Node identity.
+        id: String,
+        /// Channel.
+        property: String,
+        /// Current time of the key.
+        from: Time,
+        /// New time.
+        to: Time,
+        /// New value.
+        value: OverrideValue,
+    },
     /// Undo the last edit (Ctrl+Z).
     Undo,
     /// Redo (Ctrl+Shift+Z, Ctrl+Y).
@@ -467,6 +520,14 @@ pub enum CommandKind {
     MaskClear,
     TextAnimAdd,
     TextAnimRemove,
+    Solo,
+    Shy,
+    ShowShy,
+    FilterLayers,
+    GraphOpen,
+    GraphClose,
+    GraphView,
+    MoveKeyValue,
     Undo,
     Redo,
     Bake,
@@ -474,7 +535,7 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 65] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -529,6 +590,14 @@ impl CommandKind {
         Self::MaskClear,
         Self::TextAnimAdd,
         Self::TextAnimRemove,
+        Self::Solo,
+        Self::Shy,
+        Self::ShowShy,
+        Self::FilterLayers,
+        Self::GraphOpen,
+        Self::GraphClose,
+        Self::GraphView,
+        Self::MoveKeyValue,
         Self::Undo,
         Self::Redo,
         Self::Bake,
@@ -592,6 +661,14 @@ impl CommandKind {
             Self::MaskClear => "mask_clear",
             Self::TextAnimAdd => "text_anim_add",
             Self::TextAnimRemove => "text_anim_remove",
+            Self::Solo => "solo",
+            Self::Shy => "shy",
+            Self::ShowShy => "show_shy",
+            Self::FilterLayers => "filter_layers",
+            Self::GraphOpen => "graph_open",
+            Self::GraphClose => "graph_close",
+            Self::GraphView => "graph_view",
+            Self::MoveKeyValue => "move_key_value",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::Bake => "bake",
@@ -664,6 +741,14 @@ impl CommandKind {
                 "text_anim_add(id, property, from, to, start, stagger, duration, ease=\"linear\", order=\"forward\")"
             }
             Self::TextAnimRemove => "text_anim_remove(id, index)",
+            Self::Solo => "solo(id, on)",
+            Self::Shy => "shy(id, on)",
+            Self::ShowShy => "show_shy(on)",
+            Self::FilterLayers => "filter_layers(text)",
+            Self::GraphOpen => "graph_open(id, property)",
+            Self::GraphClose => "graph_close()",
+            Self::GraphView => "graph_view(zoom, pan_x=0, pan_y=0, zoom_y=None)",
+            Self::MoveKeyValue => "move_key_value(id, property, from_time, to_time, value)",
             Self::Undo => "undo()",
             Self::Redo => "redo()",
             Self::Bake => "bake(id, ...)",
@@ -699,6 +784,7 @@ impl CommandKind {
                 | Self::MaskClear
                 | Self::TextAnimAdd
                 | Self::TextAnimRemove
+                | Self::MoveKeyValue
         )
     }
 }
@@ -762,6 +848,14 @@ impl Command {
             Self::MaskClear { .. } => CommandKind::MaskClear,
             Self::TextAnimAdd { .. } => CommandKind::TextAnimAdd,
             Self::TextAnimRemove { .. } => CommandKind::TextAnimRemove,
+            Self::Solo { .. } => CommandKind::Solo,
+            Self::Shy { .. } => CommandKind::Shy,
+            Self::ShowShy(_) => CommandKind::ShowShy,
+            Self::FilterLayers(_) => CommandKind::FilterLayers,
+            Self::GraphOpen { .. } => CommandKind::GraphOpen,
+            Self::GraphClose => CommandKind::GraphClose,
+            Self::GraphView { .. } => CommandKind::GraphView,
+            Self::MoveKeyValue { .. } => CommandKind::MoveKeyValue,
             Self::Undo => CommandKind::Undo,
             Self::Redo => CommandKind::Redo,
             Self::Bake(_) => CommandKind::Bake,

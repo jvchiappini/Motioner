@@ -18,6 +18,13 @@ ferrous_renderer.workspace = true
 # Names the UI batch, quad and font types the chrome draws with.
 ferrous_gui.workspace = true
 ferrous_font.workspace = true
+# `SpriteInstance` for the motion-blur preview sprite.
+ferrous_2d.workspace = true
+
+[features]
+default = []
+# Counts allocations for the steady-state profile (prompt 10 Phase 10).
+alloc-count = []
 
 [dev-dependencies]
 png.workspace = true

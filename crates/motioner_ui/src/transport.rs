@@ -248,6 +248,14 @@ impl Transport {
 /// the precise frame index is always shown next to it.
 #[must_use]
 pub fn timecode(frame: i64, rate: FrameRate) -> String {
+    let mut text = String::with_capacity(11);
+    write_timecode(&mut text, frame, rate);
+    text
+}
+
+/// [`timecode`] into an existing buffer, reusing its allocation.
+pub fn write_timecode(out: &mut String, frame: i64, rate: FrameRate) {
+    use std::fmt::Write as _;
     let numerator = i64::from(rate.numerator());
     let denominator = i64::from(rate.denominator());
     let nominal = ((numerator + denominator / 2) / denominator).max(1);
@@ -257,7 +265,8 @@ pub fn timecode(frame: i64, rate: FrameRate) -> String {
     let hours = total_seconds / 3600;
     let minutes = total_seconds / 60 % 60;
     let seconds = total_seconds % 60;
-    format!("{hours:02}:{minutes:02}:{seconds:02}:{frames:02}")
+    out.clear();
+    let _ = write!(out, "{hours:02}:{minutes:02}:{seconds:02}:{frames:02}");
 }
 
 /// Frames skipped when playback moved the playhead from `before` to `after`.

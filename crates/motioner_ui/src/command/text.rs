@@ -37,6 +37,7 @@ impl Command {
             | Self::DeleteKeys
             | Self::Undo
             | Self::Redo
+            | Self::GraphClose
             | Self::ZoomFit => Vec::new(),
             Self::Step(n) | Self::Seek(n) | Self::SelectRelative(n) | Self::RetimeKeys(n) => {
                 vec![n.to_string()]
@@ -46,7 +47,8 @@ impl Command {
             | Self::SafeArea(on)
             | Self::Snap(on)
             | Self::OnlyAnimated(on)
-            | Self::MotionBlurPreview { on } => vec![bool_text(*on)],
+            | Self::MotionBlurPreview { on }
+            | Self::ShowShy(on) => vec![bool_text(*on)],
             Self::Zoom(factor) => vec![format_number(*factor)],
             Self::ZoomBy { steps, x, y } => {
                 let mut args = vec![steps.to_string()];
@@ -99,7 +101,8 @@ impl Command {
             Self::PrevKey { id, property }
             | Self::NextKey { id, property }
             | Self::Stopwatch { id, property }
-            | Self::ToggleKey { id, property } => vec![quote(id), quote(property)],
+            | Self::ToggleKey { id, property }
+            | Self::GraphOpen { id, property } => vec![quote(id), quote(property)],
             Self::Select(id) | Self::MaskClear { id } => vec![quote(id)],
             Self::Expand { id, open } => vec![quote(id), bool_text(*open)],
             Self::SelectKeys { keys, add } => {
@@ -182,6 +185,37 @@ impl Command {
                 }
                 args
             }
+            Self::Solo { id, on } | Self::Shy { id, on } => vec![quote(id), bool_text(*on)],
+            Self::FilterLayers(text) => vec![quote(text)],
+            Self::GraphView {
+                zoom,
+                pan_x,
+                pan_y,
+                zoom_y,
+            } => {
+                let mut args = vec![
+                    format_number(*zoom),
+                    format_number(*pan_x),
+                    format_number(*pan_y),
+                ];
+                if let Some(zoom_y) = zoom_y {
+                    args.push(format!("zoom_y={}", format_number(*zoom_y)));
+                }
+                args
+            }
+            Self::MoveKeyValue {
+                id,
+                property,
+                from,
+                to,
+                value,
+            } => vec![
+                quote(id),
+                quote(property),
+                from.to_text(),
+                to.to_text(),
+                value_text(value),
+            ],
             Self::Bake(ids) => ids.iter().map(|id| quote(id)).collect(),
         };
         format!("{name}({})", args.join(", "))

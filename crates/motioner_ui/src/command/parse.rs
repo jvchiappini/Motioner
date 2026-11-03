@@ -273,6 +273,34 @@ impl Command {
                     CommandError::new(ErrorKind::BadArgument, "'index' must be zero or above")
                 })?,
             },
+            CommandKind::Solo => Self::Solo {
+                id: a.string("id")?,
+                on: a.boolean("on")?,
+            },
+            CommandKind::Shy => Self::Shy {
+                id: a.string("id")?,
+                on: a.boolean("on")?,
+            },
+            CommandKind::ShowShy => Self::ShowShy(a.boolean("on")?),
+            CommandKind::FilterLayers => Self::FilterLayers(a.string("text")?),
+            CommandKind::GraphOpen => Self::GraphOpen {
+                id: a.string("id")?,
+                property: a.string("property")?,
+            },
+            CommandKind::GraphClose => Self::GraphClose,
+            CommandKind::GraphView => Self::GraphView {
+                zoom: a.number("zoom")?,
+                pan_x: a.optional_number("pan_x")?.unwrap_or(0.0),
+                pan_y: a.optional_number("pan_y")?.unwrap_or(0.0),
+                zoom_y: a.optional_number("zoom_y")?,
+            },
+            CommandKind::MoveKeyValue => Self::MoveKeyValue {
+                id: a.string("id")?,
+                property: a.string("property")?,
+                from: a.time("from_time")?,
+                to: a.time("to_time")?,
+                value: a.value("value")?,
+            },
             CommandKind::Bake => Self::Bake(a.rest_strings()?),
         };
         a.finish()?;

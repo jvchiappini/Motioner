@@ -94,6 +94,23 @@ impl PreviewApp {
                     });
                 }
             }
+            Hit::LayerSolo(row) => {
+                if let (Some(id), Some(node)) = (self.row_id(row), self.editor.outline().get(row)) {
+                    let on = !self.editor.is_solo(node.node);
+                    self.run(&Command::Solo { id, on });
+                }
+            }
+            Hit::LayerShy(row) => {
+                if let (Some(id), Some(node)) = (self.row_id(row), self.editor.outline().get(row)) {
+                    let on = !self.editor.is_shy(node.node);
+                    self.run(&Command::Shy { id, on });
+                }
+            }
+            Hit::LayerFilter => self.begin_edit(FieldTarget::Filter),
+            Hit::ShowShy => {
+                let on = !self.editor.show_shy();
+                self.run(&Command::ShowShy(on));
+            }
             Hit::LayerChevron(row) => self.press_chevron(row, modifiers.alt),
             Hit::Toggle(TopBarToggle::SafeArea) => {
                 let on = !self.editor.view().safe_area;
@@ -136,7 +153,11 @@ impl PreviewApp {
             Hit::InspectField { item, field } => self.press_inspector_field(item, field, at.0),
             Hit::TimelineRow(row) => {
                 self.press_timeline_row(row, modifiers);
-                if at.0 >= layout.timeline.tracks.x {
+                if double {
+                    if let Some((id, property)) = self.timeline_channel(row) {
+                        self.run(&Command::GraphOpen { id, property });
+                    }
+                } else if at.0 >= layout.timeline.tracks.x {
                     self.pointer.drag = Some(Drag::Marquee {
                         start: at,
                         current: at,
@@ -188,6 +209,49 @@ impl PreviewApp {
                     self.run(&Command::AssignId {
                         from: entry.id,
                         to: best,
+                    });
+                }
+            }
+            Hit::GraphPlot => {
+                self.pointer.drag = Some(Drag::GraphPan { last: at });
+            }
+            Hit::GraphKey(key) => {
+                let point = self.editor.graph().and_then(|graph| {
+                    graph.keys.get(key).map(|point| {
+                        (
+                            graph.id.clone(),
+                            graph.property.clone(),
+                            point.frame,
+                            point.ease,
+                        )
+                    })
+                });
+                if let Some((id, property, from, ease)) = point {
+                    if double {
+                        // Double click converts a named ease to an editable
+                        // bezier; a bezier key is already editable.
+                        if let Some(curve) = crate::graph::bezier_for(ease) {
+                            self.run(&Command::Ease {
+                                id,
+                                property,
+                                time: Time::Frame(from),
+                                ease: motioner_core::Ease::Bezier(curve),
+                            });
+                        }
+                    } else {
+                        self.editor.begin_gesture();
+                        self.pointer.drag = Some(Drag::GraphKey { id, property, from });
+                    }
+                }
+            }
+            Hit::GraphHandle { segment, kind } => {
+                let model = self.editor.graph().cloned();
+                if let Some(model) = model {
+                    self.editor.begin_gesture();
+                    self.pointer.drag = Some(Drag::GraphHandle {
+                        model,
+                        segment,
+                        kind,
                     });
                 }
             }
@@ -525,7 +589,7 @@ impl PreviewApp {
         let numeric = matches!(
             self.inspector_row_value(item),
             Some(inspect::RowValue::Pair { .. } | inspect::RowValue::Single(_))
-        );
+        ) && !matches!(target, FieldTarget::Bezier(_) | FieldTarget::Filter);
         match self.editor.numeric_value(target).filter(|_| numeric) {
             Some(value) => self.begin_field_drag(target, value, x),
             None => self.begin_edit(target),

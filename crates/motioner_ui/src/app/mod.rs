@@ -9,6 +9,7 @@
 //! transport, the chrome animation and the debounced overrides write; the
 //! composition pixels depend only on the document and the integer frame.
 
+mod blur;
 mod canvas;
 mod drag;
 mod pointer;
@@ -79,12 +80,23 @@ pub(crate) struct PreviewApp {
     /// Project faces for the live painter, when the app supplied them.
     fonts: Option<motioner_render::FontSet>,
     timeline_layout: timeline_model::RowsLayout,
+    /// Reused value strings indexed by timeline row, so drawing a frame does
+    /// not allocate one `String` per visible sub-row.
+    timeline_values: Vec<String>,
+    /// Cached layers-panel count.
+    layer_count: String,
+    /// Cached timeline header and ruler strings.
+    chrome: crate::panels::timeline::ChromeText,
     inspector_layout: InspectLayout,
     editing: Option<Editing>,
     field_error: Option<FieldTarget>,
     painter: Option<LivePainter>,
     /// Generation whose images the painter has uploaded.
     painter_generation: Option<u64>,
+    /// Offscreen accumulation renderer for the motion-blur preview.
+    blur: blur::BlurPreview,
+    /// Generation whose images the blur preview has uploaded.
+    blur_generation: Option<u64>,
     fatal: Rc<RefCell<Option<UiError>>>,
     capture: Capture,
     /// Whether the `--screenshot` capture was queued.
@@ -128,6 +140,9 @@ impl PreviewApp {
         let watch = FileWatch::new(editor.session().path());
         let start_playing = !options.paused;
         let fonts = options.fonts.clone();
+        let blur_fonts = fonts
+            .clone()
+            .unwrap_or_else(motioner_render::FontSet::bundled);
         Self {
             editor,
             watch,
@@ -137,6 +152,9 @@ impl PreviewApp {
                 rows: Vec::new(),
                 height: 0.0,
             },
+            timeline_values: Vec::new(),
+            layer_count: String::new(),
+            chrome: crate::panels::timeline::ChromeText::default(),
             inspector_layout: InspectLayout {
                 items: Vec::new(),
                 height: 0.0,
@@ -145,6 +163,8 @@ impl PreviewApp {
             field_error: None,
             painter: None,
             painter_generation: None,
+            blur: blur::BlurPreview::new(blur_fonts),
+            blur_generation: None,
             fatal,
             capture: Capture::default(),
             screenshot_queued: false,
@@ -262,10 +282,12 @@ impl PreviewApp {
         let Some(layout) = self.layout else {
             return;
         };
-        self.timeline_layout = timeline_model::layout(
+        let scroll = self.scroll_px(PanelId::Timeline);
+        timeline_model::layout_into(
             self.editor.timeline(),
             &layout,
-            self.scroll_px(PanelId::Timeline),
+            scroll,
+            &mut self.timeline_layout,
         );
     }
 
@@ -648,6 +670,12 @@ impl PreviewApp {
                 (visible, self.editor.node_locked(row.node))
             })
             .collect();
+        let layer_flags: Vec<(bool, bool)> = self
+            .editor
+            .outline()
+            .iter()
+            .map(|row| (self.editor.is_solo(row.node), self.editor.is_shy(row.node)))
+            .collect();
         let copied = self.copied_at.is_some_and(|at| at.elapsed() < COPIED_PULSE);
         FrameFacts {
             comp_rect,
@@ -655,6 +683,7 @@ impl PreviewApp {
             reload_pulse,
             orphans,
             layer_states,
+            layer_flags,
             copied,
         }
     }
@@ -685,6 +714,27 @@ impl PreviewApp {
         }
 
         let frame = self.frame();
+        if let Some(document) = self.editor.session().document() {
+            let timeline = self.editor.timeline();
+            timeline.write_values(document, frame, &mut self.timeline_values);
+        }
+        self.layer_count.clear();
+        {
+            use std::fmt::Write as _;
+            let _ = write!(&mut self.layer_count, "{}", self.editor.outline().len());
+        }
+        if self.editor.session().document().is_some() {
+            let transport = self.editor.transport();
+            self.chrome.prepare(
+                &layout,
+                transport.duration(),
+                transport.frame_rate(),
+                frame,
+                self.editor.selected_keys().len(),
+            );
+        } else {
+            self.chrome.clear();
+        }
         let canvas = self.paint_canvas(ctx.render.renderer_mut(), &layout, frame);
         let file_name = self
             .editor
@@ -698,11 +748,12 @@ impl PreviewApp {
         let tooltip = self.tooltip(&layout);
         let editor = &self.editor;
         let transport = editor.transport();
-        let view = View {
+        let mut view = View {
             layout: &layout,
             file_name: &file_name,
             document: editor.session().document(),
             outline: editor.outline(),
+            layer_rows: editor.visible_outline(),
             selected: editor.selected_row(),
             hover: self.pointer.hover,
             pressed: self.pointer.pressed,
@@ -727,6 +778,8 @@ impl PreviewApp {
                 ui_fps,
                 eval_ms: self.eval_ms,
                 dropped: self.dropped,
+                allocations: 0,
+                blur_ms: self.blur.last_ms(),
             },
             layer_scroll: self.scroll_px(PanelId::Layers),
             inspector_scroll: self.scroll_px(PanelId::Inspector),
@@ -736,12 +789,19 @@ impl PreviewApp {
             editing: self.editing.as_ref(),
             inspector_field_error: self.field_error,
             timeline: editor.timeline(),
+            timeline_values: &self.timeline_values,
+            layer_count: &self.layer_count,
+            chrome: &self.chrome,
             timeline_layout: &self.timeline_layout,
             selected_keys: editor.selected_keys(),
             expanded: editor.expanded(),
             orphans: &facts.orphans,
             layer_states: &facts.layer_states,
             copied: facts.copied,
+            filter: editor.filter(),
+            layer_flags: &facts.layer_flags,
+            show_shy: editor.show_shy(),
+            graph: editor.graph(),
             retime_delta: self.pointer.retime_delta(),
             tooltip,
         };
@@ -750,9 +810,18 @@ impl PreviewApp {
         panels::canvas::draw_overlays(&mut p, &view, self.started.elapsed().as_secs_f32());
         p.layer();
         panels::top_bar::draw(&mut p, &view);
+        // The counter covers exactly the outline (layers panel) and timeline
+        // chrome, not the inspector, the composition paint or the GUI batch.
+        let outline_before = crate::alloc::allocations();
         panels::layers::draw(&mut p, &view);
+        let outline_after = crate::alloc::allocations();
         panels::inspector::draw(&mut p, &view);
+        let timeline_before = crate::alloc::allocations();
         panels::timeline::draw(&mut p, &view);
+        let timeline_after = crate::alloc::allocations();
+        view.stats.allocations = outline_after
+            .saturating_sub(outline_before)
+            .saturating_add(timeline_after.saturating_sub(timeline_before));
         panels::status::draw(&mut p, &view);
         if let Some(request) = view.tooltip {
             p.layer();
@@ -769,6 +838,7 @@ impl PreviewApp {
 
 impl FerrousApp for PreviewApp {
     fn setup(&mut self, ctx: &mut AppContext<'_>) {
+        crate::alloc::start();
         let pasteboard = self.theme.pasteboard;
         ctx.render.enable_pure_2d(EngineColor::rgb(
             pasteboard[0],
@@ -814,6 +884,7 @@ struct FrameFacts {
     reload_pulse: f32,
     orphans: Vec<OrphanRow>,
     layer_states: Vec<(bool, bool)>,
+    layer_flags: Vec<(bool, bool)>,
     copied: bool,
 }
 

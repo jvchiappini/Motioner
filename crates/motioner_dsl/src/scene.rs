@@ -582,6 +582,9 @@ impl Scene {
             "anchor" => vec2_value(transform.anchor.value()),
             "rotation" => Value::Number(transform.rotation.value()),
             "opacity" => Value::Number(transform.opacity.value()),
+            "name" => node
+                .name()
+                .map_or(Value::None, |name| Value::Str(Rc::from(name))),
             "blend" => Value::Str(Rc::from(node.blend().name())),
             "visible" => Value::Bool(node.is_visible()),
             _ => content_value_of(node.content(), name).ok_or_else(|| unknown_attribute(name))?,
@@ -598,7 +601,17 @@ impl Scene {
         span: Span,
         literal: Option<Literal>,
     ) -> HostResult<()> {
-        let result = if name == "blend" {
+        let result = if name == "name" {
+            let Value::Str(text) = value else {
+                return Err(HostError::type_error(format!(
+                    "'name' expects a string, got {}",
+                    value.type_name()
+                )));
+            };
+            self.document_mut()?
+                .set_name(id, text)
+                .map_err(|error| core_error(&error))
+        } else if name == "blend" {
             let blend = blend_mode(value)?;
             self.document_mut()?
                 .set_blend(id, blend)

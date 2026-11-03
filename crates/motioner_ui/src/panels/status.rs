@@ -27,10 +27,21 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
 
     // Right side first, so the message can be ellipsized before it.
     let style = p.style(type_scale::CAPTION, t.text_muted);
-    let readout = format!(
-        "Eval {:.2} ms   \u{00b7}   UI {:.0} fps   \u{00b7}   Dropped {}",
-        v.stats.eval_ms, v.stats.ui_fps, v.stats.dropped
-    );
+    let mut readout = if crate::alloc::enabled() {
+        format!(
+            "Eval {:.2} ms   \u{00b7}   UI {:.0} fps   \u{00b7}   Dropped {}   \u{00b7}   Alloc {}",
+            v.stats.eval_ms, v.stats.ui_fps, v.stats.dropped, v.stats.allocations
+        )
+    } else {
+        format!(
+            "Eval {:.2} ms   \u{00b7}   UI {:.0} fps   \u{00b7}   Dropped {}",
+            v.stats.eval_ms, v.stats.ui_fps, v.stats.dropped
+        )
+    };
+    if v.motion_blur_preview && v.stats.blur_ms > 0.0 {
+        use std::fmt::Write as _;
+        let _ = write!(&mut readout, "   \u{00b7}   Blur {:.0} ms", v.stats.blur_ms);
+    }
     let readout_w = p.measure(&readout, &style);
     let readout_x = bar.right() - pad - readout_w;
     p.text_in(

@@ -706,3 +706,32 @@ fn text_width_and_bounds_use_the_installed_metrics() {
         width.value()
     );
 }
+
+#[test]
+fn bindings_give_default_names_and_explicit_names_win() {
+    let document = build(
+        "title = text(\"A\", size=20)\nfor i in range(5):\n    dot = circle(4)\n    dot.pos = (i * 10, 0)\ntitle.name = \"Title\"\n",
+    );
+    let nodes: Vec<_> = document.nodes().collect();
+    assert_eq!(nodes[0].name(), Some("Title"));
+    // The loop's last binding is `dot 4`; earlier iterations keep their index.
+    assert_eq!(nodes[1].name(), Some("dot 0"));
+    assert_eq!(nodes[5].name(), Some("dot 4"));
+    assert!(!nodes[0].identity().as_str().is_empty());
+}
+
+#[test]
+fn nested_loops_and_repeated_calls_keep_distinct_names() {
+    let document = build(
+        "for i in range(2):\n    for j in range(2):\n        dot = circle(2)\ndef make():\n    holder = group()\n    return holder\nmake()\nmake()\n",
+    );
+    let names: Vec<&str> = document
+        .nodes()
+        .filter_map(motioner_core::Node::name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["dot 0 0", "dot 0 1", "dot 1 0", "dot 1 1", "holder 1", "holder 2",],
+        "the full index path keeps nested iterations and calls apart"
+    );
+}

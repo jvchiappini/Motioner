@@ -228,7 +228,11 @@ mod tests {
     fn circle_bounds_follow_the_transform() {
         let (document, plan) = evaluated(120);
         let rows = crate::outline_rows(&document);
-        let first_circle = rows.iter().find(|r| r.name == "Circle 1").unwrap().node;
+        let first_circle = rows
+            .iter()
+            .find(|r| r.kind == crate::outline::NodeKind::Circle)
+            .unwrap()
+            .node;
         let b = node_bounds(&document, &plan, first_circle, &measure).unwrap();
         // Dot 1 at (480, 820), radius 24, fully scaled in by frame 120.
         assert!(close(b.min_x, 456.0) && close(b.max_x, 504.0), "{b:?}");
@@ -252,8 +256,16 @@ mod tests {
     fn group_bounds_cover_their_children() {
         let (document, plan) = evaluated(150);
         let rows = crate::outline_rows(&document);
-        let group = rows.iter().find(|r| r.name == "Group 1").unwrap().node;
-        let child = rows.iter().find(|r| r.name == "Rect 1").unwrap().node;
+        let group = rows
+            .iter()
+            .find(|r| r.kind == crate::outline::NodeKind::Group)
+            .unwrap()
+            .node;
+        let child = rows
+            .iter()
+            .find(|r| r.kind == crate::outline::NodeKind::Rect)
+            .unwrap()
+            .node;
         let g = node_bounds(&document, &plan, group, &measure).unwrap();
         let c = node_bounds(&document, &plan, child, &measure).unwrap();
         assert_eq!(g, c, "a group with one child frames that child");
@@ -265,7 +277,12 @@ mod tests {
     fn hits_pick_the_top_most_item_and_respect_rotation() {
         let (document, plan) = evaluated(150);
         let rows = crate::outline_rows(&document);
-        let circle = rows.iter().find(|r| r.name == "Circle 3").unwrap().node;
+        let circle = rows
+            .iter()
+            .filter(|r| r.kind == crate::outline::NodeKind::Circle)
+            .nth(2)
+            .unwrap()
+            .node;
         assert_eq!(
             hit_node(&document, &plan, Vec2::new(960.0, 820.0), &measure),
             Some(circle)
@@ -280,7 +297,11 @@ mod tests {
             ),
             None
         );
-        let rect = rows.iter().find(|r| r.name == "Rect 1").unwrap().node;
+        let rect = rows
+            .iter()
+            .find(|r| r.kind == crate::outline::NodeKind::Rect)
+            .unwrap()
+            .node;
         assert_eq!(
             hit_node(&document, &plan, Vec2::new(240.0, 220.0), &measure),
             Some(rect)

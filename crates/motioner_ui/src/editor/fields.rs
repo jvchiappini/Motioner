@@ -2,13 +2,13 @@
 //! with, and the command typing into it commits.
 
 use motioner_core::{
-    Axis, ContentField, EffectParam, NodeContent, OverrideAction, OverrideValue, Property,
-    TextAlign,
+    Axis, BezierEase, ContentField, Ease, EffectParam, NodeContent, OverrideAction, OverrideValue,
+    Property, TextAlign,
 };
 
 use super::{channel_name, channels, Editor};
 use crate::command::Command;
-use crate::inspect::{self, FieldTarget};
+use crate::inspect::{self, BezierPart, FieldTarget};
 
 impl Editor {
     /// The numeric value an inspector field shows (in property units).
@@ -42,8 +42,34 @@ impl Editor {
                 OverrideValue::Vec2(vector) => Some(vector.x),
                 OverrideValue::Text(_) => None,
             },
+            FieldTarget::Bezier(part) => self.bezier_value(part),
             _ => None,
         }
+    }
+
+    /// The shared cubic-bezier ease of the selected keys.
+    ///
+    /// `None` when nothing is selected, a key uses a named ease, or the
+    /// selected keys disagree.
+    #[must_use]
+    pub fn selected_bezier(&self) -> Option<BezierEase> {
+        let mut eases = self.selected_keys.iter().map(|key| self.key_ease(key));
+        let Some(Some(Ease::Bezier(first))) = eases.next() else {
+            return None;
+        };
+        eases
+            .all(|ease| ease == Some(Ease::Bezier(first)))
+            .then_some(first)
+    }
+
+    fn bezier_value(&self, part: BezierPart) -> Option<f64> {
+        let (x1, y1, x2, y2) = self.selected_bezier()?.points();
+        Some(match part {
+            BezierPart::X1 => x1,
+            BezierPart::Y1 => y1,
+            BezierPart::X2 => x2,
+            BezierPart::Y2 => y2,
+        })
     }
 
     /// The text an inspector field starts editing with.
@@ -52,6 +78,9 @@ impl Editor {
         if let Some(value) = self.numeric_value(target) {
             let shown = (value * display_factor(target) * 10.0).round() / 10.0;
             return crate::outline::number(shown);
+        }
+        if matches!(target, FieldTarget::Filter) {
+            return self.filter.clone();
         }
         let Some(node) = self.selected else {
             return String::new();
@@ -137,7 +166,11 @@ impl Editor {
     /// The command typing `text` into a field commits, or `None` when the
     /// text does not parse (the field stays red).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one arm per field kind, kept flat
     pub fn field_command(&self, target: FieldTarget, text: &str) -> Option<Command> {
+        if matches!(target, FieldTarget::Filter) {
+            return Some(Command::FilterLayers(text.to_owned()));
+        }
         let id = self.node_identity(self.selected?);
         let trimmed = text.trim();
         let (property, value) = match target {
@@ -223,7 +256,22 @@ impl Editor {
                     name: text.to_owned(),
                 })
             }
-            FieldTarget::Content(_) | FieldTarget::None => return None,
+            FieldTarget::Bezier(part) => {
+                let shown: f64 = trimmed.parse().ok().filter(|v: &f64| v.is_finite())?;
+                if part.is_x() && !(0.0..=1.0).contains(&shown) {
+                    return None;
+                }
+                let (x1, y1, x2, y2) = self.selected_bezier()?.points();
+                let (x1, y1, x2, y2) = match part {
+                    BezierPart::X1 => (shown, y1, x2, y2),
+                    BezierPart::Y1 => (x1, shown, x2, y2),
+                    BezierPart::X2 => (x1, y1, shown, y2),
+                    BezierPart::Y2 => (x1, y1, x2, shown),
+                };
+                let curve = BezierEase::new(x1, y1, x2, y2).ok()?;
+                return Some(Command::SetEase(Ease::Bezier(curve)));
+            }
+            FieldTarget::Content(_) | FieldTarget::Filter | FieldTarget::None => return None,
         };
         Some(Command::Edit {
             id,

@@ -60,8 +60,47 @@ pub enum FieldTarget {
     Weight,
     /// The display name of the layer.
     Name,
+    /// One control value of the selected keys' cubic-bezier ease.
+    Bezier(BezierPart),
+    /// The layers-panel search filter.
+    Filter,
     /// Not editable (composition summary rows).
     None,
+}
+
+/// One of the four cubic-bezier control values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BezierPart {
+    /// First control point, x (time).
+    X1,
+    /// First control point, y (value).
+    Y1,
+    /// Second control point, x (time).
+    X2,
+    /// Second control point, y (value).
+    Y2,
+}
+
+impl BezierPart {
+    /// Every part, in display order.
+    pub const ALL: [Self; 4] = [Self::X1, Self::Y1, Self::X2, Self::Y2];
+
+    /// The short name shown in the inspector.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::X1 => "x1",
+            Self::Y1 => "y1",
+            Self::X2 => "x2",
+            Self::Y2 => "y2",
+        }
+    }
+
+    /// Whether this part is constrained to `[0, 1]`.
+    #[must_use]
+    pub const fn is_x(self) -> bool {
+        matches!(self, Self::X1 | Self::X2)
+    }
 }
 
 /// One numeric field of a row.

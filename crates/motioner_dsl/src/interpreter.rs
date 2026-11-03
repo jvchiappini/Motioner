@@ -19,6 +19,7 @@ use crate::builtins;
 use crate::diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
 use crate::host::{as_integer, bind, f64_from_i64, CallArgs, CallValue, HostError, HostResult};
 use crate::limits::{Budget, Limits};
+use crate::naming::{assign_default_names, NameNote};
 use crate::origins::{literal_of, ValueOrigins};
 use crate::scene::{CreationSite, Scene};
 use crate::value::{Builtin, Value};
@@ -114,13 +115,16 @@ pub fn execute_detailed_with_metrics(
         globals: HashMap::new(),
         frames: Vec::new(),
         loops: Vec::new(),
+        index_path: Vec::new(),
+        call_counts: HashMap::new(),
         budget: Budget::new(limits),
         scene: Scene::new(limits.max_nodes),
+        name_notes: Vec::new(),
     };
     interpreter.exec_block(&program.body)?;
     let bindings = interpreter.bindings();
     let origins = interpreter.scene.origins().clone();
-    let document = interpreter.scene.into_document().ok_or_else(|| {
+    let mut document = interpreter.scene.into_document().ok_or_else(|| {
         let start = Span {
             line: 1,
             column: 1,
@@ -132,6 +136,7 @@ pub fn execute_detailed_with_metrics(
             "the program never called comp(...); every MDF program must create a composition",
         )
     })?;
+    assign_default_names(&mut document, &interpreter.name_notes);
     Ok(Execution {
         document,
         bindings,
@@ -160,8 +165,14 @@ struct Interpreter<'l> {
     frames: Vec<CallFrame>,
     /// Iteration index of every active loop, outermost first.
     loops: Vec<i64>,
+    /// Display-name path: active loop iterations and function-call ordinals,
+    /// outermost first.
+    index_path: Vec<i64>,
+    /// How many times each user function has been called in this run.
+    call_counts: HashMap<Rc<str>, i64>,
     budget: Budget,
     scene: Scene,
+    name_notes: Vec<NameNote>,
 }
 
 type Exec<T> = Result<T, Diagnostic>;
@@ -322,9 +333,13 @@ impl Interpreter<'_> {
         for (index, value) in values.enumerate() {
             self.store(variable.clone(), value);
             // The loop index is part of every node's provenance key, so the
-            // same iteration of the same call yields the same identity.
-            self.loops.push(i64::try_from(index).unwrap_or(i64::MAX));
+            // same iteration of the same call yields the same identity. It is
+            // also part of the display-name path (outermost first).
+            let iteration = i64::try_from(index).unwrap_or(i64::MAX);
+            self.loops.push(iteration);
+            self.index_path.push(iteration);
             let flow = self.exec_block(body);
+            self.index_path.pop();
             self.loops.pop();
             match flow? {
                 Flow::Break => break,
@@ -354,7 +369,14 @@ impl Interpreter<'_> {
                     self.lookup(name, span)?
                 };
                 let new = combine(self, current, evaluated)?;
-                self.store(name.clone(), new);
+                self.store(name.clone(), new.clone());
+                if let Value::Node(node) = new {
+                    self.name_notes.push(NameNote {
+                        binding: name.to_string(),
+                        node,
+                        path: self.index_path.clone(),
+                    });
+                }
             }
             Target::Attribute { object, name } => {
                 let object = self.eval(object)?;
@@ -631,7 +653,17 @@ impl Interpreter<'_> {
             call_span: span,
             locals,
         });
+        // The invocation ordinal is the display-name path entry for bindings
+        // created inside this call: two calls of `spinner` give `holder 1` and
+        // `holder 2` instead of two nodes both named `holder`.
+        let ordinal = {
+            let count = self.call_counts.entry(function.name.clone()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        self.index_path.push(ordinal);
         let flow = self.exec_block(&function.body);
+        self.index_path.pop();
         self.frames.pop();
         match flow? {
             Flow::Return(value) => Ok(value),

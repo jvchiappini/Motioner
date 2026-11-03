@@ -11,6 +11,7 @@
 mod bake;
 pub(crate) mod channels;
 mod fields;
+mod graph;
 mod query;
 mod rebind;
 mod resolve;
@@ -132,6 +133,20 @@ pub struct Editor {
     inspector_frame: Option<Frame>,
     expanded: BTreeSet<usize>,
     pinned: BTreeSet<usize>,
+    /// Groups whose descendants are hidden in the layers panel and timeline.
+    collapsed: BTreeSet<usize>,
+    /// Layer filter text (`filter_layers`), empty for no filter.
+    filter: String,
+    /// Outline indices visible after collapsing and filtering.
+    visible: Vec<usize>,
+    /// Layers shown exclusively in the preview (`solo`).
+    solo: BTreeSet<NodeId>,
+    /// Layers hidden from the preview (`shy`).
+    shy: BTreeSet<NodeId>,
+    /// Whether shy layers are shown anyway (`show_shy`).
+    show_shy: bool,
+    /// The open graph editor.
+    graph: Option<crate::graph::GraphModel>,
     only_animated: bool,
     motion_blur_preview: bool,
     selected: Option<NodeId>,
@@ -142,6 +157,8 @@ pub struct Editor {
     /// Families the text inspector offers: bundled plus project faces.
     font_families: Vec<String>,
     model_generation: u64,
+    /// Generation the full outline (including visibility runs) was built for.
+    outline_generation: Option<u64>,
 }
 
 impl Editor {
@@ -158,6 +175,13 @@ impl Editor {
             inspector_frame: None,
             expanded: BTreeSet::new(),
             pinned: BTreeSet::new(),
+            collapsed: BTreeSet::new(),
+            filter: String::new(),
+            visible: Vec::new(),
+            solo: BTreeSet::new(),
+            shy: BTreeSet::new(),
+            show_shy: false,
+            graph: None,
             only_animated: false,
             motion_blur_preview: false,
             selected: None,
@@ -175,6 +199,7 @@ impl Editor {
             },
             font_families: vec!["Inter".to_owned(), "Roboto".to_owned()],
             model_generation: u64::MAX,
+            outline_generation: None,
         };
         editor.refresh_models();
         if let Some(row) = select {
@@ -281,6 +306,92 @@ impl Editor {
         &self.expanded
     }
 
+    /// Outline indices visible after collapsing and filtering, in document
+    /// order.
+    #[must_use]
+    pub fn visible_outline(&self) -> &[usize] {
+        &self.visible
+    }
+
+    /// The current layer filter text.
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Whether a layer is soloed in the preview.
+    #[must_use]
+    pub fn is_solo(&self, node: NodeId) -> bool {
+        self.solo.contains(&node)
+    }
+
+    /// Whether a layer is shy (hidden from the preview by default).
+    #[must_use]
+    pub fn is_shy(&self, node: NodeId) -> bool {
+        self.shy.contains(&node)
+    }
+
+    /// Whether shy layers are currently shown.
+    #[must_use]
+    pub const fn show_shy(&self) -> bool {
+        self.show_shy
+    }
+
+    /// Whether solo/shy state hides anything in the preview.
+    #[must_use]
+    pub fn has_preview_filter(&self) -> bool {
+        !self.solo.is_empty() || (!self.show_shy && !self.shy.is_empty())
+    }
+
+    /// Nodes the preview must not draw because of solo/shy state.
+    ///
+    /// `solo` hides every layer that is not soloed (and its descendants);
+    /// `shy` hides the marked layer unless [`Self::show_shy`] is on. Solo wins
+    /// over shy for the soloed branch. The render and still paths never see
+    /// this set.
+    #[must_use]
+    pub fn preview_hidden(&self) -> std::collections::BTreeSet<NodeId> {
+        let Some(document) = self.document() else {
+            return std::collections::BTreeSet::new();
+        };
+        let mut hidden = std::collections::BTreeSet::new();
+        let solo_active = !self.solo.is_empty();
+        for row in document.nodes() {
+            let node = row.id();
+            let soloed = self.solo.contains(&node) || self.has_solo_ancestor(document, node);
+            let hide = if solo_active {
+                !soloed && !self.has_solo_descendant(document, node)
+            } else {
+                self.shy.contains(&node) && !self.show_shy
+            };
+            if hide {
+                hidden.insert(node);
+            }
+        }
+        hidden
+    }
+
+    fn has_solo_ancestor(&self, document: &Document, node: NodeId) -> bool {
+        let mut current = document.node(node).and_then(motioner_core::Node::parent);
+        while let Some(parent) = current {
+            if self.solo.contains(&parent) {
+                return true;
+            }
+            current = document.node(parent).and_then(motioner_core::Node::parent);
+        }
+        false
+    }
+
+    fn has_solo_descendant(&self, document: &Document, node: NodeId) -> bool {
+        let Some(current) = document.node(node) else {
+            return false;
+        };
+        current
+            .children()
+            .iter()
+            .any(|child| self.solo.contains(child) || self.has_solo_descendant(document, *child))
+    }
+
     /// Whether only animated property rows are shown.
     #[must_use]
     pub fn only_animated(&self) -> bool {
@@ -385,12 +496,25 @@ impl Editor {
     /// Rebuilds the outline, timeline and inspector after the document
     /// changed (reload or edit) and keeps the selection valid.
     pub fn refresh_models(&mut self) {
-        self.outline = self.document().map(outline_rows).unwrap_or_default();
+        let generation = self.session.generation();
+        if self.outline_generation != Some(generation) {
+            self.outline = self.document().map(outline_rows).unwrap_or_default();
+            self.outline_generation = Some(generation);
+        }
+        crate::outline::apply_visibility(&mut self.outline, &self.collapsed, &self.filter);
+        self.visible = self
+            .outline
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.visible)
+            .map(|(index, _)| index)
+            .collect();
         if self.selected.is_some() && self.selected_row().is_none() {
             self.selected = None;
         }
         self.rebuild_timeline();
         self.rebuild_inspector();
+        self.rebuild_graph();
         self.model_generation = self.session.generation();
     }
 
@@ -453,15 +577,32 @@ impl Editor {
                 value: inspect::RowValue::Ease { current },
                 channel: None,
             });
-            // A bezier key is not a preset: show its four control numbers.
-            // `set_ease(bezier(...))` edits them (D-0024).
-            if let Some(motioner_core::Ease::Bezier(curve)) = current {
-                model.rows.push(inspect::Row {
-                    section: "Keys",
-                    label: "Bezier".to_owned(),
-                    value: inspect::RowValue::ReadOnly(curve.to_mdf()),
-                    channel: None,
-                });
+            // A bezier key is not a preset: its four control numbers are
+            // editable fields. Each commit is one `set_ease(bezier(...))`
+            // command, so the drag and the typed value are one undo step
+            // (D-0037 quantisation, D-0024 command path).
+            if let Some(curve) = self.selected_bezier() {
+                let (x1, y1, x2, y2) = curve.points();
+                for (part, value) in [
+                    (inspect::BezierPart::X1, x1),
+                    (inspect::BezierPart::Y1, y1),
+                    (inspect::BezierPart::X2, x2),
+                    (inspect::BezierPart::Y2, y2),
+                ] {
+                    model.rows.push(inspect::Row {
+                        section: "Keys",
+                        label: format!("Bezier {}", part.name()),
+                        value: inspect::RowValue::Single(inspect::Field {
+                            target: inspect::FieldTarget::Bezier(part),
+                            label: part.name().to_owned(),
+                            value,
+                            text: crate::outline::number(value),
+                            factor: 1.0,
+                            suffix: "",
+                        }),
+                        channel: None,
+                    });
+                }
             }
         }
         self.inspector = model;
@@ -691,6 +832,13 @@ impl Editor {
                 property,
                 from,
                 to,
+            }
+            | Command::MoveKeyValue {
+                id,
+                property,
+                from,
+                to,
+                ..
             } => {
                 let frames = self
                     .rate()

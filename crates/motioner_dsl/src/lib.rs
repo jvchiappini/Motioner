@@ -26,6 +26,7 @@ mod host;
 mod interpreter;
 mod lexer;
 mod limits;
+mod naming;
 mod origins;
 mod overrides_file;
 mod parser;
@@ -41,6 +42,7 @@ pub use interpreter::{
 };
 pub use lexer::tokenize;
 pub use limits::Limits;
+pub use naming::{assign_default_names, default_name, NameNote};
 pub use origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
 pub use parser::{parse, MAX_EXPR_DEPTH};
 pub use token::{Keyword, Op, Token, TokenKind};

@@ -1770,6 +1770,7 @@ pub struct Node {
     pub(crate) effects: Vec<crate::effect::Effect>,
     pub(crate) mask: Option<crate::mask::MaskSpec>,
     pub(crate) identity: NodeIdentity,
+    pub(crate) display_name: Option<String>,
     pub(crate) visible: bool,
 }
 
@@ -1784,6 +1785,16 @@ impl Node {
     #[must_use]
     pub fn identity(&self) -> &NodeIdentity {
         &self.identity
+    }
+
+    /// The user-facing display name, when the program or an override set one.
+    ///
+    /// The name is presentation only: it never changes [`Self::identity`],
+    /// evaluation, overrides or rendering. MDF writes it with
+    /// `node.name = "Dot grid"`.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.display_name.as_deref()
     }
 
     /// Whether the node and its subtree are rendered.

@@ -55,6 +55,29 @@ pub(super) enum Drag {
         /// Previous pointer position in window pixels.
         last: (f32, f32),
     },
+    /// Dragging a key in the graph editor.
+    GraphKey {
+        /// Node identity.
+        id: String,
+        /// Channel name.
+        property: String,
+        /// Key frame at the press (resolution uses the gesture base).
+        from: Frame,
+    },
+    /// Dragging a bezier control point in the graph editor.
+    GraphHandle {
+        /// Graph snapshot at the press.
+        model: crate::graph::GraphModel,
+        /// Segment index.
+        segment: usize,
+        /// Which control point.
+        kind: crate::graph::HandleKind,
+    },
+    /// Panning the graph editor.
+    GraphPan {
+        /// Previous pointer position in window pixels.
+        last: (f32, f32),
+    },
 }
 
 /// What a gizmo drag needs from its press.
@@ -133,8 +156,10 @@ impl PreviewApp {
         let hover = self
             .hit_inspector(layout, mx, my)
             .or_else(|| self.hit_orphans(layout, mx, my))
+            .or_else(|| self.hit_graph(layout, mx, my))
             .or_else(|| self.hit_timeline(layout, mx, my))
             .or_else(|| self.hit_gizmo(layout, mx, my))
+            .or_else(|| self.hit_layers(layout, mx, my))
             .or(base_hit);
         if self.pointer.drag.is_none() && hover != self.pointer.hover {
             self.pointer.hover = hover;
@@ -211,6 +236,38 @@ impl PreviewApp {
         Some(Hit::Inspector)
     }
 
+    /// Maps a pointer to a visible layer row (the outline index, not the
+    /// position in the filtered list).
+    pub(super) fn hit_layers(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
+        if layout.layer_filter().contains(mx, my) {
+            return Some(Hit::LayerFilter);
+        }
+        if !layout.layers.body.contains(mx, my) {
+            return None;
+        }
+        let scroll = self.scroll_px(PanelId::Layers);
+        let offset =
+            my - layout.layers.body.y - layout.metrics.px(crate::theme::size::GRID) + scroll;
+        if offset < 0.0 || layout.row_h <= 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let position = (offset / layout.row_h).floor() as usize;
+        let &index = self.editor.visible_outline().get(position)?;
+        let row = layout.layer_row(position, scroll);
+        Some(if layout.layer_eye(row).contains(mx, my) {
+            Hit::LayerEye(index)
+        } else if layout.layer_lock(row).contains(mx, my) {
+            Hit::LayerLock(index)
+        } else if layout.layer_solo(row).contains(mx, my) {
+            Hit::LayerSolo(index)
+        } else if layout.layer_shy(row).contains(mx, my) {
+            Hit::LayerShy(index)
+        } else {
+            Hit::LayerRow(index)
+        })
+    }
+
     pub(super) fn hit_orphans(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
         if !layout.layers.body.contains(mx, my) {
             return None;
@@ -236,6 +293,27 @@ impl PreviewApp {
                 },
             )
         })
+    }
+
+    pub(super) fn hit_graph(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
+        let graph = self.editor.graph()?;
+        let plot = layout.graph_plot();
+        let in_tracks = layout.timeline.tracks.contains(mx, my);
+        if !plot.contains(mx, my) && !in_tracks {
+            return None;
+        }
+        if plot.contains(mx, my) {
+            let reach = layout.metrics.px(8.0);
+            if let Some(hit) = graph.hit(plot, mx, my, reach) {
+                return Some(match hit {
+                    crate::graph::GraphHit::Key(key) => Hit::GraphKey(key),
+                    crate::graph::GraphHit::Handle { segment, kind } => {
+                        Hit::GraphHandle { segment, kind }
+                    }
+                });
+            }
+        }
+        Some(Hit::GraphPlot)
     }
 
     pub(super) fn hit_timeline(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
@@ -318,6 +396,7 @@ impl PreviewApp {
         )
     }
 
+    #[allow(clippy::match_same_arms)] // graph and panel hit groups read better apart
     pub(super) fn cursor_for(&self, hover: Option<Hit>) -> CursorIcon {
         let resize = |which: Splitter| match which {
             Splitter::Left | Splitter::Right => CursorIcon::ColResize,
@@ -331,9 +410,12 @@ impl PreviewApp {
             gizmo::GizmoCursor::NeswResize => CursorIcon::NeswResize,
         };
         match (self.pointer.drag.as_ref(), hover) {
-            (Some(Drag::Pan { .. }), _) => CursorIcon::Move,
+            (Some(Drag::Pan { .. } | Drag::GraphPan { .. }), _) => CursorIcon::Move,
             (Some(Drag::Splitter { which, .. }), _) => resize(*which),
             (None, Some(Hit::Splitter(which))) => resize(which),
+            (Some(Drag::GraphKey { .. } | Drag::GraphHandle { .. }), _)
+            | (None, Some(Hit::GraphKey(_) | Hit::GraphHandle { .. })) => CursorIcon::Pointer,
+            (None, Some(Hit::GraphPlot)) => CursorIcon::Grab,
             (Some(Drag::Scrub | Drag::Field { .. } | Drag::Keys { .. }), _)
             | (None, Some(Hit::Scrub)) => CursorIcon::EwResize,
             (Some(Drag::Gizmo(drag)), _) => gizmo_cursor(drag.handle, true),
@@ -348,6 +430,10 @@ impl PreviewApp {
                     | Hit::LayerRow(_)
                     | Hit::LayerEye(_)
                     | Hit::LayerLock(_)
+                    | Hit::LayerSolo(_)
+                    | Hit::LayerShy(_)
+                    | Hit::LayerFilter
+                    | Hit::ShowShy
                     | Hit::Track(_)
                     | Hit::TimelineRow(_)
                     | Hit::TimelineDiamond { .. }

@@ -243,6 +243,14 @@ pub enum Hit {
     LayerEye(usize),
     /// The lock toggle of a layer row.
     LayerLock(usize),
+    /// The solo toggle of a layer row.
+    LayerSolo(usize),
+    /// The shy toggle of a layer row.
+    LayerShy(usize),
+    /// The layers-panel search/filter field.
+    LayerFilter,
+    /// The global "show shy layers" switch next to the filter.
+    ShowShy,
     /// A timeline track (index into the outline).
     Track(usize),
     /// The ruler or the empty track area: click or drag scrubs.
@@ -306,6 +314,17 @@ pub enum Hit {
     OrphanRebind(usize),
     /// The chevron that expands a layer's property rows.
     LayerChevron(usize),
+    /// The graph editor's empty plot area (pan, wheel zoom).
+    GraphPlot,
+    /// A key point in the graph editor.
+    GraphKey(usize),
+    /// A draggable bezier control point.
+    GraphHandle {
+        /// Segment index.
+        segment: usize,
+        /// Which control point.
+        kind: crate::graph::HandleKind,
+    },
 }
 
 /// A panel with a header strip and a body.
@@ -509,6 +528,47 @@ impl Layout {
         Rect::new(eye.x - eye.w, eye.y, eye.w, eye.h)
     }
 
+    /// The solo toggle inside a layer row, left of the lock.
+    #[must_use]
+    pub fn layer_solo(&self, row: Rect) -> Rect {
+        let lock = self.layer_lock(row);
+        Rect::new(lock.x - lock.w, lock.y, lock.w, lock.h)
+    }
+
+    /// The shy toggle inside a layer row, left of solo.
+    #[must_use]
+    pub fn layer_shy(&self, row: Rect) -> Rect {
+        let solo = self.layer_solo(row);
+        Rect::new(solo.x - solo.w, solo.y, solo.w, solo.h)
+    }
+
+    /// The layers-panel filter field in the panel header.
+    #[must_use]
+    pub fn layer_filter(&self) -> Rect {
+        let header = self.layers.header;
+        let width = (header.w * 0.44).min(self.metrics.px(180.0));
+        let h = self.metrics.px(18.0);
+        Rect::new(
+            header.right() - self.metrics.px(size::PAD) - width,
+            (header.center_y() - h * 0.5).round(),
+            width,
+            h,
+        )
+    }
+
+    /// The "show shy layers" switch, left of the filter field.
+    #[must_use]
+    pub fn shy_toggle(&self) -> Rect {
+        let filter = self.layer_filter();
+        let side = filter.h;
+        Rect::new(
+            filter.x - self.metrics.px(size::GRID) - side,
+            filter.y,
+            side,
+            side,
+        )
+    }
+
     /// The header rectangle of the orphans section, below `rows` rows.
     #[must_use]
     pub fn orphans_header(&self, rows: usize, scroll: f32) -> Rect {
@@ -543,6 +603,38 @@ impl Layout {
     pub fn orphan_rebind(&self, row: Rect) -> Rect {
         let delete = self.orphan_delete(row);
         Rect::new(delete.x - delete.w, delete.y, delete.w, delete.h)
+    }
+
+    /// The graph editor's caption strip, above the plot and below the ruler.
+    ///
+    /// Keeping the caption outside the plot is what guarantees it never hides
+    /// a key or a bezier handle.
+    #[must_use]
+    pub fn graph_caption(&self) -> Rect {
+        let t = self.timeline;
+        let pad = self.metrics.px(size::PAD + size::GRID);
+        let height = self.metrics.px(16.0);
+        Rect::new(
+            t.names.x + pad,
+            t.tracks.y + pad * 0.5,
+            (t.rect.right() - t.names.x - pad * 2.0).max(0.0),
+            height,
+        )
+    }
+
+    /// The graph editor's plot rectangle: the timeline track area inset by
+    /// the panel padding and by the caption strip above it.
+    #[must_use]
+    pub fn graph_plot(&self) -> Rect {
+        let t = self.timeline;
+        let pad = self.metrics.px(size::PAD + size::GRID);
+        let caption = self.metrics.px(16.0 + size::GRID);
+        Rect::new(
+            t.names.x + pad,
+            t.tracks.y + pad + caption,
+            (t.rect.right() - t.names.x - pad * 2.0).max(0.0),
+            (t.tracks.h - pad * 2.0 - caption).max(0.0),
+        )
     }
 
     /// The rectangle of timeline track `index`, scrolled by `scroll` pixels.
@@ -585,6 +677,12 @@ impl Layout {
         if self.zoom_pill.contains(x, y) {
             return Some(Hit::ZoomPill);
         }
+        if self.layer_filter().contains(x, y) {
+            return Some(Hit::LayerFilter);
+        }
+        if self.shy_toggle().contains(x, y) {
+            return Some(Hit::ShowShy);
+        }
         if self.layers.body.contains(x, y) {
             let index =
                 self.row_index(y - self.layers.body.y - self.metrics.px(size::GRID) + layer_scroll);
@@ -594,6 +692,10 @@ impl Layout {
                     Hit::LayerEye(i)
                 } else if self.layer_lock(row).contains(x, y) {
                     Hit::LayerLock(i)
+                } else if self.layer_solo(row).contains(x, y) {
+                    Hit::LayerSolo(i)
+                } else if self.layer_shy(row).contains(x, y) {
+                    Hit::LayerShy(i)
                 } else {
                     Hit::LayerRow(i)
                 }

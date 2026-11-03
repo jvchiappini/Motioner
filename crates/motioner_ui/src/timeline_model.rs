@@ -108,6 +108,16 @@ pub struct TimelineRow {
     pub on_key: bool,
     /// Indentation depth for drawing.
     pub depth: u32,
+    /// Cached display label (transform and content rows only).
+    ///
+    /// Labels never change with the frame, so they are built when the rows are
+    /// rebuilt instead of formatting a `String` on every draw.
+    pub label: String,
+    /// Cached override/selection channel name (transform and content rows).
+    pub channel: String,
+    /// The node this row belongs to (cached so value formatting needs no
+    /// outline lookup).
+    pub node: NodeId,
 }
 
 /// The timeline rows of a document and expansion state.
@@ -154,13 +164,15 @@ impl TimelineRows {
         expanded: &BTreeSet<usize>,
         only_animated: bool,
     ) -> Self {
-        let duration = document.composition().duration();
         let mut rows = Vec::with_capacity(outline.len());
         for (index, outline_row) in outline.iter().enumerate() {
+            if !outline_row.visible {
+                continue;
+            }
             let node = outline_row.node;
             rows.push(TimelineRow {
                 kind: RowKind::Layer { outline: index },
-                visible: visible_runs(document, node, duration),
+                visible: outline_row.visible_runs.clone(),
                 summary: summary_keys(document, node),
                 inherited: inherited_keys(document, node),
                 keys: Vec::new(),
@@ -168,6 +180,9 @@ impl TimelineRows {
                 animated: false,
                 on_key: false,
                 depth: outline_row.depth,
+                label: String::new(),
+                channel: String::new(),
+                node,
             });
             if !expanded.contains(&index) {
                 continue;
@@ -193,6 +208,9 @@ impl TimelineRows {
                     eases,
                     on_key: false,
                     depth: outline_row.depth + 1,
+                    label: crate::labels::transform_label(property, axis),
+                    channel: channels::channel_name(property, axis),
+                    node,
                 });
             }
             if let Some(content) = document.node(node).map(motioner_core::Node::content) {
@@ -224,11 +242,202 @@ impl TimelineRows {
                         eases,
                         on_key: false,
                         depth: outline_row.depth + 1,
+                        label: crate::labels::content_label(field),
+                        channel: crate::labels::content_label(field),
+                        node,
                     });
                 }
             }
         }
         Self { rows }
+    }
+}
+
+impl TimelineRows {
+    /// Writes every row's value text into `out`, reusing its `String`s.
+    ///
+    /// The draw loop reads the cached strings, so a scrub or a playback frame
+    /// does not format a `String` per visible sub-row. `out` only grows once;
+    /// after that every write reuses the existing capacity.
+    pub fn write_values(&self, document: &Document, frame: Frame, out: &mut Vec<String>) {
+        if out.len() < self.rows.len() {
+            out.resize_with(self.rows.len(), String::new);
+        }
+        for (index, row) in self.rows.iter().enumerate() {
+            let text = &mut out[index];
+            text.clear();
+            match row.kind {
+                RowKind::Layer { .. } => {}
+                RowKind::Transform { property, axis, .. } => {
+                    write_value_text(text, document, row.node, property, axis, frame);
+                }
+                RowKind::Content { field, .. } => {
+                    write_content_text(text, document, row.node, field, frame);
+                }
+            }
+        }
+    }
+}
+
+/// Writes the value text of one transform channel.
+pub fn write_value_text(
+    out: &mut String,
+    document: &Document,
+    node: NodeId,
+    property: Property,
+    axis: Option<Axis>,
+    frame: Frame,
+) {
+    let Some(node) = document.node(node) else {
+        return;
+    };
+    let t = node.transform();
+    let scalar = |value: &motioner_core::Animatable<f64>| sample(value, frame);
+    match (property, axis) {
+        (Property::Position, Some(axis)) => write_round(out, scalar(t.position.axis(axis))),
+        (Property::Scale, Some(axis)) => {
+            let value = scalar(t.scale.axis(axis)) * 100.0;
+            write_round(out, value);
+            out.push('%');
+        }
+        (Property::Anchor, Some(axis)) => write_round(out, scalar(t.anchor.axis(axis))),
+        (Property::Position, None) => {
+            let v = motioner_eval::sample_vec2(&t.position, frame);
+            write_round(out, v.x);
+            out.push_str(", ");
+            write_round(out, v.y);
+        }
+        (Property::Scale, None) => {
+            let v = motioner_eval::sample_vec2(&t.scale, frame);
+            write_round(out, v.x * 100.0);
+            out.push_str("%, ");
+            write_round(out, v.y * 100.0);
+            out.push('%');
+        }
+        (Property::Anchor, None) => {
+            let v = motioner_eval::sample_vec2(&t.anchor, frame);
+            write_round(out, v.x);
+            out.push_str(", ");
+            write_round(out, v.y);
+        }
+        (Property::Rotation, _) => {
+            write_round(out, scalar(&t.rotation));
+            out.push('\u{00b0}');
+        }
+        (Property::Opacity, _) => {
+            write_round(out, sample(&t.opacity, frame) * 100.0);
+            out.push('%');
+        }
+    }
+}
+
+/// Writes the value text of one content field.
+pub fn write_content_text(
+    out: &mut String,
+    document: &Document,
+    node: NodeId,
+    field: ContentField,
+    frame: Frame,
+) {
+    use crate::editor::channels::{sampled_colour, sampled_number, SampledColour};
+    if let Some(motioner_core::ContentValue::Gradient(Some(gradient))) = document
+        .node(node)
+        .and_then(|node| node.content().static_value(field))
+    {
+        out.push_str(gradient.kind().name());
+        out.push_str(" gradient");
+        return;
+    }
+    match field {
+        ContentField::Fill | ContentField::Stroke => {
+            match sampled_colour(document, node, field, frame) {
+                SampledColour::Colour(colour) => write_hex(out, colour),
+                SampledColour::Absent => out.push_str("none"),
+                SampledColour::NotColour => out.push_str("n/a"),
+            }
+        }
+        ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_) => {
+            match sampled_colour(document, node, field, frame) {
+                SampledColour::Colour(colour) => write_hex(out, colour),
+                _ => out.push_str("n/a"),
+            }
+        }
+        ContentField::FillStopOffset(_)
+        | ContentField::StrokeStopOffset(_)
+        | ContentField::StrokeWidth
+        | ContentField::Width
+        | ContentField::Height
+        | ContentField::Radius
+        | ContentField::Size
+        | ContentField::Weight
+        | ContentField::Tracking
+        | ContentField::LineHeight
+        | ContentField::TrimStart
+        | ContentField::TrimEnd
+        | ContentField::TrimOffset
+        | ContentField::Dash
+        | ContentField::DashOffset => {
+            if let Some(value) = sampled_number(document, node, field, frame) {
+                write_round(out, value);
+            } else {
+                out.push_str("n/a");
+            }
+        }
+        ContentField::Color => {
+            if let SampledColour::Colour(colour) = sampled_colour(document, node, field, frame) {
+                write_hex(out, colour);
+            }
+        }
+        ContentField::Text
+        | ContentField::Align
+        | ContentField::Cap
+        | ContentField::Join
+        | ContentField::Source
+        | ContentField::Fit => {
+            match document
+                .node(node)
+                .and_then(|node| node.content().static_value(field))
+            {
+                Some(motioner_core::ContentValue::Text(text)) => out.push_str(&text),
+                Some(motioner_core::ContentValue::Align(align)) => {
+                    out.push_str(match align {
+                        motioner_core::TextAlign::Left => "left",
+                        motioner_core::TextAlign::Center => "center",
+                        motioner_core::TextAlign::Right => "right",
+                    });
+                }
+                Some(motioner_core::ContentValue::Cap(cap)) => out.push_str(cap.name()),
+                Some(motioner_core::ContentValue::Join(join)) => out.push_str(join.name()),
+                Some(motioner_core::ContentValue::Fit(fit)) => out.push_str(fit.name()),
+                _ => out.push_str("n/a"),
+            }
+        }
+    }
+}
+
+/// Writes a rounded number exactly like the inspector (`0`, `1.5`).
+pub fn write_round(out: &mut String, value: f64) {
+    use std::fmt::Write as _;
+    let value = (value * 10.0).round() / 10.0;
+    let value = if value == 0.0 { 0.0 } else { value };
+    if value.fract().abs() < 1e-9 {
+        let _ = write!(out, "{value:.0}");
+    } else {
+        let _ = write!(out, "{value:.1}");
+    }
+}
+
+/// Writes `#RRGGBB` or `#RRGGBBAA`, matching `Color::to_hex`.
+pub fn write_hex(out: &mut String, color: motioner_core::Color) {
+    use std::fmt::Write as _;
+    if color.a == 255 {
+        let _ = write!(out, "#{:02X}{:02X}{:02X}", color.r, color.g, color.b);
+    } else {
+        let _ = write!(
+            out,
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.r, color.g, color.b, color.a
+        );
     }
 }
 
@@ -379,7 +588,9 @@ pub fn is_visible_at(document: &Document, node: NodeId, frame: Frame) -> bool {
     opacity > 0.0 && scale > 1e-9
 }
 
-fn visible_runs(document: &Document, node: NodeId, duration: Frame) -> Vec<VisibleRun> {
+/// The frame runs where `node` and its ancestors are drawn.
+#[must_use]
+pub fn visible_runs(document: &Document, node: NodeId, duration: Frame) -> Vec<VisibleRun> {
     let mut runs: Vec<VisibleRun> = Vec::new();
     for frame in 0..duration.max(0) {
         if !is_visible_at(document, node, frame) {
@@ -428,9 +639,31 @@ pub struct RowsLayout {
     pub height: f32,
 }
 
+impl RowsLayout {
+    /// Empties the layout, keeping its allocation (the per-frame reuse that
+    /// makes scrolling 1000 layers allocation-free).
+    pub fn clear(&mut self) {
+        self.rows.clear();
+        self.height = 0.0;
+    }
+}
+
 /// Lays the rows out inside the timeline's names/tracks area.
+#[cfg(test)]
 #[must_use]
 pub fn layout(rows: &TimelineRows, layout: &Layout, scroll: f32) -> RowsLayout {
+    let mut out = RowsLayout {
+        rows: Vec::with_capacity(rows.len().min(64)),
+        height: 0.0,
+    };
+    layout_into(rows, layout, scroll, &mut out);
+    out
+}
+
+/// [`layout`] into a reusable buffer, emitting only the rows that intersect
+/// the visible tracks (virtualised rows).
+pub fn layout_into(rows: &TimelineRows, layout: &Layout, scroll: f32, out: &mut RowsLayout) {
+    out.clear();
     let m = layout.metrics;
     let names = layout.timeline.names;
     let tracks = layout.timeline.tracks;
@@ -441,7 +674,6 @@ pub fn layout(rows: &TimelineRows, layout: &Layout, scroll: f32) -> RowsLayout {
         tracks.h,
     );
     let mut y = tracks.y - scroll;
-    let mut out = Vec::with_capacity(rows.len());
     for (index, row) in rows.rows().iter().enumerate() {
         let h = if row.kind.is_layer() {
             m.px(LAYER_ROW)
@@ -449,6 +681,10 @@ pub fn layout(rows: &TimelineRows, layout: &Layout, scroll: f32) -> RowsLayout {
             m.px(SUB_ROW)
         };
         let rect = Rect::new(full.x, y, full.w, h);
+        y += h;
+        if rect.bottom() < tracks.y || rect.y > tracks.bottom() {
+            continue;
+        }
         let chevron_side = m.px(12.0);
         let indent = m.px(size::INDENT) * row.depth as f32;
         let chevron = row.kind.is_layer().then(|| {
@@ -507,7 +743,7 @@ pub fn layout(rows: &TimelineRows, layout: &Layout, scroll: f32) -> RowsLayout {
                 Some(next),
             )
         };
-        out.push(RowRect {
+        out.rows.push(RowRect {
             row: index,
             rect,
             name,
@@ -518,10 +754,8 @@ pub fn layout(rows: &TimelineRows, layout: &Layout, scroll: f32) -> RowsLayout {
             next,
             chevron,
         });
-        y += h;
     }
-    let height = (y - (tracks.y - scroll)).max(0.0);
-    RowsLayout { rows: out, height }
+    out.height = (y - (tracks.y - scroll)).max(0.0);
 }
 
 #[cfg(test)]
@@ -568,8 +802,14 @@ mod tests {
         let visible = &rows.rows()[circle1].visible;
         assert_eq!(visible.first().unwrap().from, 13, "{visible:?}");
         // Group 1 (the first spinner) fades in from 1.0 s: invisible 0..=60.
-        let rect_row = outline.iter().position(|r| r.name == "Rect 1").unwrap();
-        let group_row = outline.iter().position(|r| r.name == "Group 1").unwrap();
+        let rect_row = outline
+            .iter()
+            .position(|r| r.kind == crate::outline::NodeKind::Rect)
+            .unwrap();
+        let group_row = outline
+            .iter()
+            .position(|r| r.kind == crate::outline::NodeKind::Group)
+            .unwrap();
         let group = rows.layer_row(group_row).unwrap();
         assert_eq!(rows.rows()[group].visible.first().unwrap().from, 61);
         let rect_layer = rows.layer_row(rect_row).unwrap();
@@ -584,12 +824,15 @@ mod tests {
     fn summary_keys_mark_shared_frames() {
         let document = hello();
         let rows = rows_at(0);
-        let group_row = rows.iter().find(|(name, _, _)| name == "Group 1").unwrap();
+        let group_row = rows.iter().find(|(name, _, _)| name == "holder 1").unwrap();
         // Rotation at 1.0/3.5 s and opacity at 1.0/1.5 s share frame 60.
         let document_rows = {
             let outline = crate::outline_rows(&document);
             let model = TimelineRows::compute(&document, &outline, &BTreeSet::new(), false);
-            let index = outline.iter().position(|r| r.name == "Group 1").unwrap();
+            let index = outline
+                .iter()
+                .position(|r| r.kind == crate::outline::NodeKind::Group)
+                .unwrap();
             model.rows()[model.layer_row(index).unwrap()]
                 .summary
                 .clone()
@@ -619,7 +862,10 @@ mod tests {
         let document = hello();
         let outline = crate::outline_rows(&document);
         let rows = TimelineRows::compute(&document, &outline, &BTreeSet::new(), false);
-        let rect_row = outline.iter().position(|r| r.name == "Rect 1").unwrap();
+        let rect_row = outline
+            .iter()
+            .position(|r| r.kind == crate::outline::NodeKind::Rect)
+            .unwrap();
         let rect = rows.layer_row(rect_row).unwrap();
         assert_eq!(
             rows.rows()[rect].inherited,
@@ -634,7 +880,10 @@ mod tests {
     fn expanding_adds_a_sub_row_per_property_and_content_field() {
         let document = hello();
         let outline = crate::outline_rows(&document);
-        let group = outline.iter().position(|r| r.name == "Group 1").unwrap();
+        let group = outline
+            .iter()
+            .position(|r| r.kind == crate::outline::NodeKind::Group)
+            .unwrap();
         let mut expanded = BTreeSet::new();
         expanded.insert(group);
         let rows = TimelineRows::compute(&document, &outline, &expanded, false);
@@ -697,7 +946,10 @@ mod tests {
             RowKind::Layer { outline: group + 1 }
         );
 
-        let rect = outline.iter().position(|r| r.name == "Rect 1").unwrap();
+        let rect = outline
+            .iter()
+            .position(|r| r.kind == crate::outline::NodeKind::Rect)
+            .unwrap();
         expanded.insert(rect);
         let rows = TimelineRows::compute(&document, &outline, &expanded, false);
         let start = rows.layer_row(rect).unwrap();
@@ -744,7 +996,6 @@ mod tests {
     #[test]
     fn explicit_visibility_and_overrides_change_the_strips() {
         let document = hello();
-        let outline = crate::outline_rows(&document);
         let title = document.roots()[0];
         let mut edited = document.clone();
         edited.set_visible(title, false).unwrap();
@@ -755,6 +1006,7 @@ mod tests {
             OverrideAction::Visible(false),
         ));
         set.apply(&mut edited);
+        let outline = crate::outline_rows(&edited);
         let rows = TimelineRows::compute(&edited, &outline, &BTreeSet::new(), false);
         assert!(
             rows.rows()[0].visible.is_empty(),
@@ -766,13 +1018,18 @@ mod tests {
     fn layout_maps_rows_to_rectangles_and_hits() {
         let document = hello();
         let outline = crate::outline_rows(&document);
-        let group = outline.iter().position(|r| r.name == "Group 1").unwrap();
+        let group = outline
+            .iter()
+            .position(|r| r.kind == crate::outline::NodeKind::Group)
+            .unwrap();
         let mut expanded = BTreeSet::new();
         expanded.insert(group);
         let model = TimelineRows::compute(&document, &outline, &expanded, false);
         let window = Layout::compute(1600.0, 900.0, 1.0, crate::layout::PanelSizes::default());
         let rows = layout(&model, &window, 0.0);
-        assert_eq!(rows.rows.len(), model.len());
+        // Rows are virtualised: only what intersects the track area is laid out.
+        assert!(!rows.rows.is_empty());
+        assert!(rows.rows.len() <= model.len());
         for pair in rows.rows.windows(2) {
             assert!((pair[0].rect.bottom() - pair[1].rect.y).abs() < 1e-3);
         }

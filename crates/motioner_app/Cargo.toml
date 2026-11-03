@@ -19,6 +19,10 @@ motioner_render.workspace = true
 motioner_ui.workspace = true
 anyhow.workspace = true
 
+[features]
+default = []
+alloc-count = ["motioner_ui/alloc-count"]
+
 [dev-dependencies]
 png.workspace = true
 motioner_testkit.workspace = true

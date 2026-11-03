@@ -137,7 +137,11 @@ The playhead (`seek`) matters for `edit`, `stopwatch`, `toggle_key` and
 | `select_keys([(id, property, time), ...], add=false)` | click/Shift+click/marquee on diamonds |
 | `clear_keys()` | deselect keys |
 | `safe_area(on)`, `snap(on)`, `only_animated(on)` | G, the magnet, U |
-| `motion_blur_preview(on)` | preview motion-blur indicator (D-0037) |
+| `motion_blur_preview(on)` | preview the real accumulation blur (D-0037/D-0044); paused uses every sample, playing caps at 4 |
+| `filter_layers(text)` | search the layers panel and timeline by name, kind or identity |
+| `solo(id, on)`, `shy(id, on)`, `show_shy(on)` | preview-only solo/shy layer state (never rendered) |
+| `graph_open(id, property)`, `graph_close()` | open/close the value graph of one numeric channel |
+| `graph_view(zoom, pan_x=0, pan_y=0)` | pan/zoom the graph (view state only) |
 | `zoom(factor)` | absolute canvas zoom, `1` = 100 % (clamped to 0.05..32); `1` key |
 | `zoom_fit()` | fit the composition and reset the pan; `F` or a click on the zoom pill |
 | `zoom_by(steps, x=None, y=None)` | Ctrl+wheel over the canvas: ×1.25 per step, keeping the composition point under the pointer fixed |
@@ -174,7 +178,8 @@ Space+drag over the canvas pans.
 | `toggle_key(id, property)` | ◆ button: add/remove the key at the playhead |
 | `add_keys()` | K: key the selected layer's animated channels at the playhead (Position if none) |
 | `visible(id, on)`, `lock(id, on)` | eye and padlock |
-| `rename(id, name)` | rename a layer (empty removes the name) |
+| `rename(id, name)` | set the display name (empty removes it); identity is unchanged |
+| `move_key_value(id, property, from_time, to_time, value)` | move a key in time and change its value (graph key drag) |
 | `assign_id(from, to)` | move every override of one identity to another (the Rebind action does this with the suggested node) |
 | `delete_orphan(id, property, time=None)` | × in the orphans list |
 | `effect_add(id, kind)` | the Shadow/Blur/Glow tiles in the inspector Effects section |
@@ -200,8 +205,23 @@ file, `bake` and `query` round-trip every form; `query` prints a bezier as
   `shutter` is in `(0, 360]` degrees and `samples` in `1..=64`; anything else
   is a span-carrying DSL error. `still` and `render` honour it; the preview
   is off by default.
-- `motion_blur_preview(on)` toggles the preview indicator (`state()` reports
-  `motion_blur_preview`).
+- `motion_blur_preview(on)` toggles the real accumulation preview
+  (`state()` reports `motion_blur_preview`). When the composition enables
+  motion blur, the canvas is painted from the same accumulation pass as
+  `still`/`render`; while paused every sample is used, while playing the
+  editor caps it at four so playback stays usable.
+- Display names: `node.name = "Dot grid"` in MDF, `rename(id, name)` in the
+  editor and the `name` override. A node without one is named after its first
+  binding (`title`, `dot 3` for a loop). The identity and every override key
+  stay unchanged.
+- Outline: the chevron collapses a group in the layers panel and timeline;
+  `filter_layers(text)` matches name, kind and identity and keeps ancestors;
+  `solo`/`shy` are preview-only and never affect `render`/`still`.
+- The graph editor (double click a numeric timeline row) opens
+  `graph_open(id, property)`. Keys are points; bezier segments have draggable
+  handles. A handle drag is one `ease` command with `bezier(...)` (x clamped
+  to `[0, 1]`), a key drag is `move_key_value`, and double clicking a named
+  key converts it to an editable bezier. `graph_view` pans and zooms.
 - `stagger(nodes, property, values, start, step, duration, ease)`: `values`
   is a list of `(from, to)` pairs (one pair is shared). Node `i` gets a
   linear key at `start + i*step` and an eased key at

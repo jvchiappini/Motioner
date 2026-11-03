@@ -122,6 +122,7 @@ type Semantics = (
     Option<motioner_core::MaskSpec>,
     bool,
     Option<usize>,
+    Option<String>,
 );
 
 fn semantics(document: &Document) -> Vec<Semantics> {
@@ -137,6 +138,7 @@ fn semantics(document: &Document) -> Vec<Semantics> {
                 node.mask(),
                 node.is_visible(),
                 node.parent().and_then(index),
+                node.name().map(str::to_owned),
             )
         })
         .collect()
@@ -483,9 +485,6 @@ fn bake_entry(
     entry: &OverrideEntry,
     rate: FrameRate,
 ) -> Result<String, String> {
-    if entry.property == NAME {
-        return Err("display names are editor-only and have no program statement".to_owned());
-    }
     let node = document
         .find(&entry.id)
         .ok_or_else(|| "no node has this identity (orphan)".to_owned())?;
@@ -499,6 +498,12 @@ fn bake_entry(
                 .to_owned(),
         );
     };
+    if entry.property == NAME {
+        let OverrideAction::Set(OverrideValue::Text(name)) = &entry.action else {
+            return Err("'name' expects a string".to_owned());
+        };
+        return Ok(format!("{variable}.name = {}", quote(name)));
+    }
     match &entry.action {
         OverrideAction::Set(value) => {
             if entry.property == motioner_core::EFFECTS {
@@ -1259,29 +1264,52 @@ mod tests {
     }
 
     #[test]
-    fn names_and_unkeys_are_refused() {
+    fn unkeys_are_refused() {
         let compiled = compiled();
         let title_id = title(&compiled);
-        for action in [
-            (
-                NAME,
-                OverrideAction::Set(OverrideValue::Text("Title".to_owned())),
-            ),
-            ("rotation", OverrideAction::Unkey { frame: 10 }),
-        ] {
-            let set = overrides(&[(&title_id, action.0, action.1)]);
-            let baked = bake(
-                HELLO,
-                &compiled.document,
-                &compiled.bindings,
-                &compiled.origins,
-                &set,
-                &[],
-            );
-            assert_eq!(baked.refused.len(), 1, "{baked:?}");
-            assert_eq!(baked.overrides.len(), 1);
-            assert!(baked.program == HELLO);
-        }
+        let set = overrides(&[(&title_id, "rotation", OverrideAction::Unkey { frame: 10 })]);
+        let baked = bake(
+            HELLO,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert_eq!(baked.refused.len(), 1, "{baked:?}");
+        assert_eq!(baked.overrides.len(), 1);
+        assert!(baked.program == HELLO);
+    }
+
+    #[test]
+    fn display_names_bake_as_assignments() {
+        let compiled = compiled();
+        let title_id = title(&compiled);
+        let set = overrides(&[(
+            &title_id,
+            NAME,
+            OverrideAction::Set(OverrideValue::Text("Title".to_owned())),
+        )]);
+        let baked = bake(
+            HELLO,
+            &compiled.document,
+            &compiled.bindings,
+            &compiled.origins,
+            &set,
+            &[],
+        );
+        assert!(baked.refused.is_empty(), "{baked:?}");
+        assert!(
+            baked.program.contains("title.name = \"Title\""),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(actual.roots().len(), compiled.document.roots().len());
+        assert!(
+            actual.nodes().any(|node| node.name() == Some("Title")),
+            "the baked assignment renames the node"
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@
     clippy::cast_sign_loss
 )]
 
+mod alloc;
 mod app;
 mod bounds;
 mod capture;
@@ -35,6 +36,7 @@ mod edit;
 mod editor;
 mod file_watch;
 mod gizmo;
+mod graph;
 mod icons;
 mod input;
 mod inspect;

@@ -148,6 +148,16 @@ impl<'a> Painter<'a> {
         self.fill(Rect::new(x, y0, t, y1 - y0), color);
     }
 
+    /// One anti-aliased line segment with round caps.
+    ///
+    /// Packs the engine's `LINE_BIT` quad: the engine computes the exact
+    /// fragment distance to the segment, so diagonals are anti-aliased without
+    /// stair-stepping through axis-aligned quads.
+    pub fn line(&mut self, from: (f32, f32), to: (f32, f32), width: f32, color: [f32; 4]) {
+        self.batch
+            .line([from.0, from.1], [to.0, to.1], width, color);
+    }
+
     /// A filled circle.
     pub fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: [f32; 4]) {
         let d = radius * 2.0;

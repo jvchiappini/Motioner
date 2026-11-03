@@ -1,20 +1,123 @@
 //! Timeline: transport strip, ruler, layer rows with visibility strips and
 //! key summaries, and the expanded property sub-rows of the selected layer.
 
-use motioner_core::{Document, Frame, NodeId, Property};
-use motioner_eval::sample;
+use std::fmt::Write as _;
+
+use motioner_core::{Frame, FrameRate};
 
 use crate::icons::{self, Icon};
-use crate::inspect::hex;
 use crate::layout::{Hit, Rect, TransportButton};
 use crate::paint::Painter;
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
-use crate::timeline::{frame_to_x, tick_frames, tick_spacing, TickUnit, MIN_TICK_SPACING_PX};
+use crate::timeline::{frame_to_x, tick_spacing, TickUnit, MIN_TICK_SPACING_PX};
 use crate::timeline_model::{RowKind, TimelineRow};
-use crate::transport::timecode;
 use crate::widgets::{self, ButtonKind, KeyMark};
+
+/// Timeline header and ruler strings, rewritten in place every frame.
+///
+/// A scrub or a playback frame changes the timecode, the counter, the playhead
+/// label and (rarely) the selected-key count. Caching them keeps the ordinary
+/// draw path allocation-free after the first frame.
+#[derive(Debug, Default)]
+pub struct ChromeText {
+    /// `HH:MM:SS:FF`.
+    pub timecode: String,
+    /// `frame / last`.
+    pub counter: String,
+    /// `seconds · frames`.
+    pub info: String,
+    /// Selected-key count, empty when nothing is selected.
+    pub selected: String,
+    /// Playhead ruler label.
+    pub head: String,
+    /// Ruler labels and their x coordinates.
+    pub ruler: Vec<(f32, String)>,
+    /// Composition-end label.
+    pub end_label: String,
+    /// Composition-end x coordinate.
+    pub end_x: f32,
+}
+
+impl ChromeText {
+    /// Empties every string, for a frame with no document.
+    pub fn clear(&mut self) {
+        self.timecode.clear();
+        self.counter.clear();
+        self.info.clear();
+        self.selected.clear();
+        self.head.clear();
+        self.ruler.clear();
+        self.end_label.clear();
+        self.end_x = 0.0;
+    }
+
+    /// Rewrites the strings for `frame` in `layout`.
+    pub fn prepare(
+        &mut self,
+        layout: &crate::layout::Layout,
+        duration: i64,
+        rate: FrameRate,
+        frame: i64,
+        selected_keys: usize,
+    ) {
+        crate::transport::write_timecode(&mut self.timecode, frame, rate);
+        self.counter.clear();
+        let _ = write!(&mut self.counter, "{} / {}", frame, duration.max(1) - 1);
+        let seconds = duration as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
+        self.info.clear();
+        let _ = write!(&mut self.info, "{seconds:.2} s \u{00b7} {duration} frames");
+        self.selected.clear();
+        if selected_keys == 1 {
+            self.selected.push_str("1 key");
+        } else if selected_keys > 1 {
+            let _ = write!(&mut self.selected, "{selected_keys} keys");
+        }
+        self.head.clear();
+        let _ = write!(&mut self.head, "{frame}");
+
+        let t = layout.timeline;
+        let spacing = tick_spacing(
+            duration.max(1),
+            rate,
+            f64::from(t.scrub.w),
+            MIN_TICK_SPACING_PX * f64::from(layout.metrics.scale),
+        );
+        let step = spacing.step_frames.max(1);
+        let mut tick = 0_i64;
+        let mut index = 0;
+        while tick < duration {
+            let x = frame_to_x(tick, duration, f64::from(t.scrub.x), f64::from(t.scrub.w)).round()
+                as f32;
+            if index == self.ruler.len() {
+                self.ruler.push((0.0, String::new()));
+            }
+            let slot = &mut self.ruler[index];
+            slot.0 = x;
+            slot.1.clear();
+            match spacing.unit {
+                TickUnit::Frames => {
+                    let _ = write!(&mut slot.1, "{tick}");
+                }
+                TickUnit::Seconds => {
+                    let seconds =
+                        tick as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
+                    let _ = write!(&mut slot.1, "{seconds:.0}s");
+                }
+            }
+            index += 1;
+            tick = tick.saturating_add(step);
+        }
+        self.ruler.truncate(index);
+        let end = duration.saturating_sub(1);
+        self.end_x =
+            frame_to_x(end, duration, f64::from(t.scrub.x), f64::from(t.scrub.w)).round() as f32;
+        let seconds = duration as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
+        self.end_label.clear();
+        let _ = write!(&mut self.end_label, "{seconds:.0}s");
+    }
+}
 
 /// Draws the timeline.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
@@ -25,7 +128,11 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
 
     header(p, v);
     ruler(p, v);
-    rows(p, v);
+    if v.graph.is_some() {
+        graph(p, v);
+    } else {
+        rows(p, v);
+    }
     if v.document.is_some() {
         playhead(p, v);
     }
@@ -53,26 +160,22 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
         .medium()
         .tracked(0.02);
     let tc = if loaded {
-        timecode(v.frame, v.rate)
+        v.chrome.timecode.as_str()
     } else {
-        "--:--:--:--".to_owned()
+        "--:--:--:--"
     };
-    let tc_w = p.measure(&tc, &tc_style);
+    let tc_w = p.measure(tc, &tc_style);
     let tc_rect = Rect::new(header.x + pad, header.y, tc_w + 1.0, header.h);
-    p.text_in(&tc, tc_rect, Align::Left, &tc_style);
+    p.text_in(tc, tc_rect, Align::Left, &tc_style);
     let counter_style = p.style(type_scale::CAPTION, t.text_muted);
-    let counter = if loaded {
-        format!("{} / {}", v.frame, v.duration.max(1) - 1)
-    } else {
-        String::new()
-    };
+    let counter = if loaded { &v.chrome.counter } else { "" };
     let counter_rect = Rect::new(
         tc_rect.right() + p.m.px(size::GRID * 3.0),
         header.y,
         p.m.px(96.0),
         header.h,
     );
-    p.text_in(&counter, counter_rect, Align::Left, &counter_style);
+    p.text_in(counter, counter_rect, Align::Left, &counter_style);
 
     for (button, rect) in v.layout.transport {
         let (icon, kind) = match button {
@@ -93,19 +196,14 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
     }
 
     // Selected keys: count and the U-filter hint, right of the transport.
-    let selected = v.selected_keys.len();
-    if selected > 0 {
+    if !v.chrome.selected.is_empty() {
         let style = p.style(type_scale::CAPTION, t.text_muted);
-        let label = if selected == 1 {
-            "1 key".to_owned()
-        } else {
-            format!("{selected} keys")
-        };
-        let w = p.measure(&label, &style);
+        let label = v.chrome.selected.as_str();
+        let w = p.measure(label, &style);
         let x = v.layout.transport[5].1.right() + p.m.px(size::PAD * 2.0);
         if x + w < header.right() - p.m.px(size::PAD * 4.0) {
             p.text_in(
-                &label,
+                label,
                 Rect::new(x, header.y, w, header.h),
                 Align::Left,
                 &style,
@@ -113,10 +211,8 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
         }
     }
 
-    let rate = v.rate;
-    let seconds = v.duration as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
-    let info = format!("{seconds:.2} s \u{00b7} {} frames", v.duration);
-    let info_w = p.measure(&info, &counter_style);
+    let info = v.chrome.info.as_str();
+    let info_w = p.measure(info, &counter_style);
     let info_rect = Rect::new(
         header.right() - pad - info_w,
         header.y,
@@ -125,7 +221,7 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
     );
     let transport_end = v.layout.transport[5].1.right();
     if loaded && info_rect.x > transport_end + pad {
-        p.text_in(&info, info_rect, Align::Left, &counter_style);
+        p.text_in(info, info_rect, Align::Left, &counter_style);
     }
 }
 
@@ -159,7 +255,7 @@ fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
         f64::from(scrub.w),
         MIN_TICK_SPACING_PX * f64::from(p.m.scale),
     );
-    let head = v.document.is_some().then(|| head_rect(p, v).0);
+    let head = v.document.is_some().then(|| head_rect(p, v));
     p.push_clip(tl.ruler);
     let label_style = p.style(type_scale::CAPTION, t.text_muted);
     let major_h = p.m.px(8.0);
@@ -177,18 +273,10 @@ fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
         }
         frame += minor_step;
     }
-    // Labels are centred on their tick so the mark and the number agree.
-    for tick in tick_frames(duration, spacing) {
-        let x = frame_to_x(tick, duration, f64::from(scrub.x), f64::from(scrub.w)).round() as f32;
-        let label = match spacing.unit {
-            TickUnit::Frames => tick.to_string(),
-            TickUnit::Seconds => {
-                let seconds =
-                    tick as f64 * f64::from(v.rate.denominator()) / f64::from(v.rate.numerator());
-                format!("{seconds:.0}s")
-            }
-        };
-        let w = p.measure(&label, &label_style);
+    // Labels are centred on their tick so the mark and the number agree; the
+    // strings and x positions are prepared once per frame.
+    for (x, label) in &v.chrome.ruler {
+        let w = p.measure(label, &label_style);
         let rect = Rect::new(
             (x - w * 0.5).round(),
             tl.ruler.y,
@@ -198,21 +286,17 @@ fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
         if head.is_some_and(|h| h.overlaps(rect)) {
             continue;
         }
-        p.text_in(&label, rect, Align::Center, &label_style);
+        p.text_in(label, rect, Align::Center, &label_style);
     }
     // The composition end is explicit: its tick and label sit at the right
     // edge, where the last frame maps to.
-    let end_frame = duration - 1;
-    let end =
-        frame_to_x(end_frame, duration, f64::from(scrub.x), f64::from(scrub.w)).round() as f32;
+    let end = v.chrome.end_x;
     p.vline(end, bottom - major_h, bottom, t.text_disabled);
-    let seconds =
-        v.duration as f64 * f64::from(v.rate.denominator()) / f64::from(v.rate.numerator());
-    let end_label = format!("{seconds:.0}s");
-    let w = p.measure(&end_label, &label_style);
+    let end_label = v.chrome.end_label.as_str();
+    let w = p.measure(end_label, &label_style);
     let rect = Rect::new(end - w, tl.ruler.y, w + 1.0, tl.ruler.h - major_h);
     if !head.is_some_and(|h| h.overlaps(rect)) {
-        p.text_in(&end_label, rect, Align::Right, &label_style);
+        p.text_in(end_label, rect, Align::Right, &label_style);
     }
     p.pop_clip();
 }
@@ -250,12 +334,8 @@ fn rows(p: &mut Painter<'_>, v: &View<'_>) {
         };
         match row.kind {
             RowKind::Layer { outline } => track_row(p, v, row_rect.row, row, outline),
-            RowKind::Transform {
-                outline,
-                property,
-                axis,
-            } => {
-                property_row(p, v, row_rect.row, row, outline, property, axis);
+            RowKind::Transform { outline, .. } => {
+                property_row(p, v, row_rect.row, row, outline);
             }
             RowKind::Content { outline, field } => {
                 content_row(p, v, row_rect.row, row, outline, field);
@@ -272,6 +352,137 @@ fn rows(p: &mut Painter<'_>, v: &View<'_>) {
             p.m.px(size::ROW),
         );
         p.text_in("No tracks", rect, Align::Left, &style);
+    }
+    p.pop_clip();
+}
+
+/// Draws the graph editor in the timeline's track area.
+#[allow(clippy::too_many_lines)] // one plot: grid, curve, handles, keys
+fn graph(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let Some(model) = v.graph else {
+        return;
+    };
+    let tl = v.layout.timeline;
+    p.fill(tl.tracks, t.app);
+    let plot = v.layout.graph_plot();
+    if plot.is_empty() {
+        return;
+    }
+    p.fill_rounded(plot, t.panel, p.m.px(size::RADIUS_SM));
+    let geometry = model.geometry(plot);
+    // The caption lives in its own strip above the plot, so it can never hide
+    // a key or a handle; the string is cached by the graph model.
+    let caption = p.style(type_scale::CAPTION, t.text_disabled);
+    p.text_in(
+        &model.caption,
+        v.layout.graph_caption(),
+        Align::Left,
+        &caption,
+    );
+    p.push_clip(plot);
+    // Two horizontal and four vertical grid lines.
+    for step in 0..=4 {
+        let x = plot.x + plot.w * (step as f32 / 4.0);
+        p.vline(x.round(), plot.y, plot.bottom(), t.hairline);
+    }
+    for step in 0..=2 {
+        let y = plot.y + plot.h * (step as f32 / 2.0);
+        p.hline(plot.x, plot.right(), y.round(), t.hairline);
+    }
+    // The value curve is sampled once per screen column and drawn as real
+    // anti-aliased segments, so named eases read truthfully and diagonals are
+    // smooth. Sampling by column (not a fixed step count) keeps the line
+    // correct at every zoom.
+    let ink = t.timeline_curve;
+    let w = p.m.px(1.5).max(1.0);
+    let right = plot.right();
+    for pair in model.keys.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        if to.frame <= from.frame {
+            continue;
+        }
+        let start = crate::graph::to_screen(&geometry, from.frame as f64, from.value);
+        let end = crate::graph::to_screen(&geometry, to.frame as f64, to.value);
+        let point_at = |x: i32| -> (f32, f32) {
+            let progress = if (end.0 - start.0).abs() < 1e-6 {
+                0.0
+            } else {
+                (x as f32 - start.0) / (end.0 - start.0)
+            };
+            let progress = f64::from(progress.clamp(0.0, 1.0));
+            #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
+            let span = (to.frame - from.frame) as f64;
+            let frame = from.frame as f64 + progress * span;
+            let value =
+                from.value + motioner_eval::ease(to.ease, progress) * (to.value - from.value);
+            (x as f32, crate::graph::to_screen(&geometry, frame, value).1)
+        };
+        let first = start.0.max(plot.x).ceil();
+        let last = end.0.min(right).floor();
+        #[allow(clippy::cast_possible_truncation)] // screen columns
+        let (first, last) = (first as i32, last as i32);
+        if last < first {
+            // A segment shorter than one column still draws if it is on
+            // screen; otherwise it contributes nothing.
+            if start.0 >= plot.x && end.0 <= right {
+                p.line(start, end, w, ink);
+            }
+            continue;
+        }
+        let mut previous = point_at(first);
+        for x in (first + 1)..=last {
+            let point = point_at(x);
+            p.line(previous, point, w, ink);
+            previous = point;
+        }
+    }
+    // Handles first, then keys, so a key wins a shared position.
+    for handle in model.handles(plot) {
+        let segment = &model.keys[handle.segment..=handle.segment + 1];
+        let from = crate::graph::to_screen(&geometry, segment[0].frame as f64, segment[0].value);
+        let to = crate::graph::to_screen(&geometry, segment[1].frame as f64, segment[1].value);
+        let anchor = match handle.kind {
+            crate::graph::HandleKind::Out => from,
+            crate::graph::HandleKind::In => to,
+        };
+        p.line(anchor, handle.at, p.m.hairline().max(1.0), t.border);
+        let side = p.m.px(8.0);
+        p.fill_rounded(
+            Rect::new(
+                handle.at.0 - side * 0.5,
+                handle.at.1 - side * 0.5,
+                side,
+                side,
+            ),
+            t.accent,
+            p.m.px(2.0),
+        );
+    }
+    let diamond = p.m.px(10.0);
+    let id = model.id.as_str();
+    for point in model.points(plot) {
+        let rect = Rect::new(
+            point.at.0 - diamond * 0.5,
+            point.at.1 - diamond * 0.5,
+            diamond,
+            diamond,
+        );
+        let selected = v.selected_keys.iter().any(|key| {
+            key.id.as_str() == id
+                && key.frame == model.keys[point.key].frame
+                && key.property == model.property
+        });
+        widgets::key_marker(
+            p,
+            rect,
+            if selected {
+                KeyMark::Selected
+            } else {
+                KeyMark::Key
+            },
+            false,
+        );
     }
     p.pop_clip();
 }
@@ -402,9 +613,8 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
     let Some(outline_row) = v.outline.get(outline) else {
         return;
     };
-    let name = outline_row.name.clone();
-    let row_rect = v.timeline_layout.rows[index].clone();
-    name_cell(p, v, &row_rect, row, &name, !visible || locked);
+    let row_rect = &v.timeline_layout.rows[index];
+    name_cell(p, v, row_rect, row, &outline_row.name, !visible || locked);
 
     let tl = v.layout.timeline;
     let duration = v.duration.max(1);
@@ -456,10 +666,10 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
     }
     let id = layer_identity(v, outline);
     for key in &row.summary {
-        let selected = id.as_deref().is_some_and(|id| {
+        let selected = id.is_some_and(|id| {
             v.selected_keys
                 .iter()
-                .any(|k| k.frame == key.frame && k.id == id)
+                .any(|k| k.frame == key.frame && k.id.as_str() == id)
         });
         let mark = if selected {
             KeyMark::Selected
@@ -473,18 +683,13 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
 }
 
 /// The identity of an outline row's node.
-fn layer_identity(v: &View<'_>, outline: usize) -> Option<String> {
+///
+/// Borrowed from the document: a selected-key test must not allocate one
+/// identity `String` per visible row on every frame.
+fn layer_identity<'a>(v: &'a View<'_>, outline: usize) -> Option<&'a str> {
     let node = v.outline.get(outline)?.node;
     let document = v.document?;
-    Some(document.node(node)?.identity().as_str().to_owned())
-}
-
-/// The override name of a channel: `pos.x`, `opacity`.
-fn channel_name(property: Property, axis: Option<motioner_core::Axis>) -> String {
-    match axis {
-        Some(axis) => format!("{}.{}", property.name(), axis.name()),
-        None => property.name().to_owned(),
-    }
+    Some(document.node(node)?.identity().as_str())
 }
 
 fn property_row(
@@ -493,8 +698,6 @@ fn property_row(
     index: usize,
     row: &TimelineRow,
     outline: usize,
-    property: Property,
-    axis: Option<motioner_core::Axis>,
 ) {
     let Some(row_rect) = v.timeline_layout.rows.get(index).cloned() else {
         return;
@@ -507,16 +710,9 @@ fn property_row(
         .copied()
         .unwrap_or((true, false));
     let dim = !visible || locked;
-    let label = channel_label(property, axis);
-    let name = channel_name(property, axis);
-    let value = v
-        .document
-        .and_then(|document| v.outline.get(outline).map(|row| (document, row.node)))
-        .map_or_else(String::new, |(document, node)| {
-            value_text(document, node, property, axis, v.frame)
-        });
-    draw_row_controls(p, v, index, row, &row_rect, &label, &value, dim);
-    draw_row_keys(p, v, row, outline, &name, rect, dim);
+    let value = v.timeline_values.get(index).map_or("", String::as_str);
+    draw_row_controls(p, v, index, row, &row_rect, &row.label, value, dim);
+    draw_row_keys(p, v, row, outline, &row.channel, rect, dim);
 }
 
 #[allow(clippy::too_many_arguments)] // one row's controls, kept flat
@@ -643,10 +839,10 @@ fn draw_row_keys(
             diamond,
             diamond,
         );
-        let selected = id.as_deref().is_some_and(|id| {
+        let selected = id.is_some_and(|id| {
             v.selected_keys
                 .iter()
-                .any(|key| key.frame == *frame && key.property == name && key.id == id)
+                .any(|key| key.frame == *frame && key.property == name && key.id.as_str() == id)
         });
         let mark = if selected {
             KeyMark::Selected
@@ -675,151 +871,10 @@ fn content_row(
         .copied()
         .unwrap_or((true, false));
     let dim = !visible || locked;
-    let value = v
-        .document
-        .and_then(|document| v.outline.get(outline).map(|row| (document, row.node)))
-        .map_or_else(String::new, |(document, node)| {
-            content_text(document, node, field, v.frame)
-        });
-    let name = field_label(field);
-    draw_row_controls(p, v, index, row, &row_rect, &name, &value, dim);
+    let value = v.timeline_values.get(index).map_or("", String::as_str);
+    draw_row_controls(p, v, index, row, &row_rect, &row.label, value, dim);
     if field.is_animatable() {
-        draw_row_keys(p, v, row, outline, &name, rect, dim);
-    }
-}
-
-/// The shared inspector/timeline label of a transform channel.
-fn channel_label(property: Property, axis: Option<motioner_core::Axis>) -> String {
-    crate::labels::transform_label(property, axis)
-}
-
-/// The shared inspector/timeline label of a content field.
-fn field_label(field: motioner_core::ContentField) -> String {
-    crate::labels::content_label(field)
-}
-
-fn value_text(
-    document: &Document,
-    node: NodeId,
-    property: Property,
-    axis: Option<motioner_core::Axis>,
-    frame: Frame,
-) -> String {
-    let Some(node) = document.node(node) else {
-        return String::new();
-    };
-    let t = node.transform();
-    let scalar = |value: &motioner_core::Animatable<f64>| round(sample(value, frame));
-    match (property, axis) {
-        (Property::Position, Some(axis)) => scalar(t.position.axis(axis)),
-        (Property::Scale, Some(axis)) => {
-            format!("{}%", round(sample(t.scale.axis(axis), frame) * 100.0))
-        }
-        (Property::Anchor, Some(axis)) => scalar(t.anchor.axis(axis)),
-        (Property::Position, None) => {
-            let v = motioner_eval::sample_vec2(&t.position, frame);
-            format!("{}, {}", round(v.x), round(v.y))
-        }
-        (Property::Scale, None) => {
-            let v = motioner_eval::sample_vec2(&t.scale, frame);
-            format!("{}%, {}%", round(v.x * 100.0), round(v.y * 100.0))
-        }
-        (Property::Anchor, None) => {
-            let v = motioner_eval::sample_vec2(&t.anchor, frame);
-            format!("{}, {}", round(v.x), round(v.y))
-        }
-        (Property::Rotation, _) => format!("{}\u{00b0}", scalar(&t.rotation)),
-        (Property::Opacity, _) => format!("{}%", round(sample(&t.opacity, frame) * 100.0)),
-    }
-}
-
-fn content_text(
-    document: &Document,
-    node: NodeId,
-    field: motioner_core::ContentField,
-    frame: Frame,
-) -> String {
-    if let Some(motioner_core::ContentValue::Gradient(Some(gradient))) = document
-        .node(node)
-        .and_then(|node| node.content().static_value(field))
-    {
-        return format!("{} gradient", gradient.kind().name());
-    }
-    match field {
-        motioner_core::ContentField::Fill | motioner_core::ContentField::Stroke => {
-            match crate::editor::channels::sampled_colour(document, node, field, frame) {
-                crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
-                crate::editor::channels::SampledColour::Absent => "none".to_owned(),
-                crate::editor::channels::SampledColour::NotColour => "n/a".to_owned(),
-            }
-        }
-        motioner_core::ContentField::FillStopOffset(_)
-        | motioner_core::ContentField::StrokeStopOffset(_) => {
-            crate::editor::channels::sampled_number(document, node, field, frame)
-                .map_or_else(|| "n/a".to_owned(), round)
-        }
-        motioner_core::ContentField::FillStopColor(_)
-        | motioner_core::ContentField::StrokeStopColor(_) => {
-            match crate::editor::channels::sampled_colour(document, node, field, frame) {
-                crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
-                _ => "n/a".to_owned(),
-            }
-        }
-        motioner_core::ContentField::StrokeWidth
-        | motioner_core::ContentField::Width
-        | motioner_core::ContentField::Height
-        | motioner_core::ContentField::Radius
-        | motioner_core::ContentField::Size
-        | motioner_core::ContentField::Weight
-        | motioner_core::ContentField::Tracking
-        | motioner_core::ContentField::LineHeight
-        | motioner_core::ContentField::TrimStart
-        | motioner_core::ContentField::TrimEnd
-        | motioner_core::ContentField::TrimOffset
-        | motioner_core::ContentField::Dash
-        | motioner_core::ContentField::DashOffset => {
-            crate::editor::channels::sampled_number(document, node, field, frame)
-                .map_or_else(|| "n/a".to_owned(), round)
-        }
-        motioner_core::ContentField::Color => {
-            match crate::editor::channels::sampled_colour(document, node, field, frame) {
-                crate::editor::channels::SampledColour::Colour(colour) => hex(colour),
-                _ => String::new(),
-            }
-        }
-        motioner_core::ContentField::Text
-        | motioner_core::ContentField::Align
-        | motioner_core::ContentField::Cap
-        | motioner_core::ContentField::Join
-        | motioner_core::ContentField::Source
-        | motioner_core::ContentField::Fit => {
-            match document
-                .node(node)
-                .and_then(|node| node.content().static_value(field))
-            {
-                Some(motioner_core::ContentValue::Text(text)) => text,
-                Some(motioner_core::ContentValue::Align(align)) => match align {
-                    motioner_core::TextAlign::Left => "left",
-                    motioner_core::TextAlign::Center => "center",
-                    motioner_core::TextAlign::Right => "right",
-                }
-                .to_owned(),
-                Some(motioner_core::ContentValue::Cap(cap)) => cap.name().to_owned(),
-                Some(motioner_core::ContentValue::Join(join)) => join.name().to_owned(),
-                Some(motioner_core::ContentValue::Fit(fit)) => fit.name().to_owned(),
-                _ => "n/a".to_owned(),
-            }
-        }
-    }
-}
-
-fn round(value: f64) -> String {
-    let value = (value * 10.0).round() / 10.0;
-    let value = if value == 0.0 { 0.0 } else { value };
-    if value.fract().abs() < 1e-9 {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.1}")
+        draw_row_keys(p, v, row, outline, &row.channel, rect, dim);
     }
 }
 
@@ -895,10 +950,10 @@ fn playhead(p: &mut Painter<'_>, v: &View<'_>) {
         t.accent,
     );
 
-    let (head, label) = head_rect(p, v);
+    let head = head_rect(p, v);
     let style = p.style(type_scale::CAPTION, t.text).medium();
     p.fill_rounded(head, t.accent, p.m.px(size::RADIUS_SM));
-    p.text_in(&label, head, Align::Center, &style);
+    p.text_in(&v.chrome.head, head, Align::Center, &style);
     p.pop_clip();
 }
 
@@ -915,7 +970,7 @@ fn retime_pill(p: &mut Painter<'_>, v: &View<'_>) {
     } else {
         format!("{delta}f")
     };
-    let (head, _) = head_rect(p, v);
+    let head = head_rect(p, v);
     let width = widgets::pill_width(p, &label, &style);
     let x = (head.center_x() - width * 0.5).round();
     let margin = p.m.px(size::GRID);
@@ -925,7 +980,7 @@ fn retime_pill(p: &mut Painter<'_>, v: &View<'_>) {
 }
 
 /// The playhead tab on the ruler and its frame label.
-fn head_rect(p: &Painter<'_>, v: &View<'_>) -> (Rect, String) {
+fn head_rect(p: &Painter<'_>, v: &View<'_>) -> Rect {
     let tl = v.layout.timeline;
     let duration = v.duration.max(1);
     let x = frame_to_x(
@@ -936,14 +991,10 @@ fn head_rect(p: &Painter<'_>, v: &View<'_>) -> (Rect, String) {
     )
     .round() as f32;
     let style = p.style(type_scale::CAPTION, p.theme.text).medium();
-    let label = v.frame.to_string();
-    let w = (p.measure(&label, &style) + p.m.px(size::GRID * 3.0)).round();
+    let w = (p.measure(&v.chrome.head, &style) + p.m.px(size::GRID * 3.0)).round();
     let h = p.m.px(18.0);
     let head_x = (x - w * 0.5)
         .clamp(tl.ruler.x, tl.ruler.right() - w)
         .round();
-    (
-        Rect::new(head_x, (tl.ruler.center_y() - h * 0.5).round(), w, h),
-        label,
-    )
+    Rect::new(head_x, (tl.ruler.center_y() - h * 0.5).round(), w, h)
 }

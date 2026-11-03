@@ -1805,6 +1805,7 @@ dependencies = [
 name = "motioner_ui"
 version = "0.1.0"
 dependencies = [
+ "ferrous_2d",
  "ferrous_engine",
  "ferrous_font",
  "ferrous_gui",

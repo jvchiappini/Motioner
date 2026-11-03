@@ -56,6 +56,8 @@ pub(crate) fn create(
         images: crate::ImageSet::new(),
         image_textures: HashMap::new(),
         texture_budget: crate::DEFAULT_TEXTURE_BUDGET,
+        evaluator: motioner_eval::Evaluator::new(),
+        plan: RenderPlan::new(),
     })
 }
 
@@ -136,6 +138,7 @@ fn render_plan_into_target(
         &gradients,
         &renderer.images,
         &mut renderer.image_textures,
+        None,
     );
     let report = renderer.harness.render_frame();
     Ok((stats, report))
@@ -193,13 +196,39 @@ pub(crate) fn render_frame(
     out: &mut Vec<u8>,
 ) -> Result<FrameStats, RenderError> {
     let composition = document.composition();
-    let mut evaluator = motioner_eval::Evaluator::new();
-    let mut plan = RenderPlan::new();
-    if !composition.motion_blur() {
+    // Move the scratch out of the renderer so the frame helpers can borrow
+    // the renderer mutably; the buffers are put back unchanged afterwards.
+    let mut evaluator = std::mem::take(&mut renderer.evaluator);
+    let mut plan = std::mem::take(&mut renderer.plan);
+    let stats = if composition.motion_blur() {
+        render_motion_blur(renderer, document, frame, &mut evaluator, &mut plan, out)
+    } else {
         evaluator.evaluate(document, frame, &mut plan);
-        return render(renderer, document, &plan, out);
-    }
-    render_motion_blur(renderer, document, frame, &mut evaluator, &mut plan, out)
+        render(renderer, document, &plan, out)
+    };
+    renderer.evaluator = evaluator;
+    renderer.plan = plan;
+    stats
+}
+
+/// The sub-frame sampling times of a motion-blurred frame (D-0037).
+///
+/// Exposed so the editor preview accumulates exactly the same instants as
+/// `still` and `render`.
+pub fn motion_blur_times(document: &Document, frame: Frame, samples: u32) -> Vec<f64> {
+    let composition = document.composition();
+    let shutter = composition.shutter();
+    let samples = samples.clamp(1, 64);
+    (0..samples)
+        .map(|index| {
+            let subframe = f64::from(index);
+            let offset = (shutter / 360.0) * ((subframe + 0.5) / f64::from(samples) - 0.5);
+            #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
+            {
+                frame as f64 + offset
+            }
+        })
+        .collect()
 }
 
 fn render_motion_blur(
@@ -210,9 +239,20 @@ fn render_motion_blur(
     plan: &mut RenderPlan,
     out: &mut Vec<u8>,
 ) -> Result<FrameStats, RenderError> {
-    let composition = document.composition();
-    let shutter = composition.shutter();
-    let samples = composition.samples();
+    let samples = document.composition().samples();
+    render_motion_blur_samples(renderer, document, frame, samples, evaluator, plan, out)
+}
+
+pub(crate) fn render_motion_blur_samples(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    frame: Frame,
+    samples: u32,
+    evaluator: &mut motioner_eval::Evaluator,
+    plan: &mut RenderPlan,
+    out: &mut Vec<u8>,
+) -> Result<FrameStats, RenderError> {
+    let times = motion_blur_times(document, frame, samples);
     renderer
         .harness
         .begin_accumulation_2d()
@@ -220,11 +260,7 @@ fn render_motion_blur(
             message: error.to_string(),
         })?;
     let mut last = FrameStats::default();
-    for index in 0..samples {
-        let subframe = f64::from(index);
-        let offset = (shutter / 360.0) * ((subframe + 0.5) / f64::from(samples) - 0.5);
-        #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
-        let time = frame as f64 + offset;
+    for time in times {
         evaluator.evaluate_fractional(document, frame, time, plan);
         let (paint, report) = render_plan_into_target(renderer, document, plan)?;
         renderer
@@ -326,6 +362,7 @@ pub(crate) fn paint_plan(
     gradients: &crate::gradients::GradientTable,
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
+    hidden: Option<&std::collections::BTreeSet<NodeId>>,
 ) -> PaintStats {
     let mut total = 0u32;
     for item in plan.items() {
@@ -393,7 +430,9 @@ pub(crate) fn paint_plan(
             });
             next_layer += 1;
         }
+        let skipped = hidden.is_some_and(|hidden| hidden.contains(&item.node));
         match item.shape {
+            _ if skipped => {}
             ItemShape::Text {
                 size,
                 weight,

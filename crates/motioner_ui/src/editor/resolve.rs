@@ -150,6 +150,28 @@ impl Editor {
                     ease,
                 }])]
             }
+            Command::MoveKeyValue {
+                id,
+                property,
+                from,
+                to,
+                value,
+            } => {
+                let (from, to) = (from.frame(rate)?, to.frame(rate)?);
+                let (node, channel) = channels::resolve(document, id, property)?;
+                let (_, ease) = existing_key(document, node, channel, from, id, property)?;
+                let value = channel_value(channel, value)?;
+                vec![EditCommand::MoveKeys(vec![MoveKey {
+                    key: KeyRef {
+                        id: id.clone(),
+                        property: channel.name(),
+                        frame: from,
+                    },
+                    to,
+                    value,
+                    ease,
+                }])]
+            }
             Command::Ease {
                 id,
                 property,
