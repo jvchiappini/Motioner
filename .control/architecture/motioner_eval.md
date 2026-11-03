@@ -16,8 +16,16 @@ accumulates opacity down the hierarchy and resolves paints.
 - `resolved_paint` — samples fill, stroke and stroke width; a stroke is drawn
   only when its colour is present and its width is positive:
   `crates/motioner_eval/src/evaluate.rs:132-150`.
-- `sample` — holds outside the key range, interpolates with the arriving key's
-  ease inside it: `crates/motioner_eval/src/curve.rs:95-125`.
+- `sample` / `sample_at` — holds outside the key range, interpolates with the
+  arriving key's ease inside it; `sample_at` takes a fractional frame time for
+  motion blur and the integer path calls it with an exact conversion
+  (D-0037): `crates/motioner_eval/src/curve.rs:200-280`.
+- `ease` — linear/quad/cubic/back, `hold`, the four Penner curves and the
+  deterministic bezier solver (8 Newton–Raphson steps, then 64 bisection
+  steps): `crates/motioner_eval/src/curve.rs:13-170`.
+- `Evaluator::evaluate_fractional` — the same traversal with a fractional
+  `time`; `plan.frame` keeps the integer frame: 
+  `crates/motioner_eval/src/evaluate.rs:60-230`.
 - `Interpolate for Color` / `Option<Color>` — linear-light midpoint; an
   optional colour with a `none` endpoint holds (D-0028):
   `crates/motioner_eval/src/curve.rs:58-82`.

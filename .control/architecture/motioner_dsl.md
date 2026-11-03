@@ -17,7 +17,17 @@ document, plus value origins and bake. The language is the project format
   values; a point is `(x, y)` or `(x, y, in_dx, in_dy, out_dx, out_dy)` and
   the paint/cap/join/trim/dash arguments map to content fields (D-0029):
   `crates/motioner_dsl/src/scene.rs:243-400`.
-- `Scene::linear_gradient` / `radial_gradient` are pure builtins that`n  `build a `Gradient` from `(start, end)` or `(center, radius)` and a`n  `stops` list; constructors attach it to `fill`/`stroke`/text `color`,`n  `and `ContentField::from_name` parses `fill_stop<n>_color` (D-0030):`n  `crates/motioner_dsl/src/builtins.rs:80-190` and`n  `crates/motioner_dsl/src/scene.rs:700-790`.
+- `Scene::linear_gradient` / `radial_gradient` are pure builtins that
+  build a `Gradient` from `(start, end)` or `(center, radius)` and a
+  `stops` list; constructors attach it to `fill`/`stroke`/text `color`,
+  and `ContentField::from_name` parses `fill_stop<n>_color` (D-0030):
+  `crates/motioner_dsl/src/builtins.rs:80-190` and
+  `crates/motioner_dsl/src/scene.rs:700-790`.
+- `bezier(x1, y1, x2, y2)` is a pure builtin returning a `Value::Ease`;
+  `key(..., ease=...)` accepts a name string or that value. `stagger` and
+  `node.wiggle` emit ordinary keys through the same `Scene::key` path
+  (D-0037): `crates/motioner_dsl/src/builtins.rs:70-95` and
+  `crates/motioner_dsl/src/scene.rs:690-850`.
 - `ValueOrigins` — the span, literal shape and ease of every written value, the
   input of the hybrid bake: `crates/motioner_dsl/src/origins.rs:52-174`.
 - `bake` — edits private literals in place, otherwise appends a generated

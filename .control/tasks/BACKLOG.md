@@ -12,7 +12,6 @@
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
 - **T-APP-0003** — Showcase Pro: a 20-30 s 1080p60 studio-quality example `[media]` (actualizado 2026-11-01)
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
-- **T-CORE-0002** — Professional easing, motion blur and animation helpers `[media]` (actualizado 2026-11-01)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)
 - **T-UI-0006** — Editor quality of life for big scenes (names, outline, search, graph editor, 1000 layers) `[media]` (actualizado 2026-11-01)
 - **T-PERF-0002** — Professional motion performance, docs and final report `[baja]` (actualizado 2026-11-01)

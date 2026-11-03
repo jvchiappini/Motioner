@@ -19,6 +19,13 @@ in the workspace and never touches the file system or a GPU.
   `crates/motioner_core/src/node.rs:492-565`.
 - `Document::add_content_keyframe` / `remove_content_keyframe` — the validated
   path for keyed content fields: `crates/motioner_core/src/document.rs:301-360`.
+- `Ease` / `BezierEase` — named presets plus a CSS cubic-bezier curve whose
+  four control values are quantised to 1e-6 as `i32`, keeping `Eq`/`Hash`
+  honest; `mdf_value`/`mdf_literal` round-trip the overrides and bake forms
+  (D-0037): `crates/motioner_core/src/animation.rs:9-260`.
+- `Composition::with_motion_blur` — validates shutter `(0, 360]` and samples
+  `1..=64`; `motion_blur`, `shutter`, `samples` are read by render and the
+  editor (D-0037): `crates/motioner_core/src/document.rs:20-150`.
 - `Color` — sRGB with straight alpha, the shared linear-light transfer
   function and the interpolation midpoint: `crates/motioner_core/src/color.rs:39-150`.
 - `PathGeometry` — authored points with relative Bézier handles, adaptive

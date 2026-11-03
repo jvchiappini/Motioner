@@ -9,6 +9,12 @@ documented `LivePainter` exception.
 
 ## Key components
 
+- `FrameRenderer::render_frame` — evaluates integer frames and, when
+  `comp(motion_blur=True)`, samples the centred sub-frame times and averages
+  them in linear light through the engine accumulation API. The
+  `engine-accumulation` feature is off while the pin predates that API, so
+  the hook returns the typed `Unsupported` until the bump (D-0037/D-0038):
+  `crates/motioner_render/src/frame.rs:90-260`.
 - `FrameRenderer` — the headless pipeline: harness, embedded Roboto, readback:
   `crates/motioner_render/src/lib.rs:137-280`.
 - `paint_plan` — the single plan → engine path shared by headless and live

@@ -24,6 +24,13 @@ only place that names engine types on the editor side (through
 
 - `Editor` — session, transport, selection, undo, command execution (D-0024):
   `crates/motioner_ui/src/editor/mod.rs:113-660`.
+- `labels` — the one display-label table for transform and content channels,
+  shared by the inspector and the timeline so "Width"/"Height" cannot differ
+  (D-0037): `crates/motioner_ui/src/labels.rs:1-116`.
+- The inspector Keys section draws one tile per `Ease::ALL` preset with a
+  curve thumbnail; a selected bezier key shows its four numbers (read-only;
+  `set_ease(bezier(...))` edits them). `motion_blur_preview(on)` sets the
+  editor flag and the top-bar indicator (D-0037).
 - `editor::channels` — the one channel table. A `Channel` is
   `Transform(property, axis)` or `Content(field)`; keys, eases, sampling and
   key lookup all go through it (D-0028):

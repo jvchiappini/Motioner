@@ -27,6 +27,7 @@
 - **T-UI-0003** — Editing in the editor: overrides, inspector, gizmos, keyframes and undo `[alta]` (actualizado 2026-11-01)
 - **T-UI-0004** — Polish the editor after prompt 08: visibility strips, easing curves, key markers, inspector, timeline height `[alta]` (actualizado 2026-11-01)
 - **T-UI-0005** — Canvas zoom and pan on one viewport mapping `[alta]` (actualizado 2026-11-01)
+- **T-CORE-0002** — Professional easing, motion blur and animation helpers `[media]` (actualizado 2026-11-03)
 - **T-DSL-0006** — Hybrid bake: edit literal arguments in the program, overrides for the rest `[media]` (actualizado 2026-11-01)
 - **T-RENDER-0006** — FerrousEngine: honour a screenshot request made in update `[media]` (actualizado 2026-11-01)
 - **T-RENDER-0013** — Images (project-relative, content-hash cache, fit modes) `[media]` (actualizado 2026-11-02)

@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-02
+actualizado: 2026-11-03
 actualizado_por: agente
 version_schema: 1
 ---
@@ -19,8 +19,8 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   Motioner, FerrousEngine and GUIMaker.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
 - Prompt 10 is a 12-phase job. **Phases 1-8 are done** (phase 8 images and
-  the phase 7 leftovers landed at pin e0cc574). Later phases have their
-  backlog tasks.
+  the phase 7 leftovers landed at pin e0cc574). **Phase 9 is done** (easing,
+  motion blur, helpers; D-0037/D-0038). Later phases have their backlog tasks.
 - **FerrousEngine is a general-purpose engine, not a Motioner backend.** A
   missing render capability is built in the clone as a public engine feature
   with rustdoc, `crates/<crate>/docs/`, an `mkdocs.yml` entry and engine
@@ -60,6 +60,21 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   first use and reuses them by key; missing files fail `still`/`render` with
   `UnresolvedImage` and draw a placeholder in the preview. `examples/images.motion`
   and two goldens (`images_fit_f030.png`, `images_composite_f150.png`).
+- **Timing (D-0037)**: `Ease` keeps `Copy + Eq + Hash`; `BezierEase` quantises
+  the four control values to 1e-6 as `i32`. New presets `hold`,
+  `elastic_out`, `bounce_out`, `expo_in_out`, `sine_in_out`; `bezier(...)` is
+  parsed in MDF, the overrides file and commands. The solver is 8
+  Newton–Raphson steps then 64 bisection steps. `comp(..., motion_blur=True,
+  shutter=180, samples=8)`; `Evaluator::evaluate_fractional` samples fractional
+  times; `render_frame` averages sub-frames through the engine accumulation
+  API. `stagger` and `wiggle` emit ordinary keys (SplitMix64 for `wiggle`).
+  Editor: ease grid includes the new presets; a bezier key shows its four
+  numbers; `motion_blur_preview(on)` and a top-bar indicator.
+- **Engine accumulation (D-0038)**: `Accumulation2d` in `ferrous_2d`, mirrored
+  on `Renderer`, `Pure2dHarness` and `RenderContext`; `Rgba16Float`,
+  premultiplied linear, weighted add, normalised resolve. The clone has it;
+  the pin does not yet, so Motioner gates the render hook behind the
+  `engine-accumulation` feature (off by default, typed `Unsupported`).
 - **Measurement fix**: `ferrous_font::LayoutData` (engine clone) is the CPU
   table source; `FontAtlas` builds through it. `CpuTextMetrics` caches one
   `LayoutData` per face and calls `measure_block`; `measure_parser` is gone.
@@ -80,6 +95,11 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   `motioner_render/tests/golden_images.rs` pins their SHA-256, checks overlap
   pixels and compares the render against the pin. The badge asset is
   256 px drawn at 160 px, so the example goes through the mip chain.
+- Timing (D-0037): `timing_eases_f030.png` (hold dot at its old position,
+  elastic overshoot) and `timing_motion_blur_f400.png` (0.75-coverage streak,
+  static reference). `motioner_render/tests/golden_timing.rs` pins them; the
+  render comparison and the on/off reference check need
+  `--features engine-accumulation`.
 
 ## Gotchas
 
@@ -125,6 +145,14 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
     shadow alpha, budget, oversized error).
   - Docs: `crates/ferrous_2d/docs/images.md` (linked from the README and
     `mkdocs.yml`), `ferrous_font/docs/README.md`.
+- **Uncommitted engine work (Phase 9)**: `ferrous_2d/src/render/accumulation.rs`
+  (`Accumulation2d`, `AccumulationError`, `ACCUMULATION_FORMAT`),
+  `assets/shaders/accumulation_2d.wgsl`, mirrors on `Renderer`,
+  `Pure2dHarness`, `RenderContext`; `register_texture_2d` with
+  `mipmaps:false` builds level 0 only (`build_level_zero`); tests
+  `pure2d_accumulation.rs` and the new `pure2d_images.rs` case; docs
+  `crates/ferrous_2d/docs/accumulation.md`. The reviewer must commit this and
+  bump the pin before `engine-accumulation` can be turned on.
 - **Flaky GPU tests**: the first parallel run after a build can fail with
   `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
   Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
@@ -150,11 +178,13 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-Phase 8 (images) plus the phase 7 leftovers: engine `LayoutData` + mipmapped
-`register_texture_2d` + image tests/docs; Motioner core/DSL/eval/io/render/UI
-image support, measurement through `LayoutData`, text-animator commands and
-bake, `examples/images.motion` with generated assets, two goldens, the 4K
-mipmap comparison in `out/mips_*.png`. The reviewer committed the engine
-(e0cc574), bumped the pin, removed `engine-images`/`engine-layout-data` and
-the `measure_parser` fallback, and re-laid out the example (labels per box,
-beat 2 centred, 256 px badge) with new goldens. Next: Phase 9.
+Phase 9 (timing): engine `Accumulation2d` + `build_level_zero` + tests/docs;
+Motioner `BezierEase`/new eases/`evaluate_fractional`/`render_frame`/
+`stagger`/`wiggle`, overrides/bake/query round-trip, editor ease grid and
+`motion_blur_preview`, `examples/timing.motion`, two goldens, preview and
+editor screenshots in `out/ui/`. Part A: image layer names (file stem) and
+row truncation, one label table for inspector/timeline, preview screenshots
+with real textures, engine level-0-only mipmaps. Gate green; feature-on
+clippy and the motion-blur golden were generated against the clone. Next:
+commit the engine clone, bump the pin, turn `engine-accumulation` on, then
+Phase 10.
