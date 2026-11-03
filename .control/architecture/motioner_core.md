@@ -66,3 +66,15 @@ Not needed: the crate is a leaf and its public types are the diagram.
 ## Documentation status
 
 partial — last verified: 2026-11-01
+
+## Images (D-0035)
+
+- `NodeContent::Image(ImageContent)` stores a project-relative `source`, an
+  optional resolved `ImageAsset { key, width, height }`, an animatable
+  destination `width`/`height` (`0` = natural) and a discrete `fit`.
+  `ImageLayout::compute` is the one contain/cover/fill arithmetic.
+- `ContentField::Source` and `ContentField::Fit` are discrete; `Width` and
+  `Height` are the usual scalar channels, so `set`/`edit`/`key` work by name.
+- `Document::resolve_images(&dyn ImageResolver)` fills `asset` and reports
+  `ImageIssue`s; core never reads a file. `ImageKey` is the SHA-256 digest and
+  `DecodedImage` is the renderer-facing byte record.

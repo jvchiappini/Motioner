@@ -9,7 +9,7 @@ version_schema: 1
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
 custom FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds
-the composition. Scope and decisions: REF-0001..0004, D-0010..D-0034.
+the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
 
 ## Working model
 
@@ -18,10 +18,9 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0034.
 - Prompts live in `.control/prompts/{opencode,claude}/`. Work only inside
   Motioner, FerrousEngine and GUIMaker.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
-- Prompt 10 is a 12-phase job. **Phases 1-6 are done. Phase 7 (typography) is
-  implemented and green, with the engine bump pending.** Every later phase has
-  its backlog task (T-RENDER-0013, T-CORE-0002, T-UI-0006/0007, T-APP-0003,
-  T-PERF-0002) with its design in the body.
+- Prompt 10 is a 12-phase job. **Phases 1-8 are done** (phase 8 images and
+  the phase 7 leftovers landed at pin e0cc574). Later phases have their
+  backlog tasks.
 - **FerrousEngine is a general-purpose engine, not a Motioner backend.** A
   missing render capability is built in the clone as a public engine feature
   with rustdoc, `crates/<crate>/docs/`, an `mkdocs.yml` entry and engine
@@ -45,26 +44,25 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0034.
 - **Professional motion model (D-0028)**: content fields are animatable
   channels (`Animatable<f64|Color|Option<Color>>`), colour interpolation is
   linear-light sRGB. `NodeContent::channel(field)` is the one field table.
-- **Vector paths (D-0029)**: `path`, `polygon`, `star`, `arc`, animatable
-  trim/dash, lyon tessellation with a per-node cache.
-- **Gradients (D-0030)**: `linear_gradient`/`radial_gradient` for fill, stroke
-  and text; 2..16 stops with animatable offset/colour; linear-light
-  interpolation; plan gradient arena; per-frame engine table.
-- **Blend modes (D-0031)**: seven modes on every node (discrete property).
-- **Layer effects (D-0032)**: ordered stack `drop_shadow` / `blur` / `glow`,
-  params animatable, rendered via `push_layer_2d_with_effects`.
-- **Masks (D-0033)**: `node.mask(source, mode=..., invert=...)`, stored in the
-  `mask` override, rendered since pin e8b9ba7.
-- **Typography (D-0034)**: Inter 400/600/700 in `assets/fonts/` (OFL.txt);
-  `FontSet` lookup (project first, bundled last, nearest-weight warning, typed
-  missing-family error); `TextMetrics` in core + `CpuTextMetrics` in render;
-  `text(..., font=, weight=, tracking=, line_height=)`; `\n` multi-line;
-  `text_width`/`text_bounds`; `node.animate_chars(...)` for opacity / offset /
-  scale / rotation / colour. Tracking and line height are animatable channels;
-  weight is discrete. Styled draw and per-glyph draw render since pin
-  06a8adf. The inspector Text section has Family, Weight,
-  Size, Tracking, Line height (stopwatches) and `\n` escaping. **Remaining:**
-  `text_anim_add`/`text_anim_remove` commands, the animators override and bake.
+- **Vector paths (D-0029)**, **gradients (D-0030)**, **blend modes (D-0031)**,
+  **layer effects (D-0032)**, **masks (D-0033)** as before.
+- **Typography (D-0034)**: Inter 400/600/700 in `assets/fonts/`; `FontSet`;
+  `TextMetrics` in core + `CpuTextMetrics` in render; `text_width`/`text_bounds`;
+  `node.animate_chars(...)`; the inspector Text section. **Leftovers done**:
+  `text_anim_add`/`text_anim_remove`, the `text_animators` override,
+  `node.clear_chars()`, bake emitting `animate_chars`, the inspector Animators
+  section, `query` reporting the list, and a bake round-trip test.
+- **Images (D-0035)**: `image(source, width=None, height=None, fit=...)` with
+  `contain|cover|fill`; PNG decoded by `motioner_io::ImageStore` (palette,
+  grey and 16-bit expanded to RGBA8; gAMA/iCCP ignored); SHA-256 content keys;
+  `Document::resolve_images` fills key/natural size; the plan carries key,
+  destination rect and `uv_rect`; the renderer registers mipmapped textures on
+  first use and reuses them by key; missing files fail `still`/`render` with
+  `UnresolvedImage` and draw a placeholder in the preview. `examples/images.motion`
+  and two goldens (`images_fit_f030.png`, `images_composite_f150.png`).
+- **Measurement fix**: `ferrous_font::LayoutData` (engine clone) is the CPU
+  table source; `FontAtlas` builds through it. `CpuTextMetrics` caches one
+  `LayoutData` per face and calls `measure_block`; `measure_parser` is gone.
 - Keyframes per axis; animated vectors are always keyed per axis (`pos.x`).
 - In-app screenshots: `preview --screenshot <png>` and `ctl screenshot(...)`;
   `scripts/ui_shot.ps1 [-Commands ...] [-Select ROW]`.
@@ -74,11 +72,14 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0034.
 ## Goldens
 
 - `hello_f120.png` (byte-identical), `blend_f30.png`,
-  `gradients_f30/f105.png`, effect stills, mask stills, path/animatable stills.
+  `gradients_f30/f105.png`, effect/mask/path/animatable stills.
 - Typography (D-0034): `typography_tracking_f30.png`,
-  `typography_lines_f150.png`, `typography_chars_f260.png`. The fixture test
-  validates the pixels and compares the render against the pin.
-  `examples/typography.motion` has the three beats.
+  `typography_lines_f150.png`, `typography_chars_f260.png`.
+- Images (D-0035): `images_fit_f030.png` (fit modes),
+  `images_composite_f150.png` (alpha badge, shadow, mask, multiply).
+  `motioner_render/tests/golden_images.rs` pins their SHA-256, checks overlap
+  pixels and compares the render against the pin. The badge asset is
+  256 px drawn at 160 px, so the example goes through the mip chain.
 
 ## Gotchas
 
@@ -92,46 +93,42 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0034.
 - 8 GB RAM: cargo needs `-j 2`; `CARGO_INCREMENTAL=0`.
 - `core.autocrlf=true`: working copies CRLF; engine files edited with Python
   `newline=''` keep their EOL. rustfmt may turn a CRLF file into LF; restore it
-  with a `\n` → `\r\n` pass.
-- Disk: keep C: above 5 GB; clean `target/debug/incremental` below 6 GB.
+  with a `\n` → `\r\n` pass. Motioner files are LF (`.gitattributes eol=lf`).
+- Disk: keep C: above 5 GB; clean `target` below 6 GB. A full `cargo clean`
+  after the phase 8 build freed 30 GB; the linker failed with LNK1318 at 0
+  bytes free.
 - Clippy pedantic: `too_many_lines`, `too_many_arguments`, `option_option`,
-  `float_cmp`, `implicit_clone`, `doc_markdown` and `must_use` are easy hits.
-- Inspector order: Composite → Effects → Mask → Transform → Text.
-- The inspector Text rows are Text, Family, Weight, Size, Tracking, Line height,
-  Colour, Align. Family/Weight are one-tile cycle pickers.
+  `float_cmp`, `implicit_clone`, `doc_markdown`, `must_use`, `match_same_arms`,
+  `single_match_else` and `arc_with_non_send_sync` are easy hits.
+- Inspector order: Composite → Effects → Mask → Transform → Text → Animators →
+  Image.
+- `motioner_ui` must NOT depend on `motioner_io` (boundary check). The image
+  loader enters the UI as `Rc<dyn motioner_core::ImageResolver>` through
+  `PreviewOptions.image_resolver`; the app creates `CachedImages`.
 
 ## FerrousEngine state
 
-- Pin `06a8adf` on `feat/pure2d-text-and-readback` (typography; committed
-  and pushed):
-  - `ferrous_font/src/parser.rs`: GPOS `PairPos` formats 1 and 2 (horizontal
-    advance), `GposKerning`, typed `ParseError` (`Unsupported` for CFF/CFF2),
-    `get_gpos_kerning`.
-  - `ferrous_font/src/layout.rs`: `TextStyle` (tracking, line_height),
-    `layout_block`/`measure_block`, `GlyphLayout`, `TextBounds`, `TextMetrics`
-    and per-line metrics; `layout_line`/`measure_line` unchanged.
-  - `ferrous_font/src/atlas.rs`: `GlyphMetrics.ink_bounds`, `FontAtlas.gpos`,
-    block layout methods.
-  - `ferrous_font/src/lib.rs`: `FontError::Unsupported`, re-exports.
-  - `ferrous_2d/src/render/text.rs`: `TextStyle2d`, `GlyphLayout2d`,
-    `TextMetrics`, `GlyphDraw2d`.
-  - `ferrous_renderer/src/renderer_core.rs` + `headless.rs`: styled draw,
-    `layout_text_2d`, `measure_text_block_2d` (block; the reviewer kept
-    `measure_text_2d` single-line so the public API does not break),
-    `draw_glyphs_2d`, `Pure2dHarness` mirrors.
-  - Tests: `pure2d_text_layout.rs` (8), GPOS/CFF parser tests, flaky fix.
-  - Docs: `crates/ferrous_2d/docs/text.md`, READMEs.
+- Pin `e0cc574` on `feat/pure2d-text-and-readback` (committed and pushed):
+  - `ferrous_font/src/layout_data.rs`: `LayoutData::from_bytes/from_parser`,
+    `layout_font`, `measure_*`/`layout_*`, `into_parts`. `FontAtlas::new` builds
+    through it (bit-for-bit measurement test in
+    `ferrous_renderer/tests/pure2d_text_layout.rs`, Roboto and a kern-stripped
+    Roboto).
+  - `ferrous_2d/src/render/texture.rs`: `TextureOptions2d`, `TextureFilter2d`,
+    `TextureError`, `MipChain`, `build_mip_chain` (linear premultiplied box
+    filter, exact area weights for odd sizes).
+  - `Renderer::register_texture_2d`, `texture_bytes_2d`, `store_sprite_texture`;
+    `Pure2dHarness` and `RenderContext` mirrors. `mipmaps:false` uploads level
+    0 only (fixed during the 4K manual check).
+  - Tests: `ferrous_renderer/tests/pure2d_images.rs` (9: checker mip, odd
+    chain, premultiplied texel, `uv_rect`, layer opacity, masked layer, drop
+    shadow alpha, budget, oversized error).
+  - Docs: `crates/ferrous_2d/docs/images.md` (linked from the README and
+    `mkdocs.yml`), `ferrous_font/docs/README.md`.
 - **Flaky GPU tests**: the first parallel run after a build can fail with
   `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
   Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
-  contention (each harness owns a full renderer with a 32 MB particle buffer),
-  not shared state. `tests/common/mod.rs` now has a process-wide `gpu::lock`
-  used by `pure2d_effects`, `pure2d_masks` and `pure2d_text_layout`; the
-  project_name mojibake line in `ferrous_ui_core/src/text_field_state.rs` was
-  repaired.
-- `CpuTextMetrics` still re-implements the block arithmetic over
-  `FontParser` (no GPOS, re-parses the face per call); Phase 8 replaces it
-  with the engine's `measure_block`.
+  contention; `tests/common/mod.rs` has a process-wide `gpu::lock`.
 
 ## Reference machine
 
@@ -146,11 +143,18 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
   Alpha/Luma, Invert is Off/On/Clear.
 - Text rows: Family/Weight cycle tiles, Tracking/Line height numeric with
   stopwatches, and the content field shows `\n` for line breaks.
+- Animators section: one row per animator with a Del tile, plus Fade/Rise/
+  Colour add tiles (`text_anim_add`/`text_anim_remove`).
+- Image section: Source (text), Natural size (read only), Width/Height with
+  stopwatches, Fit cycle. Image layers use a picture icon in layers/outline.
 
 ## Last relevant session
 
-Phase 7 (typography) implemented: engine GPOS + block layout + per-glyph draw
-(FerrousEngine 06a8adf, the pin), Motioner core/DSL/eval/render/editor, Inter
-assets, three typography goldens and `examples/typography.motion`. The
-reviewer removed the `engine-text-layout` gap with the bump. Next: Phase 8
-(images) plus the Phase 7 leftovers.
+Phase 8 (images) plus the phase 7 leftovers: engine `LayoutData` + mipmapped
+`register_texture_2d` + image tests/docs; Motioner core/DSL/eval/io/render/UI
+image support, measurement through `LayoutData`, text-animator commands and
+bake, `examples/images.motion` with generated assets, two goldens, the 4K
+mipmap comparison in `out/mips_*.png`. The reviewer committed the engine
+(e0cc574), bumped the pin, removed `engine-images`/`engine-layout-data` and
+the `measure_parser` fallback, and re-laid out the example (labels per box,
+beat 2 centred, 256 px badge) with new goldens. Next: Phase 9.

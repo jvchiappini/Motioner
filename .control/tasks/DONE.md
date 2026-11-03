@@ -21,6 +21,7 @@
 - **T-RENDER-0009** — Blend modes (normal, add, multiply, screen, overlay, darken, lighten) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0010** — Effects: drop shadow, blur and glow with keyable parameters `[alta]` (actualizado 2026-11-02)
 - **T-RENDER-0011** — Masks and track mattes (alpha and luma, invert) `[alta]` (actualizado 2026-11-02)
+- **T-RENDER-0012** — Typography: real fonts, tracking, line height, text metrics, per-character animation `[alta]` (actualizado 2026-11-02)
 - **T-UI-0001** — First editor window: motioner preview with live viewport, transport, timeline, outline, hot reload `[alta]` (actualizado 2026-10-31)
 - **T-UI-0002** — Professional editor chrome: tokens, painter, icons, layers, canvas, inspector, timeline `[alta]` (actualizado 2026-11-01)
 - **T-UI-0003** — Editing in the editor: overrides, inspector, gizmos, keyframes and undo `[alta]` (actualizado 2026-11-01)
@@ -28,3 +29,4 @@
 - **T-UI-0005** — Canvas zoom and pan on one viewport mapping `[alta]` (actualizado 2026-11-01)
 - **T-DSL-0006** — Hybrid bake: edit literal arguments in the program, overrides for the rest `[media]` (actualizado 2026-11-01)
 - **T-RENDER-0006** — FerrousEngine: honour a screenshot request made in update `[media]` (actualizado 2026-11-01)
+- **T-RENDER-0013** — Images (project-relative, content-hash cache, fit modes) `[media]` (actualizado 2026-11-02)

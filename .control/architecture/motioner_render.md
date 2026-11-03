@@ -66,3 +66,23 @@ Not needed: the plan is a flat list and the painter walks it twice.
 ## Documentation status
 
 partial — last verified: 2026-11-02
+
+## Images (D-0035)
+
+- `ItemShape::Image { key, width, height, uv }` carries the content key, the
+  destination rectangle and the source crop. `paint_plan` uploads each key
+  once through `Canvas2d::register_image` and reuses the texture id by key
+  (`crates/motioner_render/src/shapes.rs`).
+- `FrameRenderer::set_images` / `LivePainter::set_images` take decoded bytes
+  from `motioner_io`; the renderer never reads a file. The engine registers
+  mipmapped, premultiplied sRGB textures (`register_texture_2d`) and reports
+  the resident bytes; `texture_budget` turns an over-budget frame into
+  `RenderError::TextureBudget`.
+- An unresolved image evaluates to a placeholder item (checker + outline).
+  `still`/`render` check `Document::first_unresolved_image` first and return
+  `RenderError::UnresolvedImage { source }`.
+- Images render through `register_texture_2d` and `CpuTextMetrics` measures
+  through `ferrous_font::LayoutData` since pin e0cc574;
+  `Feature::Images` is no longer raised.
+- D-0035 fixes the format (PNG only, sRGB), the content-hash cache, the fit
+  geometry and the failure behaviour.

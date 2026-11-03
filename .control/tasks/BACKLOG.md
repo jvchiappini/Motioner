@@ -14,7 +14,6 @@
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
 - **T-CORE-0002** — Professional easing, motion blur and animation helpers `[media]` (actualizado 2026-11-01)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)
-- **T-RENDER-0013** — Images (project-relative, content-hash cache, fit modes) `[media]` (actualizado 2026-11-01)
 - **T-UI-0006** — Editor quality of life for big scenes (names, outline, search, graph editor, 1000 layers) `[media]` (actualizado 2026-11-01)
 - **T-PERF-0002** — Professional motion performance, docs and final report `[baja]` (actualizado 2026-11-01)
 - **T-UI-0007** — Canvas point editing for path nodes `[baja]` (actualizado 2026-11-01)
