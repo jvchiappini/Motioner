@@ -40,11 +40,25 @@ JSON loader with absolute `x/y/w/h`, and widgets as `Box<dyn Widget<App>>`
 mutating app state in callbacks. It is not a foundation a model can design
 well on either.
 
+### The split of responsibilities (decided by the user, non-negotiable)
+
+- **FerrousEngine draws everything**: shapes, borders, shadows, gradients,
+  clips, blur, glyph rasterisation, images, icons, the GPU pass and the
+  offscreen readback for screenshots. Any drawing capability that is missing
+  is added to the engine as a generic feature.
+- **GUIMaker decides everything else**: structure, positions, sizes,
+  responsive rules, formatting (tokens, themes, typography choices),
+  interaction (pointer, keyboard, focus, text editing) and the diagnostics
+  that explain the layout. GUIMaker contains **no shader, no rasteriser and no
+  GPU code**; its output is a list of draw commands that a thin adapter hands
+  to the engine.
+
 ### The goal
 
 A person (or a model) describes **structure and intent**, never coordinates,
 and gets a screen that looks like Linear, Raycast, Figma or Vercel's Geist
-without trying. Concretely:
+without trying, that adapts to any window size, and whose text fields and
+controls behave like native ones. Concretely:
 
 1. **Beautiful by default.** A complete design system ships in the library:
    spacing, type, radius, elevation, colour roles, motion, density. Default
@@ -57,14 +71,24 @@ without trying. Concretely:
    scroll areas, overlays. Content sizes itself (text is measured). No
    parallel "layout struct" for hit testing: the same tree draws and receives
    input.
-4. **Interaction is free.** Hover, pressed, focus ring, disabled, selected and
+4. **100 % responsive.** Every view works from a narrow 360 px panel to a 4K
+   window and at any DPI scale, with no code per size beyond declarative
+   breakpoint rules. Nothing overflows, overlaps or clips unless asked to.
+5. **Interaction is free.** Hover, pressed, focus ring, disabled, selected and
    their animated transitions come from the component, not from the caller.
-   Keyboard focus and activation work everywhere.
-5. **Feedback for whoever writes UI.** A text dump of the laid-out tree, a
-   design lint, and a headless screenshot of any view at any size, scale and
-   theme. A model iterates on UI the way it iterates on code: write, look,
-   lint, fix.
-6. **Less code than HTML + CSS** for the same screen (measured in Phase 7).
+   Click, double/triple click, right click, drag, scroll, `Tab` focus,
+   shortcuts and a complete text-editing engine (`Ctrl+A`, word jumps,
+   selection, clipboard, undo) are library utilities any widget reuses.
+6. **The library explains itself.** When a layout is wrong, GUIMaker says in
+   plain words what overlaps what, which rule caused it and how to fix it, plus
+   a text dump of the laid-out tree and a headless screenshot of any view at
+   any size, scale and theme. A model iterates on UI the way it iterates on
+   code: write, look, read the explanation, fix.
+7. **Less code than HTML + CSS** for the same screen (measured in Phase 9).
+
+Phase 0B (the startup freeze) is engine-only and independent of the rest;
+it may run first while prompt 11 is still in progress, as long as it does
+not touch the files prompt 11 owns in the engine clone.
 
 Quality bar: top-tier studio. Zero duplication, rustdoc on every public item
 (English), typed errors, no panics on runtime paths, regression tests that
@@ -111,7 +135,7 @@ GUIMaker gate: `cargo fmt -- --check`,
 `cargo test --workspace -j 2 --no-fail-fast`,
 `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps -j 2`,
 `cargo machete`.
-Motioner gate (phases 8–9): the full gate of prompt 11 (fmt, clippy, test,
+Motioner gate (phases 10–11): the full gate of prompt 11 (fmt, clippy, test,
 doc, `scripts/check_boundaries.py`, machete, `pctl validate`).
 
 Stop conditions: C: below 5 GB; a gate you cannot make green after two honest
@@ -139,9 +163,10 @@ documented fallback and continue).
    - **Repository layout**: a Cargo workspace in GUIMaker:
      `crates/guimaker` (engine-free core: view tree, style, theme, layout,
      input routing, state, display list, lint, inspect),
-     `crates/guimaker_ferrous` (backend: display list → engine `GuiBatch`,
-     text measurement and shaping from `ferrous_font`, images, offscreen
-     screenshot), `apps/gallery` (storybook), `apps/designer` (the old
+     `crates/guimaker_ferrous` (thin adapter: draw commands → engine API,
+     input events in, text metrics from `ferrous_font`; no drawing logic of
+     its own — if the adapter needs more than a mapping, the capability
+     belongs in the engine), `apps/gallery` (storybook), `apps/designer` (the old
      designer, revived in Phase 9). The old `src/` moves or is deleted; no
      dead code stays.
    - **Programming model.** Recommended, justify or replace: a declarative
@@ -165,6 +190,54 @@ documented fallback and continue).
    - Text measurement as a trait in the core (`TextSystem`) implemented by the
      backend, so the core is testable headless with a deterministic fake
      *metrics table built from a real font file*, not a mock of rendering.
+
+## Phase 0B — Engine: the "Not responding" freeze at startup
+
+The user reports that Motioner and other FerrousEngine apps often sit in
+Windows' "Not responding" state for a while on launch and then run perfectly.
+Windows ghosts a window whose thread does not pump messages for ~5 s. The
+likely cause is visible in `FerrousEngine/crates/ferrous_engine/src/runner/
+events.rs:72` (`resumed`): the window is created **visible**, then on the
+same thread, without pumping messages, the runner does `GraphicsState::new
+(...).block_on()` (adapter, device, surface, every pipeline and shader
+module, HDRI if configured), `Font::load_bytes` → `FontAtlas::new`, which
+runs `generate_msdf` on the CPU for the whole `latin_western()` set
+(`ferrous_font/src/atlas.rs:134`), and then the app's `setup` (Motioner
+loads fonts, the project, thumbnails…). Prove it before fixing it:
+
+1. **Measure**: add `tracing` spans (or the engine's existing timing) around
+   each startup step and log a startup timeline: process start, window
+   created, adapter, device, surface configure, each pipeline group, font
+   atlas (glyph count, ms), app `setup`, first frame presented. Run cold
+   (after reboot or with the shader/driver cache cleared if possible) and
+   warm, debug and release, for Motioner and one engine example. Record the
+   numbers in the session notes. Check also the driver shader cache, a
+   discrete-GPU selection (`PowerPreference`) that wakes a sleeping dGPU, and
+   any `std::fs` scan or font enumeration at start.
+2. **Fix in the engine, generically**:
+   - create the window **hidden** (`with_visible(false)`) and show it on the
+     first presented frame, or show it immediately with a cheap clear colour
+     and keep pumping messages; never block the message thread for more than
+     ~100 ms;
+   - move heavy CPU work off the main thread: MSDF atlas generation in
+     parallel (per-glyph work is independent; `rayon` only with a decision)
+     or lazily — rasterise ASCII first and the rest of the set on demand or
+     in a background thread, uploading as glyphs arrive; cache generated
+     atlases on disk keyed by font hash + glyph set + size + generator
+     version;
+   - create pipelines lazily or in parallel, use a wgpu `PipelineCache`
+     where the backend supports it, and skip 3D/HDRI pipelines for
+     `Flat2D`/`Pure2D` apps;
+   - give apps an async-friendly `setup` path (a loading state the engine
+     keeps drawing while app work finishes on a worker), documented.
+3. **Motioner side** (after prompt 11 is committed): move its own slow
+   startup work (project load, thumbnails, recent list, font loading) behind
+   the loading path so the start screen appears at once and fills in.
+4. **Acceptance**: time from launch to first visible frame and to "fully
+   interactive", cold and warm, before and after, in the report; the window
+   never shows "Not responding"; an engine test or example that fails if the
+   message thread blocks longer than a budget during startup (measured with
+   the startup timeline). Engine docs: a "Startup performance" page.
 
 ## Phase 1 — Design system: tokens and themes
 
@@ -228,11 +301,11 @@ read well, then implement.
 - **Layout** on taffy (version shared with the engine) or a hand-written
   flex/grid if G-0001 decided so; either way: pixel snapping to the physical
   grid at the end, so 1 px borders never blur; DPI scale from the host.
-- **Input routing** through the laid-out tree: hit testing respects clip and
-  z-order; pointer capture during drags; hover/press/focus state in the
-  keyed store; keyboard focus order follows the tree, `Tab`/`Shift+Tab`,
-  `Enter`/`Space` activate, `Esc` closes the top overlay.
-- **Display list**: the core's output is a flat, backend-agnostic list
+- **Input routing** through the laid-out tree (the full interaction toolkit
+  is Phase 4; here only the routing): hit testing respects clip and z-order,
+  pointer capture, the keyed state store.
+- **Display list**: the core's output is a flat, engine-agnostic list of draw
+  commands for FerrousEngine to draw
   (rounded rect with per-corner radii, border, shadow, linear/radial
   gradient, image with `fit` (`Cover/Contain/Fill`), text run, icon, clip
   push/pop with radius, layer opacity, backdrop blur request). The backend
@@ -241,18 +314,98 @@ read well, then implement.
   resolved style tokens, text) used by tests and by models. Document it as
   the first thing to read when a layout looks wrong.
 
-Tests: layout snapshots via `inspect` at 3 sizes × 2 scales; focus order;
-hit testing under clips and overlays; text clamp/ellipsis; pixel snapping.
+- **Layout explanations** (the base of Phase 8's lint): every resolved rect
+  records *why* it got its size and position (which constraint won: fixed
+  size, min/max, grow share, content size, parent clamp). `ui.explain(key)`
+  prints that chain in plain English, e.g. "`sidebar` is 280 px because
+  `width(Px(280))` wins over the parent's 240 px; it overflows `shell` by
+  40 px and overlaps `content` (x 240–280). Fix: `width(Fraction(0.25))` with
+  `min(S…)`, or collapse it below the `Md` breakpoint".
 
-## Phase 3 — FerrousEngine backend and the screenshot loop
+Tests: layout snapshots via `inspect` at 3 sizes × 2 scales; hit testing
+under clips and overlays; text clamp/ellipsis; pixel snapping; `explain`
+output pinned for a few deliberate mistakes.
 
-- `guimaker_ferrous`: display list → `GuiBatch` (reuse the frame batch as the
-  engine does since `e482b3c`), text through `ferrous_font` with kerning and
-  real weights, SVG/vector icons, images and textures, clips.
+## Phase 3 — 100 % responsive
+
+- **Container-based breakpoints** (like CSS container queries, not only window
+  size): `Xs < 480 ≤ Sm < 768 ≤ Md < 1024 ≤ Lg < 1440 ≤ Xl`, values tunable
+  in the theme. Any modifier takes a responsive value:
+  `.columns(resp![Xs: 1, Md: 2, Lg: 3])`, `.direction(resp![Xs: Column, Md:
+  Row])`, `.hidden_below(Md)`, `.pad(resp![Xs: S4, Lg: S8])`.
+- **Fluid values**: `clamp(min, preferred %, max)` for widths and type size
+  (Display/Title scale smoothly between breakpoints), `auto_fill(min)` grids,
+  `max_width` content columns that centre on wide screens.
+- **Adaptive patterns as components**: sidebar that collapses to an icon rail
+  and then to a drawer; toolbar whose overflowing items move into a "more"
+  menu; split panes with min sizes that stack vertically when narrow; dialog
+  that becomes full-screen sheet below `Sm`; tables that hide low-priority
+  columns.
+- **Text never breaks layout**: long words break or ellipsise, labels in
+  rows shrink before their siblings by declared priority (`.priority(n)`).
+- **DPI**: everything in logical units, snapped to physical pixels; tested at
+  1×, 1.25×, 1.5×, 2×.
+- **Responsive test sweep**: a helper renders a view at a list of widths
+  (360, 480, 640, 768, 1024, 1280, 1440, 1920, 2560, 3840) × scales and runs
+  the overlap/overflow checks at every one; every recipe passes the sweep.
+  A gallery mode shows a story with a draggable width handle.
+
+## Phase 4 — Interaction utilities and the text-editing engine
+
+Reusable, widget-independent utilities in `guimaker::input` that every
+component and every app widget (Motioner's timeline included) can use.
+Motioner already has `crates/motioner_ui/src/text_edit.rs` and pointer/drag
+code in `app/pointer.rs`, `app/drag.rs`: read them, move what is generic into
+GUIMaker, and leave Motioner importing it (no copy remains).
+
+- **Pointer**: click with the platform double-click time and distance, double
+  and triple click, right click / context menu, middle click, long press,
+  drag with a start threshold and capture outside the window, drag and drop
+  between elements with typed payloads and drop-target highlight, hover
+  intent (delay before tooltips), wheel and trackpad scroll with
+  `Shift`-horizontal, cursor icon per element (text I-beam, resize, grab).
+- **Focus**: `Tab`/`Shift+Tab` order from the tree (overridable with
+  `.tab_index`), focus scopes and traps for dialogs, restore focus on close,
+  arrow-key navigation inside lists, menus, grids, radio groups and tabs,
+  `Enter`/`Space` activation, `Esc` closes the top overlay, type-ahead in
+  lists and menus.
+- **Shortcuts**: a registry (`Ctrl+S`, `Ctrl+Shift+P`…) with scopes (global,
+  focused element, overlay), conflict detection reported by the lint, and
+  display strings for menus and `kbd` (platform-correct).
+- **Text-editing engine** (`TextEditor` state + pure functions, used by
+  `text_field`, `textarea`, `number_field`, search boxes, the command palette
+  and any app):
+  - caret movement by char, word (`Ctrl+←/→`), line (`Home`/`End`), document
+    (`Ctrl+Home/End`), up/down keeping the preferred column in multi-line;
+  - selection with `Shift` + any movement, `Ctrl+A`, mouse drag, double-click
+    word, triple-click line, `Shift+click` extend, auto-scroll while dragging
+    past the edge;
+  - `Ctrl+C/X/V` through a host clipboard trait (the Motioner and engine
+    clipboards implement it), paste sanitising for single-line fields;
+  - `Backspace`/`Delete` by char, `Ctrl+Backspace/Delete` by word;
+  - undo/redo (`Ctrl+Z`, `Ctrl+Y`, `Ctrl+Shift+Z`) with typing coalesced into
+    word-sized steps;
+  - grapheme-correct editing (emoji, accents, combining marks; a
+    `unicode-segmentation` dependency needs a decision), IME composition
+    events from the host, caret blink from the injected clock, horizontal
+    scroll of long single-line text keeping the caret visible;
+  - validation hooks (numeric, max length, pattern) and `Enter` submit /
+    `Esc` revert for fields.
+- Exhaustive tests: a table of (text, caret, selection, key) → expected state
+  for every shortcut above, plus pointer sequences for double/triple click and
+  drag selection.
+
+## Phase 5 — FerrousEngine drawing and the screenshot loop
+
+- `guimaker_ferrous`: draw commands → engine API (reuse the frame batch as
+  the engine does since `e482b3c`), text through `ferrous_font` with kerning
+  and real weights, SVG/vector icons, images and textures, clips. A mapping,
+  nothing more.
 - A host adapter for `FerrousApp` (feed input events and scale factor in,
   messages out, paint in `draw_ui`), ~one screen of glue for an app to adopt.
 - **Headless screenshot**: render any view to PNG at a given size, scale and
-  theme through an offscreen target and the engine's readback (prompt 05).
+  theme; the offscreen target and readback are engine features (prompt 05),
+  GUIMaker only asks for them.
   A CLI in the gallery: `gallery shot <story> --size 1280x800 --scale 1.5
   --theme light --out out/x.png`.
 - **Engine gaps → generic engine features** in the dev clone, only if the
@@ -264,12 +417,13 @@ hit testing under clips and overlays; text clamp/ellipsis; pixel snapping.
   pixel-count budget), goldens stored in the repo, a single command to
   update them with a reason.
 
-## Phase 4 — Components (each one finished, not sketched)
+## Phase 6 — Components (each one finished, not sketched)
 
 Every component: all states (rest, hover, pressed, focus-visible, disabled,
-selected/checked, loading where it applies), keyboard support, both densities,
-light and dark, animated state transitions, a gallery story, golden
-screenshots, rustdoc with a 3-line example.
+selected/checked, loading where it applies), keyboard support built on the
+Phase 4 utilities, responsive behaviour, both densities, light and dark,
+animated state transitions, a gallery story, golden screenshots, rustdoc with
+a 3-line example.
 
 - Actions: `button` (`Primary/Secondary/Ghost/Danger/Link`, sizes, leading/
   trailing icon, icon-only with mandatory tooltip, loading), `icon_button`,
@@ -301,7 +455,7 @@ screenshots, rustdoc with a 3-line example.
   search, settings, chevrons, close, play/pause, undo/redo, trash, copy,
   image, film, music, font, clock, star, more, external, check, warning…).
 
-## Phase 5 — Motion and polish
+## Phase 7 — Motion and polish
 
 - Transitions on style properties (colour, elevation, opacity, transform)
   driven by the injected clock; enter/exit animations for overlays (fade +
@@ -314,12 +468,20 @@ screenshots, rustdoc with a 3-line example.
   icons with text, consistent icon sizes per type role, hairlines crisp,
   shadows soft and never banded. Fix what the screenshots show.
 
-## Phase 6 — Design lint (the guard rail for models)
+## Phase 8 — Design lint and diagnostics (the guard rail for models)
 
 `guimaker::lint(&laid_out_tree, &theme) -> Vec<Finding>` with severity, the
-offending key path, the rect, and a fix hint written for a model to act on:
+offending key paths, the rects, the **cause** (the `explain` chain from
+Phase 2) and a fix hint written for a model to act on. Findings print as
+readable sentences ("`recent_card[2]` overlaps `examples_row` by 18 px
+vertically at width 768 because the grid has a fixed height(Px(300)) and 3
+rows of content need 342 px; remove the fixed height or wrap it in
+`scroll`"). A debug overlay in the gallery and in host apps (toggle with a
+shortcut) outlines overlaps in red, overflow in orange, and shows the
+explanation of the element under the cursor.
 
-- overlapping siblings that are not in a `stack`/overlay;
+- overlapping siblings that are not in a `stack`/overlay, and children that
+  escape their parent;
 - text clipped or truncated without an explicit `lines(n)` / ellipsis;
 - contrast below the role threshold on the actual background under it;
 - `Px` escape hatches and spacing not on the token scale;
@@ -327,12 +489,15 @@ offending key path, the rect, and a fix hint written for a model to act on:
 - inconsistent radii or elevations among siblings of the same kind;
 - hit targets smaller than 24×24 px; icon-only button without tooltip;
 - more than one `Primary` action in the same group; empty containers;
-- content wider than its `max_width` column; horizontal overflow.
+- content wider than its `max_width` column; horizontal overflow;
+- breakage only at some widths (the lint runs across the Phase 3 sweep and
+  names the first width where each problem appears);
+- focus traps without an exit, unreachable focusables, duplicate shortcuts.
 
-Plus `gallery lint <story>` and a test helper `assert_clean(view)`. Every
-gallery story and recipe must lint clean.
+Plus `gallery lint <story> [--sweep]` and a test helper `assert_clean(view)`.
+Every gallery story and recipe must lint clean across the sweep.
 
-## Phase 7 — Recipes, docs and the HTML + CSS comparison
+## Phase 9 — Recipes, docs and the HTML + CSS comparison
 
 - **Recipes** (gallery stories and copyable code, each lint clean, each with
   goldens in dark and light): app launcher / start screen, New-item dialog
@@ -355,7 +520,7 @@ gallery story and recipe must lint clean.
   numeric literals, and side-by-side screenshots. Target: fewer lines than
   HTML + CSS together, **zero** numeric literals in the GUIMaker view.
 
-## Phase 8 — Motioner adopts GUIMaker (after prompt 11 is committed)
+## Phase 10 — Motioner adopts GUIMaker (after prompt 11 is committed)
 
 1. Motioner ADR (`pctl decision-new`) **"Editor chrome on GUIMaker"**:
    amends D-0004/D-0018/D-0020/D-0021 — GUIMaker pinned as a submodule
@@ -384,10 +549,14 @@ gallery story and recipe must lint clean.
    (File menu, import errors…) if it is self-contained. Delete
    `StartLayout`, the hand-computed rects and any helper left without users.
    Zero duplication: no Motioner widget may re-implement a GUIMaker one.
-5. Screenshots `out/ui/p15-08-after-*.png` at 1280×800 and 1920×1080, scale
-   1 and 1.5, plus lint clean on the start view. Compare with Phase 0.
+5. Motioner's text fields (inspector, New project form, agent composer later)
+   use the GUIMaker text-editing engine; `text_edit.rs` and any duplicated
+   pointer/drag helpers are gone from Motioner.
+6. Screenshots `out/ui/p15-10-after-*.png` at 800×600, 1280×800, 1920×1080
+   and 3840×2160, scale 1 and 1.5, plus lint clean on the start view across
+   the sweep. Compare with Phase 0.
 
-## Phase 9 — Dogfood: the GUIMaker designer, and the backlog
+## Phase 11 — Dogfood: the GUIMaker designer, and the backlog
 
 - Revive `apps/designer` on the library (it is the best stress test): canvas
   with the app shell recipe, component palette, inspector built from forms,
@@ -400,7 +569,7 @@ gallery story and recipe must lint clean.
   agent panel (prompt 14) onto GUIMaker; engine `ferrous_ui_core` pieces that
   GUIMaker supersedes; accessibility tree export; RTL/IME text input.
 
-## Phase 10 — Report
+## Phase 12 — Report
 
 `pctl session-log` in Motioner and a session note in GUIMaker. Final report
 **in Spanish**: what changed per phase; before/after screenshots of the start
