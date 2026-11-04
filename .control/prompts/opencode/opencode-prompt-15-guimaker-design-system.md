@@ -53,6 +53,26 @@ well on either.
   GPU code**; its output is a list of draw commands that a thin adapter hands
   to the engine.
 
+**UI is not the canvas.** Clicking a button and clicking a shape in a scene
+are different problems and live in different places:
+
+| Concern | Owner | Why |
+|---|---|---|
+| Window, raw input (pointer, keys, wheel, IME, clipboard, file drop), DPI | FerrousEngine (`ferrous_events`, runner) | platform layer, shared by everything |
+| **Gesture recognition**: click, double/triple click, long press, drag threshold, pointer coalescing, key repeat | FerrousEngine (`ferrous_events`) | the same semantics for canvas and UI; implemented once |
+| Render flags, redraw scheduler, damage regions (Phase 0B) | FerrousEngine | the engine owns frames |
+| Generic **spatial index** (grid/BVH over AABBs, incremental updates) | FerrousEngine, in a GPU-free crate | used by UI hit testing and by scene picking; one implementation |
+| **Scene / canvas picking**: objects with transforms and rotation, path fill containment, stroke distance, text bounds, clips and masks, z-order, ID-buffer picking, marquee and lasso queries, snapping queries, screen ↔ world transforms, pan/zoom-to-cursor camera helpers, 3D raycasts | FerrousEngine (2D scene / renderer crates) | it knows the geometry it draws |
+| UI tree: layout, responsive rules, tokens, components | GUIMaker | |
+| **UI routing**: which widget gets an event, hover/press state, focus and `Tab` order, shortcuts scopes, overlays and focus traps | GUIMaker | screen-space rects of its own tree |
+| Text-editing engine (`Ctrl+A`, selection, undo…) | GUIMaker | a UI concern on top of engine key events and clipboard |
+| `canvas` / `viewport` element | GUIMaker reserves the rect, routes events inside it, in local coordinates, to the app | the bridge between both worlds |
+| What a pick *means* (select an MDF node, drag a gizmo handle, edit a keyframe) | the app (Motioner) | domain logic |
+
+The GUIMaker core stays free of drawing crates, but it **may depend on the
+engine's GPU-free crates** (`ferrous_events`, the spatial index, math) so
+nothing is implemented twice.
+
 ### The goal
 
 A person (or a model) describes **structure and intent**, never coordinates,
@@ -187,7 +207,7 @@ documented fallback and continue).
    "before" of the final report.
 3. Write **G-0001 "GUIMaker library architecture"** deciding:
    - **Repository layout**: a Cargo workspace in GUIMaker:
-     `crates/guimaker` (engine-free core: view tree, style, theme, layout,
+     `crates/guimaker` (core free of engine drawing crates, may use the GPU-free ones: view tree, style, theme, layout,
      input routing, state, display list, lint, inspect),
      `crates/guimaker_ferrous` (thin adapter: draw commands → engine API,
      input events in, text metrics from `ferrous_font`; no drawing logic of
@@ -418,13 +438,23 @@ output pinned for a few deliberate mistakes.
   the overlap/overflow checks at every one; every recipe passes the sweep.
   A gallery mode shows a story with a draggable width handle.
 
-## Phase 4 — Interaction utilities and the text-editing engine
+## Phase 4 — Interaction: engine input and gestures, UI routing, text editing
 
-Reusable, widget-independent utilities in `guimaker::input` that every
-component and every app widget (Motioner's timeline included) can use.
-Motioner already has `crates/motioner_ui/src/text_edit.rs` and pointer/drag
-code in `app/pointer.rs`, `app/drag.rs`: read them, move what is generic into
-GUIMaker, and leave Motioner importing it (no copy remains).
+Follow the ownership table at the top. Motioner already has
+`crates/motioner_ui/src/text_edit.rs` and pointer/drag code in
+`app/pointer.rs`, `app/drag.rs`: read them, move gesture logic to the engine
+and UI logic to GUIMaker, and leave Motioner importing both (no copy
+remains). Engine parts first (dev clone, generic, documented), then GUIMaker
+on top:
+
+- **Engine (`ferrous_events`)**: gesture recognition (click with the platform
+  double-click time and distance, double/triple, long press, drag start
+  threshold, pointer capture, coalescing, key repeat, modifier state) as a
+  pure, tested state machine fed by raw events and the injected clock; the
+  generic spatial index in a GPU-free crate.
+- **GUIMaker (`guimaker::input`)**: routing of those gestures through the UI
+  tree, hover/press/focus, shortcuts, overlays, drag and drop between UI
+  elements, and the text-editing engine.
 
 - **Algorithms first** (this toolkit runs on every input event, so it must be
   the cheapest part of the frame; document the complexity of each in
@@ -449,10 +479,10 @@ GUIMaker, and leave Motioner importing it (no copy remains).
     grapheme boundaries of the laid-out text, invalidated only when the text
     or its width changes; a keystroke in a 10 000-character field re-shapes
     only the affected line.
-- **Pointer**: click with the platform double-click time and distance, double
-  and triple click, right click / context menu, middle click, long press,
-  drag with a start threshold and capture outside the window, drag and drop
-  between elements with typed payloads and drop-target highlight, hover
+- **Pointer (GUIMaker side, consuming engine gestures)**: click, double and
+  triple click, right click / context menu, middle click, long press, drags
+  with capture outside the window, drag and drop between UI elements with
+  typed payloads and drop-target highlight, hover
   intent (delay before tooltips), wheel and trackpad scroll with
   `Shift`-horizontal, cursor icon per element (text I-beam, resize, grab).
 - **Focus**: `Tab`/`Shift+Tab` order from the tree (overridable with
@@ -485,6 +515,36 @@ GUIMaker, and leave Motioner importing it (no copy remains).
 - Exhaustive tests: a table of (text, caret, selection, key) → expected state
   for every shortcut above, plus pointer sequences for double/triple click and
   drag selection.
+
+## Phase 4B — Engine: canvas and scene picking
+
+Generic picking for anything the engine draws, so editors and games built on
+FerrousEngine never write their own (Motioner's `app/canvas.rs`,
+`gizmo.rs`, `bounds.rs` hit tests are the first consumers; read them first
+and list what they compute by hand today).
+
+- Picking queries on the 2D scene: point pick (topmost or all hits) with
+  transforms, rotation, scale and skew; exact path-fill containment
+  (non-zero / even-odd), stroke hit within a tolerance in screen pixels
+  (independent of zoom), text bounds, image alpha threshold (optional),
+  respecting clips, masks, visibility and z-order; marquee (intersect /
+  contain) and lasso queries; nearest-point and nearest-edge queries for
+  snapping.
+- GPU ID-buffer picking as an alternative for very dense scenes (render ids
+  to a small offscreen target on demand only, read back one pixel/region);
+  document when each method wins, with benches.
+- Camera helpers: screen ↔ world transforms, zoom to cursor, pan, fit to
+  bounds, with the same math the renderer uses (one source of truth).
+- 3D: ray from cursor, raycast against meshes/AABBs if the 3D side lacks it
+  (only what is generic; keep scope tight).
+- Uses the generic spatial index (rebuilt incrementally when objects move);
+  budget: a point pick < 20 µs with 10 000 shapes, a marquee over 10 000
+  shapes < 1 ms; zero allocations per query with a reused result buffer.
+- Docs page "Picking" in the engine, an example (click-to-select, marquee,
+  drag) and tests with rotated, nested and clipped shapes.
+- Motioner (Phase 10) replaces its hand-written canvas hit tests with these
+  queries; what a hit *means* (selection, gizmo handle, snapping rules)
+  stays in Motioner.
 
 ## Phase 5 — FerrousEngine drawing and the screenshot loop
 
@@ -670,7 +730,10 @@ Every gallery story and recipe must lint clean across the sweep.
    Zero duplication: no Motioner widget may re-implement a GUIMaker one.
 5. Motioner's text fields (inspector, New project form, agent composer later)
    use the GUIMaker text-editing engine; `text_edit.rs` and any duplicated
-   pointer/drag helpers are gone from Motioner.
+   pointer/drag helpers are gone from Motioner. The composition canvas uses
+   the engine gestures and Phase 4B picking; the canvas sits in the GUIMaker
+   layout as a `canvas` element and its own clicks never go through UI
+   widget hit testing.
 6. Screenshots `out/ui/p15-10-after-*.png` at 800×600, 1280×800, 1920×1080
    and 3840×2160, scale 1 and 1.5, plus lint clean on the start view across
    the sweep. Compare with Phase 0.
