@@ -5,6 +5,37 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Prompt 12 status (2026-11-04, phase 0.5 and phase 1 done)
+
+**Origins v2 + audio loop fix.** No commit; working tree for review. Gate green
+(fmt, clippy pedantic, workspace tests, rustdoc, boundaries, machete,
+`pctl validate`).
+
+- **Phase 0.5 (T-APP-0006).** `AudioOutput::ended` reports a consumed range;
+  `ProjectHost::audio_ended` exposes it. `Transport::follow_audio`
+  (`crates/motioner_ui/src/transport.rs`) wraps a looping transport to frame 0
+  and returns the loop start; `App::restart_audio`
+  (`crates/motioner_ui/src/app/mod.rs`) re-mixes and restarts the cpal stream
+  there. The first sample after the wrap is sample-exact (same integer sample
+  offset arithmetic as playback). A non-looping stream stops at the end.
+  Headless regressions:
+  `a_finished_audio_stream_restarts_looping_playback_at_the_first_frame` and
+  `audio_out::tests::the_cursor_reports_the_end_only_after_the_last_frame`.
+- **Phase 1 (T-DSL-0007).** `motioner_dsl::origins` v2: every node creation and
+  value/key origin records statement, block (span + indentation), binding and
+  reassignment, loop stack (span, variable, iterable span, index, literal
+  value, body span/indent), call stack (call site, definition, parameters and
+  defaults, whether the invocation returned the node) and expression class
+  (literal / parameter / loop variable / computed). Names are interned as
+  `NameId`; loop/call context is shared through `Arc`. `for`/`if` parser spans
+  now cover the whole construct. Tests:
+  `crates/motioner_dsl/tests/origins_v2.rs`.
+- **Interpreter cost** on `showcase_pro.motion` (release, 84 nodes, 647
+  origins, same host): 0.80 ms/run before, ~1.50 ms/run after (interpreter
+  only); the absolute cost is small next to a 16 ms render frame.
+- Next: Phase 2 (code edit model + planner skeleton). Do not start it without
+  the user's go-ahead.
+
 ## Prompt 11 status (2026-11-04, phases 0-7 done)
 
 **All phases complete**: 0-4.5, 5 (audio), 5.5 (review fixes), 6 (video)
@@ -255,7 +286,8 @@ composition. Scope and decisions: REF-0001..0004, D-0010..D-0048.
 - The demo playhead follows the audio device. On this automation host the
   device clock runs slower than wall time, so a 6 s demo can take longer than
   6 s to reach the end; UI fps and steady-state dropped frames are unaffected.
-  Looping with audio does not restart the audio stream (backlog).
+  Looping with audio restarts the stream at the loop start (prompt 12 phase
+  0.5); see `Transport::follow_audio` and `App::restart_audio`.
 
 ## FerrousEngine state
 

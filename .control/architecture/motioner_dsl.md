@@ -28,8 +28,13 @@ document, plus value origins and bake. The language is the project format
   `node.wiggle` emit ordinary keys through the same `Scene::key` path
   (D-0037): `crates/motioner_dsl/src/builtins.rs:70-95` and
   `crates/motioner_dsl/src/scene.rs:690-850`.
-- `ValueOrigins` — the span, literal shape and ease of every written value, the
-  input of the hybrid bake: `crates/motioner_dsl/src/origins.rs:52-174`.
+- `ValueOrigins` — the span, literal shape and ease of every written value,
+  plus origins v2 (D-0036): the creation site, the statement and block that
+  wrote each property, the interned binding and whether it is reassigned, the
+  loop stack (span, variable, iterable, index, literal value, body) and the
+  call stack (call site, definition, parameters, returns-the-node), and whether
+  the expression is a literal, a parameter, a loop variable or computed:
+  `crates/motioner_dsl/src/origins.rs:1-518`.
 - `bake` — edits private literals in place, otherwise appends a generated
   block, then verifies by re-running (D-0027):
   `crates/motioner_dsl/src/bake.rs:77-208`.
@@ -45,8 +50,10 @@ the only bridge.
 
 - D-0011 — MDF is the document format.
 - D-0022 / D-0025 / D-0027 — identities, orphan re-keying and hybrid bake.
+- D-0036 — origins v2 feeds write-through planning (statement/block/binding/
+  loop/call context).
 - D-0028 — content fields are animatable channels.
 
 ## Documentation status
 
-partial — last verified: 2026-11-01
+partial — last verified: 2026-11-04

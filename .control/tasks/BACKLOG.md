@@ -2,7 +2,8 @@
 
 (generado por `pctl reindex` — no editar a mano)
 
-- **T-0001** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
+- **T-0001** — Origins v2: creation, binding, loop and call context for write-through `[alta]` (actualizado 2026-11-04)
+- **T-0002** — Looping audio restarts the stream at the loop start `[alta]` (actualizado 2026-11-04)
 - **T-ARCH-0007** — Run UI toolkit spike for dock, virtualized list and bezier editor `[alta]` (actualizado 2026-10-31)
 - **T-AUDIO-0001** — Audio engine and stereo mixer (decode, tracks, gain/pan/fades, export) `[alta]` (actualizado 2026-11-03)
 - **T-AUDIO-0003** — Audio effects: EQ, compressor and reverb with a mixer panel `[alta]` (actualizado 2026-11-04)

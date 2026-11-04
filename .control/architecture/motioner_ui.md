@@ -124,3 +124,9 @@ partial — last verified: 2026-11-01
 - Device playback lives in the application behind ProjectHost::audio_*;
   `sync_audio` starts/stops it with the transport and the playhead follows
   `transport::audio_frame` (`crates/motioner_ui/src/app/mod.rs`).
+- A looping audio stream that reaches its end wraps with
+  `Transport::follow_audio` (`crates/motioner_ui/src/transport.rs:232`); the
+  app re-mixes and restarts the stream at the loop start
+  (`restart_audio`, `crates/motioner_ui/src/app/mod.rs:783`), so the playhead
+  never sticks on the last frame. `AudioOutput::ended`
+  (`crates/motioner_app/src/audio_out.rs:117`) reports the consumed range.
