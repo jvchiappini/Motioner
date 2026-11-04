@@ -4,8 +4,8 @@
 engine Motioner renders with, pinned rather than vendored. Source:
 https://github.com/jvchiappini/FerrousEngine.
 
-Pinned commit: `7e95367` (2026-11-03, temporal accumulation API and
-level-zero texture upload;
+Pinned commit: `cab7035` (2026-11-04, OS file-drop events for
+`FerrousApp::on_file_drop`;
 branch `feat/pure2d-text-and-readback`, see D-0023).
 
 Only `motioner_render` consumes the engine path dependencies
