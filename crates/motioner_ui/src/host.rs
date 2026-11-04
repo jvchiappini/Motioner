@@ -242,6 +242,14 @@ pub trait ProjectHost {
         None
     }
 
+    /// Whether the audio device consumed every mixed sample.
+    ///
+    /// The transport uses this to wrap a looping playback and restart the
+    /// stream at the loop start frame.
+    fn audio_ended(&self) -> bool {
+        false
+    }
+
     /// Plays a short grain for a scrub, when the host supports it.
     fn audio_scrub(
         &self,

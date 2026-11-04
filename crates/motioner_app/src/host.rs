@@ -553,6 +553,13 @@ impl ProjectHost for Host {
             .and_then(crate::audio_out::AudioOutput::position)
     }
 
+    fn audio_ended(&self) -> bool {
+        self.audio
+            .borrow()
+            .as_ref()
+            .is_some_and(crate::audio_out::AudioOutput::ended)
+    }
+
     fn audio_scrub(
         &self,
         composition: &Path,

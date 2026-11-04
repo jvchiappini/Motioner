@@ -370,12 +370,21 @@ impl Parser {
                 break;
             }
         }
+        let mut span = start;
+        for (_, body) in &branches {
+            if let Some(last) = body.last() {
+                span = span.to(last.span);
+            }
+        }
+        if let Some(last) = otherwise.last() {
+            span = span.to(last.span);
+        }
         Ok(Stmt {
             kind: StmtKind::If {
                 branches,
                 otherwise,
             },
-            span: start,
+            span,
         })
     }
 
@@ -385,15 +394,16 @@ impl Parser {
         self.expect_kind(&TokenKind::Keyword(Keyword::In), "'in'")?;
         let iterable = self.expression()?;
         self.loop_depth += 1;
-        let body = self.block();
+        let body = self.block()?;
         self.loop_depth -= 1;
+        let span = body.last().map_or(start, |last| start.to(last.span));
         Ok(Stmt {
             kind: StmtKind::For {
                 variable,
                 iterable: iterable.expr,
-                body: body?,
+                body,
             },
-            span: start,
+            span,
         })
     }
 

@@ -646,17 +646,22 @@ impl PreviewApp {
             self.start_playing = false;
             self.run(&Command::Play);
         }
-        let audio_position = if self.editor.transport().is_playing() {
-            self.host().and_then(|host| host.audio_position())
+        let audio = if self.editor.transport().is_playing() {
+            self.host().and_then(|host| {
+                host.audio_position()
+                    .map(|position| (position, host.audio_ended()))
+            })
         } else {
             None
         };
         let transport = self.editor.transport_mut();
+        let mut restart_audio = false;
         if transport.is_playing() {
             let before = transport.frame();
-            if let Some(position) = audio_position {
-                let frame = crate::transport::audio_frame(position, transport.frame_rate());
-                transport.follow(frame, self.clock);
+            if let Some((position, ended)) = audio {
+                restart_audio = transport
+                    .follow_audio(position, ended, self.clock)
+                    .is_some();
             } else {
                 transport.advance(self.clock);
             }
@@ -665,6 +670,9 @@ impl PreviewApp {
             self.dropped = self
                 .dropped
                 .saturating_add(skipped_frames(before, after, duration));
+        }
+        if restart_audio {
+            self.restart_audio();
         }
         self.poll_control();
         self.editor.sync_models();
@@ -758,6 +766,24 @@ impl PreviewApp {
             return;
         }
         self.audio_started = true;
+        let Some(document) = self.editor.session().document() else {
+            return;
+        };
+        let muted = self.audio_muted();
+        let path = self.editor.session().path().to_path_buf();
+        let frame = self.editor.frame();
+        let _ = host.audio_play(&path, document, frame, &muted);
+    }
+
+    /// Restarts device audio at the transport's loop start after a wrap.
+    ///
+    /// The host mixes a fresh range from the frame, so the first sample after
+    /// the wrap is the first sample of the loop range (sample-exact), not the
+    /// stale tail of the old stream.
+    fn restart_audio(&mut self) {
+        let Some(host) = self.host() else {
+            return;
+        };
         let Some(document) = self.editor.session().document() else {
             return;
         };

@@ -6,6 +6,7 @@
 
 use std::fmt::Write as _;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use motioner_core::{
     AudioContent, BlendMode, CharOrder, CharProperty, CharValue, Color, Composition,
@@ -21,7 +22,10 @@ use crate::host::{
     as_integer, as_vec2, bind, vec2_value, Bound, CallArgs, CallValue, HostError, HostResult,
     PaintInput,
 };
-use crate::origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
+use crate::origins::{
+    BindingOrigin, BlockOrigin, EaseOrigin, Literal, NameId, NodeOrigin, OriginKind, OriginSite,
+    ValueOrigin, ValueOrigins, ValueSource,
+};
 use crate::value::{Builtin, NodeMethod, Value};
 
 /// NTSC-style frame rates written as decimals, mapped to exact rationals.
@@ -35,28 +39,41 @@ const MAX_FPS: i64 = 1000;
 /// The key is `@<call start>` followed by `/c<call-site start>` for every user
 /// function frame (outermost first) and `/i<index>` for every enclosing loop.
 /// The same program always produces the same sites.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct CreationSite {
-    /// Byte offset of the creating call's span start.
-    pub call_start: usize,
-    /// Span starts of the user-function call sites on the stack.
-    pub callers: Vec<usize>,
-    /// Iteration index of every enclosing `for` loop, outermost first.
-    pub loops: Vec<i64>,
+    /// Span of the constructor call.
+    pub creation: Span,
+    /// Span of the statement that contains the call.
+    pub statement: Span,
+    /// The block that contains the statement.
+    pub block: BlockOrigin,
+    /// Loop and call context of the call.
+    pub site: Arc<OriginSite>,
 }
 
 impl CreationSite {
     /// The stable provenance key this site renders as.
     pub fn key(&self) -> String {
-        let mut key = format!("@{}", self.call_start);
-        for caller in &self.callers {
-            let _ = write!(key, "/c{caller}");
+        let mut key = format!("@{}", self.creation.start);
+        for call in &self.site.calls {
+            let _ = write!(key, "/c{}", call.call_site.start);
         }
-        for index in &self.loops {
-            let _ = write!(key, "/i{index}");
+        for loop_frame in &self.site.loops {
+            let _ = write!(key, "/i{}", loop_frame.index);
         }
         key
     }
+}
+
+/// A property or key write with the statement and context that produced it.
+#[derive(Debug, Clone)]
+pub(crate) struct WriteSite {
+    /// Span of the statement that contains the write.
+    pub statement: Span,
+    /// The block that contains the statement.
+    pub block: BlockOrigin,
+    /// Loop and call context of the write.
+    pub site: Arc<OriginSite>,
 }
 
 /// The frame, ease and ease source of one `key(...)` call.
@@ -88,6 +105,11 @@ impl Scene {
         &self.origins
     }
 
+    /// Interns `name` in the origin table, returning its stable id.
+    pub fn intern_name(&mut self, name: &str) -> NameId {
+        self.origins.intern_name(name)
+    }
+
     /// The finished document, if `comp()` was called.
     pub fn into_document(self) -> Option<Document> {
         self.document
@@ -95,17 +117,32 @@ impl Scene {
 
     /// Records where a node property value came from, when the source is
     /// known (an argument that was actually written in the program).
-    fn record(&mut self, node: NodeId, property: &str, source: Option<(Span, Option<Literal>)>) {
-        if let Some((span, literal)) = source {
+    fn record(
+        &mut self,
+        node: NodeId,
+        property: &str,
+        source: Option<ValueSource>,
+        write: &WriteSite,
+    ) {
+        if let Some(source) = source {
             self.origins.record(ValueOrigin {
                 node,
                 property: property.to_owned(),
-                span,
-                literal,
+                span: source.span,
+                literal: source.literal,
                 kind: OriginKind::Set,
                 ease: None,
+                expression: source.expression,
+                statement: write.statement,
+                block: write.block,
+                site: Arc::clone(&write.site),
             });
         }
+    }
+
+    /// Binds `node` to a variable in the caller's block.
+    pub fn attach_binding(&mut self, node: NodeId, binding: BindingOrigin) {
+        self.origins.attach_binding(node, binding);
     }
 
     /// Calls a scene constructor builtin.
@@ -149,7 +186,16 @@ impl Scene {
                         (4, "stroke"),
                         (5, "stroke_width"),
                     ] {
-                        self.record(id, property, bound.source(index));
+                        self.record(
+                            id,
+                            property,
+                            bound.argument(index).map(value_source),
+                            &WriteSite {
+                                statement: site.statement,
+                                block: site.block,
+                                site: Arc::clone(&site.site),
+                            },
+                        );
                     }
                 }
                 Ok(node)
@@ -168,7 +214,16 @@ impl Scene {
                         (2, "stroke"),
                         (3, "stroke_width"),
                     ] {
-                        self.record(id, property, bound.source(index));
+                        self.record(
+                            id,
+                            property,
+                            bound.argument(index).map(value_source),
+                            &WriteSite {
+                                statement: site.statement,
+                                block: site.block,
+                                site: Arc::clone(&site.site),
+                            },
+                        );
                     }
                 }
                 Ok(node)
@@ -315,7 +370,16 @@ impl Scene {
                 (6, "tracking"),
                 (7, "line_height"),
             ] {
-                self.record(id, property, bound.source(index));
+                self.record(
+                    id,
+                    property,
+                    bound.argument(index).map(value_source),
+                    &WriteSite {
+                        statement: site.statement,
+                        block: site.block,
+                        site: Arc::clone(&site.site),
+                    },
+                );
             }
         }
         Ok(node)
@@ -358,7 +422,16 @@ impl Scene {
         let node = self.create(NodeContent::Image(content), site)?;
         if let Value::Node(id) = node {
             for (index, property) in [(0, "source"), (1, "width"), (2, "height"), (3, "fit")] {
-                self.record(id, property, bound.source(index));
+                self.record(
+                    id,
+                    property,
+                    bound.argument(index).map(value_source),
+                    &WriteSite {
+                        statement: site.statement,
+                        block: site.block,
+                        site: Arc::clone(&site.site),
+                    },
+                );
             }
         }
         Ok(node)
@@ -419,7 +492,16 @@ impl Scene {
                 (6, "fade_in"),
                 (7, "fade_out"),
             ] {
-                self.record(id, property, bound.source(index));
+                self.record(
+                    id,
+                    property,
+                    bound.argument(index).map(value_source),
+                    &WriteSite {
+                        statement: site.statement,
+                        block: site.block,
+                        site: Arc::clone(&site.site),
+                    },
+                );
             }
         }
         Ok(node)
@@ -495,7 +577,16 @@ impl Scene {
                 (7, "fit"),
                 (8, "gain"),
             ] {
-                self.record(id, property, bound.source(index));
+                self.record(
+                    id,
+                    property,
+                    bound.argument(index).map(value_source),
+                    &WriteSite {
+                        statement: site.statement,
+                        block: site.block,
+                        site: Arc::clone(&site.site),
+                    },
+                );
             }
         }
         Ok(node)
@@ -545,7 +636,16 @@ impl Scene {
                 self.document_mut()?
                     .set_content(id, field, ContentValue::Number(value))
                     .map_err(|error| core_error(&error))?;
-                self.record(id, &field.name(), bound.source(index));
+                self.record(
+                    id,
+                    &field.name(),
+                    bound.argument(index).map(value_source),
+                    &WriteSite {
+                        statement: site.statement,
+                        block: site.block,
+                        site: Arc::clone(&site.site),
+                    },
+                );
             }
         }
         Ok(node)
@@ -651,7 +751,16 @@ impl Scene {
                 (cap_at, "cap"),
                 (join_at, "join"),
             ] {
-                self.record(id, property, bound.source(index));
+                self.record(
+                    id,
+                    property,
+                    bound.argument(index).map(value_source),
+                    &WriteSite {
+                        statement: site.statement,
+                        block: site.block,
+                        site: Arc::clone(&site.site),
+                    },
+                );
             }
         }
         Ok(node)
@@ -700,10 +809,18 @@ impl Scene {
                 "node limit of {max_nodes} exceeded"
             )));
         }
-        document
+        let node = document
             .add_node_with_identity(content, NodeIdentity::provenance(site.key()))
-            .map(Value::Node)
-            .map_err(|error| core_error(&error))
+            .map_err(|error| core_error(&error))?;
+        self.origins.record_node(NodeOrigin {
+            node,
+            creation: site.creation,
+            statement: site.statement,
+            block: site.block,
+            site: Arc::clone(&site.site),
+            bindings: Vec::new(),
+        });
+        Ok(Value::Node(node))
     }
 
     /// Reads `node.name`.
@@ -738,8 +855,8 @@ impl Scene {
         id: NodeId,
         name: &str,
         value: &Value,
-        span: Span,
-        literal: Option<Literal>,
+        source: ValueSource,
+        site: &WriteSite,
     ) -> HostResult<()> {
         let result = if name == "name" {
             let Value::Str(text) = value else {
@@ -786,7 +903,7 @@ impl Scene {
                 .map_err(|error| core_error(&error))
         };
         result?;
-        self.record(id, name, Some((span, literal)));
+        self.record(id, name, Some(source), site);
         Ok(())
     }
 
@@ -796,17 +913,18 @@ impl Scene {
         id: NodeId,
         method: NodeMethod,
         args: CallArgs,
+        site: &WriteSite,
     ) -> HostResult<Value> {
         match method {
-            NodeMethod::Key => self.key(id, args),
+            NodeMethod::Key => self.key(id, args, site),
             NodeMethod::Add => self.add_children(id, &args),
             NodeMethod::Id => self.assign_id(id, args),
-            NodeMethod::Effect => self.effect(id, args),
+            NodeMethod::Effect => self.effect(id, args, site),
             NodeMethod::EffectStack => self.effect_stack(id, args),
             NodeMethod::Mask => self.mask(id, args),
-            NodeMethod::AnimateChars => self.animate_chars(id, args),
+            NodeMethod::AnimateChars => self.animate_chars(id, args, site),
             NodeMethod::ClearChars => self.clear_chars(id),
-            NodeMethod::Wiggle => self.wiggle(id, args),
+            NodeMethod::Wiggle => self.wiggle(id, args, site),
         }
     }
 
@@ -827,7 +945,7 @@ impl Scene {
     /// with `from` and a key at `start + i*step + duration` with `to` and
     /// `ease`. The helper only emits ordinary keys, so it is deterministic and
     /// bakeable.
-    fn stagger(&mut self, args: CallArgs, _site: &CreationSite) -> HostResult<Value> {
+    fn stagger(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
         let params = [
             "nodes", "property", "values", "start", "step", "duration", "ease",
         ];
@@ -871,8 +989,32 @@ impl Scene {
             let (from, to) = pair_at(&values, index, "stagger()")?;
             #[allow(clippy::cast_precision_loss)] // a list index is far below 2^53
             let time = start + index as f64 * step;
-            self.key_value(*id, &property, time, from, Ease::Linear, span)?;
-            self.key_value(*id, &property, time + duration, to, ease, span)?;
+            self.key_value(
+                *id,
+                &property,
+                time,
+                from,
+                Ease::Linear,
+                span,
+                &WriteSite {
+                    statement: site.statement,
+                    block: site.block,
+                    site: Arc::clone(&site.site),
+                },
+            )?;
+            self.key_value(
+                *id,
+                &property,
+                time + duration,
+                to,
+                ease,
+                span,
+                &WriteSite {
+                    statement: site.statement,
+                    block: site.block,
+                    site: Arc::clone(&site.site),
+                },
+            )?;
         }
         Ok(Value::None)
     }
@@ -883,7 +1025,7 @@ impl Scene {
     /// `base ± amplitude` from a documented `SplitMix64` stream. The same seed
     /// always produces the same keys. `base` is the property's current static
     /// value (existing keyframes are not sampled).
-    fn wiggle(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+    fn wiggle(&mut self, id: NodeId, args: CallArgs, site: &WriteSite) -> HostResult<Value> {
         let params = ["property", "seed", "frequency", "amplitude", "start", "end"];
         let bound = bind("wiggle", &params, 6, args)?;
         let property = bound.string_or(0, "")?;
@@ -922,6 +1064,7 @@ impl Scene {
                 Value::Number(value),
                 Ease::SineInOut,
                 span,
+                site,
             )?;
             time += step;
         }
@@ -961,6 +1104,7 @@ impl Scene {
     }
 
     /// Writes one ordinary key through the same path as `node.key(...)`.
+    #[allow(clippy::too_many_arguments)] // mirrors the key site it forwards
     fn key_value(
         &mut self,
         id: NodeId,
@@ -969,22 +1113,26 @@ impl Scene {
         value: Value,
         ease: Ease,
         span: Span,
+        site: &WriteSite,
     ) -> HostResult<()> {
         let mut args = CallArgs::default();
         args.positional.push(CallValue {
             value: Value::Str(Rc::from(property)),
             span,
             literal: Some(Literal::Text),
+            origin: crate::origins::ExpressionOrigin::Literal(Literal::Text),
         });
         args.positional.push(CallValue {
             value: Value::Number(time),
             span,
             literal: Some(Literal::Number),
+            origin: crate::origins::ExpressionOrigin::Literal(Literal::Number),
         });
         args.positional.push(CallValue {
             value,
             span,
             literal: None,
+            origin: crate::origins::ExpressionOrigin::Computed,
         });
         args.keywords.push((
             Rc::from("ease"),
@@ -992,16 +1140,22 @@ impl Scene {
                 value: Value::Ease(ease),
                 span,
                 literal: None,
+                origin: crate::origins::ExpressionOrigin::Computed,
             },
         ));
-        self.key(id, args)?;
+        self.key(id, args, site)?;
         Ok(())
     }
 
     /// `node.animate_chars(property, from, to, start, stagger, duration,
     /// ease="linear", order="forward")`: appends a per-character animator
     /// (D-0034).
-    fn animate_chars(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+    fn animate_chars(
+        &mut self,
+        id: NodeId,
+        args: CallArgs,
+        _site: &WriteSite,
+    ) -> HostResult<Value> {
         let params = [
             "property", "from", "to", "start", "stagger", "duration", "ease", "order",
         ];
@@ -1064,7 +1218,8 @@ impl Scene {
     /// Supported arguments: `drop_shadow` takes `color`, `offset`, `blur` and
     /// `opacity`; `blur` takes `radius`; `glow` takes `color`, `radius` and
     /// `intensity`.
-    fn effect(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+    #[allow(clippy::too_many_lines)] // one branch per effect parameter
+    fn effect(&mut self, id: NodeId, args: CallArgs, site: &WriteSite) -> HostResult<Value> {
         let params = [
             "kind",
             "color",
@@ -1111,16 +1266,22 @@ impl Scene {
                 .push_effect(id, Effect::new(kind))
                 .map_err(|error| core_error(&error))?;
         }
-        if let (true, Some(source)) = (bound.get(1).is_some(), bound.source(1)) {
+        if let (true, Some(argument)) = (bound.get(1).is_some(), bound.argument(1)) {
             let color = bound.color_or(1, Color::BLACK)?;
             let channel = EffectChannel {
                 kind,
                 param: EffectParam::Color,
                 axis: None,
             };
-            self.write_effect_param(id, channel, EffectValueInput::Color(color), source)?;
+            self.write_effect_param(
+                id,
+                channel,
+                EffectValueInput::Color(color),
+                value_source(argument),
+                site,
+            )?;
         }
-        if let (true, Some(source)) = (bound.get(2).is_some(), bound.source(2)) {
+        if let (true, Some(argument)) = (bound.get(2).is_some(), bound.argument(2)) {
             let offset = as_vec2(bound.get(2).unwrap())
                 .ok_or_else(|| HostError::type_error("effect(): 'offset' expects two numbers"))?;
             for (axis, value) in [
@@ -1132,7 +1293,13 @@ impl Scene {
                     param: EffectParam::Offset,
                     axis: Some(axis),
                 };
-                self.write_effect_param(id, channel, EffectValueInput::Number(value), source)?;
+                self.write_effect_param(
+                    id,
+                    channel,
+                    EffectValueInput::Number(value),
+                    value_source(argument),
+                    site,
+                )?;
             }
         }
         for (index, param) in [
@@ -1141,14 +1308,20 @@ impl Scene {
             (5, EffectParam::Radius),
             (6, EffectParam::Intensity),
         ] {
-            if let (true, Some(source)) = (bound.get(index).is_some(), bound.source(index)) {
+            if let (true, Some(argument)) = (bound.get(index).is_some(), bound.argument(index)) {
                 let number = bound.number(index)?;
                 let channel = EffectChannel {
                     kind,
                     param,
                     axis: None,
                 };
-                self.write_effect_param(id, channel, EffectValueInput::Number(number), source)?;
+                self.write_effect_param(
+                    id,
+                    channel,
+                    EffectValueInput::Number(number),
+                    value_source(argument),
+                    site,
+                )?;
             }
         }
         Ok(Value::Node(id))
@@ -1250,12 +1423,13 @@ impl Scene {
         id: NodeId,
         channel: EffectChannel,
         value: EffectValueInput,
-        source: (Span, Option<Literal>),
+        source: ValueSource,
+        site: &WriteSite,
     ) -> HostResult<()> {
         self.document_mut()?
             .set_effect(id, channel, value)
             .map_err(|error| core_error(&error))?;
-        self.record(id, &channel.name(), Some(source));
+        self.record(id, &channel.name(), Some(source), site);
         Ok(())
     }
 
@@ -1270,11 +1444,11 @@ impl Scene {
         Ok(Value::Node(id))
     }
 
-    fn key(&mut self, id: NodeId, args: CallArgs) -> HostResult<Value> {
+    fn key(&mut self, id: NodeId, args: CallArgs, site: &WriteSite) -> HostResult<Value> {
         let bound = bind("key", &["property", "time", "value", "ease"], 3, args)?;
         let property_name = bound.string_or(0, "")?;
         if let Some(channel) = EffectChannel::from_name(&property_name) {
-            return self.key_effect(id, channel, &property_name, &bound);
+            return self.key_effect(id, channel, &property_name, &bound, site);
         }
         if let Some((kind, rest)) = property_name.split_once('.') {
             if EffectKind::from_name(kind).is_some() && rest.ends_with(".offset") {
@@ -1285,7 +1459,7 @@ impl Scene {
         }
         let (base, axis) = split_axis(&property_name);
         if let Some(field) = ContentField::from_name(base) {
-            return self.key_content(id, field, &property_name, axis, &bound);
+            return self.key_content(id, field, &property_name, axis, &bound, site);
         }
         let property = Property::from_name(base).ok_or_else(|| {
             HostError::value_error(format!(
@@ -1343,7 +1517,13 @@ impl Scene {
                 .map_err(|error| core_error(&error))?,
             (None, None) => {}
         }
-        self.record_key(id, &property_name, &timing, bound.source(2));
+        self.record_key(
+            id,
+            &property_name,
+            &timing,
+            bound.argument(2).map(value_source),
+            site,
+        );
         Ok(Value::None)
     }
 
@@ -1355,6 +1535,7 @@ impl Scene {
         property_name: &str,
         axis: Option<motioner_core::Axis>,
         bound: &Bound<'_>,
+        site: &WriteSite,
     ) -> HostResult<Value> {
         if axis.is_some() {
             return Err(HostError::value_error(format!(
@@ -1378,7 +1559,13 @@ impl Scene {
         self.document_mut()?
             .add_content_keyframe(id, field, timing.frame, value, timing.ease)
             .map_err(|error| core_error(&error))?;
-        self.record_key(id, property_name, &timing, bound.source(2));
+        self.record_key(
+            id,
+            property_name,
+            &timing,
+            bound.argument(2).map(value_source),
+            site,
+        );
         Ok(Value::None)
     }
 
@@ -1390,6 +1577,7 @@ impl Scene {
         channel: EffectChannel,
         property_name: &str,
         bound: &Bound<'_>,
+        site: &WriteSite,
     ) -> HostResult<Value> {
         let time = bound.number(1)?;
         if !time.is_finite() {
@@ -1422,7 +1610,13 @@ impl Scene {
         self.document_mut()?
             .add_effect_keyframe(id, channel, timing.frame, value, timing.ease)
             .map_err(|error| core_error(&error))?;
-        self.record_key(id, property_name, &timing, bound.source(2));
+        self.record_key(
+            id,
+            property_name,
+            &timing,
+            bound.argument(2).map(value_source),
+            site,
+        );
         Ok(Value::None)
     }
 
@@ -1468,16 +1662,21 @@ impl Scene {
         id: NodeId,
         property_name: &str,
         timing: &KeyTiming,
-        source: Option<(Span, Option<Literal>)>,
+        source: Option<ValueSource>,
+        site: &WriteSite,
     ) {
-        if let Some((span, literal)) = source {
+        if let Some(source) = source {
             self.origins.record(ValueOrigin {
                 node: id,
                 property: property_name.to_string(),
-                span,
-                literal,
+                span: source.span,
+                literal: source.literal,
                 kind: OriginKind::Key(timing.frame),
                 ease: timing.ease_origin.clone(),
+                expression: source.expression,
+                statement: site.statement,
+                block: site.block,
+                site: Arc::clone(&site.site),
             });
         }
     }
@@ -1499,6 +1698,15 @@ impl Scene {
                 .map_err(|error| core_error(&error))?;
         }
         Ok(Value::None)
+    }
+}
+
+/// The origin of a written argument, with its syntax classification.
+fn value_source(value: &CallValue) -> ValueSource {
+    ValueSource {
+        span: value.span,
+        literal: value.literal,
+        expression: value.origin,
     }
 }
 

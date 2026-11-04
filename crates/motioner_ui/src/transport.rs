@@ -219,6 +219,38 @@ impl Transport {
         }
     }
 
+    /// Follows the audio clock and handles the end of the mixed range.
+    ///
+    /// `ended` is true once the device consumed every mixed sample. In loop
+    /// mode the transport wraps to the first frame, re-anchors at `now` and
+    /// returns `Some(0)`: the caller restarts the audio stream at the first
+    /// sample so the next gesture is sample-exact. Without looping, playback
+    /// stops on the last frame.
+    ///
+    /// The return value is the loop-start frame that must be restarted, or
+    /// `None` when the transport simply followed the clock.
+    pub fn follow_audio(&mut self, position: f64, ended: bool, now: Duration) -> Option<i64> {
+        if !self.is_playing() {
+            return None;
+        }
+        if ended {
+            if self.looping {
+                self.frame = 0;
+                self.state = State::Playing {
+                    anchor_frame: 0,
+                    anchor_time: now,
+                };
+                return Some(0);
+            }
+            self.frame = self.duration - 1;
+            self.state = State::Stopped;
+            return None;
+        }
+        let frame = audio_frame(position, self.rate);
+        self.follow(frame, now);
+        None
+    }
+
     /// Maps wall-clock `now` to the frame to display.
     ///
     /// Stopped and scrubbing transports return their current frame unchanged.
@@ -499,6 +531,42 @@ mod tests {
         // 298 -> 299 -> 0 -> 1: frames 299 and 0 were skipped.
         assert_eq!(skipped_frames(298, 1, 300), 2);
         assert_eq!(skipped_frames(299, 0, 300), 0);
+    }
+
+    #[test]
+    fn a_finished_audio_stream_restarts_looping_playback_at_the_first_frame() {
+        let mut transport = Transport::new(rate_60(), 60);
+        transport.play(Duration::ZERO);
+        assert_eq!(
+            transport.follow_audio(0.5, false, at(0.5)),
+            None,
+            "mid-stream positions only move the playhead"
+        );
+        assert_eq!(transport.frame(), 30);
+
+        // The mixer reaches the end of the range: wrap and ask the caller to
+        // restart the stream on the first sample.
+        assert_eq!(transport.follow_audio(1.0, true, at(1.0)), Some(0));
+        assert_eq!(
+            transport.frame(),
+            0,
+            "the playhead must not stay on the last frame"
+        );
+        assert!(transport.is_playing());
+
+        // The restarted stream advances from its own anchor.
+        transport.follow_audio(0.1, false, at(1.1));
+        assert_eq!(transport.frame(), 6);
+    }
+
+    #[test]
+    fn a_finished_audio_stream_stops_playback_when_not_looping() {
+        let mut transport = Transport::new(rate_60(), 60);
+        transport.set_looping(false);
+        transport.play(Duration::ZERO);
+        assert_eq!(transport.follow_audio(1.0, true, at(1.0)), None);
+        assert_eq!(transport.frame(), 59);
+        assert!(!transport.is_playing());
     }
 
     #[test]

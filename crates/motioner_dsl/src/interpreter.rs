@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use motioner_core::{Document, NodeId};
 
@@ -20,8 +21,11 @@ use crate::diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
 use crate::host::{as_integer, bind, f64_from_i64, CallArgs, CallValue, HostError, HostResult};
 use crate::limits::{Budget, Limits};
 use crate::naming::{assign_default_names, NameNote};
-use crate::origins::{literal_of, ValueOrigins};
-use crate::scene::{CreationSite, Scene};
+use crate::origins::{
+    literal_of, BindingOrigin, BlockOrigin, CallOrigin, ExpressionOrigin, IterationValue, Literal,
+    LoopOrigin, NameId, OriginSite, ParameterOrigin, ValueOrigins, ValueSource,
+};
+use crate::scene::{CreationSite, Scene, WriteSite};
 use crate::value::{Builtin, Value};
 use motioner_core::{NoTextMetrics, TextMetrics};
 
@@ -115,15 +119,21 @@ pub fn execute_detailed_with_metrics(
         globals: HashMap::new(),
         frames: Vec::new(),
         loops: Vec::new(),
+        blocks: Vec::new(),
         index_path: Vec::new(),
         call_counts: HashMap::new(),
+        returned: Vec::new(),
+        site: Arc::new(OriginSite::default()),
+        site_dirty: true,
         budget: Budget::new(limits),
         scene: Scene::new(limits.max_nodes),
         name_notes: Vec::new(),
     };
     interpreter.exec_block(&program.body)?;
     let bindings = interpreter.bindings();
-    let origins = interpreter.scene.origins().clone();
+    let mut origins = interpreter.scene.origins().clone();
+    origins.finalize(program);
+    origins.mark_returned(&interpreter.returned);
     let mut document = interpreter.scene.into_document().ok_or_else(|| {
         let start = Span {
             line: 1,
@@ -154,8 +164,26 @@ enum Flow {
 
 struct CallFrame {
     function: Rc<str>,
+    function_id: NameId,
     call_span: Span,
+    definition: Span,
+    parameters: Vec<(Rc<str>, NameId)>,
     locals: HashMap<Rc<str>, Value>,
+}
+
+struct LoopFrame {
+    span: Span,
+    variables: Rc<[(Rc<str>, NameId)]>,
+    iterable: Span,
+    body: Span,
+    indent: u16,
+    index: i64,
+    value: Option<IterationValue>,
+}
+
+struct BlockFrame {
+    origin: BlockOrigin,
+    statement: Span,
 }
 
 struct Interpreter<'l> {
@@ -163,13 +191,23 @@ struct Interpreter<'l> {
     metrics: &'l dyn TextMetrics,
     globals: HashMap<Rc<str>, Value>,
     frames: Vec<CallFrame>,
-    /// Iteration index of every active loop, outermost first.
-    loops: Vec<i64>,
+    /// Enclosing loops at runtime, outermost first.
+    loops: Vec<LoopFrame>,
+    /// Enclosing statement blocks at runtime, outermost first.
+    blocks: Vec<BlockFrame>,
     /// Display-name path: active loop iterations and function-call ordinals,
     /// outermost first.
     index_path: Vec<i64>,
     /// How many times each user function has been called in this run.
     call_counts: HashMap<Rc<str>, i64>,
+    /// `(node, call-site span)` pairs for every function return that produced
+    /// a node; origins are marked after the run.
+    returned: Vec<(NodeId, Span)>,
+    /// The origin context of the statement being executed, rebuilt only when
+    /// a write needs it and the loop or call stack changed.
+    site: Arc<OriginSite>,
+    /// Whether [`Self::site`] must rebuild the cached context.
+    site_dirty: bool,
     budget: Budget,
     scene: Scene,
     name_notes: Vec<NameNote>,
@@ -206,17 +244,108 @@ impl Interpreter<'_> {
         self.diagnostic(error.category, span, error.message)
     }
 
-    /// The provenance site of a creating call at `span`.
-    fn site(&self, span: Span) -> CreationSite {
-        CreationSite {
-            call_start: span.start,
-            callers: self
-                .frames
-                .iter()
-                .map(|frame| frame.call_span.start)
-                .collect(),
-            loops: self.loops.clone(),
+    /// Rebuilds the origin context after the statement, loop stack or call
+    /// stack changes. Origins share the result through [`Arc`], so recording a
+    /// write does not rebuild or clone the stacks.
+    fn ensure_site(&mut self) {
+        if !self.site_dirty {
+            return;
         }
+        self.site_dirty = false;
+        let loops = self
+            .loops
+            .iter()
+            .map(|frame| LoopOrigin {
+                span: frame.span,
+                variables: frame.variables.iter().map(|(_, id)| *id).collect(),
+                iterable: frame.iterable,
+                index: frame.index,
+                value: frame.value.clone(),
+                body: frame.body,
+                indent: frame.indent,
+            })
+            .collect();
+        let calls = self
+            .frames
+            .iter()
+            .map(|frame| CallOrigin {
+                call_site: frame.call_span,
+                function: frame.function_id,
+                definition: frame.definition,
+                parameters: frame
+                    .parameters
+                    .iter()
+                    .map(|(_, id)| ParameterOrigin {
+                        name: *id,
+                        default: None,
+                    })
+                    .collect(),
+                returns_node: false,
+            })
+            .collect();
+        self.site = Arc::new(OriginSite { loops, calls });
+    }
+
+    /// The statement currently executing inside the innermost block.
+    fn current_statement(&self) -> Span {
+        self.blocks
+            .last()
+            .map_or_else(Span::default, |frame| frame.statement)
+    }
+
+    /// The block currently executing.
+    fn current_block(&self) -> BlockOrigin {
+        self.blocks
+            .last()
+            .map_or_else(BlockOrigin::default, |frame| frame.origin)
+    }
+
+    /// The provenance site of a creating call at `span`.
+    fn site(&mut self, span: Span) -> CreationSite {
+        self.ensure_site();
+        CreationSite {
+            creation: span,
+            statement: self.current_statement(),
+            block: self.current_block(),
+            site: Arc::clone(&self.site),
+        }
+    }
+
+    /// The write context of the statement currently executing.
+    fn write_site(&mut self) -> WriteSite {
+        self.ensure_site();
+        WriteSite {
+            statement: self.current_statement(),
+            block: self.current_block(),
+            site: Arc::clone(&self.site),
+        }
+    }
+
+    /// Classifies `expr` syntactically against the current scope.
+    fn expression_origin(&self, expr: &Expr, literal: Option<Literal>) -> ExpressionOrigin {
+        if let Some(literal) = literal {
+            return ExpressionOrigin::Literal(literal);
+        }
+        if let ExprKind::Name(name) = &expr.kind {
+            if let Some(frame) = self.frames.last() {
+                if let Some((_, id)) = frame
+                    .parameters
+                    .iter()
+                    .find(|(parameter, _)| parameter.as_ref() == &**name)
+                {
+                    return ExpressionOrigin::Parameter { name: *id };
+                }
+            }
+            if let Some((_, id)) = self.loops.iter().find_map(|loop_frame| {
+                loop_frame
+                    .variables
+                    .iter()
+                    .find(|(variable, _)| variable.as_ref() == &**name)
+            }) {
+                return ExpressionOrigin::LoopVariable { name: *id };
+            }
+        }
+        ExpressionOrigin::Computed
     }
 
     /// Top-level variable bindings that point at nodes, sorted by name.
@@ -257,13 +386,29 @@ impl Interpreter<'_> {
     // ---- statements ----------------------------------------------------
 
     fn exec_block(&mut self, body: &[Stmt]) -> Exec<Flow> {
+        self.blocks.push(BlockFrame {
+            origin: BlockOrigin::of(body),
+            statement: Span::default(),
+        });
+        let mut result = Ok(Flow::Normal);
         for statement in body {
-            let flow = self.exec(statement)?;
-            if !matches!(flow, Flow::Normal) {
-                return Ok(flow);
+            if let Some(frame) = self.blocks.last_mut() {
+                frame.statement = statement.span;
+            }
+            match self.exec(statement) {
+                Ok(Flow::Normal) => {}
+                Ok(flow) => {
+                    result = Ok(flow);
+                    break;
+                }
+                Err(error) => {
+                    result = Err(error);
+                    break;
+                }
             }
         }
-        Ok(Flow::Normal)
+        self.blocks.pop();
+        result
     }
 
     fn exec(&mut self, statement: &Stmt) -> Exec<Flow> {
@@ -305,42 +450,64 @@ impl Interpreter<'_> {
                 variable,
                 iterable,
                 body,
-            } => self.exec_for(variable, iterable, body),
+            } => self.exec_for(variable, iterable, body, statement.span),
             StmtKind::Break => Ok(Flow::Break),
             StmtKind::Continue => Ok(Flow::Continue),
             StmtKind::Pass => Ok(Flow::Normal),
         }
     }
 
-    fn exec_for(&mut self, variable: &Rc<str>, iterable: &Expr, body: &[Stmt]) -> Exec<Flow> {
+    fn exec_for(
+        &mut self,
+        variable: &Rc<str>,
+        iterable: &Expr,
+        body: &[Stmt],
+        span: Span,
+    ) -> Exec<Flow> {
         let sequence = self.eval(iterable)?;
         if let Value::Range(range) = sequence {
             // Ranges are iterated lazily so `range(10**7)` needs no memory.
             let values = (0..range.len()).map(|i| Value::Number(f64_from_i64(range.at(i))));
-            return self.run_loop(variable, body, values);
+            return self.run_loop(variable, body, span, iterable.span, values);
         }
         let items = builtins::items(&sequence, self.limits, &mut self.budget)
             .map_err(|e| self.host_error(iterable.span, e))?;
-        self.run_loop(variable, body, items.into_iter())
+        self.run_loop(variable, body, span, iterable.span, items.into_iter())
     }
 
     fn run_loop(
         &mut self,
         variable: &Rc<str>,
         body: &[Stmt],
+        span: Span,
+        iterable: Span,
         values: impl Iterator<Item = Value>,
     ) -> Exec<Flow> {
+        let body_origin = BlockOrigin::of(body);
+        let variable_id = self.scene.intern_name(variable);
+        let variables: Rc<[(Rc<str>, NameId)]> = Rc::from(vec![(variable.clone(), variable_id)]);
         for (index, value) in values.enumerate() {
+            let iteration = i64::try_from(index).unwrap_or(i64::MAX);
+            let iteration_value = iteration_value_of(&value);
             self.store(variable.clone(), value);
             // The loop index is part of every node's provenance key, so the
             // same iteration of the same call yields the same identity. It is
             // also part of the display-name path (outermost first).
-            let iteration = i64::try_from(index).unwrap_or(i64::MAX);
-            self.loops.push(iteration);
+            self.loops.push(LoopFrame {
+                span,
+                variables: Rc::clone(&variables),
+                iterable,
+                body: body_origin.span,
+                indent: body_origin.indent,
+                index: iteration,
+                value: iteration_value,
+            });
             self.index_path.push(iteration);
+            self.site_dirty = true;
             let flow = self.exec_block(body);
             self.index_path.pop();
             self.loops.pop();
+            self.site_dirty = true;
             match flow? {
                 Flow::Break => break,
                 Flow::Return(value) => return Ok(Flow::Return(value)),
@@ -376,6 +543,20 @@ impl Interpreter<'_> {
                         node,
                         path: self.index_path.clone(),
                     });
+                    let block = self
+                        .blocks
+                        .last()
+                        .map_or_else(BlockOrigin::default, |frame| frame.origin);
+                    let name_id = self.scene.intern_name(name);
+                    self.scene.attach_binding(
+                        node,
+                        BindingOrigin {
+                            name: name_id,
+                            statement: span,
+                            block,
+                            reassigned_later: false,
+                        },
+                    );
                 }
             }
             Target::Attribute { object, name } => {
@@ -396,9 +577,17 @@ impl Interpreter<'_> {
                 };
                 let new = combine(self, current, evaluated)?;
                 let literal = (op == AssignOp::Set).then(|| literal_of(value)).flatten();
-                let result = self
-                    .scene
-                    .set_attribute(id, name, &new, value.span, literal);
+                let source = ValueSource {
+                    span: value.span,
+                    literal,
+                    expression: if op == AssignOp::Set {
+                        self.expression_origin(value, literal)
+                    } else {
+                        ExpressionOrigin::Computed
+                    },
+                };
+                let write = self.write_site();
+                let result = self.scene.set_attribute(id, name, &new, source, &write);
                 result.map_err(|e| self.host_error(span, e))?;
             }
             Target::Index { object, index } => {
@@ -577,16 +766,20 @@ impl Interpreter<'_> {
         let mut call_args = CallArgs::default();
         for arg in args {
             let value = self.eval(&arg.value)?;
+            let literal = literal_of(&arg.value);
             let call_value = CallValue {
                 value,
                 span: arg.value.span,
-                literal: literal_of(&arg.value),
+                literal,
+                origin: self.expression_origin(&arg.value, literal),
             };
             match &arg.name {
                 Some(name) => call_args.keywords.push((name.clone(), call_value)),
                 None => call_args.positional.push(call_value),
             }
         }
+        let site = self.site(span);
+        let write = self.write_site();
         let result = match function {
             Value::Function(def) => return self.call_function(&def, call_args, span),
             Value::Builtin(
@@ -603,7 +796,7 @@ impl Interpreter<'_> {
                 | Builtin::Audio
                 | Builtin::Video
                 | Builtin::Stagger),
-            ) => self.scene.call(builtin, call_args, &self.site(span)),
+            ) => self.scene.call(builtin, call_args, &site),
             Value::Builtin(builtin) => builtins::call(
                 builtin,
                 call_args,
@@ -611,7 +804,7 @@ impl Interpreter<'_> {
                 &mut self.budget,
                 self.metrics,
             ),
-            Value::Method(id, method) => self.scene.call_method(id, method, call_args),
+            Value::Method(id, method) => self.scene.call_method(id, method, call_args, &write),
             other => Err(HostError::type_error(format!(
                 "a {} is not callable",
                 other.type_name()
@@ -650,11 +843,21 @@ impl Interpreter<'_> {
                     .map(|v| v.unwrap_or(Value::None)),
             )
             .collect();
+        let function_id = self.scene.intern_name(&function.name);
+        let parameters: Vec<(Rc<str>, NameId)> = function
+            .params
+            .iter()
+            .map(|name| (Rc::clone(name), self.scene.intern_name(name)))
+            .collect();
         self.frames.push(CallFrame {
             function: function.name.clone(),
+            function_id,
             call_span: span,
+            definition: function.span,
+            parameters,
             locals,
         });
+        self.site_dirty = true;
         // The invocation ordinal is the display-name path entry for bindings
         // created inside this call: two calls of `spinner` give `holder 1` and
         // `holder 2` instead of two nodes both named `holder`.
@@ -667,10 +870,26 @@ impl Interpreter<'_> {
         let flow = self.exec_block(&function.body);
         self.index_path.pop();
         self.frames.pop();
-        match flow? {
-            Flow::Return(value) => Ok(value),
-            Flow::Normal | Flow::Break | Flow::Continue => Ok(Value::None),
+        self.site_dirty = true;
+        let value = match flow? {
+            Flow::Return(value) => value,
+            Flow::Normal | Flow::Break | Flow::Continue => Value::None,
+        };
+        if let Value::Node(node) = &value {
+            self.returned.push((*node, span));
         }
+        Ok(value)
+    }
+}
+
+/// The iteration value as a literal when its type can be written literally.
+fn iteration_value_of(value: &Value) -> Option<IterationValue> {
+    match value {
+        Value::Number(number) => Some(IterationValue::Number(*number)),
+        Value::Str(text) => Some(IterationValue::Text(text.to_string())),
+        Value::Bool(flag) => Some(IterationValue::Bool(*flag)),
+        Value::None => Some(IterationValue::None),
+        _ => None,
     }
 }
 

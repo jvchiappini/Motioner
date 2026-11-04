@@ -107,6 +107,19 @@ impl AudioOutput {
         let played = playback.cursor as f64 / f64::from(SAMPLE_RATE);
         Some(self.origin_seconds + played)
     }
+
+    /// Whether the device consumed every mixed sample.
+    ///
+    /// The transport uses this to wrap a looping transport and restart the
+    /// stream at the loop start; a silent mix never reports the end because
+    /// the wall clock drives it.
+    #[must_use]
+    pub fn ended(&self) -> bool {
+        if self.silent {
+            return false;
+        }
+        lock(&self.playback).ended()
+    }
 }
 
 impl Drop for AudioOutput {
@@ -123,6 +136,10 @@ struct Playback {
 }
 
 impl Playback {
+    fn ended(&self) -> bool {
+        self.cursor >= self.frames
+    }
+
     fn fill(&mut self, data: &mut [f32], channels: usize) {
         for frame in data.chunks_mut(channels) {
             if self.cursor < self.frames {
@@ -214,4 +231,28 @@ fn store_for(project: &Project, document: &Document) -> AudioStore {
         store.insert(entry.original.clone(), pcm);
     }
     store
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cursor_reports_the_end_only_after_the_last_frame() {
+        let mut playback = Playback {
+            samples: vec![0.25, -0.25, 0.5, -0.5],
+            cursor: 0,
+            frames: 2,
+        };
+        assert!(!playback.ended());
+        let mut data = [0.0_f32; 2];
+        playback.fill(&mut data, 2);
+        assert!(!playback.ended());
+        playback.fill(&mut data, 2);
+        assert!(playback.ended());
+        // Extra callbacks are silent and never move the cursor past the end.
+        playback.fill(&mut data, 2);
+        assert_eq!(playback.cursor, 2);
+        assert!(data.iter().all(|sample| *sample == 0.0));
+    }
 }

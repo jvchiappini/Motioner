@@ -10,7 +10,7 @@ use std::rc::Rc;
 use motioner_core::{Color, Gradient, Vec2};
 
 use crate::diagnostic::{ErrorCategory, Span};
-use crate::origins::Literal;
+use crate::origins::{ExpressionOrigin, Literal};
 use crate::value::Value;
 
 /// A paint argument: a solid colour or a gradient (D-0030).
@@ -58,6 +58,8 @@ pub(crate) struct CallValue {
     pub span: Span,
     /// The literal shape of the expression, when it is a plain literal.
     pub literal: Option<Literal>,
+    /// Literal, parameter reference, loop variable or computed.
+    pub origin: ExpressionOrigin,
 }
 
 /// Evaluated call arguments.
@@ -143,6 +145,11 @@ impl Bound<'_> {
             .get(index)
             .and_then(Option::as_ref)
             .map(|value| (value.span, value.literal))
+    }
+
+    /// The evaluated argument bound to `index`, when given.
+    pub fn argument(&self, index: usize) -> Option<&CallValue> {
+        self.values.get(index).and_then(Option::as_ref)
     }
 
     fn mismatch(&self, index: usize, expected: &str, got: &Value) -> HostError {

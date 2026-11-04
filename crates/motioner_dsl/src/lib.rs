@@ -43,7 +43,11 @@ pub use interpreter::{
 pub use lexer::tokenize;
 pub use limits::Limits;
 pub use naming::{assign_default_names, default_name, NameNote};
-pub use origins::{EaseOrigin, Literal, OriginKind, ValueOrigin, ValueOrigins};
+pub use origins::{
+    BindingOrigin, BlockOrigin, CallOrigin, EaseOrigin, ExpressionOrigin, IterationValue, Literal,
+    LoopOrigin, NameId, NodeOrigin, OriginKind, OriginSite, ParameterOrigin, ValueOrigin,
+    ValueOrigins, ValueSource,
+};
 pub use parser::{parse, MAX_EXPR_DEPTH};
 pub use token::{Keyword, Op, Token, TokenKind};
 
