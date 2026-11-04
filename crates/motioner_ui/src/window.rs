@@ -63,6 +63,12 @@ pub struct PreviewOptions {
     /// project-rooted loader; without one every image stays unresolved and
     /// draws a placeholder.
     pub image_resolver: Option<std::rc::Rc<dyn motioner_core::ImageResolver>>,
+    /// Project services (D-0045); without one the start screen is read-only.
+    pub host: Option<std::rc::Rc<dyn crate::ProjectHost>>,
+    /// Open the window on the start screen with this state.
+    pub start: Option<crate::StartScreen>,
+    /// Left panel tab shown at startup (screenshots and demos).
+    pub panel_tab: Option<crate::LeftTab>,
 }
 
 /// Errors that prevent the preview window from running.
@@ -128,13 +134,27 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
         transport.set_frame(frame);
     }
 
-    let (width, height) = options.window_size.unwrap_or(DEFAULT_WINDOW_SIZE);
     let title = format!(
         "Motioner — {}",
         path.file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("untitled")
     );
+    let mut editor = Editor::new(session, transport, options.select);
+    if let Some(fonts) = &options.fonts {
+        let mut families: Vec<String> =
+            fonts.faces().map(|(family, _)| family.to_owned()).collect();
+        families.sort();
+        families.dedup();
+        editor.set_font_families(families);
+    }
+    run_inner(editor, options, title)
+}
+
+/// Runs the window for an already loaded editor.
+#[allow(clippy::needless_pass_by_value)] // cloned into the app and borrowed by the builder
+fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(), UiError> {
+    let (width, height) = options.window_size.unwrap_or(DEFAULT_WINDOW_SIZE);
     let control = match &options.control {
         Some(file) => {
             let server =
@@ -151,15 +171,7 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     // `App::run` consumes the app and returns `()`, so a fatal error raised
     // inside the event loop is handed back through this shared slot.
     let fatal = Rc::new(RefCell::new(None));
-    let mut editor = Editor::new(session, transport, options.select);
-    if let Some(fonts) = &options.fonts {
-        let mut families: Vec<String> =
-            fonts.faces().map(|(family, _)| family.to_owned()).collect();
-        families.sort();
-        families.dedup();
-        editor.set_font_families(families);
-    }
-    let app = PreviewApp::new(editor, options, control, Rc::clone(&fatal));
+    let app = PreviewApp::new(editor, options, control, Rc::clone(&fatal), title.clone());
     App::new(app)
         .with_title(&title)
         .with_size(width.max(320), height.max(240))
@@ -171,6 +183,29 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
         .run();
     let error = fatal.borrow_mut().take();
     error.map_or(Ok(()), Err)
+}
+
+/// Opens the window on the start screen (no argument on the command line).
+///
+/// # Errors
+///
+/// [`UiError::Painter`] when the embedded font cannot be registered, and
+/// [`UiError::Screenshot`] when a requested screenshot cannot be written.
+pub fn run_app(options: PreviewOptions) -> Result<(), UiError> {
+    let metrics = options
+        .text_metrics
+        .clone()
+        .unwrap_or_else(|| std::sync::Arc::new(motioner_core::NoTextMetrics));
+    let editor = Editor::blank(metrics);
+    let mut options = options;
+    if options.start.is_none() {
+        let (recents, examples) = options.host.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |host| (host.recents(), host.examples()),
+        );
+        options.start = Some(crate::StartScreen::new(recents, examples));
+    }
+    run_inner(editor, options, "Motioner".to_owned())
 }
 
 fn default_rate() -> Result<FrameRate, UiError> {

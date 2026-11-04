@@ -164,6 +164,45 @@ the pointer fixed when `x`/`y` are given; a wheel step while fitted multiplies
 the fit scale. Space toggles playback on release only if it did not drag:
 Space+drag over the canvas pans.
 
+### Projects (D-0045)
+
+A project is a `<name>.motioner/` folder. Every command accepts the folder,
+its `project.motion` or one of its composition files; a loose `.motion` file
+keeps single-file mode. These commands run through the editor and, in the
+window, through the same `ProjectHost` the File menu uses.
+
+| Command | What it does (the person's equivalent) |
+|---|---|
+| `new_project(name, dir, width, height, fps, duration)` | create `<dir>/<name>.motioner/` and open it (File → New project) |
+| `open_project(path)` | open a folder, manifest or composition (File → Open, Open recent) |
+| `close_project()` | return to the start screen (File → Close project) |
+| `save()` | write the overrides now; autosave already does it (File → Save / Ctrl+S) |
+| `save_as(path)` | copy the project folder and open the copy (File → Save a copy) |
+
+The CLI surface is `motioner new <dir> [--name N] [--size WxH] [--fps N]
+[--duration FRAMES]`, `motioner migrate <file.motion> <dir>` and
+`motioner info <project>`.
+
+### Assets (D-0045)
+
+`import_asset` copies the bytes to `assets/<sha256>.<ext>` (deduplicated by
+hash), assigns a stable key (the original stem, suffixed on a clash) and
+writes `project.motion`. Non-PNG images are converted once through ffmpeg into
+`cache/<hash>.png`; fonts join the Family cycle; audio peaks are cached in
+`cache/<hash>.peaks`.
+
+| Command | What it does (the person's equivalent) |
+|---|---|
+| `import_asset(path="")` | import one file; empty opens the native picker (Assets +, File → Import asset, dropped files) |
+| `remove_asset(key)` | delete a registry entry and its blob (Delete on a selected asset) |
+| `rename_asset(key, name)` | change the human key; MDF references by original name keep working |
+| `place_asset(key, frame=None, x=None, y=None)` | add the layer at the drop point (drag from the panel, double click) |
+| `remove_unused_assets()` | delete every blob no composition references (CLEAN) |
+
+The CLI equivalent of import is `motioner import <project> <file>...`. The
+assets panel is the Assets tab of the left panel; it lists or shows a grid,
+virtualises the rows and shows a waveform strip for audio.
+
 ### Editing (each is one undo step)
 
 | Command | What it does |

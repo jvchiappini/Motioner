@@ -51,7 +51,21 @@ pub enum Status {
 }
 
 fn open(input: &Path, frame: Option<i64>) -> Result<Editor, CommandError> {
-    let mut editor = Editor::open(input)?;
+    let target = crate::resolve_input(input)
+        .map_err(|failure| CommandError::new(ErrorKind::Io, failure.to_string()))?;
+    let fonts = crate::project_fonts(&target);
+    let mut editor = Editor::open_with_metrics(
+        &target.composition,
+        std::sync::Arc::new(motioner_render::CpuTextMetrics::new(fonts)),
+    )?;
+    let images = match &target.project {
+        Some(project) => motioner_io::ProjectImages::new(project),
+        None => motioner_io::ProjectImages::loose(&target.root),
+    };
+    editor
+        .session_mut()
+        .set_image_resolver(std::rc::Rc::new(images));
+    let _ = editor.session_mut().reload();
     if let Some(frame) = frame {
         editor.execute(&Command::Seek(frame), Duration::ZERO)?;
     }

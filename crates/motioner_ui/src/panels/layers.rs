@@ -16,7 +16,7 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let panel = v.layout.layers;
     p.fill(panel.rect, t.panel);
     let count = (!v.outline.is_empty()).then_some(v.layer_count);
-    crate::widgets::panel_header(p, panel.header, "LAYERS", count);
+    crate::panels::assets::tabs(p, v, count);
     filter_field(p, v);
     p.vline(
         panel.rect.right() - p.m.hairline(),

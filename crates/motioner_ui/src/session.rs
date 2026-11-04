@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use motioner_core::{Composition, Document, NoTextMetrics, OverrideSet, TextMetrics};
+use motioner_core::{Composition, Document, FrameRate, NoTextMetrics, OverrideSet, TextMetrics};
 use motioner_dsl::{Compiled, Diagnostic, Limits};
 use motioner_eval::{Evaluator, RenderPlan};
 
@@ -403,6 +403,34 @@ impl PreviewSession {
         self.dirty = None;
         self.overrides_watch.reset();
         true
+    }
+
+    /// Writes the overrides unconditionally, returning the path.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Io`] when the write fails.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: `60/1` is a valid fallback frame rate.
+    pub fn force_write(&mut self) -> Result<PathBuf, SessionError> {
+        let rate = self.composition().map_or_else(
+            || FrameRate::new(60, 1).expect("60/1 is valid"),
+            Composition::frame_rate,
+        );
+        let text = self.overrides.to_mdf(rate);
+        if let Err(error) = write_atomic(&self.overrides_path, &text) {
+            self.diagnostics = vec![DiagnosticInfo::io(&self.overrides_path, &error)];
+            return Err(SessionError::Io {
+                path: self.overrides_path.clone(),
+                message: error.to_string(),
+            });
+        }
+        self.last_overrides_text = text;
+        self.dirty = None;
+        self.overrides_watch.reset();
+        Ok(self.overrides_path.clone())
     }
 
     /// Polls both files and reports whether an external change should reload.

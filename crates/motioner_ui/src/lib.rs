@@ -27,6 +27,7 @@
 
 mod alloc;
 mod app;
+mod assets;
 mod bounds;
 mod capture;
 mod clipboard;
@@ -37,6 +38,7 @@ mod editor;
 mod file_watch;
 mod gizmo;
 mod graph;
+mod host;
 mod icons;
 mod input;
 mod inspect;
@@ -47,6 +49,7 @@ mod outline;
 mod paint;
 mod panels;
 mod session;
+mod start;
 mod text;
 mod text_edit;
 mod theme;
@@ -57,6 +60,7 @@ mod viewport;
 mod widgets;
 mod window;
 
+pub use assets::{format_size, AssetKindUi, AssetSummary, AssetView, AssetsModel};
 pub use bounds::{hit_node, hit_node_where, node_bounds, Bounds, MeasureText};
 pub use capture::{CaptureResult, PngWriter, DELIVERY_FRAMES};
 pub use command::{
@@ -70,6 +74,7 @@ pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack};
 pub use editor::{channel_has_key, channel_name, Editor, Effect, Outcome, ViewState, CHANNELS};
 pub use file_watch::FileWatch;
 pub use gizmo::{Corner, Guide, Handle};
+pub use host::{ProjectHost, RecoveryInfo};
 pub use input::{command_for, Modifiers, Toggles};
 pub use inspect::{
     hex, inspect_comp, inspect_node, kind_label, Axis, Channel, Editing, Field, FieldTarget,
@@ -77,10 +82,16 @@ pub use inspect::{
 };
 pub use json::Json;
 pub use labels::{content_label, transform_label};
-pub use layout::{Hit, Layout, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton};
+pub use layout::{
+    Hit, Layout, LeftTab, MenuAction, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton,
+};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use session::{
     overrides_path, write_atomic, DiagnosticInfo, PreviewSession, SessionError, WRITE_DEBOUNCE,
+};
+pub use start::{
+    FormField, NewProjectForm, NewProjectRequest, StartAction, StartEntry, StartLayout, StartMode,
+    StartScreen,
 };
 pub use text::{advance, ellipsize, Glyphs, TextStyle};
 pub use text_edit::{EditKey, TextEdit};
@@ -93,4 +104,34 @@ pub use transport::{elapsed_frames, skipped_frames, timecode, Transport};
 pub use viewport::{
     anchored_pan, clamp_zoom, zoom_by_steps, Viewport, MAX_ZOOM, MIN_ZOOM, WHEEL_STEP,
 };
-pub use window::{run_preview, PreviewOptions, UiError, DEFAULT_WINDOW_SIZE};
+pub use window::{run_app, run_preview, PreviewOptions, UiError, DEFAULT_WINDOW_SIZE};
+
+/// The name shown in the window title for a composition path.
+///
+/// A composition inside a project shows the project folder's name (`demo` for
+/// `demo.motioner/compositions/main.motion`); a loose program shows its stem.
+#[must_use]
+pub fn project_display_name(path: &std::path::Path) -> String {
+    let parent = path.parent();
+    if parent
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "compositions")
+    {
+        if let Some(root) = parent.and_then(std::path::Path::parent) {
+            if let Some(name) = root.file_name().and_then(|name| name.to_str()) {
+                return name.strip_suffix(".motioner").unwrap_or(name).to_owned();
+            }
+        }
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("untitled")
+        .to_owned()
+}
+
+/// A path as text with forward slashes (forms and the recent list).
+#[must_use]
+pub fn project_path_text(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}

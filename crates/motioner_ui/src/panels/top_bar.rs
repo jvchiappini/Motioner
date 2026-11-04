@@ -2,7 +2,7 @@
 //! safe-area toggle and the zoom readout.
 
 use crate::icons::{self, Icon};
-use crate::layout::{Hit, Rect, TopBarToggle};
+use crate::layout::{Hit, MenuAction, Rect, TopBarToggle};
 use crate::paint::Painter;
 use crate::panels::View;
 use crate::text::Align;
@@ -21,13 +21,24 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
         t.hairline,
     );
 
-    let pad = p.m.px(size::PAD);
     let cy = bar.center_y();
+
+    // File menu button, left of the app mark.
+    let file = v.layout.file_button;
+    let state = v.interaction(Hit::FileMenu);
+    let file_fill = if v.menu_open || state.hovered {
+        t.row_hover
+    } else {
+        t.raised
+    };
+    p.fill_rounded(file, file_fill, p.m.px(4.0));
+    let file_style = p.style(type_scale::CAPTION, t.text_body);
+    p.text_in("File", file, Align::Center, &file_style);
 
     // App mark: an accent tile with a play glyph.
     let mark_side = p.m.px(20.0);
     let mark = Rect::new(
-        bar.x + pad,
+        file.right() + p.m.px(size::GRID * 2.0),
         (cy - mark_side * 0.5).round(),
         mark_side,
         mark_side,
@@ -150,4 +161,57 @@ fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
         zoom.h * 0.5,
     );
     p.text_in(&zoom_text, zoom, Align::Center, &style);
+}
+
+/// Draws the File dropdown above the editor.
+pub fn draw_menu(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let items = v.layout.menu_items();
+    let first = items[0].1;
+    let last = items[items.len() - 1].1;
+    let panel = Rect::new(
+        first.x,
+        first.y - p.m.px(4.0),
+        first.w,
+        last.bottom() - first.y + p.m.px(8.0),
+    );
+    p.shadow(
+        panel,
+        p.m.px(6.0),
+        p.m.px(16.0),
+        p.m.px(4.0),
+        [0.0, 0.0, 0.0, 0.6],
+    );
+    p.fill_rounded(panel, t.panel, p.m.px(6.0));
+    p.stroke_rounded(panel, t.hairline, p.m.px(6.0), p.m.px(1.0));
+    let body = p.style(type_scale::BODY, t.text);
+    let key_style = p.style(type_scale::CAPTION, t.text_muted);
+    for (action, rect) in items {
+        if v.menu_hover == Some(action) {
+            p.fill_rounded(rect, t.row_hover, p.m.px(4.0));
+        }
+        p.text_in(
+            action.label(),
+            Rect::new(rect.x + p.m.px(10.0), rect.y, rect.w - p.m.px(20.0), rect.h),
+            Align::Left,
+            &body,
+        );
+        if let Some(shortcut) = action.shortcut() {
+            p.text_in(
+                shortcut,
+                Rect::new(rect.x, rect.y, rect.w - p.m.px(10.0), rect.h),
+                Align::Right,
+                &key_style,
+            );
+        }
+        if matches!(action, MenuAction::SaveAs | MenuAction::Close) {
+            let line_y = rect.bottom().round();
+            p.hline(
+                rect.x + p.m.px(6.0),
+                rect.right() - p.m.px(6.0),
+                line_y,
+                t.hairline,
+            );
+        }
+    }
 }

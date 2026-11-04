@@ -9,6 +9,7 @@ use crate::text::Align;
 use crate::theme::{size, type_scale};
 
 /// Draws the status bar.
+#[allow(clippy::too_many_lines)] // one immediate-mode strip
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let bar = v.layout.status_bar;
@@ -24,6 +25,44 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
         icon_side,
     );
     let text_x = icon.right() + p.m.px(size::GRID * 1.5);
+
+    if let Some(recovery) = v.recovery {
+        icons::draw(p, Icon::Warning, icon, t.warning, t.app);
+        let style = p.style(type_scale::CAPTION, t.warning);
+        let message = format!(
+            "Crash detected: backup {} ({}) is newer",
+            recovery.name, recovery.detail
+        );
+        let room = Rect::new(
+            text_x,
+            bar.y,
+            (v.layout.recovery_restore.x - text_x - p.m.px(size::PAD)).max(0.0),
+            bar.h,
+        );
+        p.text_in(&message, room, Align::Left, &style);
+        for (rect, label, hit) in [
+            (
+                v.layout.recovery_restore,
+                "Restore",
+                crate::Hit::RecoverRestore,
+            ),
+            (
+                v.layout.recovery_dismiss,
+                "Dismiss",
+                crate::Hit::RecoverDismiss,
+            ),
+        ] {
+            let state = v.interaction(hit);
+            p.fill_rounded(
+                rect,
+                if state.hovered { t.row_hover } else { t.raised },
+                p.m.px(size::RADIUS_SM),
+            );
+            let style = p.style(type_scale::CAPTION, t.text_body);
+            p.text_in(label, rect, Align::Center, &style);
+        }
+        return;
+    }
 
     // Right side first, so the message can be ellipsized before it.
     let style = p.style(type_scale::CAPTION, t.text_muted);

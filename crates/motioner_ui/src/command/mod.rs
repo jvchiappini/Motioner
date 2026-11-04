@@ -460,6 +460,69 @@ pub enum Command {
     Redo,
     /// Fold overrides into the program (`motioner bake`); all ids when empty.
     Bake(Vec<String>),
+    /// Write every pending editor file now (normally autosave does it).
+    Save,
+    /// Write a copy of the project under `path` and switch to it.
+    SaveAs {
+        /// Destination folder.
+        path: String,
+    },
+    /// Close the project and return to the start screen.
+    CloseProject,
+    /// Open a project folder, manifest or program.
+    OpenProject {
+        /// Folder, `project.motion` or composition file.
+        path: String,
+    },
+    /// Create a project and open it.
+    NewProject {
+        /// Project name.
+        name: String,
+        /// Parent folder.
+        dir: String,
+        /// Composition width.
+        width: u32,
+        /// Composition height.
+        height: u32,
+        /// Frame rate.
+        fps: u32,
+        /// Length in frames.
+        duration: i64,
+    },
+    /// Import a file into the project (`path` empty opens the picker).
+    ImportAsset {
+        /// File to import, or empty to ask the application for one.
+        path: String,
+    },
+    /// Remove an asset and its blob.
+    RemoveAsset {
+        /// Registry key.
+        key: String,
+    },
+    /// Rename an asset's key.
+    RenameAsset {
+        /// Registry key.
+        key: String,
+        /// New key.
+        name: String,
+    },
+    /// Add the layer for an asset.
+    PlaceAsset {
+        /// Registry key.
+        key: String,
+        /// Drop frame (timeline), when any.
+        frame: Option<i64>,
+        /// Drop x in composition pixels.
+        x: Option<f64>,
+        /// Drop y in composition pixels.
+        y: Option<f64>,
+    },
+    /// Remove every asset no composition references.
+    RemoveUnusedAssets,
+    /// Restore the backup offered after a crash.
+    RestoreBackup,
+    /// Dismiss the recovery offer and keep the files on disk.
+    DismissRecovery,
 }
 
 /// The variant of a [`Command`], without data: names, signatures, examples.
@@ -531,11 +594,23 @@ pub enum CommandKind {
     Undo,
     Redo,
     Bake,
+    Save,
+    SaveAs,
+    CloseProject,
+    OpenProject,
+    NewProject,
+    ImportAsset,
+    RemoveAsset,
+    RenameAsset,
+    PlaceAsset,
+    RemoveUnusedAssets,
+    RestoreBackup,
+    DismissRecovery,
 }
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 65] = [
+    pub const ALL: [Self; 77] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -601,6 +676,18 @@ impl CommandKind {
         Self::Undo,
         Self::Redo,
         Self::Bake,
+        Self::Save,
+        Self::SaveAs,
+        Self::CloseProject,
+        Self::OpenProject,
+        Self::NewProject,
+        Self::ImportAsset,
+        Self::RemoveAsset,
+        Self::RenameAsset,
+        Self::PlaceAsset,
+        Self::RemoveUnusedAssets,
+        Self::RestoreBackup,
+        Self::DismissRecovery,
     ];
 
     /// The stable text name (the function name in the text form).
@@ -672,6 +759,18 @@ impl CommandKind {
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::Bake => "bake",
+            Self::Save => "save",
+            Self::SaveAs => "save_as",
+            Self::CloseProject => "close_project",
+            Self::OpenProject => "open_project",
+            Self::NewProject => "new_project",
+            Self::ImportAsset => "import_asset",
+            Self::RemoveAsset => "remove_asset",
+            Self::RenameAsset => "rename_asset",
+            Self::PlaceAsset => "place_asset",
+            Self::RemoveUnusedAssets => "remove_unused_assets",
+            Self::RestoreBackup => "restore_backup",
+            Self::DismissRecovery => "dismiss_recovery",
         }
     }
 
@@ -752,6 +851,18 @@ impl CommandKind {
             Self::Undo => "undo()",
             Self::Redo => "redo()",
             Self::Bake => "bake(id, ...)",
+            Self::Save => "save()",
+            Self::SaveAs => "save_as(path)",
+            Self::CloseProject => "close_project()",
+            Self::OpenProject => "open_project(path)",
+            Self::NewProject => "new_project(name, dir, width, height, fps, duration)",
+            Self::ImportAsset => "import_asset(path=\"\")",
+            Self::RemoveAsset => "remove_asset(key)",
+            Self::RenameAsset => "rename_asset(key, name)",
+            Self::PlaceAsset => "place_asset(key, frame=None, x=None, y=None)",
+            Self::RemoveUnusedAssets => "remove_unused_assets()",
+            Self::RestoreBackup => "restore_backup()",
+            Self::DismissRecovery => "dismiss_recovery()",
         }
     }
 
@@ -859,6 +970,18 @@ impl Command {
             Self::Undo => CommandKind::Undo,
             Self::Redo => CommandKind::Redo,
             Self::Bake(_) => CommandKind::Bake,
+            Self::Save => CommandKind::Save,
+            Self::SaveAs { .. } => CommandKind::SaveAs,
+            Self::CloseProject => CommandKind::CloseProject,
+            Self::OpenProject { .. } => CommandKind::OpenProject,
+            Self::NewProject { .. } => CommandKind::NewProject,
+            Self::ImportAsset { .. } => CommandKind::ImportAsset,
+            Self::RemoveAsset { .. } => CommandKind::RemoveAsset,
+            Self::RenameAsset { .. } => CommandKind::RenameAsset,
+            Self::PlaceAsset { .. } => CommandKind::PlaceAsset,
+            Self::RemoveUnusedAssets => CommandKind::RemoveUnusedAssets,
+            Self::RestoreBackup => CommandKind::RestoreBackup,
+            Self::DismissRecovery => CommandKind::DismissRecovery,
         }
     }
 }

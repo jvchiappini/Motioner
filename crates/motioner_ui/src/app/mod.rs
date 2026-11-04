@@ -14,6 +14,7 @@ mod canvas;
 mod drag;
 mod pointer;
 mod press;
+mod project;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -128,6 +129,34 @@ pub(crate) struct PreviewApp {
     space_down: bool,
     /// The Space+drag moved, so releasing Space must not toggle playback.
     space_dragged: bool,
+    /// Project services, when the application supplied them.
+    host: Option<Rc<dyn crate::ProjectHost>>,
+    /// The start screen, when it is open instead of the editor.
+    start: Option<crate::StartScreen>,
+    /// Start-screen target under the pointer.
+    start_hover: Option<crate::StartAction>,
+    /// Start-screen target under the pressed button.
+    start_pressed: Option<crate::StartAction>,
+    /// Whether the File menu is open.
+    menu_open: bool,
+    /// Native window title of the last frame.
+    last_title: String,
+    /// Whether the title changed and must be pushed to the window.
+    title_dirty: bool,
+    /// A transient status-bar message.
+    toast: Option<(String, Instant)>,
+    /// The list the left panel shows.
+    left_tab: crate::LeftTab,
+    /// Project assets shown in the panel.
+    assets: crate::AssetsModel,
+    /// Bumped when the asset list is rebuilt.
+    asset_generation: u64,
+    /// A newer backup offered after a crash.
+    recovery: Option<crate::RecoveryInfo>,
+    /// Last heartbeat of the session lock.
+    last_heartbeat: Instant,
+    /// Last automatic snapshot.
+    last_snapshot: Instant,
 }
 
 impl PreviewApp {
@@ -136,9 +165,24 @@ impl PreviewApp {
         options: PreviewOptions,
         control: Option<ControlServer>,
         fatal: Rc<RefCell<Option<UiError>>>,
+        title: String,
     ) -> Self {
         let watch = FileWatch::new(editor.session().path());
-        let start_playing = !options.paused;
+        let start_playing = !options.paused && options.start.is_none();
+        let host = options.host.clone();
+        let start = options.start.clone();
+        let title_dirty = start.is_none();
+        let panel_tab = options.panel_tab;
+        let recovery = if start.is_none() {
+            host.as_ref().and_then(|host| {
+                let path = editor.session().path();
+                let recovery = host.recovery(path);
+                host.begin_session(path);
+                recovery
+            })
+        } else {
+            None
+        };
         let fonts = options.fonts.clone();
         let blur_fonts = fonts
             .clone()
@@ -191,6 +235,20 @@ impl PreviewApp {
             revealed_keys: 0,
             space_down: false,
             space_dragged: false,
+            host,
+            start,
+            start_hover: None,
+            start_pressed: None,
+            menu_open: false,
+            last_title: title,
+            title_dirty,
+            toast: None,
+            left_tab: panel_tab.unwrap_or_default(),
+            assets: crate::AssetsModel::default(),
+            asset_generation: 0,
+            recovery,
+            last_heartbeat: Instant::now(),
+            last_snapshot: Instant::now(),
         }
     }
 
@@ -227,6 +285,17 @@ impl PreviewApp {
                 crate::clipboard::copy(&text);
                 self.copied_at = Some(Instant::now());
             }
+            Effect::SaveAs(destination) => self.save_as(Some(destination)),
+            Effect::CloseProject => self.close_project(),
+            Effect::OpenProject(path) => self.open_composition(&path),
+            Effect::NewProject(request) => self.create_project(&request),
+            Effect::ImportAsset(path) => self.import_assets(&path),
+            Effect::RemoveAsset(key) => self.remove_asset(&key),
+            Effect::RenameAsset { key, name } => self.rename_asset(&key, &name),
+            Effect::PlaceAsset { key, frame, pos } => self.place_asset(&key, frame, pos),
+            Effect::RemoveUnusedAssets => self.remove_unused_assets(),
+            Effect::RestoreBackup => self.restore_backup(),
+            Effect::DismissRecovery => self.recovery = None,
         }
     }
 
@@ -360,6 +429,34 @@ impl PreviewApp {
             self.space_dragged = false;
         }
         let modifiers = modifiers(ctx);
+        if self.left_tab == crate::LeftTab::Assets
+            && ctx.input.just_pressed(KeyCode::Delete)
+            && self.assets.selected_asset().is_some()
+        {
+            if let Some(asset) = self.assets.selected_asset() {
+                let key = asset.key.clone();
+                self.run(&Command::RemoveAsset { key });
+            }
+            return;
+        }
+        if modifiers.ctrl {
+            if ctx.input.just_pressed(KeyCode::KeyS) {
+                if modifiers.shift {
+                    self.save_as(None);
+                } else {
+                    self.run(&Command::Save);
+                }
+                return;
+            }
+            if ctx.input.just_pressed(KeyCode::KeyN) {
+                self.dispatch_menu(crate::MenuAction::New);
+                return;
+            }
+            if ctx.input.just_pressed(KeyCode::KeyO) {
+                self.dispatch_menu(crate::MenuAction::Open);
+                return;
+            }
+        }
         let toggles = Toggles {
             looping: self.editor.transport().looping(),
             safe_area: self.editor.view().safe_area,
@@ -490,9 +587,28 @@ impl PreviewApp {
             ctx.render.set_2d_pixel_ratio(dpr);
             self.pixel_ratio = dpr;
         }
+        if self.asset_generation == 0
+            && self.start.is_none()
+            && self.editor.session().document().is_some()
+        {
+            self.refresh_assets();
+        }
+        if self.start.is_some() {
+            self.update_start(ctx);
+            if self.title_dirty {
+                self.title_dirty = false;
+                let title = self.last_title.clone();
+                ctx.window.set_title(&title);
+            }
+            return;
+        }
         let layout = self.relayout(ctx);
         self.editor.view_mut().fit_zoom = canvas::fit_zoom(self.editor.session(), &layout);
 
+        if self.menu_click(ctx, &layout) {
+            self.pointer.pressed = None;
+            return;
+        }
         self.handle_keys(ctx);
         let now = Instant::now();
         if (self.watch.check(now) || self.editor.session_mut().poll_changes(now))
@@ -516,6 +632,12 @@ impl PreviewApp {
         }
         self.poll_control();
         self.editor.sync_models();
+        if self.title_dirty {
+            self.title_dirty = false;
+            let title = self.last_title.clone();
+            ctx.window.set_title(&title);
+        }
+        self.tick_session();
 
         self.handle_pointer(ctx, &layout);
         self.reveal(&layout);
@@ -523,6 +645,7 @@ impl PreviewApp {
         self.relayout(ctx);
         self.editor.sync_models();
         self.marquee = self.pointer.marquee_rect();
+        self.retitle();
     }
 
     /// Whether `--exit-after-frames` closes the window now. With
@@ -712,6 +835,10 @@ impl PreviewApp {
         if self.capture.poll(self.frames_presented) {
             ctx.request_screenshot();
         }
+        if self.start.is_some() {
+            self.draw_start(dc);
+            return;
+        }
 
         let frame = self.frame();
         if let Some(document) = self.editor.session().document() {
@@ -746,6 +873,12 @@ impl PreviewApp {
             .to_owned();
         let facts = self.frame_facts(&layout);
         let tooltip = self.tooltip(&layout);
+        let (mouse_x, mouse_y) = ctx.input.mouse_pos_f32();
+        let menu_hover = if self.menu_open {
+            layout.menu_hit(mouse_x, mouse_y)
+        } else {
+            None
+        };
         let editor = &self.editor;
         let transport = editor.transport();
         let mut view = View {
@@ -803,6 +936,11 @@ impl PreviewApp {
             show_shy: editor.show_shy(),
             graph: editor.graph(),
             retime_delta: self.pointer.retime_delta(),
+            menu_open: self.menu_open,
+            menu_hover,
+            left_tab: self.left_tab,
+            assets: &self.assets,
+            recovery: self.recovery.as_ref(),
             tooltip,
         };
 
@@ -813,7 +951,10 @@ impl PreviewApp {
         // The counter covers exactly the outline (layers panel) and timeline
         // chrome, not the inspector, the composition paint or the GUI batch.
         let outline_before = crate::alloc::allocations();
-        panels::layers::draw(&mut p, &view);
+        match self.left_tab {
+            crate::LeftTab::Layers => panels::layers::draw(&mut p, &view),
+            crate::LeftTab::Assets => panels::assets::draw(&mut p, &view),
+        }
         let outline_after = crate::alloc::allocations();
         panels::inspector::draw(&mut p, &view);
         let timeline_before = crate::alloc::allocations();
@@ -823,6 +964,10 @@ impl PreviewApp {
             .saturating_sub(outline_before)
             .saturating_add(timeline_after.saturating_sub(timeline_before));
         panels::status::draw(&mut p, &view);
+        if self.menu_open {
+            p.layer();
+            panels::top_bar::draw_menu(&mut p, &view);
+        }
         if let Some(request) = view.tooltip {
             p.layer();
             crate::widgets::tooltip(

@@ -7,6 +7,7 @@
 
 #![allow(clippy::many_single_char_names)]
 
+pub mod assets;
 pub mod canvas;
 pub mod inspector;
 pub mod layers;
@@ -150,6 +151,16 @@ pub struct View<'a> {
     pub copied: bool,
     /// Frame delta of a key-drag in progress.
     pub retime_delta: Option<i64>,
+    /// The list the left panel shows.
+    pub left_tab: crate::LeftTab,
+    /// Project assets.
+    pub assets: &'a crate::AssetsModel,
+    /// Whether the File menu is open.
+    pub menu_open: bool,
+    /// The File-menu item under the pointer.
+    pub menu_hover: Option<crate::MenuAction>,
+    /// A backup offered after a crash.
+    pub recovery: Option<&'a crate::RecoveryInfo>,
 }
 
 /// One orphaned override row.

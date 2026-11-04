@@ -9,15 +9,34 @@
 //! on the renderer. [`write_png`] stores a single still as an 8-bit sRGB PNG,
 //! and [`Mp4Encoder`] streams frames to `ffmpeg` for H.264 MP4 output.
 
+mod assets;
+mod backups;
 mod encode;
 mod error;
 mod fonts;
 mod frame;
 mod images;
+mod media;
 mod png_writer;
+mod project;
 
+pub use assets::{
+    converted_image, project_fonts, safe_relative, sha256_hex, valid_key, AssetError,
+    ImportOutcome, ProjectImages,
+};
+pub use backups::{BackupError, BackupInfo, BackupPolicy, STALE_LOCK};
 pub use encode::{EncodeSummary, FfmpegLocation, Mp4Encoder, VideoSettings};
 pub use error::ExportError;
-pub use fonts::{load_project_fonts, FontLoadError, ProjectFont};
+pub use fonts::{font_from_original, load_project_fonts, FontLoadError, ProjectFont};
 pub use images::{CachedImages, DecodedImage, ImageError, ImageStore};
+pub use media::{
+    audio_peaks, first_frame_png, format_bytes, peaks_from_text, peaks_to_text, AudioPeaks,
+};
 pub use png_writer::write_png;
+pub use project::{
+    default_program, format_utc, format_utc_seconds, normalize_project_dir, path_text,
+    project_root, write_atomic, write_atomic_bytes, AppState, AssetEntry, AssetKind,
+    CompositionRef, EditorState, Project, ProjectError, ProjectOptions, ProjectSettings,
+    RecentProject, WindowPlacement, ASSETS_DIR, BACKUPS_DIR, CACHE_DIR, COMPOSITIONS_DIR,
+    EDITOR_FILE, FORMAT_VERSION, PROJECT_EXTENSION, PROJECT_FILE, TRACES_DIR,
+};

@@ -50,6 +50,43 @@ impl PreviewApp {
         double: bool,
     ) {
         match hit {
+            Hit::LeftTab(tab) => self.left_tab = tab,
+            Hit::AssetRow(index) | Hit::AssetCell(index) => {
+                self.assets.selected = Some(index);
+                if let Some(asset) = self.assets.entries.get(index) {
+                    self.pointer.drag = Some(Drag::Asset {
+                        key: asset.key.clone(),
+                        last: at,
+                        moved: false,
+                    });
+                }
+                if double {
+                    if let Some(asset) = self.assets.entries.get(index) {
+                        let key = asset.key.clone();
+                        self.run(&Command::PlaceAsset {
+                            key,
+                            frame: None,
+                            x: None,
+                            y: None,
+                        });
+                    }
+                }
+            }
+            Hit::AssetAdd => {
+                self.run(&Command::ImportAsset {
+                    path: String::new(),
+                });
+            }
+            Hit::AssetView => self.assets.toggle_view(),
+            Hit::AssetRemoveUnused => {
+                self.run(&Command::RemoveUnusedAssets);
+            }
+            Hit::RecoverRestore => {
+                self.run(&Command::RestoreBackup);
+            }
+            Hit::RecoverDismiss => {
+                self.run(&Command::DismissRecovery);
+            }
             Hit::Scrub if self.editor.session().document().is_some() => {
                 self.editor.transport_mut().begin_scrub();
                 let frame = self.x_frame(layout, at.0);
@@ -256,7 +293,7 @@ impl PreviewApp {
                 }
             }
             Hit::Transport(button) => self.press_transport(button),
-            Hit::OrphanRow(_) | Hit::Inspector | Hit::Scrub => {}
+            Hit::OrphanRow(_) | Hit::Inspector | Hit::Scrub | Hit::FileMenu => {}
         }
     }
 

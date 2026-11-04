@@ -91,6 +91,20 @@ pub fn load_project_fonts(dir: &Path) -> Result<Vec<ProjectFont>, FontLoadError>
     Ok(fonts)
 }
 
+/// Builds a face from bytes and its original file name.
+///
+/// Project fonts live at `assets/<hash>.ttf`, so the family and weight come
+/// from the name recorded in the registry, not from the blob name (D-0045).
+#[must_use]
+pub fn font_from_original(original: &str, bytes: Vec<u8>) -> ProjectFont {
+    let (family, weight) = parse_name(Path::new(original));
+    ProjectFont {
+        family,
+        weight,
+        bytes,
+    }
+}
+
 /// Infers `(family, weight)` from `Inter-SemiBold.ttf`.
 fn parse_name(path: &Path) -> (String, u16) {
     let stem = path

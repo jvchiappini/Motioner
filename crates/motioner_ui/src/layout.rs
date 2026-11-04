@@ -230,6 +230,88 @@ pub enum TopBarToggle {
     SafeArea,
 }
 
+/// Which list the left panel shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeftTab {
+    /// The scene outline.
+    #[default]
+    Layers,
+    /// The project assets.
+    Assets,
+}
+
+impl LeftTab {
+    /// Every tab, in header order.
+    pub const ALL: [Self; 2] = [Self::Layers, Self::Assets];
+
+    /// The tab label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Layers => "Layers",
+            Self::Assets => "Assets",
+        }
+    }
+}
+
+/// One item of the editor's File menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    /// Create a project (opens the start screen's form).
+    New,
+    /// Open a project folder.
+    Open,
+    /// Write pending files now.
+    Save,
+    /// Copy the folder elsewhere and open the copy.
+    SaveAs,
+    /// Import a media file into the project.
+    Import,
+    /// Show the project folder in the file manager.
+    Reveal,
+    /// Close the project and return to the start screen.
+    Close,
+}
+
+impl MenuAction {
+    /// Every item, in menu order.
+    pub const ALL: [Self; 7] = [
+        Self::New,
+        Self::Open,
+        Self::Save,
+        Self::SaveAs,
+        Self::Import,
+        Self::Reveal,
+        Self::Close,
+    ];
+
+    /// The menu label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::New => "New project",
+            Self::Open => "Open project…",
+            Self::Save => "Save",
+            Self::SaveAs => "Save a copy…",
+            Self::Import => "Import asset…",
+            Self::Reveal => "Reveal in Explorer",
+            Self::Close => "Close project",
+        }
+    }
+
+    /// The keyboard shortcut text, when the item has one.
+    #[must_use]
+    pub const fn shortcut(self) -> Option<&'static str> {
+        match self {
+            Self::New => Some("Ctrl+N"),
+            Self::Open => Some("Ctrl+O"),
+            Self::Save => Some("Ctrl+S"),
+            Self::SaveAs => Some("Ctrl+Shift+S"),
+            Self::Import | Self::Reveal | Self::Close => None,
+        }
+    }
+}
+
 /// What the pointer is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
@@ -287,10 +369,28 @@ pub enum Hit {
     SnapToggle,
     /// The zoom readout in the top bar; clicking it fits the composition.
     ZoomPill,
+    /// The File menu button.
+    FileMenu,
+    /// Restore the offered backup.
+    RecoverRestore,
+    /// Dismiss the recovery offer.
+    RecoverDismiss,
     /// A timeline row (index into the timeline row model).
     TimelineRow(usize),
     /// The stopwatch of a timeline property row.
     TimelineStopwatch(usize),
+    /// The left panel's Layers/Assets tab.
+    LeftTab(LeftTab),
+    /// One row of the assets list.
+    AssetRow(usize),
+    /// One tile of the assets grid.
+    AssetCell(usize),
+    /// The assets panel's import (+) button.
+    AssetAdd,
+    /// The assets panel's list/grid toggle.
+    AssetView,
+    /// The assets panel's "remove unused" button.
+    AssetRemoveUnused,
     /// The previous-key button of a timeline property row.
     TimelinePrevKey(usize),
     /// The add/remove-key button of a timeline property row.
@@ -392,6 +492,12 @@ pub struct Layout {
     pub snap_toggle: Rect,
     /// Zoom readout in the top bar; a click fits the composition.
     pub zoom_pill: Rect,
+    /// The File menu button in the top bar.
+    pub file_button: Rect,
+    /// "Restore" in the recovery strip.
+    pub recovery_restore: Rect,
+    /// "Dismiss" in the recovery strip.
+    pub recovery_dismiss: Rect,
     /// Splitter hit zones.
     pub splitters: [(Splitter, Rect); 3],
     /// Height of one layer/track row.
@@ -406,6 +512,7 @@ impl Layout {
     /// directions whenever the window is large enough to allow it. Every
     /// rectangle stays inside the window.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one pass of panel geometry
     pub fn compute(width: f32, height: f32, scale: f32, sizes: PanelSizes) -> Self {
         let m = Metrics::new(scale);
         let window = Rect::new(0.0, 0.0, width.max(0.0).floor(), height.max(0.0).floor());
@@ -466,6 +573,24 @@ impl Layout {
             safe_area_toggle.w,
             safe_area_toggle.h,
         );
+        let file_button = Rect::new(
+            top_bar.x + m.px(size::PAD),
+            (top_bar.center_y() - m.px(10.0)).round(),
+            m.px(46.0),
+            m.px(20.0),
+        );
+        let recovery_dismiss = Rect::new(
+            status_bar.right() - m.px(size::PAD) - m.px(64.0),
+            (status_bar.center_y() - m.px(8.0)).round(),
+            m.px(64.0),
+            m.px(16.0),
+        );
+        let recovery_restore = Rect::new(
+            recovery_dismiss.x - m.px(68.0) - m.px(4.0),
+            recovery_dismiss.y,
+            m.px(68.0),
+            m.px(16.0),
+        );
 
         let hit = m.px(size::SPLITTER_HIT);
         let splitters = [
@@ -496,6 +621,9 @@ impl Layout {
             safe_area_toggle,
             snap_toggle,
             zoom_pill,
+            file_button,
+            recovery_restore,
+            recovery_dismiss,
             splitters,
             row_h: m.px(size::ROW),
         }
@@ -540,6 +668,76 @@ impl Layout {
     pub fn layer_shy(&self, row: Rect) -> Rect {
         let solo = self.layer_solo(row);
         Rect::new(solo.x - solo.w, solo.y, solo.w, solo.h)
+    }
+
+    /// One of the left panel's tabs.
+    #[must_use]
+    pub fn left_tab(&self, tab: LeftTab) -> Rect {
+        let header = self.layers.header;
+        let pad = self.metrics.px(size::PAD);
+        let height = self.metrics.px(20.0);
+        let width = self.metrics.px(52.0);
+        let x = match tab {
+            LeftTab::Layers => header.x + pad,
+            LeftTab::Assets => header.x + pad + width + self.metrics.px(4.0),
+        };
+        Rect::new(x, (header.center_y() - height * 0.5).round(), width, height)
+    }
+
+    /// The assets panel's toolbar: import, view toggle, remove unused.
+    #[must_use]
+    pub fn asset_toolbar(&self) -> (Rect, Rect, Rect) {
+        let header = self.layers.header;
+        let pad = self.metrics.px(size::PAD);
+        let height = self.metrics.px(20.0);
+        let y = (header.center_y() - height * 0.5).round();
+        let add = Rect::new(
+            header.right() - pad - self.metrics.px(24.0),
+            y,
+            self.metrics.px(24.0),
+            height,
+        );
+        let view = Rect::new(
+            add.x - self.metrics.px(44.0) - self.metrics.px(4.0),
+            y,
+            self.metrics.px(44.0),
+            height,
+        );
+        let unused = Rect::new(
+            view.x - self.metrics.px(56.0) - self.metrics.px(4.0),
+            y,
+            self.metrics.px(56.0),
+            height,
+        );
+        (add, view, unused)
+    }
+
+    /// One list row of the assets panel.
+    #[must_use]
+    pub fn asset_row(&self, index: usize, scroll: f32) -> Rect {
+        let body = self.layers.body;
+        let y = body.y + self.metrics.px(size::GRID) + index as f32 * self.row_h - scroll;
+        Rect::new(body.x, y, body.w, self.row_h)
+    }
+
+    /// One grid tile of the assets panel (two columns).
+    #[must_use]
+    pub fn asset_cell(&self, index: usize, scroll: f32) -> Rect {
+        let body = self.layers.body;
+        let gap = self.metrics.px(size::GRID);
+        let height = self.metrics.px(68.0);
+        let width = (body.w - gap) * 0.5;
+        let column = index % 2;
+        let row = index / 2;
+        let x = body.x + column as f32 * (width + gap);
+        let y = body.y + self.metrics.px(size::GRID) + row as f32 * (height + gap) - scroll;
+        Rect::new(x, y, width, height)
+    }
+
+    /// The assets panel's grid row height.
+    #[must_use]
+    pub fn asset_grid_step(&self) -> f32 {
+        self.metrics.px(68.0 + size::GRID)
     }
 
     /// The layers-panel filter field in the panel header.
@@ -645,6 +843,32 @@ impl Layout {
         Rect::new(self.timeline.names.x, y, self.timeline.rect.w, self.row_h)
     }
 
+    /// The File-menu items, laid out below the button.
+    #[must_use]
+    pub fn menu_items(&self) -> [(MenuAction, Rect); MenuAction::ALL.len()] {
+        let item_h = self.metrics.px(26.0);
+        let width = self.metrics.px(208.0);
+        let x = self.file_button.x;
+        let y = self.file_button.bottom() + self.metrics.px(size::GRID);
+        let mut items = [(MenuAction::New, Rect::default()); MenuAction::ALL.len()];
+        for (index, action) in MenuAction::ALL.into_iter().enumerate() {
+            items[index] = (
+                action,
+                Rect::new(x, y + index as f32 * item_h, width, item_h),
+            );
+        }
+        items
+    }
+
+    /// The menu item under `(x, y)`, when the pointer is over the dropdown.
+    #[must_use]
+    pub fn menu_hit(&self, x: f32, y: f32) -> Option<MenuAction> {
+        self.menu_items()
+            .into_iter()
+            .find(|(_, rect)| rect.contains(x, y))
+            .map(|(action, _)| action)
+    }
+
     /// The element under `(x, y)`, given how many outline rows exist and how
     /// far the layer list and the timeline are scrolled.
     ///
@@ -677,8 +901,22 @@ impl Layout {
         if self.zoom_pill.contains(x, y) {
             return Some(Hit::ZoomPill);
         }
+        if self.file_button.contains(x, y) {
+            return Some(Hit::FileMenu);
+        }
+        if self.recovery_restore.contains(x, y) {
+            return Some(Hit::RecoverRestore);
+        }
+        if self.recovery_dismiss.contains(x, y) {
+            return Some(Hit::RecoverDismiss);
+        }
         if self.layer_filter().contains(x, y) {
             return Some(Hit::LayerFilter);
+        }
+        for tab in LeftTab::ALL {
+            if self.left_tab(tab).contains(x, y) {
+                return Some(Hit::LeftTab(tab));
+            }
         }
         if self.shy_toggle().contains(x, y) {
             return Some(Hit::ShowShy);

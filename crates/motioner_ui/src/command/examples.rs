@@ -203,6 +203,41 @@ impl CommandKind {
             Self::Undo => Command::Undo,
             Self::Redo => Command::Redo,
             Self::Bake => Command::Bake(vec![id(), "card".to_owned()]),
+            Self::Save => Command::Save,
+            Self::SaveAs => Command::SaveAs {
+                path: "C:/work/demo-copy.motioner".to_owned(),
+            },
+            Self::CloseProject => Command::CloseProject,
+            Self::OpenProject => Command::OpenProject {
+                path: "C:/work/demo.motioner".to_owned(),
+            },
+            Self::NewProject => Command::NewProject {
+                name: "demo".to_owned(),
+                dir: "C:/work".to_owned(),
+                width: 1920,
+                height: 1080,
+                fps: 60,
+                duration: 300,
+            },
+            Self::ImportAsset => Command::ImportAsset {
+                path: "C:/work/logo.png".to_owned(),
+            },
+            Self::RemoveAsset => Command::RemoveAsset {
+                key: "logo".to_owned(),
+            },
+            Self::RenameAsset => Command::RenameAsset {
+                key: "logo".to_owned(),
+                name: "brand".to_owned(),
+            },
+            Self::PlaceAsset => Command::PlaceAsset {
+                key: "logo".to_owned(),
+                frame: Some(60),
+                x: Some(960.0),
+                y: Some(540.0),
+            },
+            Self::RemoveUnusedAssets => Command::RemoveUnusedAssets,
+            Self::RestoreBackup => Command::RestoreBackup,
+            Self::DismissRecovery => Command::DismissRecovery,
         }
     }
 }

@@ -86,7 +86,7 @@ fn panel_index(panel: Panel) -> usize {
 }
 
 /// What the caller should do after a command, beyond redrawing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     /// Nothing.
     None,
@@ -96,10 +96,44 @@ pub enum Effect {
     Reloaded,
     /// Copy this text to the clipboard.
     Copy(String),
+    /// Write a copy of the project under this destination.
+    SaveAs(std::path::PathBuf),
+    /// Close the project and show the start screen.
+    CloseProject,
+    /// Open a project folder, manifest or program.
+    OpenProject(std::path::PathBuf),
+    /// Create a project and open it.
+    NewProject(crate::start::NewProjectRequest),
+    /// Import a file (empty opens the picker).
+    ImportAsset(String),
+    /// Remove an asset and its blob.
+    RemoveAsset(String),
+    /// Rename an asset key.
+    RenameAsset {
+        /// Registry key.
+        key: String,
+        /// New key.
+        name: String,
+    },
+    /// Append the layer for an asset.
+    PlaceAsset {
+        /// Registry key.
+        key: String,
+        /// Drop frame.
+        frame: Option<i64>,
+        /// Drop position in composition pixels.
+        pos: Option<(f64, f64)>,
+    },
+    /// Remove every unreferenced asset.
+    RemoveUnusedAssets,
+    /// Restore the offered backup.
+    RestoreBackup,
+    /// Dismiss the recovery offer.
+    DismissRecovery,
 }
 
 /// The result of a command that ran.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Outcome {
     /// What happened, in one line.
     pub summary: String,
@@ -241,6 +275,60 @@ impl Editor {
             .map(|c| (c.frame_rate(), c.duration()))
             .ok_or_else(|| CommandError::new(ErrorKind::NoDocument, "no composition"))?;
         Ok(Self::new(session, Transport::new(rate, duration), None))
+    }
+
+    /// An editor with no document, for the start screen.
+    ///
+    /// Nothing is read from disk until a project is opened.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: `60/1` is a valid frame rate.
+    #[must_use]
+    pub fn blank(metrics: Arc<dyn TextMetrics>) -> Self {
+        let mut session = PreviewSession::new(std::path::PathBuf::new());
+        session.set_text_metrics(metrics);
+        let rate = motioner_core::FrameRate::new(60, 1).expect("60/1 is a valid rate");
+        Self::new(session, Transport::new(rate, 1), None)
+    }
+
+    /// Replaces the loaded document, keeping the panel layout.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NoDocument`] when the new session has no composition.
+    pub fn replace_session(&mut self, session: PreviewSession) -> Result<(), CommandError> {
+        let (rate, duration) = session
+            .composition()
+            .map(|composition| (composition.frame_rate(), composition.duration()))
+            .ok_or_else(|| CommandError::new(ErrorKind::NoDocument, "no composition"))?;
+        self.session = session;
+        self.transport = Transport::new(rate, duration);
+        self.outline.clear();
+        self.timeline = TimelineRows::default();
+        self.inspector = empty_inspector();
+        self.inspector_frame = None;
+        self.expanded.clear();
+        self.pinned.clear();
+        self.collapsed.clear();
+        self.filter.clear();
+        self.visible.clear();
+        self.solo.clear();
+        self.shy.clear();
+        self.show_shy = false;
+        self.graph = None;
+        self.only_animated = false;
+        self.motion_blur_preview = false;
+        self.selected = None;
+        self.selected_keys.clear();
+        self.undo = UndoStack::default_limit();
+        self.gesture = None;
+        self.view.zoom = None;
+        self.view.pan = (0.0, 0.0);
+        self.model_generation = u64::MAX;
+        self.outline_generation = None;
+        self.refresh_models();
+        Ok(())
     }
 
     // ---- read access -----------------------------------------------------
@@ -677,6 +765,7 @@ impl Editor {
     /// # Errors
     ///
     /// A typed [`CommandError`]; the state is unchanged on error.
+    #[allow(clippy::too_many_lines)] // one arm per command family
     pub fn execute(&mut self, command: &Command, now: Duration) -> Result<Outcome, CommandError> {
         match command {
             Command::Play
@@ -711,6 +800,80 @@ impl Editor {
             Command::Undo => self.undo_redo(true),
             Command::Redo => self.undo_redo(false),
             Command::Bake(ids) => self.bake(ids),
+            Command::Save => match self.session.force_write() {
+                Ok(path) => Ok(Outcome::done(format!("saved {}", path.display()))),
+                Err(error) => Err(CommandError::new(ErrorKind::Io, error.to_string())),
+            },
+            Command::SaveAs { path } => Ok(Outcome {
+                summary: format!("write a copy under {path}"),
+                effect: Effect::SaveAs(std::path::PathBuf::from(path)),
+            }),
+            Command::CloseProject => Ok(Outcome {
+                summary: "closed the project".to_owned(),
+                effect: Effect::CloseProject,
+            }),
+            Command::OpenProject { path } => Ok(Outcome {
+                summary: format!("open {path}"),
+                effect: Effect::OpenProject(std::path::PathBuf::from(path)),
+            }),
+            Command::ImportAsset { path } => Ok(Outcome {
+                summary: if path.is_empty() {
+                    "choose files to import".to_owned()
+                } else {
+                    format!("import {path}")
+                },
+                effect: Effect::ImportAsset(path.clone()),
+            }),
+            Command::RemoveAsset { key } => Ok(Outcome {
+                summary: format!("remove asset {key}"),
+                effect: Effect::RemoveAsset(key.clone()),
+            }),
+            Command::RenameAsset { key, name } => Ok(Outcome {
+                summary: format!("rename asset {key} to {name}"),
+                effect: Effect::RenameAsset {
+                    key: key.clone(),
+                    name: name.clone(),
+                },
+            }),
+            Command::PlaceAsset { key, frame, x, y } => Ok(Outcome {
+                summary: format!("place {key}"),
+                effect: Effect::PlaceAsset {
+                    key: key.clone(),
+                    frame: *frame,
+                    pos: x.zip(*y),
+                },
+            }),
+            Command::RemoveUnusedAssets => Ok(Outcome {
+                summary: "remove unused assets".to_owned(),
+                effect: Effect::RemoveUnusedAssets,
+            }),
+            Command::RestoreBackup => Ok(Outcome {
+                summary: "restore the backup".to_owned(),
+                effect: Effect::RestoreBackup,
+            }),
+            Command::DismissRecovery => Ok(Outcome {
+                summary: "keep the files on disk".to_owned(),
+                effect: Effect::DismissRecovery,
+            }),
+            Command::NewProject {
+                name,
+                dir,
+                width,
+                height,
+                fps,
+                duration,
+            } => Ok(Outcome {
+                summary: format!("create {name} in {dir}"),
+                effect: Effect::NewProject(crate::start::NewProjectRequest {
+                    name: name.clone(),
+                    location: std::path::PathBuf::from(dir),
+                    width: *width,
+                    height: *height,
+                    fps: *fps,
+                    duration: *duration,
+                    background: "#000000".to_owned(),
+                }),
+            }),
             _ if command.kind().edits() => self.execute_edit(command),
             _ => self.execute_view(command),
         }

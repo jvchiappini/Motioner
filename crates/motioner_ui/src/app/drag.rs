@@ -129,6 +129,12 @@ impl PreviewApp {
                 }
                 *last = at;
             }
+            Drag::Asset { last, moved, .. } => {
+                if (at.0 - last.0).abs() > CLICK_SLOP || (at.1 - last.1).abs() > CLICK_SLOP {
+                    *moved = true;
+                }
+                *last = at;
+            }
             Drag::Marquee { current, .. } => *current = at,
             Drag::Pan { last } => {
                 if let Some(view) =
@@ -268,6 +274,23 @@ impl PreviewApp {
                 }
             }
             Some(Drag::Scrub) => self.editor.transport_mut().end_scrub(),
+            Some(Drag::Asset { key, last, moved }) => {
+                if moved && layout.canvas.contains(last.0, last.1) {
+                    if let Some(viewport) = crate::app::canvas::viewport(
+                        self.editor.session(),
+                        self.editor.view(),
+                        layout,
+                    ) {
+                        let point = viewport.to_composition(last.0, last.1);
+                        self.run(&Command::PlaceAsset {
+                            key,
+                            frame: None,
+                            x: Some(point.x),
+                            y: Some(point.y),
+                        });
+                    }
+                }
+            }
             Some(
                 Drag::Gizmo(_)
                 | Drag::Keys { .. }

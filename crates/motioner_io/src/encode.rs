@@ -251,7 +251,7 @@ fn validate_rgba_bytes(expected: usize, rgba: &[u8]) -> Result<(), ExportError> 
 }
 
 /// Resolves the executable to launch for the given location.
-fn resolve_program(location: &FfmpegLocation) -> OsString {
+pub(crate) fn resolve_program(location: &FfmpegLocation) -> OsString {
     match location {
         FfmpegLocation::Path(path) => path.as_os_str().to_owned(),
         FfmpegLocation::FromEnvOrPath => std::env::var_os(FFMPEG_ENV)

@@ -21,6 +21,7 @@
 //! application edge.
 
 mod agent;
+mod host;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -33,7 +34,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use motioner_core::Document;
 use motioner_dsl::Limits;
 
-use motioner_io::{write_png, ExportError, FfmpegLocation, ImageStore, Mp4Encoder, VideoSettings};
+use motioner_io::{
+    write_png, ExportError, FfmpegLocation, Mp4Encoder, Project, ProjectImages, ProjectOptions,
+    ProjectSettings, VideoSettings,
+};
 use motioner_render::{CpuTextMetrics, FontSet, ImageData, ImageSet};
 use motioner_render::{FrameRenderer, RenderError};
 use std::sync::Arc;
@@ -43,17 +47,26 @@ const HELP: &str = "\
 Motioner - AI-first motion graphics
 
 Usage:
-  motioner render  <file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
-  motioner still   <file.motion> --frame N --out <file.png>
-  motioner info    <file.motion> [--json]
-  motioner bake    <file.motion> [--id ID]...
-  motioner query   <file.motion> [--frame N] [--node ID]
-  motioner edit    <file.motion> [--frame N] [--dry-run] <command>...
+  motioner new     <dir> [--name NAME] [--size WxH] [--fps N] [--duration FRAMES]
+  motioner migrate <file.motion> <dir> [--name NAME]
+  motioner render  <project|file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
+  motioner still   <project|file.motion> --frame N --out <file.png>
+  motioner import  <project> <file>...
+  motioner backup  <project>
+  motioner info    <project|file.motion> [--json]
+  motioner bake    <project|file.motion> [--id ID]...
+  motioner query   <project|file.motion> [--frame N] [--node ID]
+  motioner edit    <project|file.motion> [--frame N] [--dry-run] <command>...
   motioner ctl     [--endpoint FILE] <request>...
-  motioner preview <file.motion> [--frame N] [--paused] [--exit-after-frames N]
+  motioner preview <project|file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--window-size WxH] [--ui-scale F] [--select ROW]
                    [--screenshot <file.png>] [--control] [--control-file FILE]
   motioner --help
+
+A project is a `<name>.motioner/` folder (D-0045); every command also accepts
+its folder, its `project.motion` or one of its composition files. A loose
+`.motion` file keeps single-file mode with the process working directory as
+its asset root.
 
 Frames are integer indices. `render` draws the half-open range [from, to) and
 defaults to the whole composition. `still` draws one frame. `preview` opens the
@@ -63,6 +76,9 @@ live editor window; `--exit-after-frames` closes it after N presented frames
 `--select` selects an outline row at startup and `--screenshot` writes the
 window to a PNG after `--exit-after-frames` frames (1 by default) and closes
 it.
+
+`new` creates the folder, manifest, a default composition and `editor.motion`.
+`migrate` copies a loose program and the assets it references into a project.
 
 `bake` folds <name>.overrides.motion into <name>.motion for nodes bound to a
 top-level variable, appends one generated block and rewrites both files
@@ -78,6 +94,10 @@ queries state(), query(node=None) and screenshot(path).";
 /// Parsed command line.
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
+    /// Create a project folder.
+    New(NewArgs),
+    /// Copy a loose program into a project.
+    Migrate(MigrateArgs),
     /// Render a frame range to an H.264 MP4.
     Render(RenderArgs),
     /// Render one frame to a PNG still.
@@ -96,6 +116,67 @@ enum Command {
     Ctl(agent::CtlArgs),
     /// Print usage.
     Help,
+    /// Open the start screen with no project.
+    Desktop(DesktopArgs),
+    /// Import media files into a project.
+    Import(ImportArgs),
+    /// Write a project backup now.
+    Backup(BackupArgs),
+}
+
+/// Arguments of the `backup` command.
+#[derive(Debug, PartialEq, Eq)]
+struct BackupArgs {
+    /// Project folder, manifest or composition.
+    project: PathBuf,
+}
+
+/// Arguments of the `import` command.
+#[derive(Debug, PartialEq, Eq)]
+struct ImportArgs {
+    /// Project folder, manifest or composition.
+    project: PathBuf,
+    /// Files to import.
+    files: Vec<PathBuf>,
+}
+
+/// Arguments of the start screen (the no-argument launch).
+#[derive(Debug, PartialEq, Eq, Default)]
+struct DesktopArgs {
+    /// Close the window after this many presented frames.
+    exit_after_frames: Option<u64>,
+    /// Window size in physical pixels.
+    window_size: Option<(u32, u32)>,
+    /// Chrome scale override, stored in thousandths.
+    ui_scale_milli: Option<u32>,
+    /// Capture the window to this PNG and close it.
+    screenshot: Option<PathBuf>,
+}
+
+/// Arguments of the `new` command.
+#[derive(Debug, PartialEq, Eq)]
+struct NewArgs {
+    /// Destination folder; `.motioner` is added when absent.
+    dir: PathBuf,
+    /// Project name; the folder stem when absent.
+    name: Option<String>,
+    /// Composition size.
+    size: Option<(u32, u32)>,
+    /// Frame rate.
+    fps: Option<u32>,
+    /// Composition length in frames.
+    duration: Option<i64>,
+}
+
+/// Arguments of the `migrate` command.
+#[derive(Debug, PartialEq, Eq)]
+struct MigrateArgs {
+    /// Loose program to copy.
+    input: PathBuf,
+    /// Destination folder.
+    dir: PathBuf,
+    /// Project name; the folder stem when absent.
+    name: Option<String>,
 }
 
 /// Arguments of the `render` command.
@@ -163,6 +244,8 @@ struct PreviewArgs {
     screenshot: Option<PathBuf>,
     /// Endpoint file of the live control endpoint, when it is opened.
     control: Option<PathBuf>,
+    /// Show the assets tab instead of the layers tab at startup.
+    assets: bool,
 }
 
 /// Why the run stopped and with which exit code.
@@ -232,6 +315,8 @@ fn run(args: &[OsString]) -> Result<bool, Failure> {
             Ok(true)
         }
         Command::Info(args) => run_info(&args).map(|()| true),
+        Command::New(args) => run_new(&args).map(|()| true),
+        Command::Migrate(args) => run_migrate(&args).map(|()| true),
         Command::Bake(args) => run_bake(&args).map(|()| true),
         Command::Still(args) => run_still(&args).map(|()| true),
         Command::Render(args) => run_render(&args).map(|()| true),
@@ -239,19 +324,27 @@ fn run(args: &[OsString]) -> Result<bool, Failure> {
         Command::Query(args) => Ok(status(agent::run_query(&args))),
         Command::Edit(args) => Ok(status(agent::run_edit(&args))),
         Command::Ctl(args) => Ok(status(agent::run_ctl(&args))),
+        Command::Desktop(args) => run_desktop(&args).map(|()| true),
+        Command::Import(args) => run_import(&args).map(|()| true),
+        Command::Backup(args) => run_backup(&args).map(|()| true),
     }
 }
 
 /// Parses the command line into a [`Command`].
 fn parse(args: &[OsString]) -> Result<Command> {
     let Some(first) = args.first().and_then(|arg| arg.to_str()) else {
-        return Ok(Command::Help);
+        return Ok(Command::Desktop(DesktopArgs::default()));
     };
     if first == "--help" || first == "-h" {
         return Ok(Command::Help);
     }
     let rest = &args[1..];
     match first {
+        "--start" => parse_desktop(rest),
+        "import" => parse_import(rest),
+        "backup" => parse_backup(rest),
+        "new" => parse_new(rest),
+        "migrate" => parse_migrate(rest),
         "render" => parse_render(rest),
         "still" => parse_still(rest),
         "info" => parse_info(rest),
@@ -260,8 +353,208 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "query" => parse_query(rest),
         "edit" => parse_edit(rest),
         "ctl" => parse_ctl(rest),
+        other
+            if !other.starts_with('-')
+                && (other.ends_with(".motion")
+                    || other.ends_with(".motioner")
+                    || Path::new(other).exists()) =>
+        {
+            // `motioner <path>` opens it directly.
+            parse_preview(args)
+        }
         other => bail!("unknown command '{other}' (try --help)"),
     }
+}
+
+/// Parses `backup <project>`.
+fn parse_backup(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("backup", args, true, &[], &[])?;
+    if !parsed.rest.is_empty() {
+        bail!("backup takes exactly one project");
+    }
+    Ok(Command::Backup(BackupArgs {
+        project: parsed
+            .input
+            .ok_or_else(|| anyhow!("backup needs a project"))?,
+    }))
+}
+
+/// Writes one backup snapshot and prints its folder.
+fn run_backup(args: &BackupArgs) -> std::result::Result<(), Failure> {
+    let project = Project::open(&args.project).map_err(|error| Failure::Error(anyhow!(error)))?;
+    let info = project
+        .snapshot(std::time::SystemTime::now())
+        .map_err(|error| Failure::Error(anyhow!(error)))?;
+    println!(
+        "Backup {} ({} files, {} bytes)",
+        info.path.display(),
+        info.files,
+        info.bytes
+    );
+    Ok(())
+}
+
+/// Parses `import <project> <file>...`.
+fn parse_import(args: &[OsString]) -> Result<Command> {
+    let mut values: Vec<PathBuf> = Vec::new();
+    for argument in args {
+        let Some(text) = argument.to_str() else {
+            bail!("arguments must be valid UTF-8");
+        };
+        if text.starts_with("--") {
+            bail!("unknown flag '{text}' for import");
+        }
+        values.push(PathBuf::from(text));
+    }
+    if values.len() < 2 {
+        bail!("import takes a project and at least one file");
+    }
+    let project = values.remove(0);
+    Ok(Command::Import(ImportArgs {
+        project,
+        files: values,
+    }))
+}
+
+/// Imports files into a project and prints their keys.
+fn run_import(args: &ImportArgs) -> std::result::Result<(), Failure> {
+    let root = std::env::current_dir().unwrap_or_default();
+    let host = host::Host::new(root);
+    let services: &dyn motioner_ui::ProjectHost = &host;
+    let composition = services
+        .open_project(&args.project)
+        .map_err(|message| Failure::Error(anyhow!(message)))?;
+    for file in &args.files {
+        let summary = services
+            .import_asset(&composition, file)
+            .map_err(|message| Failure::Error(anyhow!(message)))?;
+        println!(
+            "{} <- {} ({} bytes, used by {})",
+            summary.key,
+            file.display(),
+            summary.size_bytes,
+            summary.used_by
+        );
+    }
+    Ok(())
+}
+
+/// Parses the start screen's smoke-test flags.
+fn parse_desktop(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags(
+        "start",
+        args,
+        false,
+        &[
+            "--window-size",
+            "--ui-scale",
+            "--screenshot",
+            "--exit-after-frames",
+        ],
+        &[],
+    )?;
+    if !parsed.rest.is_empty() {
+        bail!("the start screen takes no positional arguments");
+    }
+    Ok(Command::Desktop(DesktopArgs {
+        exit_after_frames: parsed
+            .value("--exit-after-frames")
+            .map(parse_u64)
+            .transpose()?,
+        window_size: parsed.value("--window-size").map(parse_size).transpose()?,
+        ui_scale_milli: parsed
+            .value("--ui-scale")
+            .map(|text| -> Result<u32> {
+                let scale: f64 = text
+                    .parse()
+                    .with_context(|| format!("invalid scale '{text}' for --ui-scale"))?;
+                if !(0.5..=4.0).contains(&scale) {
+                    bail!("--ui-scale must be between 0.5 and 4.0, got '{text}'");
+                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                Ok((scale * 1000.0).round() as u32)
+            })
+            .transpose()?,
+        screenshot: parsed.value("--screenshot").map(PathBuf::from),
+    }))
+}
+
+/// Parses a whole number.
+fn parse_u64(text: &str) -> Result<u64> {
+    text.parse()
+        .with_context(|| format!("invalid whole number '{text}'"))
+}
+
+/// Parses `new <dir> [--name NAME] [--size WxH] [--fps N] [--duration FRAMES]`.
+fn parse_new(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags(
+        "new",
+        args,
+        false,
+        &["--name", "--size", "--fps", "--duration"],
+        &[],
+    )?;
+    if parsed.rest.len() > 1 {
+        bail!("new takes one destination folder");
+    }
+    let dir = parsed
+        .rest
+        .first()
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("new needs a destination folder"))?;
+    let size = parsed.value("--size").map(parse_size).transpose()?;
+    let fps = parsed.value("--fps").map(parse_u32).transpose()?;
+    let duration = parsed.value("--duration").map(parse_i64).transpose()?;
+    Ok(Command::New(NewArgs {
+        dir,
+        name: parsed.value("--name").map(str::to_owned),
+        size,
+        fps,
+        duration,
+    }))
+}
+
+/// Parses `migrate <file.motion> <dir> [--name NAME]`.
+fn parse_migrate(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("migrate", args, false, &["--name"], &[])?;
+    if parsed.rest.len() != 2 {
+        bail!("migrate takes a .motion file and a destination folder");
+    }
+    Ok(Command::Migrate(MigrateArgs {
+        input: PathBuf::from(&parsed.rest[0]),
+        dir: PathBuf::from(&parsed.rest[1]),
+        name: parsed.value("--name").map(str::to_owned),
+    }))
+}
+
+/// Parses a `WxH` size value.
+fn parse_size(text: &str) -> Result<(u32, u32)> {
+    let (width, height) = text
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow!("--size expects WxH, got '{text}'"))?;
+    Ok((parse_u32(width)?, parse_u32(height)?))
+}
+
+/// Parses a positive whole number.
+fn parse_u32(text: &str) -> Result<u32> {
+    let value: u32 = text
+        .parse()
+        .with_context(|| format!("invalid whole number '{text}'"))?;
+    if value == 0 {
+        bail!("'{text}' must be positive");
+    }
+    Ok(value)
+}
+
+/// Parses a positive frame count.
+fn parse_i64(text: &str) -> Result<i64> {
+    let value: i64 = text
+        .parse()
+        .with_context(|| format!("invalid whole number '{text}'"))?;
+    if value <= 0 {
+        bail!("'{text}' must be positive");
+    }
+    Ok(value)
 }
 
 /// Parses `render <file> --out <file> [--from N] [--to N] [--ffmpeg PATH]`.
@@ -537,6 +830,7 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
     let mut select = None;
     let mut screenshot = None;
     let mut control = None;
+    let mut assets = false;
     let mut index = 0;
     while index < args.len() {
         let Some(arg) = args[index].to_str() else {
@@ -572,6 +866,10 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
                 screenshot = Some(PathBuf::from(flag_value(args, index, "--screenshot")?));
                 index += 2;
             }
+            "--assets" => {
+                assets = true;
+                index += 1;
+            }
             "--control" => {
                 control.get_or_insert_with(motioner_ui::default_endpoint_file);
                 index += 1;
@@ -601,6 +899,7 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
         select,
         screenshot,
         control,
+        assets,
     }))
 }
 
@@ -673,10 +972,81 @@ fn count_value(args: &[OsString], index: usize, flag: &str) -> Result<u64> {
     text.parse::<u64>()
         .with_context(|| format!("invalid frame count '{text}' for {flag}"))
 }
+/// A resolved input: the composition file to load plus the asset root.
+pub(crate) struct InputTarget {
+    /// Program file to load and edit.
+    composition: PathBuf,
+    /// Project root, or the process working directory in single-file mode.
+    root: PathBuf,
+    /// The project, when the input belongs to one.
+    project: Option<Project>,
+}
+
+/// Resolves a folder, a manifest or a program inside a project to the main
+/// composition and its asset root (D-0045). A loose file keeps single-file
+/// mode with the working directory as its root.
+pub(crate) fn resolve_input(path: &Path) -> std::result::Result<InputTarget, Failure> {
+    match Project::open(path) {
+        Ok(project) => {
+            let composition = project.composition_path(&project.settings().main);
+            let root = project.root().to_path_buf();
+            Ok(InputTarget {
+                composition,
+                root,
+                project: Some(project),
+            })
+        }
+        Err(motioner_io::ProjectError::NotFound { .. }) => Ok(InputTarget {
+            composition: path.to_path_buf(),
+            root: std::env::current_dir().unwrap_or_default(),
+            project: None,
+        }),
+        Err(error) => Err(Failure::Error(anyhow!(error))),
+    }
+}
+
+/// Opens the start screen with no project (double-clicking the binary).
+fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
+    eprintln!("desktop: enter");
+    let root = std::env::current_dir().unwrap_or_default();
+    let services = host::Host::new(root);
+    let placement = services.state().window;
+    let services: std::rc::Rc<dyn motioner_ui::ProjectHost> = std::rc::Rc::new(services);
+    let fonts = FontSet::bundled();
+    let options = motioner_ui::PreviewOptions {
+        host: Some(std::rc::Rc::clone(&services)),
+        start: None,
+        exit_after_frames: args.exit_after_frames,
+        window_size: args.window_size.or_else(|| {
+            (placement.width > 0 && placement.height > 0)
+                .then_some((placement.width, placement.height))
+        }),
+        #[allow(clippy::cast_precision_loss)]
+        ui_scale: args.ui_scale_milli.map(|milli| milli as f32 / 1000.0),
+        screenshot: args.screenshot.clone(),
+        png_writer: Some(write_screenshot),
+        text_metrics: Some(Arc::new(CpuTextMetrics::new(fonts.clone()))),
+        fonts: Some(fonts),
+        ..motioner_ui::PreviewOptions::default()
+    };
+    if let Some(path) = &args.screenshot {
+        ensure_parent(path)?;
+    }
+    motioner_ui::run_app(options)?;
+    if let Some(path) = &args.screenshot {
+        println!("Wrote {}", path.display());
+    }
+    Ok(())
+}
 
 /// Opens the live preview window.
 fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
-    let fonts = project_fonts();
+    let target = resolve_input(&args.input)?;
+    let fonts = project_fonts(&target);
+    let resolver = match &target.project {
+        Some(project) => ProjectImages::new(project),
+        None => ProjectImages::loose(&target.root),
+    };
     let options = motioner_ui::PreviewOptions {
         frame: args.frame,
         paused: args.paused,
@@ -690,14 +1060,17 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         control: args.control.clone(),
         text_metrics: Some(Arc::new(CpuTextMetrics::new(fonts.clone()))),
         fonts: Some(fonts),
-        image_resolver: Some(std::rc::Rc::new(motioner_io::CachedImages::new(
-            ImageStore::new(std::env::current_dir().unwrap_or_default()),
+        image_resolver: Some(std::rc::Rc::new(resolver)),
+        host: Some(std::rc::Rc::new(host::Host::new(
+            std::env::current_dir().unwrap_or_default(),
         ))),
+        start: None,
+        panel_tab: args.assets.then_some(motioner_ui::LeftTab::Assets),
     };
     if let Some(path) = &args.screenshot {
         ensure_parent(path)?;
     }
-    motioner_ui::run_preview(&args.input, options)?;
+    motioner_ui::run_preview(&target.composition, options)?;
     if let Some(path) = &args.screenshot {
         println!("Wrote {}", path.display());
     }
@@ -709,14 +1082,25 @@ fn write_screenshot(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result
     write_png(path, width, height, rgba).map_err(|error| error.to_string())
 }
 
-/// The bundled faces plus every static face under the project's
-/// `assets/fonts/` (D-0034). Project faces win on a family/weight clash.
-fn project_fonts() -> FontSet {
+/// The bundled faces plus every project face (D-0034, D-0045).
+///
+/// Project faces win on a family/weight clash. A project contributes its
+/// registry fonts; single-file mode reads `assets/fonts/` under the root.
+pub(crate) fn project_fonts(target: &InputTarget) -> FontSet {
     let mut fonts = FontSet::bundled();
-    let dir = std::env::current_dir()
-        .unwrap_or_default()
-        .join("assets/fonts");
-    fonts.set_project_label(dir.display().to_string());
+    let label = match &target.project {
+        Some(project) => project.root().join("assets"),
+        None => target.root.join("assets/fonts"),
+    };
+    fonts.set_project_label(label.display().to_string());
+    if let Some(project) = &target.project {
+        if let Ok(faces) = motioner_io::project_fonts(project) {
+            for face in faces {
+                fonts.push_face(face.family, face.weight, face.bytes);
+            }
+        }
+    }
+    let dir = target.root.join("assets/fonts");
     if let Ok(project) = motioner_io::load_project_fonts(&dir) {
         for face in project {
             fonts.push_face(face.family, face.weight, face.bytes);
@@ -733,36 +1117,42 @@ fn font_families(fonts: &FontSet) -> Vec<String> {
     families
 }
 
-/// Loads and executes an MDF program.
+/// Loads and executes an MDF program inside `target`.
 ///
-/// Returns the source text and the document. An MDF diagnostic becomes
-/// [`Failure::Diagnostic`] so `main` can print it and exit with code 2.
-fn load_document(path: &Path) -> std::result::Result<(String, Document, ImageStore), Failure> {
+/// Returns the source text, the document and the image resolver. An MDF
+/// diagnostic becomes [`Failure::Diagnostic`] so `main` can print it and exit
+/// with code 2.
+fn load_document(
+    target: &InputTarget,
+) -> std::result::Result<(String, Document, ProjectImages), Failure> {
+    let path = &target.composition;
     let source = fs::read_to_string(path)
         .with_context(|| format!("cannot read {}", path.display()))
         .map_err(Failure::Error)?;
     let name = path.display().to_string();
-    let metrics = CpuTextMetrics::new(project_fonts());
+    let metrics = CpuTextMetrics::new(project_fonts(target));
     match motioner_dsl::run_with_metrics(&source, &Limits::default(), &metrics) {
         Ok(mut document) => {
-            let store = ImageStore::new(std::env::current_dir().unwrap_or_default());
-            let cached = motioner_io::CachedImages::new(store);
-            for issue in document.resolve_images(&cached) {
+            let images = match &target.project {
+                Some(project) => ProjectImages::new(project),
+                None => ProjectImages::loose(&target.root),
+            };
+            for issue in document.resolve_images(&images) {
                 eprintln!(
                     "warning: image {} ({}): {}",
                     issue.source, issue.node, issue.message
                 );
             }
-            Ok((source, document, cached.into_inner()))
+            Ok((source, document, images))
         }
         Err(diagnostic) => Err(Failure::Diagnostic(diagnostic.render(&source, &name))),
     }
 }
 
 /// Every decoded image as the renderer's upload set.
-fn image_set(store: &ImageStore) -> ImageSet {
+fn image_set(images: &ProjectImages) -> ImageSet {
     let mut set = ImageSet::new();
-    for image in store.decoded() {
+    for image in images.decoded() {
         set.insert(ImageData {
             key: image.key,
             width: image.width,
@@ -784,18 +1174,109 @@ fn ensure_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Creates the project folder for `motioner new`.
+fn run_new(args: &NewArgs) -> std::result::Result<(), Failure> {
+    let dir = &args.dir;
+    let default_name = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("untitled");
+    let name = args.name.as_deref().unwrap_or(default_name);
+    let mut settings = ProjectSettings::new(name);
+    if let Some((width, height)) = args.size {
+        settings.width = width;
+        settings.height = height;
+    }
+    if let Some(fps) = args.fps {
+        settings.fps_numerator = fps;
+        settings.fps_denominator = 1;
+    }
+    if let Some(duration) = args.duration {
+        settings.duration = duration;
+    }
+    let mut options = ProjectOptions::new(name);
+    options.program = motioner_io::default_program(&settings, "Main");
+    options.settings = settings;
+    let project = Project::create(dir, &options).map_err(|error| Failure::Error(anyhow!(error)))?;
+    println!("Created {}", project.root().display());
+    println!(
+        "Composition: {}",
+        project.composition_path("main").display()
+    );
+    Ok(())
+}
+
+/// Copies a loose program and the assets it references into a project.
+fn run_migrate(args: &MigrateArgs) -> std::result::Result<(), Failure> {
+    let source = fs::read_to_string(&args.input)
+        .with_context(|| format!("cannot read {}", args.input.display()))
+        .map_err(Failure::Error)?;
+    let default_name = args
+        .dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("untitled");
+    let name = args.name.as_deref().unwrap_or(default_name);
+    let mut options = ProjectOptions::new(name);
+    options.program = source;
+    let mut project =
+        Project::create(&args.dir, &options).map_err(|error| Failure::Error(anyhow!(error)))?;
+    let root = std::env::current_dir().unwrap_or_default();
+    let loose = InputTarget {
+        composition: args.input.clone(),
+        root: root.clone(),
+        project: None,
+    };
+    let (_, document, _) = load_document(&loose)?;
+    let mut imported = 0_usize;
+    for node in document.nodes() {
+        if let motioner_core::NodeContent::Image(image) = &node.content() {
+            let candidate = root.join(&image.source);
+            if candidate.is_file() {
+                if let Ok(outcome) = project.import_file(&candidate) {
+                    if !outcome.deduped {
+                        imported += 1;
+                    }
+                }
+            }
+        }
+    }
+    let fonts_dir = root.join("assets/fonts");
+    if let Ok(entries) = fs::read_dir(&fonts_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_file() {
+                imported += usize::from(
+                    project
+                        .import_file(&entry.path())
+                        .is_ok_and(|outcome| !outcome.deduped),
+                );
+            }
+        }
+    }
+    println!(
+        "Created {} from {} ({} asset(s) imported)",
+        project.root().display(),
+        args.input.display(),
+        imported
+    );
+    Ok(())
+}
+
 /// Folds the overrides file into the program (`motioner bake`) through the
 /// editor's `bake` command, so the CLI, the window and `ctl` share one
 /// implementation.
 fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
-    let fonts = project_fonts();
+    let target = resolve_input(&args.input)?;
+    let fonts = project_fonts(&target);
     let families = font_families(&fonts);
-    let mut editor =
-        motioner_ui::Editor::open_with_metrics(&args.input, Arc::new(CpuTextMetrics::new(fonts)))
-            .map_err(|error| match error.kind {
-            motioner_ui::ErrorKind::NoDocument => Failure::Diagnostic(error.message),
-            _ => Failure::Error(anyhow!("{}", error.message)),
-        })?;
+    let mut editor = motioner_ui::Editor::open_with_metrics(
+        &target.composition,
+        Arc::new(CpuTextMetrics::new(fonts)),
+    )
+    .map_err(|error| match error.kind {
+        motioner_ui::ErrorKind::NoDocument => Failure::Diagnostic(error.message),
+        _ => Failure::Error(anyhow!("{}", error.message)),
+    })?;
     editor.set_font_families(families);
     for warning in editor.session().warnings() {
         println!("warning: line {}: {}", warning.line, warning.message);
@@ -811,7 +1292,7 @@ fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
     }
     println!(
         "Wrote {} and {}",
-        args.input.display(),
+        target.composition.display(),
         editor.session().overrides_path().display()
     );
     Ok(())
@@ -819,7 +1300,8 @@ fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
 
 /// Prints composition facts for the `info` command.
 fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
-    let (_, document, _images) = load_document(&args.input)?;
+    let target = resolve_input(&args.input)?;
+    let (_, document, _images) = load_document(&target)?;
     let composition = document.composition();
     let rate = composition.frame_rate();
     let frames = composition.duration();
@@ -828,7 +1310,15 @@ fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
     if args.json {
         let mut j = motioner_ui::Json::new();
         j.begin_object();
-        j.key("file").string(&args.input.display().to_string());
+        j.key("file")
+            .string(&target.composition.display().to_string());
+        j.key("project").opt_string(
+            target
+                .project
+                .as_ref()
+                .map(|project| project.root().display().to_string())
+                .as_deref(),
+        );
         j.key("name").string(composition.name());
         j.key("width").int(i64::from(composition.width()));
         j.key("height").int(i64::from(composition.height()));
@@ -838,11 +1328,24 @@ fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
         j.key("seconds").number(seconds);
         j.key("nodes")
             .int(i64::try_from(document.len()).unwrap_or(i64::MAX));
+        if let Some(project) = &target.project {
+            j.key("assets")
+                .int(i64::try_from(project.assets().len()).unwrap_or(i64::MAX));
+            j.key("compositions")
+                .int(i64::try_from(project.compositions().len()).unwrap_or(i64::MAX));
+        }
         j.end_object();
         println!("{}", j.finish());
         return Ok(());
     }
-    println!("File: {}", args.input.display());
+    if let Some(project) = &target.project {
+        println!("Project: {}", project.root().display());
+        println!("Project name: {}", project.settings().name);
+        println!("Main composition: {}", project.settings().main);
+        println!("Compositions: {}", project.compositions().len());
+        println!("Assets: {}", project.assets().len());
+    }
+    println!("File: {}", target.composition.display());
     println!("Composition: {}", composition.name());
     println!("Canvas: {}x{}", composition.width(), composition.height());
     println!(
@@ -858,7 +1361,8 @@ fn run_info(args: &InfoArgs) -> std::result::Result<(), Failure> {
 
 /// Renders one frame to a PNG file.
 fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
-    let (_, document, images) = load_document(&args.input)?;
+    let target = resolve_input(&args.input)?;
+    let (_, document, images) = load_document(&target)?;
     if let Some(issue) = document.first_unresolved_image() {
         return Err(Failure::Error(anyhow!(RenderError::UnresolvedImage {
             source: issue.source,
@@ -874,8 +1378,11 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
     }
     ensure_parent(&args.output)?;
 
-    let mut renderer =
-        FrameRenderer::with_fonts(composition.width(), composition.height(), project_fonts())?;
+    let mut renderer = FrameRenderer::with_fonts(
+        composition.width(),
+        composition.height(),
+        project_fonts(&target),
+    )?;
     renderer.set_images(image_set(&images));
     let mut rgba = Vec::new();
     renderer.render_frame(&document, args.frame, &mut rgba)?;
@@ -898,7 +1405,8 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
 
 /// Renders a frame range and streams it to ffmpeg.
 fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
-    let (_, document, images) = load_document(&args.input)?;
+    let target = resolve_input(&args.input)?;
+    let (_, document, images) = load_document(&target)?;
     if let Some(issue) = document.first_unresolved_image() {
         return Err(Failure::Error(anyhow!(RenderError::UnresolvedImage {
             source: issue.source,
@@ -930,7 +1438,8 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
             FfmpegLocation::Path(path.clone())
         });
 
-    let mut renderer = FrameRenderer::with_fonts(settings.width, settings.height, project_fonts())?;
+    let mut renderer =
+        FrameRenderer::with_fonts(settings.width, settings.height, project_fonts(&target))?;
     renderer.set_images(image_set(&images));
     let mut encoder = Mp4Encoder::start(&args.output, &settings, &location)?;
     let mut rgba = Vec::new();
@@ -1003,6 +1512,46 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn parses_new_and_migrate() {
+        assert_eq!(
+            parse(&args(&[
+                "new",
+                "demo",
+                "--name",
+                "Demo",
+                "--size",
+                "1280x720",
+                "--fps",
+                "30",
+                "--duration",
+                "120"
+            ]))
+            .unwrap(),
+            Command::New(super::NewArgs {
+                dir: PathBuf::from("demo"),
+                name: Some("Demo".to_owned()),
+                size: Some((1280, 720)),
+                fps: Some(30),
+                duration: Some(120),
+            })
+        );
+        assert_eq!(
+            parse(&args(&["migrate", "show.motion", "demo", "--name", "Demo"])).unwrap(),
+            Command::Migrate(super::MigrateArgs {
+                input: PathBuf::from("show.motion"),
+                dir: PathBuf::from("demo"),
+                name: Some("Demo".to_owned()),
+            })
+        );
+        assert!(parse(&args(&["new"])).is_err());
+        assert!(parse(&args(&["new", "a", "b"])).is_err());
+        assert!(parse(&args(&["new", "a", "--size", "wide"])).is_err());
+        assert!(parse(&args(&["new", "a", "--fps", "0"])).is_err());
+        assert!(parse(&args(&["migrate", "a.motion"])).is_err());
+        assert!(parse(&args(&["migrate", "a.motion", "b", "c"])).is_err());
     }
 
     #[test]
@@ -1104,6 +1653,7 @@ mod tests {
                 select: Some(3),
                 screenshot: Some(PathBuf::from("shot.png")),
                 control: Some(PathBuf::from("ctl.txt")),
+                assets: false,
             })
         );
     }
@@ -1122,6 +1672,7 @@ mod tests {
                 select: None,
                 screenshot: None,
                 control: None,
+                assets: false,
             })
         );
     }
@@ -1232,9 +1783,25 @@ mod tests {
     }
 
     #[test]
-    fn help_needs_no_arguments() {
-        assert_eq!(parse(&args(&[])).unwrap(), Command::Help);
+    fn no_arguments_opens_the_start_screen_and_help_is_explicit() {
+        assert_eq!(
+            parse(&args(&[])).unwrap(),
+            Command::Desktop(super::DesktopArgs::default())
+        );
         assert_eq!(parse(&args(&["--help"])).unwrap(), Command::Help);
+    }
+
+    #[test]
+    fn a_path_opens_directly() {
+        assert!(matches!(
+            parse(&args(&["in.motion"])).unwrap(),
+            Command::Preview(_)
+        ));
+        assert!(matches!(
+            parse(&args(&["demo.motioner", "--paused"])).unwrap(),
+            Command::Preview(_)
+        ));
+        assert!(parse(&args(&["nope"])).is_err());
     }
 
     #[test]

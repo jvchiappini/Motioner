@@ -38,6 +38,11 @@ impl Command {
             | Self::Undo
             | Self::Redo
             | Self::GraphClose
+            | Self::Save
+            | Self::CloseProject
+            | Self::RemoveUnusedAssets
+            | Self::RestoreBackup
+            | Self::DismissRecovery
             | Self::ZoomFit => Vec::new(),
             Self::Step(n) | Self::Seek(n) | Self::SelectRelative(n) | Self::RetimeKeys(n) => {
                 vec![n.to_string()]
@@ -217,6 +222,37 @@ impl Command {
                 value_text(value),
             ],
             Self::Bake(ids) => ids.iter().map(|id| quote(id)).collect(),
+            Self::SaveAs { path } | Self::OpenProject { path } | Self::ImportAsset { path } => {
+                vec![quote(path)]
+            }
+            Self::RemoveAsset { key } => vec![quote(key)],
+            Self::RenameAsset { key, name } => vec![quote(key), quote(name)],
+            Self::PlaceAsset { key, frame, x, y } => {
+                let mut args = vec![quote(key)];
+                if frame.is_none() && x.is_none() && y.is_none() {
+                    args
+                } else {
+                    args.push(frame.map_or_else(|| "None".to_owned(), |frame| frame.to_string()));
+                    args.push(format_number(x.unwrap_or(0.0)));
+                    args.push(format_number(y.unwrap_or(0.0)));
+                    args
+                }
+            }
+            Self::NewProject {
+                name,
+                dir,
+                width,
+                height,
+                fps,
+                duration,
+            } => vec![
+                quote(name),
+                quote(dir),
+                width.to_string(),
+                height.to_string(),
+                fps.to_string(),
+                duration.to_string(),
+            ],
         };
         format!("{name}({})", args.join(", "))
     }

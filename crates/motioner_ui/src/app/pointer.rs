@@ -78,6 +78,15 @@ pub(super) enum Drag {
         /// Previous pointer position in window pixels.
         last: (f32, f32),
     },
+    /// Dragging an asset onto the canvas or timeline.
+    Asset {
+        /// Registry key.
+        key: String,
+        /// Last pointer position in window pixels.
+        last: (f32, f32),
+        /// Whether the pointer travelled past the click slop.
+        moved: bool,
+    },
 }
 
 /// What a gizmo drag needs from its press.
@@ -242,6 +251,9 @@ impl PreviewApp {
         if layout.layer_filter().contains(mx, my) {
             return Some(Hit::LayerFilter);
         }
+        if self.left_tab == crate::LeftTab::Assets {
+            return self.hit_assets(layout, mx, my);
+        }
         if !layout.layers.body.contains(mx, my) {
             return None;
         }
@@ -266,6 +278,58 @@ impl PreviewApp {
         } else {
             Hit::LayerRow(index)
         })
+    }
+
+    /// Hit testing for the assets list and toolbar.
+    fn hit_assets(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
+        let (add, view, unused) = layout.asset_toolbar();
+        if add.contains(mx, my) {
+            return Some(Hit::AssetAdd);
+        }
+        if view.contains(mx, my) {
+            return Some(Hit::AssetView);
+        }
+        if unused.contains(mx, my) {
+            return Some(Hit::AssetRemoveUnused);
+        }
+        if !layout.layers.body.contains(mx, my) {
+            return None;
+        }
+        let scroll = self.scroll_px(PanelId::Layers);
+        let offset =
+            my - layout.layers.body.y - layout.metrics.px(crate::theme::size::GRID) + scroll;
+        if offset < 0.0 {
+            return None;
+        }
+        match self.assets.view() {
+            crate::AssetView::List => {
+                if layout.row_h <= 0.0 {
+                    return None;
+                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let position = (offset / layout.row_h).floor() as usize;
+                let index = self.assets.list_index(position, self.editor.filter())?;
+                Some(Hit::AssetRow(index))
+            }
+            crate::AssetView::Grid => {
+                let step = layout.asset_grid_step();
+                if step <= 0.0 {
+                    return None;
+                }
+                let gap = layout.metrics.px(crate::theme::size::GRID);
+                let cell_w = (layout.layers.body.w - gap) * 0.5 + gap;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let row = (offset / step).floor() as usize;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let column = ((mx - layout.layers.body.x) / cell_w)
+                    .floor()
+                    .clamp(0.0, 1.0) as usize;
+                let index = self
+                    .assets
+                    .list_index(row * 2 + column, self.editor.filter())?;
+                Some(Hit::AssetCell(index))
+            }
+        }
     }
 
     pub(super) fn hit_orphans(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {

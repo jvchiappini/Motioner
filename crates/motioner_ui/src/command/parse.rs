@@ -302,6 +302,60 @@ impl Command {
                 value: a.value("value")?,
             },
             CommandKind::Bake => Self::Bake(a.rest_strings()?),
+            CommandKind::ImportAsset => Self::ImportAsset {
+                path: a.optional_string("path")?.unwrap_or_default(),
+            },
+            CommandKind::RemoveAsset => Self::RemoveAsset {
+                key: a.string("key")?,
+            },
+            CommandKind::RenameAsset => Self::RenameAsset {
+                key: a.string("key")?,
+                name: a.string("name")?,
+            },
+            CommandKind::PlaceAsset => Self::PlaceAsset {
+                key: a.string("key")?,
+                frame: a.optional_int("frame")?,
+                x: a.optional_number("x")?,
+                y: a.optional_number("y")?,
+            },
+            CommandKind::RemoveUnusedAssets => Self::RemoveUnusedAssets,
+            CommandKind::RestoreBackup => Self::RestoreBackup,
+            CommandKind::DismissRecovery => Self::DismissRecovery,
+            CommandKind::Save => Self::Save,
+            CommandKind::SaveAs => Self::SaveAs {
+                path: a.string("path")?,
+            },
+            CommandKind::CloseProject => Self::CloseProject,
+            CommandKind::OpenProject => Self::OpenProject {
+                path: a.string("path")?,
+            },
+            CommandKind::NewProject => {
+                let name = a.string("name")?;
+                let dir = a.string("dir")?;
+                let width = a.int("width")?;
+                let height = a.int("height")?;
+                let fps = a.int("fps")?;
+                let duration = a.int("duration")?;
+                let positive = |value: i64, what: &str| {
+                    u32::try_from(value)
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| {
+                            CommandError::new(
+                                ErrorKind::BadArgument,
+                                format!("'{what}' must be a positive whole number"),
+                            )
+                        })
+                };
+                Self::NewProject {
+                    name,
+                    dir,
+                    width: positive(width, "width")?,
+                    height: positive(height, "height")?,
+                    fps: positive(fps, "fps")?,
+                    duration,
+                }
+            }
         };
         a.finish()?;
         Ok(command)
@@ -425,7 +479,7 @@ impl Args {
         number_of(&expr).ok_or_else(|| self.error(format!("'{name}' must be a number")))
     }
 
-    fn optional_number(&mut self, name: &str) -> Result<Option<f64>, CommandError> {
+    pub(crate) fn optional_number(&mut self, name: &str) -> Result<Option<f64>, CommandError> {
         match self.take(name) {
             None
             | Some(Expr {
@@ -435,6 +489,23 @@ impl Args {
             Some(expr) => number_of(&expr)
                 .map(Some)
                 .ok_or_else(|| self.error(format!("'{name}' must be a number"))),
+        }
+    }
+
+    pub(crate) fn optional_int(&mut self, name: &str) -> Result<Option<i64>, CommandError> {
+        match self.take(name) {
+            None
+            | Some(Expr {
+                kind: ExprKind::None,
+                ..
+            }) => Ok(None),
+            Some(expr) => number_of(&expr)
+                .filter(|value| value.fract() == 0.0 && value.is_finite() && value.abs() <= 1e15)
+                .map(|value| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    Some(value as i64)
+                })
+                .ok_or_else(|| self.error(format!("'{name}' must be a whole number"))),
         }
     }
 
