@@ -1,0 +1,88 @@
+# Demo project (prompt 11 phase 7).
+#
+# A 6 s, 1280x720 60 fps title sequence over a generated test-source video,
+# with a generated music loop and a fade to black. Every asset is produced
+# from ffmpeg lavfi sources (no third-party media):
+#
+#   gradients=...  -> bg.png
+#   testsrc2=...   -> clip.mp4
+#   aevalsrc=...   -> music.wav
+#
+# Render with:
+#   motioner render examples/demo.motioner --out out/demo.mp4
+
+comp(name="Demo", width=1280, height=720, fps=60, duration=6.0,
+     background="#07070C")
+
+INK = "#F4F7FF"
+MUTED = "#A9B8D0"
+ACCENT = "#5B8CFF"
+
+# ---- background ------------------------------------------------------------
+
+backdrop = image("bg.png", width=1280, height=720, fit="cover")
+backdrop.id("backdrop")
+backdrop.opacity = 0.60
+
+clip = video("clip.mp4", in_point=0.0, out_point=6.0, width=1280, height=720,
+             fit="cover", gain=0.0)
+clip.id("clip")
+clip.pos = (640, 360)
+clip.opacity = 0.60
+clip.key("scale", 0.0, 1.02)
+clip.key("scale", 6.0, 1.10)
+
+scrim = rect(1280, 720, fill="#05070D")
+scrim.id("scrim")
+scrim.pos = (640, 360)
+scrim.opacity = 0.42
+
+# ---- title -----------------------------------------------------------------
+
+bar = rect(84, 6, radius=3, fill=ACCENT)
+bar.id("bar")
+bar.pos = (640, 292)
+bar.key("scale.x", 0.0, 0.0)
+bar.key("scale.x", 0.6, 1.0, ease="cubic_out")
+bar.opacity = 0.0
+bar.key("opacity", 0.0, 0.0)
+bar.key("opacity", 0.2, 1.0)
+bar.key("opacity", 3.4, 1.0)
+bar.key("opacity", 3.8, 0.0)
+
+title = text("MOTIONER", font="Inter", weight=700, size=136, color=INK,
+             align="center", tracking=0.06)
+title.id("title")
+title.pos = (640, 360)
+title.opacity = 0.0
+title.key("opacity", 0.0, 0.0)
+title.key("opacity", 0.5, 1.0, ease="quad_out")
+title.key("opacity", 3.4, 1.0)
+title.key("opacity", 3.9, 0.0, ease="quad_in")
+title.key("pos.y", 0.0, 380)
+title.key("pos.y", 0.8, 360, ease="cubic_out")
+
+subtitle = text("a generated demo", font="Inter", weight=400, size=38,
+                color=MUTED, align="center", tracking=0.18)
+subtitle.id("subtitle")
+subtitle.pos = (640, 448)
+subtitle.opacity = 0.0
+subtitle.key("opacity", 0.6, 0.0)
+subtitle.key("opacity", 1.1, 1.0, ease="quad_out")
+subtitle.key("opacity", 3.3, 1.0)
+subtitle.key("opacity", 3.7, 0.0)
+
+# ---- outro -----------------------------------------------------------------
+
+fade = rect(1280, 720, fill="#000000")
+fade.id("fade")
+fade.pos = (640, 360)
+fade.opacity = 0.0
+fade.key("opacity", 5.0, 0.0)
+fade.key("opacity", 6.0, 1.0, ease="quad_in")
+
+# ---- music -----------------------------------------------------------------
+
+music = audio("music.wav", in_point=0.0, out_point=6.0, gain=0.85,
+              start=0, fade_out=1.2)
+music.id("music")

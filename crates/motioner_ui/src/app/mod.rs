@@ -133,8 +133,10 @@ pub(crate) struct PreviewApp {
     space_dragged: bool,
     /// Project services, when the application supplied them.
     host: Option<Rc<dyn crate::ProjectHost>>,
-    /// Frame and proxy mode whose video textures are already uploaded.
+    /// Frame and preview mode whose video textures are already uploaded.
     video_last: Option<(Frame, bool)>,
+    /// A frame is still being decoded; retry on the next UI frame.
+    video_waiting: bool,
     /// Decoded-video bytes reported by the host (the profiler readout).
     video_bytes: usize,
     /// Proxy progress text for the top bar, when a job is running.
@@ -253,6 +255,7 @@ impl PreviewApp {
             space_dragged: false,
             host,
             video_last: None,
+            video_waiting: false,
             video_bytes: 0,
             proxy_status: None,
             start,

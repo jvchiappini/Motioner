@@ -12,9 +12,14 @@ pipeline shared by preview and export.
 PNG, and motioner preview opens an editor window that edits the composition
 through **overrides** stored in <name>.overrides.motion (D-0022): inspector
 fields, canvas gizmos with zoom and pan, timeline keys, visibility/lock,
-undo/redo. The program itself changes only through motioner bake, which edits
-private literals in place and falls back to a generated block for the rest
-(D-0027). FerrousEngine is vendored as a pinned submodule; GUIMaker is not.
+undo/redo. Projects are `<name>.motioner/` folders with a start screen,
+autosave, backups, an assets panel and OS file drops. Audio layers are mixed
+to a deterministic 48 kHz stereo track and muxed as AAC; video layers decode
+frame-exactly, use generated preview proxies and carry their audio through
+the same mixer. The program itself changes only through motioner bake, which
+edits private literals in place and falls back to a generated block for the
+rest (D-0027). FerrousEngine is vendored as a pinned submodule; GUIMaker is
+not.
 
 ## Showcase
 
@@ -89,9 +94,30 @@ scripts/              repository checks
 spec/                 language and format specifications
 ```
 
+## Open the app
+
+Run `motioner` with no arguments (or double-click `motioner.exe`) to open the
+start screen: **New project**, **Open project**, recent projects and the
+examples. A project is a `<name>.motioner/` folder that holds the manifest,
+the compositions and the content-addressed assets; the editor autosaves into
+it and keeps rolling backups. The File menu has New, Open, Save, Save a copy,
+Import asset, Reveal in Explorer and Close project. Opening a loose
+`.motion` file still works in single-file mode.
+
+```
+motioner                         # start screen
+motioner examples/demo.motioner  # the generated demo project
+```
+
+The full folder contract, what is safe to delete and the recovery flow are in
+[`docs/projects.md`](docs/projects.md). The demo project
+(`examples/demo.motioner/`) uses only ffmpeg `lavfi` test sources for its
+image, video and music, and renders to `out/demo.mp4`.
+
 ## Usage
 
 ```
+motioner render  examples/demo.motioner --out out/demo.mp4
 motioner render  examples/hello.motion --out out/hello.mp4
 motioner render  examples/showcase_pro.motion --out out/showcase_pro.mp4
 motioner still   examples/hello.motion --frame 120 --out out/hello.png

@@ -7,9 +7,9 @@
 __pycache__/
 *.py[cod]
 
-# Motioner project runtime
-*.motioner/cache/
-*.motioner/backups/
+# Motioner project runtime (nested project folders included)
+**/*.motioner/cache/
+**/*.motioner/backups/
 
 # Project Control System runtime
 .control/.events.ndjson

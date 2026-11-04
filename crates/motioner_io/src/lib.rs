@@ -47,4 +47,6 @@ pub use project::{
     RecentProject, WindowPlacement, ASSETS_DIR, BACKUPS_DIR, CACHE_DIR, COMPOSITIONS_DIR,
     EDITOR_FILE, FORMAT_VERSION, PROJECT_EXTENSION, PROJECT_FILE, TRACES_DIR,
 };
-pub use video::{decode_frame, make_proxy, probe as probe_video, VideoInfo};
+pub use video::{
+    decode_frame, decode_frames, make_proxy, probe as probe_video, FrameStream, VideoInfo,
+};

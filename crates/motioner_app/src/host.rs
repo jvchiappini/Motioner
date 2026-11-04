@@ -24,9 +24,12 @@ pub struct Host {
     state_path: PathBuf,
     root: PathBuf,
     audio: RefCell<Option<crate::audio_out::AudioOutput>>,
-    video_cache: RefCell<crate::video_cache::VideoCache>,
+    video_cache: crate::video_cache::VideoCache,
     proxies: RefCell<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU32>>>,
     proxy_done: RefCell<HashMap<String, std::time::Instant>>,
+    /// The last opened project and its manifest mtime, so the per-frame video
+    /// path does not re-read and validate `project.motion` 60 times a second.
+    project_cache: RefCell<Option<(PathBuf, Option<std::time::SystemTime>, Project)>>,
 }
 
 impl Host {
@@ -40,9 +43,10 @@ impl Host {
             state_path,
             root,
             audio: RefCell::new(None),
-            video_cache: RefCell::new(crate::video_cache::VideoCache::default()),
+            video_cache: crate::video_cache::VideoCache::new(),
             proxies: RefCell::new(HashMap::new()),
             proxy_done: RefCell::new(HashMap::new()),
+            project_cache: RefCell::new(None),
         }
     }
 
@@ -55,7 +59,28 @@ impl Host {
     /// Decoded-video bytes resident in the bounded cache.
     #[must_use]
     pub fn video_cache_bytes(&self) -> usize {
-        self.video_cache.borrow().bytes()
+        self.video_cache.bytes()
+    }
+
+    /// Opens a project, reusing the last one while its manifest is unchanged.
+    fn project_for(&self, composition: &Path) -> Option<Project> {
+        let root = motioner_io::project_root(composition)?;
+        let manifest = root.join(motioner_io::PROJECT_FILE);
+        let mtime = std::fs::metadata(&manifest)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        {
+            let cache = self.project_cache.borrow();
+            if let Some((path, cached_mtime, project)) = cache.as_ref() {
+                if path == composition && *cached_mtime == mtime {
+                    return Some(project.clone());
+                }
+            }
+        }
+        let project = Project::open(composition).ok()?;
+        *self.project_cache.borrow_mut() =
+            Some((composition.to_path_buf(), mtime, project.clone()));
+        Some(project)
     }
 
     /// Starts a proxy job for `hash` once, when the file does not exist yet.
@@ -525,7 +550,7 @@ impl ProjectHost for Host {
         self.audio
             .borrow()
             .as_ref()
-            .map(crate::audio_out::AudioOutput::position)
+            .and_then(crate::audio_out::AudioOutput::position)
     }
 
     fn audio_scrub(
@@ -551,20 +576,27 @@ impl ProjectHost for Host {
         composition: &Path,
         source: &str,
         source_frame: i64,
-        proxy: bool,
-    ) -> Option<motioner_core::DecodedImage> {
-        let project = Project::open(composition).ok()?;
-        let entry = crate::video_cache::video_entry(&project, source)?;
-        if proxy {
+        preview: bool,
+    ) -> motioner_ui::VideoFrameState {
+        let Some(project) = self.project_for(composition) else {
+            return motioner_ui::VideoFrameState::Unavailable;
+        };
+        let Some(entry) = crate::video_cache::video_entry(&project, source) else {
+            return motioner_ui::VideoFrameState::Unavailable;
+        };
+        if preview {
             self.ensure_proxy(&project, &entry.hash, &entry.path);
         }
-        crate::video_cache::decode(
-            &project,
-            &entry,
-            &mut self.video_cache.borrow_mut(),
-            source_frame,
-            proxy,
-        )
+        match crate::video_cache::decode(&project, &entry, &self.video_cache, source_frame, preview)
+        {
+            crate::video_cache::FrameLookup::Ready(image) => {
+                motioner_ui::VideoFrameState::Ready(image)
+            }
+            crate::video_cache::FrameLookup::Pending => motioner_ui::VideoFrameState::Pending,
+            crate::video_cache::FrameLookup::Unavailable => {
+                motioner_ui::VideoFrameState::Unavailable
+            }
+        }
     }
 
     fn video_cache_bytes(&self) -> usize {
@@ -572,7 +604,7 @@ impl ProjectHost for Host {
     }
 
     fn proxy_progress(&self, composition: &Path, source: &str) -> Option<f32> {
-        let project = Project::open(composition).ok()?;
+        let project = self.project_for(composition)?;
         let entry = crate::video_cache::video_entry(&project, source)?;
         if crate::video_cache::has_proxy(&project, &entry.hash) {
             // Keep the completed indicator on screen briefly: the job can

@@ -75,7 +75,7 @@ pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack};
 pub use editor::{channel_has_key, channel_name, Editor, Effect, Outcome, ViewState, CHANNELS};
 pub use file_watch::FileWatch;
 pub use gizmo::{Corner, Guide, Handle};
-pub use host::{ProjectHost, RecoveryInfo};
+pub use host::{ProjectHost, RecoveryInfo, VideoFrameState};
 pub use input::{command_for, Modifiers, Toggles};
 pub use inspect::{
     hex, inspect_comp, inspect_node, kind_label, Axis, Channel, Editing, Field, FieldTarget,

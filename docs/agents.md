@@ -39,8 +39,10 @@ Every one of them prints **one JSON object per line** on stdout.
   `join` is `"miter"`, `"bevel"` or `"round"`. Audio layers add `source`,
   `in_point`, `out_point` (seconds; `0` means the file end), `start`
   (frames), `gain`, `pan` (`-1..=1`), `fade_in` and `fade_out` (seconds).
-  Only `gain` and `pan` are keyable. `place_asset(key, frame=...)` appends an
-  `audio(...)` layer for an audio asset.
+  Only `gain` and `pan` are keyable. Video layers add `source`, `in_point`,
+  `out_point`, `start`, `speed`, `width`, `height`, `fit` and `gain`; only
+  `gain` is keyable. `place_asset(key, frame=...)` appends an `image(...)`,
+  `audio(...)` or `video(...)` layer for the asset's kind.
 - **Blend mode** (D-0031): `blend` is `"normal"`, `"add"`, `"multiply"`,
   `"screen"`, `"overlay"`, `"darken"` or `"lighten"`. It is a whole-node
   property, not a content channel: `set(id, "blend", "multiply")` or
@@ -205,7 +207,23 @@ writes `project.motion`. Non-PNG images are converted once through ffmpeg into
 
 The CLI equivalent of import is `motioner import <project> <file>...`. The
 assets panel is the Assets tab of the left panel; it lists or shows a grid,
-virtualises the rows and shows a waveform strip for audio.
+virtualises the rows and shows a waveform strip for audio. Video assets show
+a thumbnail strip; the timeline draws the same strip on the clip and supports
+move, trim and Alt-drag slip. While playing, the preview decodes an all-intra
+proxy from `cache/` on a background worker and the status bar shows proxy
+progress and the decoded-video cache size. `render` and `still` always decode
+the original at full resolution.
+
+### Recovery (D-0045)
+
+A stale `cache/session.lock` with a newer snapshot in `backups/` produces a
+recovery offer in the status bar. These commands answer it through the same
+command layer as the buttons.
+
+| Command | What it does |
+|---|---|
+| `restore_backup()` | copy the newest offered snapshot over the composition files |
+| `dismiss_recovery()` | keep the files on disk and remove the offer |
 
 ### Editing (each is one undo step)
 

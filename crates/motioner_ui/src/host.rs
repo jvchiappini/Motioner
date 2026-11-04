@@ -23,6 +23,17 @@ pub struct RecoveryInfo {
     pub detail: String,
 }
 
+/// The answer to one video frame request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoFrameState {
+    /// The frame is decoded and ready to upload.
+    Ready(motioner_core::DecodedImage),
+    /// A background worker is decoding it; ask again on the next UI frame.
+    Pending,
+    /// The asset or the stream cannot be read.
+    Unavailable,
+}
+
 /// Project-level services for the window.
 pub trait ProjectHost {
     /// Recent projects, most recent first.
@@ -143,17 +154,19 @@ pub trait ProjectHost {
 
     /// One decoded frame of a video asset, at the original or proxy size.
     ///
-    /// The returned image's `asset.key` is the source key; the editor swaps in
-    /// the video layer's own texture key before uploading.
+    /// `preview` means the transport is playing: the frame comes from the
+    /// proxy and a background worker decodes ahead of the playhead. The
+    /// returned image's `asset.key` is the source key; the editor swaps in the
+    /// video layer's own texture key before uploading.
     fn video_frame(
         &self,
         composition: &Path,
         source: &str,
         source_frame: i64,
-        proxy: bool,
-    ) -> Option<motioner_core::DecodedImage> {
-        let _ = (composition, source, source_frame, proxy);
-        None
+        preview: bool,
+    ) -> VideoFrameState {
+        let _ = (composition, source, source_frame, preview);
+        VideoFrameState::Unavailable
     }
 
     /// Proxy generation progress in `0.0..=1.0`, when a job is running.

@@ -19,6 +19,8 @@ pub struct AudioOutput {
     stream: Option<cpal::Stream>,
     playback: Arc<Mutex<Playback>>,
     origin_seconds: f64,
+    /// The document mixes to silence, so the wall clock drives the transport.
+    silent: bool,
 }
 
 impl AudioOutput {
@@ -68,28 +70,42 @@ impl AudioOutput {
             count,
             &muted,
         );
+        let silent = !samples.iter().any(|sample| *sample != 0.0);
         let frames = count;
         let playback = Arc::new(Mutex::new(Playback {
             samples,
             cursor: 0,
             frames,
         }));
-        let stream = build_stream(Arc::clone(&playback))?;
-        stream.play().map_err(|error| error.to_string())?;
+        let stream = if silent {
+            None
+        } else {
+            let stream = build_stream(Arc::clone(&playback))?;
+            stream.play().map_err(|error| error.to_string())?;
+            Some(stream)
+        };
         Ok(Self {
-            stream: Some(stream),
+            stream,
             playback,
             origin_seconds,
+            silent,
         })
     }
 
     /// Seconds since the composition start according to the device cursor.
+    ///
+    /// `None` when the mix is silent: there is no audio to stay in sync with,
+    /// so the transport uses the wall clock instead of a device cursor that
+    /// may not be running.
     #[must_use]
-    pub fn position(&self) -> f64 {
+    pub fn position(&self) -> Option<f64> {
+        if self.silent {
+            return None;
+        }
         let playback = lock(&self.playback);
         #[allow(clippy::cast_precision_loss)]
         let played = playback.cursor as f64 / f64::from(SAMPLE_RATE);
-        self.origin_seconds + played
+        Some(self.origin_seconds + played)
     }
 }
 
@@ -144,14 +160,24 @@ fn build_stream(playback: Arc<Mutex<Playback>>) -> Result<cpal::Stream, String> 
         .ok_or_else(|| "the audio device does not support 48 kHz f32 stereo".to_owned())?;
     let config = range.with_sample_rate(SAMPLE_RATE).config();
     let channels = usize::from(config.channels);
-    device
-        .build_output_stream(
+    // A small fixed period keeps the cursor regular: a device default can be
+    // hundreds of milliseconds, which makes the transport jump several frames
+    // per callback. Fall back to the default when the device refuses it.
+    let mut fixed = config;
+    fixed.buffer_size = cpal::BufferSize::Fixed(1024);
+    let build = |config: cpal::StreamConfig, playback: Arc<Mutex<Playback>>| {
+        device.build_output_stream(
             config,
             move |data: &mut [f32], _| lock(&playback).fill(data, channels),
             |error| eprintln!("audio output: {error}"),
             None,
         )
-        .map_err(|error| format!("cannot open the audio device: {error}"))
+    };
+    match build(fixed, Arc::clone(&playback)) {
+        Ok(stream) => Ok(stream),
+        Err(_) => build(config, playback)
+            .map_err(|error| format!("cannot open the audio device: {error}")),
+    }
 }
 
 fn lock(playback: &Arc<Mutex<Playback>>) -> std::sync::MutexGuard<'_, Playback> {

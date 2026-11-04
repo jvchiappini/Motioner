@@ -160,8 +160,9 @@ effects and masks) and selects its source frame from the composition frame
 with exact rational time: `source_frame = floor((in_point + (frame - start) /
 fps) * speed * source_fps)`. `out_point=None` means the file end. Its audio
 uses the same `gain`, `in_point` and `out_point` through the Phase 5 mixer.
-The preview decodes low-resolution all-intra proxies from `cache/`; `render`
-and `still` always decode the original at full resolution.
+The preview decodes low-resolution all-intra proxies from `cache/` on a
+background worker that fills a bounded frame cache ahead of the playhead;
+`render` and `still` always decode the original at full resolution.
 
 Every content field except `text`, `align`, `weight`, `cap`, `join`,
 `source`, `fit`, `in_point`, `out_point`, `start`, `speed`, `fade_in` and
@@ -335,6 +336,29 @@ through the plan. A missing or invalid file is a typed `still`/`render` error
 naming the path; the live preview draws a checker placeholder instead.
 PNG only for v0; palette, greyscale and 16-bit files are expanded to RGBA8,
 and `gAMA`/`iCCP` are ignored.
+
+### 7.7 Assets and project resolution
+
+`image`, `audio` and `video` take a source string. In a project folder the
+loader resolves it through the asset registry **by key or original file
+name**, case-insensitively, project assets first; the resolved hash and blob
+are recorded on the node so the renderer never re-resolves a path per frame.
+A name that matches no registry entry is still tried as a project-relative
+path (`assets/fonts/...`, loose files). Absolute paths and `..` are rejected.
+
+The registry key is the explicit form: `image("logo")` selects the entry
+whose key is `logo` even when its original file is `logo.png`. The v0
+implementation has no separate `asset()` call: the key is passed directly to
+the constructor, which avoids a second resolution surface and keeps one
+registry lookup. (D-0045 proposed `asset("logo")`; it remains reserved.)
+An unknown source is a typed `still`/`render` error naming the path. The
+preview draws a checker placeholder for images and keeps the last uploaded
+frame for video. Audio sources that do not resolve are skipped by the mixer.
+
+The project root replaces the process working directory for every relative
+path. A loose `.motion` file keeps single-file mode: root = the process
+working directory, no registry, no autosave. `docs/projects.md` describes
+the folder, the authoritative files and what is safe to delete.
 
 ## 8. Control flow example
 

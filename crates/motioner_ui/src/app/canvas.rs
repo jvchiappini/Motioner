@@ -202,9 +202,10 @@ impl PreviewApp {
     }
 
     /// Uploads the current source frame of every video layer, reusing one
-    /// texture per layer. Called only when the frame or proxy mode changes.
+    /// texture per layer. Called only when the frame or preview mode changes;
+    /// a frame that is still decoding is retried on the next UI frame.
     fn update_video_images(&mut self, frame: i64, playing: bool) {
-        if self.video_last == Some((frame, playing)) {
+        if self.video_last == Some((frame, playing)) && !self.video_waiting {
             return;
         }
         self.video_last = Some((frame, playing));
@@ -212,43 +213,51 @@ impl PreviewApp {
             return;
         };
         let path = self.editor.session().path().to_path_buf();
-        let requests: Vec<(String, i64, motioner_core::ImageKey)> = {
-            let Some(document) = self.editor.session().document() else {
-                return;
-            };
-            let rate = document.composition().frame_rate();
-            document
-                .nodes()
-                .filter_map(|node| {
-                    let motioner_core::NodeContent::Video(video) = node.content() else {
-                        return None;
-                    };
-                    let source_frame = video.source_frame(frame, rate)?;
-                    Some((
-                        video.source.clone(),
-                        source_frame,
-                        video.texture_key(node.id())?,
-                    ))
-                })
-                .collect()
-        };
+        let requests = self.video_requests(frame);
         let revision = u64::try_from(frame).unwrap_or(0) * 2 + u64::from(playing);
+        let mut waiting = false;
         for (source, source_frame, key) in requests {
-            let Some(decoded) = host.video_frame(&path, &source, source_frame, playing) else {
-                continue;
-            };
-            let image = ImageData {
-                key,
-                width: decoded.asset.width,
-                height: decoded.asset.height,
-                rgba8: decoded.rgba8,
-                revision,
-            };
-            if let Some(painter) = self.painter.as_mut() {
-                painter.set_image(image.clone());
+            match host.video_frame(&path, &source, source_frame, playing) {
+                crate::VideoFrameState::Ready(decoded) => {
+                    let image = ImageData {
+                        key,
+                        width: decoded.asset.width,
+                        height: decoded.asset.height,
+                        rgba8: decoded.rgba8,
+                        revision,
+                    };
+                    if let Some(painter) = self.painter.as_mut() {
+                        painter.set_image(image.clone());
+                    }
+                    self.blur.set_image(image);
+                }
+                crate::VideoFrameState::Pending => waiting = true,
+                crate::VideoFrameState::Unavailable => {}
             }
-            self.blur.set_image(image);
         }
+        self.video_waiting = waiting;
+    }
+
+    /// The video layers visible at `frame`, with their exact source frame.
+    fn video_requests(&self, frame: i64) -> Vec<(String, i64, motioner_core::ImageKey)> {
+        let Some(document) = self.editor.session().document() else {
+            return Vec::new();
+        };
+        let rate = document.composition().frame_rate();
+        document
+            .nodes()
+            .filter_map(|node| {
+                let motioner_core::NodeContent::Video(video) = node.content() else {
+                    return None;
+                };
+                let source_frame = video.source_frame(frame, rate)?;
+                Some((
+                    video.source.clone(),
+                    source_frame,
+                    video.texture_key(node.id())?,
+                ))
+            })
+            .collect()
     }
 
     fn hovered_node(&self) -> Option<NodeId> {
