@@ -5,6 +5,39 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Prompt 11 status (2026-11-04, partial at a phase boundary)
+
+Fases 0–4 completas; **fases 5 (audio), 6 (vídeo) y 7 (demo/docs/release)
+pendientes** para la próxima ejecución. Informe:
+`out/reports/PHASE-11-PARTIAL-REPORT.md`.
+
+- D-0045 “Project folder v1”: `<name>.motioner/` con `project.motion` (MDF),
+  `compositions/`, `assets/<sha256>.<ext>`, `cache/`, `backups/`, `traces/`,
+  `editor.motion`; registro con clave estable; MDF resuelve por clave o
+  nombre original; estado de app en `%APPDATA%\Motioner\app.motion`; escrituras
+  atómicas y migraciones explícitas.
+- D-0046: `rfd` solo en `motioner_app` (selector de carpeta), detrás de
+  `ProjectHost`.
+- `motioner_io::project` (manifiesto, `EditorState`, `AppState`, validación,
+  `clean_temp`) y `motioner_io::assets` (`ProjectImages`, import/dedupe/
+  rename/remove, fuentes).
+- CLI: `new`, `import <project> <file>...`, `backup <project>`, `migrate`,
+  `info`; todos los comandos aceptan carpeta/manifiesto/composición.
+- Pantalla de inicio + menú File + `ProjectHost` (`motioner_app::host::Host`);
+  `Editor::blank`/`replace_session`; comandos `new_project`, `open_project`,
+  `close_project`, `save`, `save_as`.
+- Panel **Layers/Assets** con lista/rejilla virtualizada, import (menú, `+`,
+  doble clic/arrastre), conversión ffmpeg a `cache/`, picos de audio, CLEAN y
+  place; **0 alloc/frame** (`out/ui/p11-05-alloc.png`).
+- Autosave: overrides 300 ms; `motioner_io::backups` (snapshot cada 120 s,
+  20/200 MB, poda) y lock `cache/session.lock` con heartbeat; banner de
+  recuperación con Restore/Dismiss.
+- Comandos nuevos de assets: `import_asset`, `remove_asset`, `rename_asset`,
+  `place_asset`, `remove_unused_assets`, `restore_backup`,
+  `dismiss_recovery`; documentados en `docs/agents.md`.
+- Capturas: `p11-01-start`, `p11-02-assets`, `p11-03-placed`, `p11-04-recovery`,
+  `p11-05-alloc` en `out/ui/`.
+
 ## What this project is, in practice
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
@@ -206,6 +239,12 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   0/frame. Engine tests for `ferrous_ui_render`, `ferrous_render_graph`,
   `ferrous_renderer` and `ferrous_engine` pass. The reviewer must commit the
   submodule pointer (working tree is checked out at `e482b3c`).
+- **Clone commit `cab7035` (prompt 11, not yet in Motioner history)**:
+  `FileDropEvent`/`FileDropKind`, `FerrousApp::on_file_drop`; the runner queues
+  `HoveredFile`/`HoveredFileCancelled`/`DroppedFile` and delivers them in the
+  frame's `AppContext`; docs in `ferrous-app-trait.md` and the README, test
+  `ferrous_engine/tests/file_drop.rs`. The reviewer must push and bump the pin
+  (T-APP-0005); OS drops stay behind the pin until then.
 - **Flaky GPU tests**: the first parallel run after a build can fail with
   `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
   Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
@@ -256,3 +295,16 @@ Phase 12 + Phase 11 review (T-PERF-0002/T-PERF-0003, session
   `-D warnings`, boundaries, machete, `pctl validate`.
 - Reviewer: commit the `engine/ferrous` pointer at `e482b3c` (or the pushed
   clone head) and keep the pin bump in one commit.
+
+## Last relevant session (prompt 11, partial)
+
+Session `S-2026-11-03-006`. Fases 0-4 del prompt 11 implementadas y con gate
+verde: D-0045/D-0046, proyecto + assets + backups/recuperación, CLI
+`new/import/backup/migrate`, pantalla de inicio, menú File, panel de assets con
+import/conversión/colocación, comandos y docs. `hello_f120.png` sigue
+byte-idéntico (`C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`).
+C: libre ~19.6 GB. Engine clone `cab7035` listo para el bump (file-drop
+events); Motioner mantiene los drops del SO detrás del pin. Fases 5-7
+(T-AUDIO-0002, T-RENDER-0015, demo/goldens/release) quedan para la próxima
+ejecución; el informe parcial está en
+`out/reports/PHASE-11-PARTIAL-REPORT.md`.
