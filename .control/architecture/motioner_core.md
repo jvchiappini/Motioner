@@ -85,3 +85,13 @@ partial — last verified: 2026-11-01
 - `Document::resolve_images(&dyn ImageResolver)` fills `asset` and reports
   `ImageIssue`s; core never reads a file. `ImageKey` is the SHA-256 digest and
   `DecodedImage` is the renderer-facing byte record.
+
+## Audio (D-0048)
+
+- `NodeContent::Audio(AudioContent)` (`crates/motioner_core/src/node.rs:1244`)
+  stores `source`, `in_point`/`out_point` (seconds), `gain`/`pan` as
+  animatable channels, `start` in composition frames and the fade lengths.
+- `ContentField` gains `in_point`, `out_point`, `gain`, `pan`, `start`,
+  `fade_in` and `fade_out` (`crates/motioner_core/src/node.rs:97`); only
+  gain and pan are keyable. Audio nodes carry no draw content, so the
+  evaluator skips them.

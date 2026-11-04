@@ -95,3 +95,13 @@ Not needed: the panels read pure models; the app turns input into commands.
 ## Documentation status
 
 partial — last verified: 2026-11-01
+
+## Audio (D-0048)
+
+- The timeline draws a waveform bar for `NodeKind::Audio` rows
+  (`crates/motioner_ui/src/panels/timeline.rs:690`) and clip edges
+  move/trim through `Edit` commands. Gain and Pan are ordinary expanded
+  content rows.
+- Device playback lives in the application behind ProjectHost::audio_*;
+  `sync_audio` starts/stops it with the transport and the playhead follows
+  `transport::audio_frame` (`crates/motioner_ui/src/app/mod.rs`).

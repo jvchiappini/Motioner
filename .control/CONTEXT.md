@@ -1,15 +1,32 @@
 ---
-actualizado: 2026-11-03
+actualizado: 2026-11-04
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
-## Prompt 11 status (2026-11-04, partial at a phase boundary)
+## Prompt 11 status (2026-11-04, phases 0–5 done)
 
-Fases 0–4 completas; **fases 5 (audio), 6 (vídeo) y 7 (demo/docs/release)
-pendientes** para la próxima ejecución. Informe:
-`out/reports/PHASE-11-PARTIAL-REPORT.md`.
+Fases 0–4.5 y **fase 5 (audio) completas**. Quedan **fase 6 (vídeo) y fase 7
+(demo/docs/release)**. Gate verde (fmt, clippy pedantic, tests, rustdoc,
+boundaries, machete, pctl validate). Sin commit.
+
+- D-0047: `time` en `motioner_io` para edades relativas locales; la edad es
+  pura con `now` inyectado y el tooltip usa el offset local.
+- D-0048: `cpal` solo en `motioner_app`; `audio_out` posee el stream y el
+  cursor de samples, el transporte sigue `ProjectHost::audio_position`.
+- Audio: `AudioContent`/`NodeContent::Audio`; MDF
+  `audio(source, in_point, out_point, gain, start, pan, fade_in, fade_out)`
+  con `gain`/`pan` keyables; `motioner_io::audio` (decode 48 kHz estéreo a
+  `cache/<hash>.pcm`, `mix_document` puro sample-exacto, WAV, mux AAC con
+  `-shortest` y `--no-audio`); timeline con waveform, filas Gain/Pan y
+  trim/move por `Edit`; capturas `p11-06-timeline-waveform.png`,
+  `p11-06-audio-layer.png`; render `out/p11-audio/demo.mp4` (3.000 s,
+  audio 3.000 s).
+- Phase 4.5: `app::drop` enruta los drops del SO (import + place en canvas);
+  resaltado de ventana/panel; toolbar de assets con iconos lista/grid/clean y
+  geometría compacta (sin texto truncado a 180 px); recents relativos con
+  tooltip local. Captura re-hecha: `out/ui/p11-02-assets.png`.
 
 - D-0045 “Project folder v1”: `<name>.motioner/` con `project.motion` (MDF),
   `compositions/`, `assets/<sha256>.<ext>`, `cache/`, `backups/`, `traces/`,
@@ -197,7 +214,12 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   `float_cmp`, `implicit_clone`, `doc_markdown`, `must_use`, `match_same_arms`,
   `single_match_else` and `arc_with_non_send_sync` are easy hits.
 - Inspector order: Composite → Effects → Mask → Transform → Text → Animators →
-  Image.
+  Image → Audio.
+- `cpal` 0.18 uses `u32` sample rates (`min_sample_rate()` / `with_sample_rate`
+  take `u32`, not `SampleRate`); tests never open a device, only
+  `mix_document` and the WAV/mux path.
+- `time` may fail to read a local offset on unusual hosts; the tooltip falls
+  back to UTC, which is still a full date.
 - `motioner_ui` must NOT depend on `motioner_io` (boundary check). The image
   loader enters the UI as `Rc<dyn motioner_core::ImageResolver>` through
   `PreviewOptions.image_resolver`; the app creates `CachedImages`.
@@ -239,12 +261,12 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
   0/frame. Engine tests for `ferrous_ui_render`, `ferrous_render_graph`,
   `ferrous_renderer` and `ferrous_engine` pass. The reviewer must commit the
   submodule pointer (working tree is checked out at `e482b3c`).
-- **Clone commit `cab7035` (prompt 11, not yet in Motioner history)**:
+- **Pinned clone commit `cab7035` (in Motioner history at `fc41083`)**:
   `FileDropEvent`/`FileDropKind`, `FerrousApp::on_file_drop`; the runner queues
   `HoveredFile`/`HoveredFileCancelled`/`DroppedFile` and delivers them in the
   frame's `AppContext`; docs in `ferrous-app-trait.md` and the README, test
-  `ferrous_engine/tests/file_drop.rs`. The reviewer must push and bump the pin
-  (T-APP-0005); OS drops stay behind the pin until then.
+  `ferrous_engine/tests/file_drop.rs`. T-APP-0005 closed; the editor routes
+  OS drops through its Command layer.
 - **Flaky GPU tests**: the first parallel run after a build can fail with
   `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
   Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
@@ -303,8 +325,8 @@ verde: D-0045/D-0046, proyecto + assets + backups/recuperación, CLI
 `new/import/backup/migrate`, pantalla de inicio, menú File, panel de assets con
 import/conversión/colocación, comandos y docs. `hello_f120.png` sigue
 byte-idéntico (`C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`).
-C: libre ~19.6 GB. Engine clone `cab7035` listo para el bump (file-drop
-events); Motioner mantiene los drops del SO detrás del pin. Fases 5-7
-(T-AUDIO-0002, T-RENDER-0015, demo/goldens/release) quedan para la próxima
-ejecución; el informe parcial está en
-`out/reports/PHASE-11-PARTIAL-REPORT.md`.
+C: libre ~19.6 GB. Sesión `S-2026-11-04-007` (continuación): Phase 4.5
+(T-UI-0012) y Phase 5 (T-AUDIO-0002) cerradas; T-APP-0005 cerrada. Quedan
+fase 6 (T-RENDER-0015) y fase 7 (demo/goldens/release). El informe parcial
+antiguo sigue en `out/reports/PHASE-11-PARTIAL-REPORT.md`; el informe de esta
+sesión está en `out/reports/PHASE-11-PHASE5-REPORT.md`.
