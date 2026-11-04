@@ -20,6 +20,7 @@ motioner_ui.workspace = true
 anyhow.workspace = true
 # Native folder picker, application-only (D-0046).
 rfd = "0.15"
+cpal = "0.18.2"
 
 [features]
 default = []

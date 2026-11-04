@@ -87,6 +87,31 @@ pub(super) enum Drag {
         /// Whether the pointer travelled past the click slop.
         moved: bool,
     },
+    /// Moving or trimming an audio clip.
+    Clip(ClipDrag),
+}
+
+/// Which part of an audio clip a drag grabbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClipKind {
+    /// The clip body: move it.
+    Body,
+    /// The left handle: trim the start and the source in point.
+    TrimStart,
+    /// The right handle: trim the source out point.
+    TrimEnd,
+}
+
+/// The state captured when an audio clip drag starts.
+#[derive(Debug, Clone)]
+pub(super) struct ClipDrag {
+    pub(super) id: String,
+    pub(super) kind: ClipKind,
+    pub(super) start_pointer_frame: Frame,
+    pub(super) start: Frame,
+    pub(super) in_point: f64,
+    pub(super) end: Frame,
+    pub(super) fps: f64,
 }
 
 /// What a gizmo drag needs from its press.
@@ -282,12 +307,15 @@ impl PreviewApp {
 
     /// Hit testing for the assets list and toolbar.
     fn hit_assets(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
-        let (add, view, unused) = layout.asset_toolbar();
+        let (add, list, grid, unused) = layout.asset_toolbar();
         if add.contains(mx, my) {
             return Some(Hit::AssetAdd);
         }
-        if view.contains(mx, my) {
-            return Some(Hit::AssetView);
+        if list.contains(mx, my) {
+            return Some(Hit::AssetView(crate::AssetView::List));
+        }
+        if grid.contains(mx, my) {
+            return Some(Hit::AssetView(crate::AssetView::Grid));
         }
         if unused.contains(mx, my) {
             return Some(Hit::AssetRemoveUnused);
@@ -392,6 +420,12 @@ impl PreviewApp {
             .iter()
             .find(|r| r.rect.contains(mx, my))?;
         let inside = |rect: Option<Rect>| rect.is_some_and(|r| r.contains(mx, my));
+        let outline = self
+            .editor
+            .timeline()
+            .rows()
+            .get(row.row)
+            .map(|entry| entry.kind.outline());
         Some(if inside(row.chevron) {
             Hit::LayerChevron(row.row)
         } else if inside(row.stopwatch) {
@@ -404,6 +438,23 @@ impl PreviewApp {
             Hit::TimelineNextKey(row.row)
         } else if inside(row.field) {
             Hit::TimelineField(row.row)
+        } else if let Some(clip) = in_tracks
+            .then_some(outline)
+            .flatten()
+            .and_then(|outline| self.audio_clip_rect(layout, outline))
+            .filter(|clip| clip.contains(mx, my))
+            .map(|clip| (clip, outline))
+        {
+            let (clip, outline) = clip;
+            let outline = outline.unwrap_or(0);
+            let edge = layout.metrics.px(6.0);
+            if mx < clip.x + edge {
+                Hit::ClipTrimStart(outline)
+            } else if mx > clip.right() - edge {
+                Hit::ClipTrimEnd(outline)
+            } else {
+                Hit::ClipBody(outline)
+            }
         } else if let Some(frame) = in_tracks
             .then(|| self.diamond_at(row.row, mx, layout))
             .flatten()
@@ -415,6 +466,41 @@ impl PreviewApp {
         } else {
             Hit::TimelineRow(row.row)
         })
+    }
+
+    /// The bar rectangle of an audio layer's clip, when `outline` is one.
+    pub(super) fn audio_clip_rect(&self, layout: &Layout, outline: usize) -> Option<Rect> {
+        let row = self.timeline_layout.rows.iter().find(|row| {
+            matches!(
+                self.editor.timeline().rows().get(row.row).map(|entry| entry.kind),
+                Some(crate::TimelineRowKind::Layer { outline: candidate }) if candidate == outline
+            )
+        })?;
+        let document = self.editor.session().document()?;
+        let node = self.editor.outline().get(outline)?.node;
+        let motioner_core::NodeContent::Audio(audio) = document.node(node)?.content() else {
+            return None;
+        };
+        let entry = self
+            .assets
+            .entries
+            .iter()
+            .find(|entry| entry.original == audio.source || entry.key == audio.source);
+        let range = crate::timeline_model::audio_clip_range(
+            audio,
+            self.editor.transport().frame_rate(),
+            entry.and_then(|entry| entry.duration),
+            self.editor.transport().duration(),
+        );
+        let x0 = self.frame_x(layout, range.start);
+        let x1 = self.frame_x(layout, range.end);
+        let h = layout.metrics.px(12.0);
+        Some(Rect::new(
+            x0.round(),
+            (row.rect.center_y() - h * 0.5).round(),
+            (x1 - x0).max(1.0),
+            h,
+        ))
     }
 
     pub(super) fn hit_gizmo(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
@@ -480,6 +566,9 @@ impl PreviewApp {
             (Some(Drag::GraphKey { .. } | Drag::GraphHandle { .. }), _)
             | (None, Some(Hit::GraphKey(_) | Hit::GraphHandle { .. })) => CursorIcon::Pointer,
             (None, Some(Hit::GraphPlot)) => CursorIcon::Grab,
+            (Some(Drag::Clip(_)), _) => CursorIcon::EwResize,
+            (None, Some(Hit::ClipTrimStart(_) | Hit::ClipTrimEnd(_))) => CursorIcon::EwResize,
+            (None, Some(Hit::ClipBody(_))) => CursorIcon::Grab,
             (Some(Drag::Scrub | Drag::Field { .. } | Drag::Keys { .. }), _)
             | (None, Some(Hit::Scrub)) => CursorIcon::EwResize,
             (Some(Drag::Gizmo(drag)), _) => gizmo_cursor(drag.handle, true),

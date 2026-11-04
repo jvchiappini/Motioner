@@ -11,7 +11,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use motioner_core::{Axis, ContentField, Document, Ease, Frame, NodeContent, NodeId, Property};
+use motioner_core::{
+    AudioContent, Axis, ContentField, Document, Ease, Frame, FrameRate, NodeContent, NodeId,
+    Property,
+};
 use motioner_eval::sample;
 
 use crate::editor::{channels, CHANNELS};
@@ -376,7 +379,14 @@ pub fn write_content_text(
         | ContentField::TrimEnd
         | ContentField::TrimOffset
         | ContentField::Dash
-        | ContentField::DashOffset => {
+        | ContentField::DashOffset
+        | ContentField::InPoint
+        | ContentField::OutPoint
+        | ContentField::Gain
+        | ContentField::Pan
+        | ContentField::Start
+        | ContentField::FadeIn
+        | ContentField::FadeOut => {
             if let Some(value) = sampled_number(document, node, field, frame) {
                 write_round(out, value);
             } else {
@@ -534,6 +544,16 @@ fn base_fields(content: &NodeContent) -> Vec<ContentField> {
             ContentField::Source,
             ContentField::Fit,
         ],
+        NodeContent::Audio(_) => vec![
+            ContentField::Source,
+            ContentField::Start,
+            ContentField::InPoint,
+            ContentField::OutPoint,
+            ContentField::Gain,
+            ContentField::Pan,
+            ContentField::FadeIn,
+            ContentField::FadeOut,
+        ],
     }
 }
 
@@ -566,9 +586,60 @@ fn inherited_keys(document: &Document, node: NodeId) -> Vec<Frame> {
     frames.into_iter().collect()
 }
 
+/// The clip range of an audio layer, as half-open composition frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioClipRange {
+    /// First frame of the clip.
+    pub start: Frame,
+    /// One past the last frame of the clip.
+    pub end: Frame,
+}
+
+/// The clip range of an audio layer.
+///
+/// `asset_duration` is the decoded file length; when it is `None` the
+/// composition length is used for a clip without `out_point`, so a timeline
+/// still shows a bounded bar.
+#[must_use]
+pub fn audio_clip_range(
+    audio: &AudioContent,
+    rate: FrameRate,
+    asset_duration: Option<f64>,
+    composition_duration: Frame,
+) -> AudioClipRange {
+    let fps = rate.as_f64();
+    let seconds = composition_duration as f64 / fps;
+    let in_point = audio.in_point.value().max(0.0);
+    let out_point = audio.out_point.value();
+    let length = if out_point > in_point {
+        out_point - in_point
+    } else {
+        (asset_duration.unwrap_or(seconds) - in_point).max(0.0)
+    };
+    let start = audio.start.max(0);
+    #[allow(clippy::cast_possible_truncation)]
+    let frames = (length * fps).round() as i64;
+    let end = start.saturating_add(frames).min(composition_duration);
+    AudioClipRange {
+        start,
+        end: end.max(start.saturating_add(1)),
+    }
+}
+
 /// Whether `node` (and its ancestors) are drawn at `frame`.
 #[must_use]
 pub fn is_visible_at(document: &Document, node: NodeId, frame: Frame) -> bool {
+    if let Some(NodeContent::Audio(audio)) = document.node(node).map(motioner_core::Node::content) {
+        let range = audio_clip_range(
+            audio,
+            document.composition().frame_rate(),
+            None,
+            document.composition().duration(),
+        );
+        if frame < range.start || frame >= range.end {
+            return false;
+        }
+    }
     let mut current = Some(node);
     let mut opacity = 1.0;
     let mut scale = 1.0_f64;
@@ -1104,5 +1175,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn an_audio_clip_range_uses_start_and_the_trimmed_length() {
+        let rate = FrameRate::new(60, 1).unwrap();
+        let mut audio = AudioContent::new("tone.wav", 30);
+        audio.in_point = motioner_core::Animatable::new(0.5);
+        audio.out_point = motioner_core::Animatable::new(1.5);
+        let range = audio_clip_range(&audio, rate, Some(3.0), 120);
+        assert_eq!(range, AudioClipRange { start: 30, end: 90 });
+        // No out point: the asset duration bounds the bar.
+        audio.out_point = motioner_core::Animatable::new(0.0);
+        let range = audio_clip_range(&audio, rate, Some(2.5), 120);
+        assert_eq!(
+            range,
+            AudioClipRange {
+                start: 30,
+                end: 120
+            }
+        );
+        // The bar is clamped to the composition.
+        let range = audio_clip_range(&audio, rate, Some(5.0), 60);
+        assert_eq!(range, AudioClipRange { start: 30, end: 60 });
     }
 }

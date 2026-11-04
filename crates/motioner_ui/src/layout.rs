@@ -20,6 +20,7 @@
 //! +------------------------------------------------------------------+
 //! ```
 
+use crate::assets::AssetView;
 use crate::theme::{size, Metrics};
 
 /// An axis-aligned rectangle.
@@ -377,6 +378,12 @@ pub enum Hit {
     RecoverDismiss,
     /// A timeline row (index into the timeline row model).
     TimelineRow(usize),
+    /// The body of an audio clip bar (outline index).
+    ClipBody(usize),
+    /// The left trim handle of an audio clip (outline index).
+    ClipTrimStart(usize),
+    /// The right trim handle of an audio clip (outline index).
+    ClipTrimEnd(usize),
     /// The stopwatch of a timeline property row.
     TimelineStopwatch(usize),
     /// The left panel's Layers/Assets tab.
@@ -387,8 +394,8 @@ pub enum Hit {
     AssetCell(usize),
     /// The assets panel's import (+) button.
     AssetAdd,
-    /// The assets panel's list/grid toggle.
-    AssetView,
+    /// One segment of the assets panel's list/grid control.
+    AssetView(AssetView),
     /// The assets panel's "remove unused" button.
     AssetRemoveUnused,
     /// The previous-key button of a timeline property row.
@@ -670,46 +677,49 @@ impl Layout {
         Rect::new(solo.x - solo.w, solo.y, solo.w, solo.h)
     }
 
+    /// Whether the left panel header is too narrow for the comfortable
+    /// sizes. The compact geometry keeps every control inside the minimum
+    /// panel width (180 logical pixels) without ellipsizing a label.
+    #[must_use]
+    fn compact_header(&self) -> bool {
+        self.layers.header.w < self.metrics.px(240.0)
+    }
+
     /// One of the left panel's tabs.
     #[must_use]
     pub fn left_tab(&self, tab: LeftTab) -> Rect {
         let header = self.layers.header;
-        let pad = self.metrics.px(size::PAD);
+        let compact = self.compact_header();
+        let pad = self.metrics.px(if compact { 4.0 } else { size::PAD });
+        let gap = self.metrics.px(if compact { 2.0 } else { 4.0 });
         let height = self.metrics.px(20.0);
-        let width = self.metrics.px(52.0);
+        let width = self.metrics.px(if compact { 44.0 } else { 52.0 });
         let x = match tab {
             LeftTab::Layers => header.x + pad,
-            LeftTab::Assets => header.x + pad + width + self.metrics.px(4.0),
+            LeftTab::Assets => header.x + pad + width + gap,
         };
         Rect::new(x, (header.center_y() - height * 0.5).round(), width, height)
     }
 
-    /// The assets panel's toolbar: import, view toggle, remove unused.
+    /// The assets panel's toolbar: import, list, grid, remove unused.
+    ///
+    /// The list and grid segments form one segmented control. At the minimum
+    /// panel width the buttons shrink and the labels become icons, so the tab
+    /// strip and the toolbar never overlap and no text is truncated.
     #[must_use]
-    pub fn asset_toolbar(&self) -> (Rect, Rect, Rect) {
+    pub fn asset_toolbar(&self) -> (Rect, Rect, Rect, Rect) {
         let header = self.layers.header;
-        let pad = self.metrics.px(size::PAD);
+        let compact = self.compact_header();
+        let pad = self.metrics.px(if compact { 4.0 } else { size::PAD });
+        let gap = self.metrics.px(if compact { 2.0 } else { 4.0 });
+        let side = self.metrics.px(if compact { 18.0 } else { 22.0 });
         let height = self.metrics.px(20.0);
         let y = (header.center_y() - height * 0.5).round();
-        let add = Rect::new(
-            header.right() - pad - self.metrics.px(24.0),
-            y,
-            self.metrics.px(24.0),
-            height,
-        );
-        let view = Rect::new(
-            add.x - self.metrics.px(44.0) - self.metrics.px(4.0),
-            y,
-            self.metrics.px(44.0),
-            height,
-        );
-        let unused = Rect::new(
-            view.x - self.metrics.px(56.0) - self.metrics.px(4.0),
-            y,
-            self.metrics.px(56.0),
-            height,
-        );
-        (add, view, unused)
+        let add = Rect::new(header.right() - pad - side, y, side, height);
+        let grid = Rect::new(add.x - gap - side, y, side, height);
+        let list = Rect::new(grid.x - side, y, side, height);
+        let unused = Rect::new(list.x - gap - side, y, side, height);
+        (add, list, grid, unused)
     }
 
     /// One list row of the assets panel.
@@ -1332,6 +1342,41 @@ mod tests {
         );
         let tiny = resize_panels(start, Splitter::Left, (-1000.0, 0.0));
         assert!((tiny.left - 180.0).abs() < f32::EPSILON, "minimum width");
+    }
+
+    #[test]
+    fn the_asset_header_fits_its_minimum_width_without_overlap() {
+        let sizes = PanelSizes {
+            left: 180.0,
+            ..PanelSizes::default()
+        };
+        let layout = Layout::compute(2000.0, 900.0, 1.0, sizes);
+        assert!(layout.layers.rect.w >= 180.0);
+        let header = layout.layers.header;
+        let layers = layout.left_tab(LeftTab::Layers);
+        let assets = layout.left_tab(LeftTab::Assets);
+        let (add, list, grid, clean) = layout.asset_toolbar();
+        for (name, rect) in [
+            ("tabs", layers),
+            ("assets tab", assets),
+            ("import", add),
+            ("list", list),
+            ("grid", grid),
+            ("clean", clean),
+        ] {
+            assert!(inside(header, rect), "{name} outside the header");
+            assert!(rect.w >= 18.0, "{name} is too narrow");
+        }
+        for pair in [
+            (layers, assets),
+            (assets, clean),
+            (clean, add),
+            (add, list),
+            (list, grid),
+        ] {
+            assert!(!pair.0.overlaps(pair.1), "asset header controls overlap");
+        }
+        assert!((list.right() - grid.x).abs() < f32::EPSILON);
     }
 
     #[test]

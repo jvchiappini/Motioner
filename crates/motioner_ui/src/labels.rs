@@ -59,6 +59,13 @@ pub fn content_label(field: ContentField) -> String {
         ContentField::Join => "Join",
         ContentField::Source => "Source",
         ContentField::Fit => "Fit",
+        ContentField::InPoint => "In point",
+        ContentField::OutPoint => "Out point",
+        ContentField::Gain => "Gain",
+        ContentField::Pan => "Pan",
+        ContentField::Start => "Start",
+        ContentField::FadeIn => "Fade in",
+        ContentField::FadeOut => "Fade out",
         ContentField::FillStopOffset(_)
         | ContentField::FillStopColor(_)
         | ContentField::StrokeStopOffset(_)

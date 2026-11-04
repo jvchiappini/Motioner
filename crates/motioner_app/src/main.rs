@@ -21,6 +21,7 @@
 //! application edge.
 
 mod agent;
+mod audio_out;
 mod host;
 
 use std::ffi::OsString;
@@ -31,12 +32,13 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use motioner_core::Document;
+use motioner_core::{Document, NodeContent};
 use motioner_dsl::Limits;
 
 use motioner_io::{
-    write_png, ExportError, FfmpegLocation, Mp4Encoder, Project, ProjectImages, ProjectOptions,
-    ProjectSettings, VideoSettings,
+    decode_to_cache, mix_document, write_png, write_wav_i16, AssetKind, AudioStore, ExportError,
+    FfmpegLocation, Mp4Encoder, Project, ProjectImages, ProjectOptions, ProjectSettings,
+    VideoSettings, SAMPLE_RATE,
 };
 use motioner_render::{CpuTextMetrics, FontSet, ImageData, ImageSet};
 use motioner_render::{FrameRenderer, RenderError};
@@ -49,7 +51,7 @@ Motioner - AI-first motion graphics
 Usage:
   motioner new     <dir> [--name NAME] [--size WxH] [--fps N] [--duration FRAMES]
   motioner migrate <file.motion> <dir> [--name NAME]
-  motioner render  <project|file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH]
+  motioner render  <project|file.motion> --out <file.mp4> [--from N] [--to N] [--ffmpeg PATH] [--no-audio]
   motioner still   <project|file.motion> --frame N --out <file.png>
   motioner import  <project> <file>...
   motioner backup  <project>
@@ -192,6 +194,8 @@ struct RenderArgs {
     to: Option<i64>,
     /// Explicit `ffmpeg` executable.
     ffmpeg: Option<PathBuf>,
+    /// Do not mux the mixed audio track.
+    no_audio: bool,
 }
 
 /// Arguments of the `still` command.
@@ -564,6 +568,7 @@ fn parse_render(args: &[OsString]) -> Result<Command> {
     let mut from = None;
     let mut to = None;
     let mut ffmpeg = None;
+    let mut no_audio = false;
     let mut index = 0;
     while index < args.len() {
         let Some(arg) = args[index].to_str() else {
@@ -586,6 +591,10 @@ fn parse_render(args: &[OsString]) -> Result<Command> {
                 ffmpeg = Some(PathBuf::from(flag_value(args, index, "--ffmpeg")?));
                 index += 2;
             }
+            "--no-audio" => {
+                no_audio = true;
+                index += 1;
+            }
             other if other.starts_with("--") => bail!("unknown flag '{other}' for render"),
             _ => {
                 if input.is_some() {
@@ -604,6 +613,7 @@ fn parse_render(args: &[OsString]) -> Result<Command> {
         from,
         to,
         ffmpeg,
+        no_audio,
     }))
 }
 
@@ -1403,6 +1413,66 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
     Ok(())
 }
 
+/// Decodes every audio asset a document references, keyed by registry key and
+/// original name so the MDF source resolves either way.
+fn audio_store(
+    target: &InputTarget,
+    document: &Document,
+    location: &FfmpegLocation,
+) -> Option<AudioStore> {
+    let project = target.project.as_ref()?;
+    let mut store = AudioStore::default();
+    for node in document.nodes() {
+        let NodeContent::Audio(audio) = node.content() else {
+            continue;
+        };
+        let Some(entry) = project.find_asset(&audio.source) else {
+            continue;
+        };
+        if entry.kind != AssetKind::Audio {
+            continue;
+        }
+        let Ok(pcm) = decode_to_cache(
+            &project.assets_dir().join(entry.file_name()),
+            &project.cache_dir(),
+            &entry.hash,
+            location,
+        ) else {
+            continue;
+        };
+        store.insert(entry.key.clone(), pcm.clone());
+        store.insert(entry.original.clone(), pcm);
+    }
+    (!store.is_empty()).then_some(store)
+}
+
+/// Writes the mixed stereo track for `[from, to)` to `path`.
+fn write_mix_wav(
+    document: &Document,
+    store: &AudioStore,
+    from: i64,
+    to: i64,
+    path: &Path,
+) -> std::result::Result<(), Failure> {
+    let rate = document.composition().frame_rate();
+    let numerator = u64::from(rate.numerator());
+    let denominator = u64::from(rate.denominator());
+    let samples_per_frame = u128::from(SAMPLE_RATE) * u128::from(denominator);
+    let from_sample = u128::try_from(from).unwrap_or(0) * samples_per_frame / u128::from(numerator);
+    let count = u128::try_from(to - from).unwrap_or(0) * samples_per_frame / u128::from(numerator);
+    let count = usize::try_from(count)
+        .map_err(|_| Failure::Error(anyhow!("the requested audio range is too long")))?;
+    let from_sample = u64::try_from(from_sample).unwrap_or(0);
+    let samples = mix_document(
+        document,
+        store,
+        from_sample,
+        count,
+        &std::collections::HashSet::new(),
+    );
+    write_wav_i16(path, &samples, SAMPLE_RATE).map_err(|error| Failure::Error(error.into()))
+}
+
 /// Renders a frame range and streams it to ffmpeg.
 fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
     let target = resolve_input(&args.input)?;
@@ -1438,10 +1508,27 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
             FfmpegLocation::Path(path.clone())
         });
 
+    let audio = if args.no_audio {
+        None
+    } else {
+        audio_store(&target, &document, &location)
+    };
+    let wav = audio.as_ref().map(|store| {
+        let path =
+            std::env::temp_dir().join(format!("motioner-mix-{}-{}.wav", std::process::id(), from));
+        write_mix_wav(&document, store, from, to, &path).map(|()| path)
+    });
+    let wav = match wav {
+        Some(Ok(path)) => Some(path),
+        Some(Err(error)) => return Err(error),
+        None => None,
+    };
+
     let mut renderer =
         FrameRenderer::with_fonts(settings.width, settings.height, project_fonts(&target))?;
     renderer.set_images(image_set(&images));
-    let mut encoder = Mp4Encoder::start(&args.output, &settings, &location)?;
+    let mut encoder =
+        Mp4Encoder::start_with_audio(&args.output, &settings, &location, wav.as_deref())?;
     let mut rgba = Vec::new();
 
     let total = u64::try_from(to - from).unwrap_or(0);
@@ -1478,6 +1565,9 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
     }
 
     let encode = encoder.finish()?;
+    if let Some(path) = wav {
+        let _ = std::fs::remove_file(path);
+    }
     let elapsed = started.elapsed();
     let seconds = elapsed.as_secs_f64();
     println!(
@@ -1577,6 +1667,7 @@ mod tests {
                 from: Some(10),
                 to: Some(20),
                 ffmpeg: Some(PathBuf::from("ffmpeg.exe")),
+                no_audio: false,
             })
         );
     }
@@ -1592,6 +1683,7 @@ mod tests {
                 from: None,
                 to: None,
                 ffmpeg: None,
+                no_audio: false,
             })
         );
     }

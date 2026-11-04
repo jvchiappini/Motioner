@@ -36,7 +36,11 @@ Every one of them prints **one JSON object per line** on stdout.
   `size`, `weight`, `tracking`, `line_height`, `color`, `align` (text). Colours are `"#RRGGBB"` or
   `"#RRGGBBAA"`; `fill`/`stroke` also take `"none"`. `align` is `"left"`,
   `"center"` or `"right"`; `cap` is `"butt"`, `"round"` or `"square"`;
-  `join` is `"miter"`, `"bevel"` or `"round"`.
+  `join` is `"miter"`, `"bevel"` or `"round"`. Audio layers add `source`,
+  `in_point`, `out_point` (seconds; `0` means the file end), `start`
+  (frames), `gain`, `pan` (`-1..=1`), `fade_in` and `fade_out` (seconds).
+  Only `gain` and `pan` are keyable. `place_asset(key, frame=...)` appends an
+  `audio(...)` layer for an audio asset.
 - **Blend mode** (D-0031): `blend` is `"normal"`, `"add"`, `"multiply"`,
   `"screen"`, `"overlay"`, `"darken"` or `"lighten"`. It is a whole-node
   property, not a content channel: `set(id, "blend", "multiply")` or
@@ -460,7 +464,7 @@ motioner ctl 'seek(120)' 'select("@288")' 'screenshot("out/title.png")' 'quit()'
 # 4. Fold the edits into the program.
 motioner bake hello.motion
 
-# 5. Render.
+# 5. Render (audio layers are mixed and muxed as AAC; --no-audio skips them).
 motioner render hello.motion --out out/hello.mp4
 ```
 

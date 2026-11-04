@@ -25,6 +25,8 @@ pub struct StartEntry {
     pub detail: String,
     /// Whether the folder is gone (shown greyed with "remove").
     pub missing: bool,
+    /// Hover tooltip, such as the full local opened date.
+    pub tooltip: Option<String>,
 }
 
 impl StartEntry {
@@ -36,7 +38,15 @@ impl StartEntry {
             name,
             detail,
             missing,
+            tooltip: None,
         }
+    }
+
+    /// Attaches a hover tooltip to the entry.
+    #[must_use]
+    pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
     }
 }
 
@@ -532,6 +542,14 @@ pub fn draw(
         StartMode::New => {
             draw_home(p, screen, layout, None, None);
             draw_dialog(p, screen, layout, hover, pressed);
+        }
+    }
+    if let Some(StartAction::OpenRecent(index)) = hover {
+        if let (Some(entry), Some(card)) = (screen.recents.get(index), layout.recents.get(index)) {
+            if let Some(tooltip) = &entry.tooltip {
+                p.layer();
+                crate::widgets::tooltip(p, card.card, layout.window, tooltip, None);
+            }
         }
     }
 }

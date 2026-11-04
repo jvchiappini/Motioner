@@ -160,4 +160,40 @@ pub trait ProjectHost {
     ///
     /// A human-readable I/O message.
     fn restore(&self, composition: &Path) -> Result<(), String>;
+
+    /// Starts audio playback at `from`; `muted` lists the identities of audio
+    /// layers muted by the editor (hidden layers or the solo state).
+    ///
+    /// # Errors
+    ///
+    /// A human-readable message when no output device is available.
+    fn audio_play(
+        &self,
+        composition: &Path,
+        document: &motioner_core::Document,
+        from: motioner_core::Frame,
+        muted: &[String],
+    ) -> Result<(), String> {
+        let _ = (composition, document, from, muted);
+        Ok(())
+    }
+
+    /// Stops audio playback.
+    fn audio_stop(&self) {}
+
+    /// The audio clock in seconds since the composition start, when playing.
+    fn audio_position(&self) -> Option<f64> {
+        None
+    }
+
+    /// Plays a short grain for a scrub, when the host supports it.
+    fn audio_scrub(
+        &self,
+        composition: &Path,
+        document: &motioner_core::Document,
+        from: motioner_core::Frame,
+        muted: &[String],
+    ) {
+        let _ = (composition, document, from, muted);
+    }
 }

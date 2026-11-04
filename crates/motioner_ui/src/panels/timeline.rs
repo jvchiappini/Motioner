@@ -651,6 +651,9 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
             }
         }
     }
+    if outline_row.kind == crate::outline::NodeKind::Audio {
+        audio_strip(p, v, outline_row, full, bar_y, bar_h, &x_of);
+    }
     let diamond = p.m.px(10.0);
     let marker_at = |frame: Frame| {
         Rect::new(
@@ -679,6 +682,70 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
             KeyMark::Key
         };
         widgets::key_marker(p, marker_at(key.frame), mark, dim);
+    }
+}
+
+/// Draws the waveform of an audio layer inside its clip bar.
+#[allow(clippy::too_many_arguments)]
+fn audio_strip(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    outline_row: &crate::OutlineRow,
+    full: Rect,
+    bar_y: f32,
+    bar_h: f32,
+    x_of: &impl Fn(i64) -> f32,
+) {
+    let t = *p.theme;
+    let Some(audio) = v
+        .document
+        .and_then(|document| document.node(outline_row.node))
+        .and_then(|node| match node.content() {
+            motioner_core::NodeContent::Audio(audio) => Some(audio),
+            _ => None,
+        })
+    else {
+        return;
+    };
+    let entry = v
+        .assets
+        .entries
+        .iter()
+        .find(|entry| entry.original == audio.source || entry.key == audio.source);
+    let range = crate::timeline_model::audio_clip_range(
+        audio,
+        v.rate,
+        entry.and_then(|entry| entry.duration),
+        v.duration,
+    );
+    let from = x_of(range.start).max(full.x).round();
+    let to = x_of(range.end).min(full.right()).round();
+    if to <= from {
+        return;
+    }
+    let strip = Rect::new(from, bar_y, to - from, bar_h);
+    let Some(entry) = entry else {
+        return;
+    };
+    if entry.peaks.is_empty() || strip.w <= 0.0 {
+        return;
+    }
+    let mut colour = t.accent;
+    colour[3] = 0.55;
+    let step = (strip.w / entry.peaks.len() as f32).max(1.0);
+    for (index, peak) in entry.peaks.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let x = strip.x + index as f32 * step;
+        let height = (strip.h * peak.clamp(0.0, 1.0)).max(1.0);
+        p.fill(
+            Rect::new(
+                x,
+                strip.center_y() - height * 0.5,
+                (step - 1.0).max(1.0),
+                height,
+            ),
+            colour,
+        );
     }
 }
 

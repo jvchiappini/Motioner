@@ -12,6 +12,7 @@
 mod blur;
 mod canvas;
 mod drag;
+mod drop;
 mod pointer;
 mod press;
 mod project;
@@ -21,7 +22,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ferrous_engine::{
-    AppContext, Color as EngineColor, DrawContext, FerrousApp, KeyCode, Screenshot,
+    AppContext, Color as EngineColor, DrawContext, FerrousApp, FileDropEvent, FileDropKind,
+    KeyCode, Screenshot,
 };
 use motioner_core::{Frame, NodeId};
 use motioner_render::LivePainter;
@@ -149,6 +151,10 @@ pub(crate) struct PreviewApp {
     left_tab: crate::LeftTab,
     /// Project assets shown in the panel.
     assets: crate::AssetsModel,
+    /// Key of the asset imported by the most recent command.
+    last_imported: Option<String>,
+    /// Whether an operating-system file drag is over the window.
+    file_drop_hover: bool,
     /// Bumped when the asset list is rebuilt.
     asset_generation: u64,
     /// A newer backup offered after a crash.
@@ -157,6 +163,10 @@ pub(crate) struct PreviewApp {
     last_heartbeat: Instant,
     /// Last automatic snapshot.
     last_snapshot: Instant,
+    /// Whether the host audio device is currently playing this session.
+    audio_started: bool,
+    /// Last frame that played a scrub grain.
+    last_scrub_audio: Option<Frame>,
 }
 
 impl PreviewApp {
@@ -245,10 +255,14 @@ impl PreviewApp {
             toast: None,
             left_tab: panel_tab.unwrap_or_default(),
             assets: crate::AssetsModel::default(),
+            last_imported: None,
+            file_drop_hover: false,
             asset_generation: 0,
             recovery,
             last_heartbeat: Instant::now(),
             last_snapshot: Instant::now(),
+            audio_started: false,
+            last_scrub_audio: None,
         }
     }
 
@@ -620,10 +634,20 @@ impl PreviewApp {
             self.start_playing = false;
             self.run(&Command::Play);
         }
+        let audio_position = if self.editor.transport().is_playing() {
+            self.host().and_then(|host| host.audio_position())
+        } else {
+            None
+        };
         let transport = self.editor.transport_mut();
         if transport.is_playing() {
             let before = transport.frame();
-            transport.advance(self.clock);
+            if let Some(position) = audio_position {
+                let frame = crate::transport::audio_frame(position, transport.frame_rate());
+                transport.follow(frame, self.clock);
+            } else {
+                transport.advance(self.clock);
+            }
             let after = transport.frame();
             let duration = transport.duration();
             self.dropped = self
@@ -640,12 +664,92 @@ impl PreviewApp {
         self.tick_session();
 
         self.handle_pointer(ctx, &layout);
+        self.sync_audio();
         self.reveal(&layout);
         self.editor.session_mut().flush_overrides(Instant::now());
         self.relayout(ctx);
         self.editor.sync_models();
         self.marquee = self.pointer.marquee_rect();
         self.retitle();
+    }
+
+    /// Audio-layer identities muted by the editor: hidden layers, plus every
+    /// non-soloed audio layer while any audio layer is soloed.
+    fn audio_muted(&self) -> Vec<String> {
+        let Some(document) = self.editor.session().document() else {
+            return Vec::new();
+        };
+        let audio: Vec<_> = self
+            .editor
+            .outline()
+            .iter()
+            .filter(|row| {
+                document.node(row.node).is_some_and(|node| {
+                    matches!(node.content(), motioner_core::NodeContent::Audio(_))
+                })
+            })
+            .map(|row| row.node)
+            .collect();
+        let solo = audio.iter().any(|node| self.editor.is_solo(*node));
+        let mut muted = Vec::new();
+        for node in audio {
+            let visible = document
+                .node(node)
+                .is_some_and(motioner_core::Node::is_visible);
+            if !visible || (solo && !self.editor.is_solo(node)) {
+                muted.push(self.editor.node_identity(node));
+            }
+        }
+        muted
+    }
+
+    /// Starts or stops device audio to match the transport.
+    fn sync_audio(&mut self) {
+        let playing = self.editor.transport().is_playing();
+        if playing == self.audio_started {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        if !playing {
+            host.audio_stop();
+            self.audio_started = false;
+            self.last_scrub_audio = None;
+            return;
+        }
+        self.audio_started = true;
+        let Some(document) = self.editor.session().document() else {
+            return;
+        };
+        let muted = self.audio_muted();
+        let path = self.editor.session().path().to_path_buf();
+        let frame = self.editor.frame();
+        let _ = host.audio_play(&path, document, frame, &muted);
+    }
+
+    /// Plays a short grain while scrubbing, at most every four frames.
+    fn scrub_audio(&mut self) {
+        if self.editor.transport().is_playing() {
+            return;
+        }
+        let frame = self.editor.frame();
+        if self
+            .last_scrub_audio
+            .is_some_and(|last| (last - frame).abs() < 4)
+        {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        let Some(document) = self.editor.session().document() else {
+            return;
+        };
+        let muted = self.audio_muted();
+        let path = self.editor.session().path().to_path_buf();
+        host.audio_scrub(&path, document, frame, &muted);
+        self.last_scrub_audio = Some(frame);
     }
 
     /// Whether `--exit-after-frames` closes the window now. With
@@ -682,6 +786,18 @@ impl PreviewApp {
                 ("Safe areas", Some("G"), layout.safe_area_toggle)
             }
             Hit::SnapToggle => ("Snap to guides and layers", None, layout.snap_toggle),
+            Hit::AssetAdd => (
+                "Import media into the project",
+                None,
+                layout.asset_toolbar().0,
+            ),
+            Hit::AssetView(crate::AssetView::List) => ("List view", None, layout.asset_toolbar().1),
+            Hit::AssetView(crate::AssetView::Grid) => ("Grid view", None, layout.asset_toolbar().2),
+            Hit::AssetRemoveUnused => (
+                "Remove assets no layer uses",
+                None,
+                layout.asset_toolbar().3,
+            ),
             Hit::ZoomPill => (
                 "Fit the canvas to the composition",
                 Some("F"),
@@ -964,6 +1080,9 @@ impl PreviewApp {
             .saturating_sub(outline_before)
             .saturating_add(timeline_after.saturating_sub(timeline_before));
         panels::status::draw(&mut p, &view);
+        if self.file_drop_hover {
+            draw_drop_hover(&mut p, &layout, mouse_x, mouse_y);
+        }
         if self.menu_open {
             p.layer();
             panels::top_bar::draw_menu(&mut p, &view);
@@ -1019,6 +1138,67 @@ impl FerrousApp for PreviewApp {
             &screenshot.rgba,
         );
     }
+
+    fn on_file_drop(&mut self, event: FileDropEvent, ctx: &mut AppContext<'_>) {
+        match event.kind {
+            FileDropKind::Entered => {
+                self.file_drop_hover = self.start.is_none();
+            }
+            FileDropKind::Left => self.file_drop_hover = false,
+            FileDropKind::Dropped => {
+                self.file_drop_hover = false;
+                if self.start.is_some() || self.editor.session().document().is_none() {
+                    return;
+                }
+                let (mx, my) = ctx.input.mouse_pos_f32();
+                let target = self
+                    .layout
+                    .as_ref()
+                    .and_then(|layout| drop::target_at(layout, mx, my));
+                let point = target.filter(|target| target.places()).and_then(|_| {
+                    let layout = self.layout?;
+                    canvas::viewport(self.editor.session(), self.editor.view(), &layout)
+                        .map(|viewport| viewport.to_composition(mx, my))
+                });
+                let path = event.path.to_string_lossy().into_owned();
+                self.last_imported = None;
+                self.run(&Command::ImportAsset { path });
+                if let (Some(key), Some(point)) = (self.last_imported.clone(), point) {
+                    self.run(&Command::PlaceAsset {
+                        key,
+                        frame: None,
+                        x: Some(point.x),
+                        y: Some(point.y),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Paints the drop highlight: the window always, plus the surface under the
+/// pointer so the user knows whether the file will only be imported or also
+/// placed on the canvas.
+fn draw_drop_hover(p: &mut Painter<'_>, layout: &Layout, x: f32, y: f32) {
+    let t = *p.theme;
+    let mut accent = t.accent;
+    accent[3] = 0.9;
+    p.layer();
+    p.stroke_rounded(
+        layout.window.inset(p.m.px(2.0)),
+        accent,
+        p.m.px(4.0),
+        p.m.px(2.0),
+    );
+    let Some(target) = drop::target_at(layout, x, y) else {
+        return;
+    };
+    let surface = match target {
+        drop::DropTarget::Assets => layout.layers.rect,
+        drop::DropTarget::Canvas => layout.canvas,
+        drop::DropTarget::Window => return,
+    };
+    p.stroke_rounded(surface.inset(p.m.px(2.0)), accent, p.m.px(4.0), p.m.px(2.0));
 }
 
 /// Values the editor draws from that only depend on the session, not on the

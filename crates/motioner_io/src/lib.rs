@@ -10,7 +10,9 @@
 //! and [`Mp4Encoder`] streams frames to `ffmpeg` for H.264 MP4 output.
 
 mod assets;
+mod audio;
 mod backups;
+mod dates;
 mod encode;
 mod error;
 mod fonts;
@@ -24,7 +26,11 @@ pub use assets::{
     converted_image, project_fonts, safe_relative, sha256_hex, valid_key, AssetError,
     ImportOutcome, ProjectImages,
 };
+pub use audio::{
+    decode_to_cache, mix_document, write_wav_i16, AudioPcm, AudioStore, CHANNELS, SAMPLE_RATE,
+};
 pub use backups::{BackupError, BackupInfo, BackupPolicy, STALE_LOCK};
+pub use dates::{full_local_date, relative_time};
 pub use encode::{EncodeSummary, FfmpegLocation, Mp4Encoder, VideoSettings};
 pub use error::ExportError;
 pub use fonts::{font_from_original, load_project_fonts, FontLoadError, ProjectFont};

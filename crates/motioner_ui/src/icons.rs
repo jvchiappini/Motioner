@@ -63,6 +63,14 @@ pub enum Icon {
     Mask,
     /// An image layer.
     Image,
+    /// An audio clip.
+    Audio,
+    /// Assets panel, list view.
+    List,
+    /// Assets panel, grid view.
+    Grid,
+    /// Remove unused assets (bin).
+    Clean,
 }
 
 impl Icon {
@@ -76,6 +84,7 @@ impl Icon {
             NodeKind::Path => Self::Path,
             NodeKind::Text => Self::Text,
             NodeKind::Image => Self::Image,
+            NodeKind::Audio => Self::Audio,
         }
     }
 }
@@ -196,6 +205,7 @@ fn transport(
 }
 
 /// Layer, object and editor glyphs.
+#[allow(clippy::too_many_lines)] // one arm per glyph, kept together
 fn layer(
     p: &mut Painter<'_>,
     icon: Icon,
@@ -288,6 +298,38 @@ fn layer(
             p.fill(g.r(9.5, 3.0, 2.5, 6.0), surface);
             p.fill_rounded(g.r(3.5, 10.0, 2.5, 4.0), color, g.len(1.0));
             p.fill_rounded(g.r(10.0, 10.0, 2.5, 4.0), color, g.len(1.0));
+        }
+        Icon::Audio => {
+            for (index, height) in [4.0_f32, 8.0, 6.0, 10.0, 5.0].into_iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 2.25 + index as f32 * 2.5;
+                let top = 8.0 - height * 0.5;
+                p.fill_rounded(g.r(x, top, 1.5, height), color, g.len(0.5));
+            }
+        }
+        Icon::List => {
+            for row in 0..3 {
+                let y = 3.5 + row as f32 * 4.0;
+                p.fill_rounded(g.r(2.5, y, 2.0, 2.0), color, g.len(0.5));
+                p.fill_rounded(g.r(6.5, y + 0.4, 7.0, 1.2), color, g.len(0.5));
+            }
+        }
+        Icon::Grid => {
+            for row in 0..2 {
+                for column in 0..2 {
+                    p.fill_rounded(
+                        g.r(2.5 + column as f32 * 5.5, 3.0 + row as f32 * 5.5, 4.0, 4.0),
+                        color,
+                        g.len(1.0),
+                    );
+                }
+            }
+        }
+        Icon::Clean => {
+            p.fill_rounded(g.r(4.0, 3.0, 8.0, 1.75), color, g.len(0.5));
+            p.fill_rounded(g.r(6.0, 1.5, 4.0, 1.75), color, g.len(0.5));
+            p.stroke_rounded(g.r(5.0, 5.0, 6.0, 9.0), color, g.len(1.0), stroke);
+            p.vline(g.x + g.len(8.5), g.y + g.len(7.5), g.y + g.len(11.5), color);
         }
         _ => return false,
     }

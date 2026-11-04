@@ -600,6 +600,7 @@ impl Interpreter<'_> {
                 | Builtin::Star
                 | Builtin::Arc
                 | Builtin::Image
+                | Builtin::Audio
                 | Builtin::Stagger),
             ) => self.scene.call(builtin, call_args, &self.site(span)),
             Value::Builtin(builtin) => builtins::call(

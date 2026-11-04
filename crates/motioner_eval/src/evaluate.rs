@@ -259,7 +259,7 @@ fn resolved_effects(node: &Node, time: f64) -> Vec<EffectValue> {
 
 fn item_shape(content: &NodeContent, time: f64, plan: &mut RenderPlan) -> Option<ItemShape> {
     match content {
-        NodeContent::Group => None,
+        NodeContent::Group | NodeContent::Audio(_) => None,
         NodeContent::Rect {
             width,
             height,

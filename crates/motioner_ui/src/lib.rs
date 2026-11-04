@@ -99,7 +99,10 @@ pub use theme::{Metrics, Srgb, Theme};
 pub use timeline::{
     frame_to_x, tick_frames, tick_spacing, x_to_frame, TickSpacing, TickUnit, MIN_TICK_SPACING_PX,
 };
-pub use timeline_model::{RowKind as TimelineRowKind, TimelineRow, TimelineRows, VisibleRun};
+pub use timeline_model::{
+    audio_clip_range, AudioClipRange, RowKind as TimelineRowKind, TimelineRow, TimelineRows,
+    VisibleRun,
+};
 pub use transport::{elapsed_frames, skipped_frames, timecode, Transport};
 pub use viewport::{
     anchored_pan, clamp_zoom, zoom_by_steps, Viewport, MAX_ZOOM, MIN_ZOOM, WHEEL_STEP,

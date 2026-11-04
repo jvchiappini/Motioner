@@ -509,7 +509,84 @@ fn content_rows(
         NodeContent::Path { geometry, .. } => path_rows(document, node, geometry, frame),
         NodeContent::Text(text) => text_rows(document, node, text, frame, font_families),
         NodeContent::Image(image) => image_rows(document, node, image, frame),
+        NodeContent::Audio(audio) => audio_rows(document, node, audio, frame),
     }
+}
+
+fn audio_rows(
+    document: &Document,
+    node: NodeId,
+    audio: &motioner_core::AudioContent,
+    frame: Frame,
+) -> Vec<Row> {
+    let mut rows = vec![
+        row(
+            "Audio",
+            "Source",
+            RowValue::Text {
+                target: FieldTarget::Content(ContentField::Source),
+                text: audio.source.clone(),
+            },
+            None,
+        ),
+        row(
+            "Audio",
+            crate::labels::content_label(ContentField::Start),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Start),
+                "",
+                number_or_zero(document, node, ContentField::Start, frame),
+                1.0,
+                " fr",
+            )),
+            None,
+        ),
+        row(
+            "Audio",
+            crate::labels::content_label(ContentField::InPoint),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::InPoint),
+                "",
+                number_or_zero(document, node, ContentField::InPoint, frame),
+                0.01,
+                " s",
+            )),
+            None,
+        ),
+        row(
+            "Audio",
+            crate::labels::content_label(ContentField::OutPoint),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::OutPoint),
+                "",
+                number_or_zero(document, node, ContentField::OutPoint, frame),
+                0.01,
+                " s",
+            )),
+            None,
+        ),
+    ];
+    for content_field in [
+        ContentField::Gain,
+        ContentField::Pan,
+        ContentField::FadeIn,
+        ContentField::FadeOut,
+    ] {
+        rows.push(row(
+            "Audio",
+            crate::labels::content_label(content_field),
+            RowValue::Single(field(
+                FieldTarget::Content(content_field),
+                "",
+                number_or_zero(document, node, content_field, frame),
+                0.01,
+                "",
+            )),
+            (content_field == ContentField::Gain || content_field == ContentField::Pan)
+                .then(|| content_channel(document, node, content_field, frame)),
+        ));
+    }
+    rows
 }
 
 fn path_rows(
@@ -1004,6 +1081,7 @@ pub const fn kind_label(content: &NodeContent) -> &'static str {
         NodeContent::Path { .. } => "Path layer",
         NodeContent::Text(_) => "Text layer",
         NodeContent::Image(_) => "Image layer",
+        NodeContent::Audio(_) => "Audio layer",
     }
 }
 

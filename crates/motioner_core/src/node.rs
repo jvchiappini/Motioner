@@ -139,6 +139,20 @@ pub enum ContentField {
     Source,
     /// Image fit mode (discrete).
     Fit,
+    /// Audio source offset in seconds (`in_point`).
+    InPoint,
+    /// Audio source end in seconds (`out_point`; `0` means the file end).
+    OutPoint,
+    /// Audio gain (`gain`), keyable.
+    Gain,
+    /// Stereo pan in `-1.0..=1.0` (`pan`), keyable.
+    Pan,
+    /// Timeline start in composition frames (`start`).
+    Start,
+    /// Fade-in length in seconds (`fade_in`).
+    FadeIn,
+    /// Fade-out length in seconds (`fade_out`).
+    FadeOut,
     /// Offset of fill stop `n` (`fill_stop<n>_offset`, D-0030).
     FillStopOffset(u8),
     /// Colour of fill stop `n` (`fill_stop<n>_color`).
@@ -155,7 +169,7 @@ impl ContentField {
     /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
     /// [`ContentField::from_name`] and describe them with
     /// [`ContentField::name`].
-    pub const ALL: [(Self, &'static str); 22] = [
+    pub const ALL: [(Self, &'static str); 29] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
@@ -178,6 +192,13 @@ impl ContentField {
         (Self::Join, "join"),
         (Self::Source, "source"),
         (Self::Fit, "fit"),
+        (Self::InPoint, "in_point"),
+        (Self::OutPoint, "out_point"),
+        (Self::Gain, "gain"),
+        (Self::Pan, "pan"),
+        (Self::Start, "start"),
+        (Self::FadeIn, "fade_in"),
+        (Self::FadeOut, "fade_out"),
     ];
 
     /// Whether the field has keyframes (D-0028).
@@ -196,6 +217,11 @@ impl ContentField {
                 | Self::Join
                 | Self::Source
                 | Self::Fit
+                | Self::InPoint
+                | Self::OutPoint
+                | Self::Start
+                | Self::FadeIn
+                | Self::FadeOut
         )
     }
 
@@ -1208,6 +1234,49 @@ impl ImageResolver for NoImages {
     }
 }
 
+/// An audio clip in the composition (D-0048).
+///
+/// Audio nodes are never drawn; the mixer in `motioner_io` turns them into
+/// stereo samples. `start` is the first composition frame and `in_point` /
+/// `out_point` are seconds inside the source file. `out_point == 0` means
+/// "until the file ends"; `gain` and `pan` are keyable channels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioContent {
+    /// Project-relative source path (registry key or original name).
+    pub source: String,
+    /// Source offset in seconds.
+    pub in_point: Animatable<f64>,
+    /// Source end in seconds; `0` means the file end.
+    pub out_point: Animatable<f64>,
+    /// Linear gain, normally `1.0`.
+    pub gain: Animatable<f64>,
+    /// Stereo pan in `-1.0..=1.0`.
+    pub pan: Animatable<f64>,
+    /// First composition frame of the clip.
+    pub start: i64,
+    /// Fade-in length in seconds.
+    pub fade_in: f64,
+    /// Fade-out length in seconds.
+    pub fade_out: f64,
+}
+
+impl AudioContent {
+    /// A clip from the start of `source` at frame `start`, unity gain.
+    #[must_use]
+    pub fn new(source: impl Into<String>, start: i64) -> Self {
+        Self {
+            source: source.into(),
+            in_point: Animatable::new(0.0),
+            out_point: Animatable::new(0.0),
+            gain: Animatable::new(1.0),
+            pan: Animatable::new(0.0),
+            start,
+            fade_in: 0.0,
+            fade_out: 0.0,
+        }
+    }
+}
+
 /// What a node draws.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
@@ -1252,6 +1321,8 @@ pub enum NodeContent {
     Text(TextContent),
     /// A raster image centred on the node origin (D-0035).
     Image(ImageContent),
+    /// An audio clip (D-0048); it contributes samples, never pixels.
+    Audio(AudioContent),
 }
 
 impl NodeContent {
@@ -1299,6 +1370,7 @@ impl NodeContent {
             Self::Path { .. } => "path",
             Self::Text(_) => "text",
             Self::Image(_) => "image",
+            Self::Audio(_) => "audio",
         }
     }
 
@@ -1375,6 +1447,17 @@ impl NodeContent {
                     | ContentField::Source
                     | ContentField::Fit
             ),
+            Self::Audio(_) => matches!(
+                field,
+                ContentField::Source
+                    | ContentField::InPoint
+                    | ContentField::OutPoint
+                    | ContentField::Gain
+                    | ContentField::Pan
+                    | ContentField::Start
+                    | ContentField::FadeIn
+                    | ContentField::FadeOut
+            ),
         }
     }
 
@@ -1388,7 +1471,7 @@ impl NodeContent {
             Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. } => {
                 paint.gradient(slot).map_or(0, Gradient::len)
             }
-            Self::Text(_) | Self::Group | Self::Image(_) => 0,
+            Self::Text(_) | Self::Group | Self::Image(_) | Self::Audio(_) => 0,
         }
     }
 
@@ -1417,7 +1500,7 @@ impl NodeContent {
                     .gradient(slot)
                     .is_some_and(|gradient| index < gradient.len())
             }
-            Self::Group | Self::Image(_) => false,
+            Self::Group | Self::Image(_) | Self::Audio(_) => false,
         }
     }
 
@@ -1469,12 +1552,17 @@ impl NodeContent {
             (Self::Text(text), ContentField::Color) => Some(ContentChannel::Color(&text.color)),
             (Self::Image(image), ContentField::Width) => number(&image.width),
             (Self::Image(image), ContentField::Height) => number(&image.height),
+            (Self::Audio(audio), ContentField::InPoint) => number(&audio.in_point),
+            (Self::Audio(audio), ContentField::OutPoint) => number(&audio.out_point),
+            (Self::Audio(audio), ContentField::Gain) => number(&audio.gain),
+            (Self::Audio(audio), ContentField::Pan) => number(&audio.pan),
             _ => None,
         }
     }
 
     /// The static value of `field`, ignoring keyframes.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one arm per content field, kept together
     pub fn static_value(&self, field: ContentField) -> Option<ContentValue> {
         if let Some((slot, part, index)) = field.stop() {
             let stop = match self {
@@ -1482,7 +1570,7 @@ impl NodeContent {
                 Self::Rect { paint, .. }
                 | Self::Circle { paint, .. }
                 | Self::Path { paint, .. } => paint.gradient(slot)?.stop(index)?,
-                Self::Group | Self::Image(_) => return None,
+                Self::Group | Self::Image(_) | Self::Audio(_) => return None,
             };
             return Some(match part {
                 StopPart::Offset => ContentValue::Number(stop.offset.value()),
@@ -1564,12 +1652,37 @@ impl NodeContent {
                 Some(ContentValue::Text(image.source.clone()))
             }
             (Self::Image(image), ContentField::Fit) => Some(ContentValue::Fit(image.fit)),
+            (Self::Audio(audio), ContentField::Source) => {
+                Some(ContentValue::Text(audio.source.clone()))
+            }
+            (Self::Audio(audio), ContentField::InPoint) => {
+                Some(ContentValue::Number(audio.in_point.value()))
+            }
+            (Self::Audio(audio), ContentField::OutPoint) => {
+                Some(ContentValue::Number(audio.out_point.value()))
+            }
+            (Self::Audio(audio), ContentField::Gain) => {
+                Some(ContentValue::Number(audio.gain.value()))
+            }
+            (Self::Audio(audio), ContentField::Pan) => {
+                Some(ContentValue::Number(audio.pan.value()))
+            }
+            (Self::Audio(audio), ContentField::Start) =>
+            {
+                #[allow(clippy::cast_precision_loss)]
+                Some(ContentValue::Number(audio.start as f64))
+            }
+            (Self::Audio(audio), ContentField::FadeIn) => Some(ContentValue::Number(audio.fade_in)),
+            (Self::Audio(audio), ContentField::FadeOut) => {
+                Some(ContentValue::Number(audio.fade_out))
+            }
             _ => None,
         }
     }
 
     /// Checks that static sizes are finite and non-negative and text size is
     /// positive. Returns the name of the first invalid field.
+    #[allow(clippy::too_many_lines)] // one arm per content kind, kept together
     pub(crate) fn invalid_field(&self) -> Option<&'static str> {
         let bad = |value: f64| !value.is_finite() || value < 0.0;
         let bad_paint = |paint: &PaintSpec| {
@@ -1661,6 +1774,30 @@ impl NodeContent {
                     Some("width")
                 } else if bad(height) {
                     Some("height")
+                } else {
+                    None
+                }
+            }
+            Self::Audio(audio) => {
+                let non_negative = |channel: &Animatable<f64>| {
+                    bad(channel.value()) || channel.keys().iter().any(|key| bad(key.value))
+                };
+                let pan_ok = |channel: &Animatable<f64>| {
+                    let check = |value: f64| value.is_finite() && (-1.0..=1.0).contains(&value);
+                    !check(channel.value()) || channel.keys().iter().any(|key| !check(key.value))
+                };
+                if non_negative(&audio.in_point) {
+                    Some("in_point")
+                } else if non_negative(&audio.out_point) {
+                    Some("out_point")
+                } else if non_negative(&audio.gain) {
+                    Some("gain")
+                } else if pan_ok(&audio.pan) {
+                    Some("pan")
+                } else if audio.fade_in < 0.0 {
+                    Some("fade_in")
+                } else if audio.fade_out < 0.0 {
+                    Some("fade_out")
                 } else {
                     None
                 }

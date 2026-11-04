@@ -77,7 +77,7 @@ impl PreviewApp {
                     path: String::new(),
                 });
             }
-            Hit::AssetView => self.assets.toggle_view(),
+            Hit::AssetView(view) => self.assets.view = Some(view),
             Hit::AssetRemoveUnused => {
                 self.run(&Command::RemoveUnusedAssets);
             }
@@ -87,10 +87,19 @@ impl PreviewApp {
             Hit::RecoverDismiss => {
                 self.run(&Command::DismissRecovery);
             }
+            Hit::ClipBody(outline) | Hit::ClipTrimStart(outline) | Hit::ClipTrimEnd(outline) => {
+                let kind = match hit {
+                    Hit::ClipBody(_) => super::pointer::ClipKind::Body,
+                    Hit::ClipTrimStart(_) => super::pointer::ClipKind::TrimStart,
+                    _ => super::pointer::ClipKind::TrimEnd,
+                };
+                self.begin_clip_drag(outline, kind, at.0, layout);
+            }
             Hit::Scrub if self.editor.session().document().is_some() => {
                 self.editor.transport_mut().begin_scrub();
                 let frame = self.x_frame(layout, at.0);
                 self.run(&Command::Seek(frame));
+                self.scrub_audio();
                 self.pointer.drag = Some(Drag::Scrub);
             }
             Hit::Splitter(which) => {
@@ -295,6 +304,55 @@ impl PreviewApp {
             Hit::Transport(button) => self.press_transport(button),
             Hit::OrphanRow(_) | Hit::Inspector | Hit::Scrub | Hit::FileMenu => {}
         }
+    }
+
+    fn begin_clip_drag(
+        &mut self,
+        outline: usize,
+        kind: super::pointer::ClipKind,
+        x: f32,
+        layout: &Layout,
+    ) {
+        let captured = {
+            let Some(document) = self.editor.session().document() else {
+                return;
+            };
+            let Some(node) = self.editor.outline().get(outline).map(|row| row.node) else {
+                return;
+            };
+            let Some(motioner_core::NodeContent::Audio(audio)) =
+                document.node(node).map(motioner_core::Node::content)
+            else {
+                return;
+            };
+            let entry = self
+                .assets
+                .entries
+                .iter()
+                .find(|entry| entry.original == audio.source || entry.key == audio.source);
+            let range = crate::timeline_model::audio_clip_range(
+                audio,
+                self.editor.transport().frame_rate(),
+                entry.and_then(|entry| entry.duration),
+                self.editor.transport().duration(),
+            );
+            (
+                self.editor.node_identity(node),
+                audio.start,
+                audio.in_point.value(),
+                range.end,
+            )
+        };
+        self.editor.begin_gesture();
+        self.pointer.drag = Some(super::pointer::Drag::Clip(super::pointer::ClipDrag {
+            id: captured.0,
+            kind,
+            start_pointer_frame: self.x_frame(layout, x),
+            start: captured.1,
+            in_point: captured.2,
+            end: captured.3,
+            fps: self.editor.transport().frame_rate().as_f64(),
+        }));
     }
 
     pub(super) fn press_transport(&mut self, button: TransportButton) {

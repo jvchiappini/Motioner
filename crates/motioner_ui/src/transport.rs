@@ -205,6 +205,20 @@ impl Transport {
         }
     }
 
+    /// Moves the playhead to `frame` and re-anchors playback to `now`.
+    ///
+    /// Used while the audio device is the clock: the frame follows the
+    /// played samples, not the wall clock.
+    pub fn follow(&mut self, frame: i64, now: Duration) {
+        self.frame = self.clamp(frame);
+        if self.is_playing() {
+            self.state = State::Playing {
+                anchor_frame: self.frame,
+                anchor_time: now,
+            };
+        }
+    }
+
     /// Maps wall-clock `now` to the frame to display.
     ///
     /// Stopped and scrubbing transports return their current frame unchanged.
@@ -296,6 +310,21 @@ pub fn elapsed_frames(elapsed: Duration, rate: FrameRate) -> i64 {
     i64::try_from(frames).unwrap_or(i64::MAX)
 }
 
+/// The composition frame at `position` seconds on the audio clock.
+///
+/// The audio device counts 48 kHz samples exactly, so this is the one mapping
+/// between the audio clock and the playhead. Rounding keeps it within half a
+/// frame of the device cursor.
+#[must_use]
+pub fn audio_frame(position: f64, rate: FrameRate) -> i64 {
+    if !position.is_finite() {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let frame = (position * rate.as_f64()).round() as i64;
+    frame
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +411,21 @@ mod tests {
         transport.end_scrub();
         assert!(!transport.is_scrubbing());
         assert_eq!(transport.frame(), 42);
+    }
+
+    #[test]
+    fn the_audio_clock_maps_seconds_to_frames_without_drift() {
+        let rate = rate_60();
+        assert_eq!(audio_frame(0.0, rate), 0);
+        assert_eq!(audio_frame(1.0 / 60.0, rate), 1);
+        assert_eq!(audio_frame(10.0 * 60.0, rate), 36_000);
+        // 48 000 samples are exactly one second at every integer rate.
+        for samples in [1_u64, 799, 800, 48_000, 2_880_000] {
+            #[allow(clippy::cast_precision_loss)]
+            let position = samples as f64 / 48_000.0;
+            let expected = ((samples * 60) as f64 / 48_000.0).round() as i64;
+            assert_eq!(audio_frame(position, rate), expected);
+        }
     }
 
     #[test]

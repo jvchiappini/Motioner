@@ -107,11 +107,25 @@ impl Mp4Encoder {
         settings: &VideoSettings,
         ffmpeg: &FfmpegLocation,
     ) -> Result<Self, ExportError> {
+        Self::start_with_audio(path, settings, ffmpeg, None)
+    }
+
+    /// Starts `ffmpeg` with an optional WAV track muxed into the MP4.
+    ///
+    /// # Errors
+    ///
+    /// Same failures as [`Mp4Encoder::start`].
+    pub fn start_with_audio(
+        path: &Path,
+        settings: &VideoSettings,
+        ffmpeg: &FfmpegLocation,
+        audio: Option<&Path>,
+    ) -> Result<Self, ExportError> {
         let expected_frame_len = expected_len(settings.width, settings.height)?;
         let program = resolve_program(ffmpeg);
         let mut command = Command::new(&program);
         command
-            .args(ffmpeg_arguments(settings, path))
+            .args(ffmpeg_arguments_with_audio(settings, path, audio))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -326,8 +340,18 @@ fn join_thread(thread: Option<JoinHandle<()>>) {
 }
 
 /// Builds the complete `ffmpeg` argument list, including the output path.
+#[cfg(test)]
 fn ffmpeg_arguments(settings: &VideoSettings, output: &Path) -> Vec<OsString> {
-    vec![
+    ffmpeg_arguments_with_audio(settings, output, None)
+}
+
+/// Builds the `ffmpeg` arguments with an optional WAV track muxed in.
+fn ffmpeg_arguments_with_audio(
+    settings: &VideoSettings,
+    output: &Path,
+    audio: Option<&Path>,
+) -> Vec<OsString> {
+    let mut args = vec![
         OsString::from("-y"),
         OsString::from("-loglevel"),
         OsString::from("error"),
@@ -362,8 +386,27 @@ fn ffmpeg_arguments(settings: &VideoSettings, output: &Path) -> Vec<OsString> {
         OsString::from("bt709"),
         OsString::from("-movflags"),
         OsString::from("+faststart"),
-        output.as_os_str().to_owned(),
-    ]
+    ];
+    if let Some(audio) = audio {
+        args.insert(13, OsString::from("-i"));
+        args.insert(14, audio.as_os_str().to_owned());
+        let after = args
+            .iter()
+            .position(|argument| argument == "-movflags")
+            .unwrap_or(args.len());
+        args.splice(
+            after..after,
+            [
+                OsString::from("-c:a"),
+                OsString::from("aac"),
+                OsString::from("-b:a"),
+                OsString::from("192k"),
+                OsString::from("-shortest"),
+            ],
+        );
+    }
+    args.push(output.as_os_str().to_owned());
+    args
 }
 
 #[cfg(test)]
@@ -371,7 +414,10 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use super::{ffmpeg_arguments, validate_rgba_bytes, FfmpegLocation, Mp4Encoder, VideoSettings};
+    use super::{
+        ffmpeg_arguments, ffmpeg_arguments_with_audio, validate_rgba_bytes, FfmpegLocation,
+        Mp4Encoder, VideoSettings,
+    };
     use crate::error::ExportError;
 
     #[test]
@@ -415,6 +461,23 @@ mod tests {
         .map(OsString::from)
         .collect();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn an_audio_track_is_muxed_and_shortened_to_the_video() {
+        let args = ffmpeg_arguments_with_audio(
+            &VideoSettings::youtube_1080p(),
+            Path::new("out.mp4"),
+            Some(Path::new("mix.wav")),
+        );
+        let text: Vec<String> = args
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert!(text.windows(2).any(|pair| pair == ["-i", "mix.wav"]));
+        assert!(text.windows(2).any(|pair| pair == ["-c:a", "aac"]));
+        assert!(text.iter().any(|argument| argument == "-shortest"));
+        assert_eq!(text.last().map(String::as_str), Some("out.mp4"));
     }
 
     #[test]

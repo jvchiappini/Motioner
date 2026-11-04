@@ -23,6 +23,7 @@ pub struct Host {
     state: RefCell<AppState>,
     state_path: PathBuf,
     root: PathBuf,
+    audio: RefCell<Option<crate::audio_out::AudioOutput>>,
 }
 
 impl Host {
@@ -35,6 +36,7 @@ impl Host {
             state: RefCell::new(state),
             state_path,
             root,
+            audio: RefCell::new(None),
         }
     }
 
@@ -67,12 +69,22 @@ impl Host {
             .iter()
             .map(|entry: &RecentProject| {
                 let missing = !entry.path.is_dir() && !entry.path.is_file();
+                let now = std::time::SystemTime::now();
                 let detail = if missing {
                     format!("missing: {}", entry.path.display())
                 } else {
-                    format!("last opened {}", entry.opened)
+                    format!(
+                        "last opened {}",
+                        motioner_io::relative_time(&entry.opened, now)
+                    )
+                };
+                let tooltip = if missing {
+                    entry.path.display().to_string()
+                } else {
+                    motioner_io::full_local_date(&entry.opened)
                 };
                 StartEntry::recent(entry.path.clone(), entry.name.clone(), detail, missing)
+                    .with_tooltip(tooltip)
             })
             .collect()
     }
@@ -272,6 +284,12 @@ impl ProjectHost for Host {
         }
         if entry.kind == AssetKind::Audio {
             let _ = self.waveform(composition, &entry.key, 96);
+            let _ = motioner_io::decode_to_cache(
+                &project.assets_dir().join(entry.file_name()),
+                &project.cache_dir(),
+                &entry.hash,
+                &ffmpeg,
+            );
         }
         let used = used_keys(&project);
         Ok(summary(
@@ -309,9 +327,8 @@ impl ProjectHost for Host {
             .find_asset(key)
             .ok_or_else(|| format!("no asset has the key {key:?}"))?;
         match entry.kind {
-            AssetKind::Image => {}
+            AssetKind::Image | AssetKind::Audio => {}
             AssetKind::Font => return Err("fonts are used by text layers, not placed".to_owned()),
-            AssetKind::Audio => return Err("audio layers arrive with phase 5 (D-0045)".to_owned()),
             AssetKind::Video => return Err("video layers arrive with phase 6 (D-0045)".to_owned()),
         }
         let path = project.composition_path(&project.settings().main);
@@ -329,15 +346,25 @@ impl ProjectHost for Host {
         }
         {
             use std::fmt::Write as _;
-            let _ = write!(
-                text,
-                "\n# asset {:?} ({})\n{variable} = image({:?})\n{variable}.pos = ({x:.1}, {y:.1})\n",
-                entry.key, entry.original, entry.original,
-            );
+            match entry.kind {
+                AssetKind::Image => {
+                    let _ = write!(
+                        text,
+                        "\n# asset {:?} ({})\n{variable} = image({:?})\n{variable}.pos = ({x:.1}, {y:.1})\n",
+                        entry.key, entry.original, entry.original,
+                    );
+                }
+                AssetKind::Audio => {
+                    let start = frame.unwrap_or(0);
+                    let _ = write!(
+                        text,
+                        "\n# asset {:?} ({})\n{variable} = audio({:?}, start={start})\n",
+                        entry.key, entry.original, entry.original,
+                    );
+                }
+                AssetKind::Font | AssetKind::Video => {}
+            }
             if let Some(frame) = frame {
-                // Images have no start channel yet; the comment keeps the
-                // drop frame visible to the reviewer and to the future NLE
-                // model.
                 let _ = writeln!(text, "# placed at frame {frame}");
             }
         }
@@ -431,6 +458,49 @@ impl ProjectHost for Host {
         project.restore(&backup).map_err(|error| error.to_string())
     }
 
+    fn audio_play(
+        &self,
+        composition: &Path,
+        document: &motioner_core::Document,
+        from: motioner_core::Frame,
+        muted: &[String],
+    ) -> Result<(), String> {
+        self.audio.borrow_mut().take();
+        let project = Project::open(composition).map_err(|error| error.to_string())?;
+        let output = crate::audio_out::AudioOutput::start(&project, document, from, muted, false)?;
+        *self.audio.borrow_mut() = Some(output);
+        Ok(())
+    }
+
+    fn audio_stop(&self) {
+        self.audio.borrow_mut().take();
+    }
+
+    fn audio_position(&self) -> Option<f64> {
+        self.audio
+            .borrow()
+            .as_ref()
+            .map(crate::audio_out::AudioOutput::position)
+    }
+
+    fn audio_scrub(
+        &self,
+        composition: &Path,
+        document: &motioner_core::Document,
+        from: motioner_core::Frame,
+        muted: &[String],
+    ) {
+        self.audio.borrow_mut().take();
+        let Ok(project) = Project::open(composition) else {
+            return;
+        };
+        if let Ok(output) =
+            crate::audio_out::AudioOutput::start(&project, document, from, muted, true)
+        {
+            *self.audio.borrow_mut() = Some(output);
+        }
+    }
+
     fn waveform(&self, composition: &Path, key: &str, buckets: usize) -> Vec<f32> {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();
@@ -502,6 +572,7 @@ fn used_keys(project: &Project) -> HashMap<String, usize> {
         for node in document.nodes() {
             let name = match node.content() {
                 NodeContent::Image(image) => image.source.as_str(),
+                NodeContent::Audio(audio) => audio.source.as_str(),
                 _ => continue,
             };
             if let Some(entry) = project.find_asset(name) {

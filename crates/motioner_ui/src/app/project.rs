@@ -48,6 +48,11 @@ impl PreviewApp {
 
     /// Opens `path` (folder, manifest or program) as the current project.
     pub(crate) fn open_composition(&mut self, path: &Path) {
+        if let Some(host) = self.host() {
+            host.audio_stop();
+        }
+        self.audio_started = false;
+        self.last_scrub_audio = None;
         let Some(host) = self.host() else {
             self.report("opening a project needs the desktop application");
             return;
@@ -96,8 +101,11 @@ impl PreviewApp {
     /// Closes the project and shows the start screen.
     pub(crate) fn close_project(&mut self) {
         if let Some(host) = self.host() {
+            host.audio_stop();
             host.end_session(self.editor.session().path());
         }
+        self.audio_started = false;
+        self.last_scrub_audio = None;
         self.recovery = None;
         let (recents, examples) = self.host().map_or_else(
             || (Vec::new(), Vec::new()),
@@ -400,12 +408,17 @@ impl PreviewApp {
         }
         let mut imported = 0_usize;
         let mut failure = None;
+        let mut last_key = None;
         for source in sources {
             match host.import_asset(&composition, &source) {
-                Ok(_) => imported += 1,
+                Ok(summary) => {
+                    imported += 1;
+                    last_key = Some(summary.key);
+                }
                 Err(message) => failure = Some(message),
             }
         }
+        self.last_imported = last_key;
         if let Some(message) = failure {
             self.report(&message);
         } else if imported > 0 {

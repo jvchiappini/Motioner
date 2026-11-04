@@ -27,6 +27,8 @@ pub enum NodeKind {
     Text,
     /// A raster image.
     Image,
+    /// An audio clip.
+    Audio,
 }
 
 impl NodeKind {
@@ -40,6 +42,7 @@ impl NodeKind {
             Self::Path => "Path",
             Self::Text => "Text",
             Self::Image => "Image",
+            Self::Audio => "Audio",
         }
     }
 
@@ -51,6 +54,7 @@ impl NodeKind {
             NodeContent::Path { .. } => Self::Path,
             NodeContent::Text(_) => Self::Text,
             NodeContent::Image(_) => Self::Image,
+            NodeContent::Audio(_) => Self::Audio,
         }
     }
 }
@@ -113,7 +117,7 @@ impl MaskRole {
 #[must_use]
 pub fn outline_rows(document: &Document) -> Vec<OutlineRow> {
     let mut rows = Vec::with_capacity(document.len());
-    let mut counters = [0u32; 6];
+    let mut counters = [0u32; 7];
     let roots = document.roots();
     for (index, &root) in roots.iter().enumerate() {
         push_rows(
@@ -133,7 +137,7 @@ fn push_rows(
     id: NodeId,
     depth: u32,
     has_next_sibling: bool,
-    counters: &mut [u32; 6],
+    counters: &mut [u32; 7],
     rows: &mut Vec<OutlineRow>,
 ) {
     let Some(node) = document.node(id) else {
@@ -221,6 +225,14 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
                 |asset| format!("{} × {}", asset.width, asset.height),
             );
             (stem, detail)
+        }
+        NodeContent::Audio(audio) => {
+            let stem = std::path::Path::new(&audio.source)
+                .file_stem()
+                .and_then(std::ffi::OsStr::to_str)
+                .filter(|stem| !stem.is_empty())
+                .map_or_else(|| format!("Audio {ordinal}"), ToOwned::to_owned);
+            (stem, format!("in {:.2}s", audio.in_point.value()))
         }
     }
 }

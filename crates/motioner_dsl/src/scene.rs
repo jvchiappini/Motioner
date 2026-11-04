@@ -8,11 +8,11 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use motioner_core::{
-    BlendMode, CharOrder, CharProperty, CharValue, Color, Composition, ContentChannel,
-    ContentField, ContentValue, CoreError, Document, Ease, Effect, EffectChannel, EffectKind,
-    EffectParam, EffectValueInput, FrameRate, Gradient, ImageContent, ImageFit, LineCap, LineJoin,
-    MaskMode, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint, Property,
-    PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Vec2, MAX_CANVAS_SIZE,
+    AudioContent, BlendMode, CharOrder, CharProperty, CharValue, Color, Composition,
+    ContentChannel, ContentField, ContentValue, CoreError, Document, Ease, Effect, EffectChannel,
+    EffectKind, EffectParam, EffectValueInput, FrameRate, Gradient, ImageContent, ImageFit,
+    LineCap, LineJoin, MaskMode, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint,
+    Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Vec2, MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -174,6 +174,7 @@ impl Scene {
             }
             Builtin::Text => self.text(args, site),
             Builtin::Image => self.image(args, site),
+            Builtin::Audio => self.audio(args, site),
             Builtin::Stagger => self.stagger(args, site),
             Builtin::Path => self.path(args, site),
             Builtin::Polygon => self.polygon(args, site),
@@ -355,6 +356,67 @@ impl Scene {
         let node = self.create(NodeContent::Image(content), site)?;
         if let Value::Node(id) = node {
             for (index, property) in [(0, "source"), (1, "width"), (2, "height"), (3, "fit")] {
+                self.record(id, property, bound.source(index));
+            }
+        }
+        Ok(node)
+    }
+
+    /// `audio(source, in_point=0.0, out_point=None, gain=1.0, start=0,
+    /// pan=0.0, fade_in=0, fade_out=0)` (D-0048).
+    fn audio(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "source",
+            "in_point",
+            "out_point",
+            "gain",
+            "start",
+            "pan",
+            "fade_in",
+            "fade_out",
+        ];
+        let bound = bind("audio", &params, 1, args)?;
+        let source = bound.string_or(0, "")?;
+        if source.is_empty() {
+            return Err(HostError::value_error(
+                "audio(): 'source' must be a non-empty project-relative path",
+            ));
+        }
+        let optional = |index: usize, name: &str| -> HostResult<f64> {
+            match bound.get(index) {
+                None | Some(Value::None) => Ok(0.0),
+                Some(Value::Number(number)) => Ok(*number),
+                Some(other) => Err(HostError::type_error(format!(
+                    "audio(): '{name}' must be a number or None, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        let start = bound.number_or(4, 0.0)?;
+        if !start.is_finite() {
+            return Err(HostError::value_error("audio(): 'start' must be finite"));
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let start = start.round() as i64;
+        let mut content = AudioContent::new(source.to_string(), start);
+        content.in_point = motioner_core::Animatable::new(bound.number_or(1, 0.0)?);
+        content.out_point = motioner_core::Animatable::new(optional(2, "out_point")?);
+        content.gain = motioner_core::Animatable::new(bound.number_or(3, 1.0)?);
+        content.pan = motioner_core::Animatable::new(bound.number_or(5, 0.0)?);
+        content.fade_in = bound.number_or(6, 0.0)?.max(0.0);
+        content.fade_out = bound.number_or(7, 0.0)?.max(0.0);
+        let node = self.create(NodeContent::Audio(content), site)?;
+        if let Value::Node(id) = node {
+            for (index, property) in [
+                (0, "source"),
+                (1, "in_point"),
+                (2, "out_point"),
+                (3, "gain"),
+                (4, "start"),
+                (5, "pan"),
+                (6, "fade_in"),
+                (7, "fade_out"),
+            ] {
                 self.record(id, property, bound.source(index));
             }
         }
@@ -1661,6 +1723,13 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::TrimOffset
         | ContentField::Dash
         | ContentField::DashOffset
+        | ContentField::InPoint
+        | ContentField::OutPoint
+        | ContentField::Gain
+        | ContentField::Pan
+        | ContentField::Start
+        | ContentField::FadeIn
+        | ContentField::FadeOut
         | ContentField::FillStopOffset(_)
         | ContentField::StrokeStopOffset(_) => number(value),
         ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_) => match value {

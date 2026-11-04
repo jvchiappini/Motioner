@@ -11,8 +11,10 @@ repository.workspace = true
 motioner_core.workspace = true
 # The project manifest is MDF constants; the parser and diagnostics are shared.
 motioner_dsl.workspace = true
+motioner_eval.workspace = true
 png.workspace = true
 sha2.workspace = true
+time = { version = "0.3.55", features = ["local-offset", "formatting", "parsing"] }
 
 [lints]
 workspace = true

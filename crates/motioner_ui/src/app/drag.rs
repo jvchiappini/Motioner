@@ -26,6 +26,7 @@ impl PreviewApp {
             Drag::Scrub => {
                 let frame = self.x_frame(layout, at.0);
                 self.run(&Command::Seek(frame));
+                self.scrub_audio();
             }
             Drag::Splitter {
                 which,
@@ -134,6 +135,47 @@ impl PreviewApp {
                     *moved = true;
                 }
                 *last = at;
+            }
+            Drag::Clip(clip) => {
+                let delta = self.x_frame(layout, at.0) - clip.start_pointer_frame;
+                if delta == 0 {
+                    self.pointer.drag = Some(drag);
+                    return;
+                }
+                match clip.kind {
+                    super::pointer::ClipKind::Body => {
+                        let start = clip.start.saturating_add(delta).max(0);
+                        let _ = self.run(&Command::Edit {
+                            id: clip.id.clone(),
+                            property: "start".to_owned(),
+                            value: OverrideValue::Number(start as f64),
+                        });
+                    }
+                    super::pointer::ClipKind::TrimStart => {
+                        let start = clip.start.saturating_add(delta).max(0);
+                        let actual = start - clip.start;
+                        let in_point = (clip.in_point + actual as f64 / clip.fps).max(0.0);
+                        let _ = self.run(&Command::Edit {
+                            id: clip.id.clone(),
+                            property: "start".to_owned(),
+                            value: OverrideValue::Number(start as f64),
+                        });
+                        let _ = self.run(&Command::Edit {
+                            id: clip.id.clone(),
+                            property: "in_point".to_owned(),
+                            value: OverrideValue::Number(in_point),
+                        });
+                    }
+                    super::pointer::ClipKind::TrimEnd => {
+                        let end = clip.end.saturating_add(delta).max(clip.start + 1);
+                        let out_point = clip.in_point + (end - clip.start) as f64 / clip.fps;
+                        let _ = self.run(&Command::Edit {
+                            id: clip.id.clone(),
+                            property: "out_point".to_owned(),
+                            value: OverrideValue::Number(out_point),
+                        });
+                    }
+                }
             }
             Drag::Marquee { current, .. } => *current = at,
             Drag::Pan { last } => {
@@ -296,7 +338,8 @@ impl PreviewApp {
                 | Drag::Keys { .. }
                 | Drag::Field { .. }
                 | Drag::GraphKey { .. }
-                | Drag::GraphHandle { .. },
+                | Drag::GraphHandle { .. }
+                | Drag::Clip(_),
             ) => {
                 self.editor.end_gesture();
             }
@@ -411,7 +454,10 @@ impl PreviewApp {
                 | Hit::TimelinePrevKey(_)
                 | Hit::TimelineKeyToggle(_)
                 | Hit::TimelineNextKey(_)
-                | Hit::TimelineField(_),
+                | Hit::TimelineField(_)
+                | Hit::ClipBody(_)
+                | Hit::ClipTrimStart(_)
+                | Hit::ClipTrimEnd(_),
             ) => (
                 PanelId::Timeline,
                 self.timeline_layout.height,

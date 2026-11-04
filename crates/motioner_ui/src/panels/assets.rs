@@ -85,49 +85,54 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
 
 fn toolbar(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
-    let (add, view, unused) = v.layout.asset_toolbar();
+    let (add, list, grid, unused) = v.layout.asset_toolbar();
+    let button = |p: &mut Painter<'_>, rect: Rect, hovered: bool| {
+        p.fill_rounded(
+            rect,
+            if hovered { t.row_hover } else { t.raised },
+            p.m.px(size::RADIUS_SM),
+        );
+    };
     let add_state = v.interaction(Hit::AssetAdd);
-    p.fill_rounded(
-        add,
-        if add_state.hovered {
-            t.row_hover
-        } else {
-            t.raised
-        },
-        p.m.px(size::RADIUS_SM),
-    );
+    button(p, add, add_state.hovered);
     let plus = p.style(type_scale::BODY, t.text_body).medium();
     p.text_in("+", add, Align::Center, &plus);
 
-    let view_state = v.interaction(Hit::AssetView);
-    p.fill_rounded(
-        view,
-        if view_state.hovered {
-            t.row_hover
-        } else {
-            t.raised
-        },
-        p.m.px(size::RADIUS_SM),
-    );
-    let label = match v.assets.view() {
-        AssetView::List => "GRID",
-        AssetView::Grid => "LIST",
-    };
-    let style = p.style(type_scale::CAPTION, t.text_muted);
-    p.text_in(label, view, Align::Center, &style);
+    // One segmented control for the two views: a shared trough with the
+    // active segment filled, so no caption has to fit in a 44 px button.
+    let trough = Rect::new(list.x, list.y, grid.right() - list.x, list.h);
+    p.fill_rounded(trough, t.raised, p.m.px(size::RADIUS_SM));
+    for (view, rect) in [(AssetView::List, list), (AssetView::Grid, grid)] {
+        let state = v.interaction(Hit::AssetView(view));
+        let active = v.assets.view() == view;
+        if active {
+            p.fill_rounded(rect, t.selection, p.m.px(size::RADIUS_SM));
+        } else if state.hovered {
+            p.fill_rounded(rect, t.row_hover, p.m.px(size::RADIUS_SM));
+        }
+        let ink = if active { t.text } else { t.text_muted };
+        let icon = match view {
+            AssetView::List => crate::icons::Icon::List,
+            AssetView::Grid => crate::icons::Icon::Grid,
+        };
+        crate::icons::draw(p, icon, rect.inset(p.m.px(4.0)), ink, t.raised);
+    }
+    p.stroke_rounded(trough, t.hairline, p.m.px(size::RADIUS_SM), p.m.hairline());
 
     let unused_state = v.interaction(Hit::AssetRemoveUnused);
-    p.fill_rounded(
-        unused,
+    button(p, unused, unused_state.hovered);
+    let icon = crate::icons::Icon::Clean;
+    crate::icons::draw(
+        p,
+        icon,
+        unused.inset(p.m.px(4.0)),
         if unused_state.hovered {
-            t.row_hover
+            t.text
         } else {
-            t.raised
+            t.text_muted
         },
-        p.m.px(size::RADIUS_SM),
+        t.raised,
     );
-    let style = p.style(type_scale::CAPTION, t.text_muted);
-    p.text_in("CLEAN", unused, Align::Center, &style);
 }
 
 fn draw_list(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {

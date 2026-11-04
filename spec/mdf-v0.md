@@ -124,7 +124,7 @@ The v0 surface:
 | `latex(expression, size=48, color="#ffffff", display=False)` | LaTeX math |
 | `image(source, width=None, height=None, fit="contain")` | Image |
 | `video(source, in_point=0.0, out_point=None)` | Video clip |
-| `audio(source, in_point=0.0, out_point=None, gain=1.0)` | Audio clip |
+| `audio(source, in_point=0.0, out_point=None, gain=1.0, start=0, pan=0.0, fade_in=0, fade_out=0)` | Audio clip (D-0048) |
 | `camera(pos=(0, 0, 8), target=(0, 0, 0), fov=45)` | 3D camera |
 | `light(kind="directional", intensity=1.0, color="#ffffff")` | 3D light |
 | `mesh(source)` | glTF model |
@@ -148,10 +148,19 @@ Common node members:
 - Methods: `add(*nodes)`, `remove()`, `key(property, time, value, ease="linear")`,
   `ease(name)`, `effect(kind, **params)`, `mask(source, mode="alpha", invert=False)`.
 
-Every content field except `text`, `align`, `weight`, `cap` and `join` is an
-**animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
+`audio()` plays a project asset; it never draws pixels. `start` is the first
+composition frame, `in_point`/`out_point` are seconds inside the source
+(`out_point=None` means the file end), `gain` and `pan` (`-1..=1`) are
+keyable channels, and `fade_in`/`fade_out` are seconds. The mixer combines
+every visible audio layer to 48 kHz stereo; the editor's mute is the layer
+visibility and its solo mode silences the other audio layers.
+
+Every content field except `text`, `align`, `weight`, `cap`, `join`,
+`source`, `fit`, `in_point`, `out_point`, `start`, `fade_in` and `fade_out`
+is an **animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
 `key("tracking", t, 0.02)`, `key("line_height", t, 1.4)`,
-`key("stroke_width", t, 8)`, `key("trim_end", t, 1)`. Colours interpolate
+`key("stroke_width", t, 8)`, `key("trim_end", t, 1)`,
+`key("gain", t, 0.5)`, `key("pan", t, -0.5)`. Colours interpolate
 in linear-light sRGB; a `fill`/`stroke` keyed to `None` holds the previous
 colour until that key (a step). See D-0028.
 

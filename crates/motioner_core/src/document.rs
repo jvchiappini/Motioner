@@ -1348,11 +1348,59 @@ fn content_static_write(
                 }
                 Ok(())
             }
+            NodeContent::Audio(audio) => {
+                audio.source = source;
+                Ok(())
+            }
             _ => Err(wrong_kind(content, field)),
         },
         (ContentField::Fit, ContentValue::Fit(fit)) => match content {
             NodeContent::Image(image) => {
                 image.fit = fit;
+                Ok(())
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (
+            ContentField::InPoint
+            | ContentField::OutPoint
+            | ContentField::Gain
+            | ContentField::Pan
+            | ContentField::FadeIn
+            | ContentField::FadeOut,
+            ContentValue::Number(value),
+        ) => match content {
+            NodeContent::Audio(audio) => {
+                let channel = match field {
+                    ContentField::InPoint => &mut audio.in_point,
+                    ContentField::OutPoint => &mut audio.out_point,
+                    ContentField::Gain => &mut audio.gain,
+                    ContentField::Pan => &mut audio.pan,
+                    ContentField::FadeIn => {
+                        audio.fade_in = value.max(0.0);
+                        return Ok(());
+                    }
+                    _ => {
+                        audio.fade_out = value.max(0.0);
+                        return Ok(());
+                    }
+                };
+                set_number(channel, field, value, false)
+            }
+            _ => Err(wrong_kind(content, field)),
+        },
+        (ContentField::Start, ContentValue::Number(value)) => match content {
+            NodeContent::Audio(audio) => {
+                if !value.is_finite() {
+                    return Err(CoreError::InvalidContentValue {
+                        field: field.name(),
+                        reason: "start must be a finite frame",
+                    });
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    audio.start = value.round() as i64;
+                }
                 Ok(())
             }
             _ => Err(wrong_kind(content, field)),
@@ -1482,6 +1530,17 @@ fn content_key_write(
             | ContentField::StrokeStopColor(_),
             value,
         ) => key_stop(content, field, frame, value, ease)?,
+        (ContentField::Gain | ContentField::Pan, ContentValue::Number(v)) => match content {
+            NodeContent::Audio(audio) => {
+                let channel = if field == ContentField::Gain {
+                    &mut audio.gain
+                } else {
+                    &mut audio.pan
+                };
+                channel.insert_key(key(v, false)?);
+            }
+            _ => return Err(wrong_kind(content, field)),
+        },
         (
             ContentField::Fill | ContentField::Stroke | ContentField::Color,
             ContentValue::Gradient(_),
