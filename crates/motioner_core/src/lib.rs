@@ -39,9 +39,9 @@ pub use math::Vec2;
 pub use node::{
     is_valid_identity_name, AudioContent, BlendMode, CharOrder, CharProperty, CharValue,
     ContentChannel, ContentField, ContentValue, DecodedImage, ImageAsset, ImageContent, ImageFit,
-    ImageIssue, ImageKey, ImageLayout, ImageResolver, NoImages, Node, NodeContent, NodeId,
-    NodeIdentity, Paint, PaintSpec, Property, PropertyValue, Stroke, TextAlign, TextAnimator,
-    TextContent, Transform,
+    ImageIssue, ImageKey, ImageLayout, ImageResolver, NoImages, NoVideos, Node, NodeContent,
+    NodeId, NodeIdentity, Paint, PaintSpec, Property, PropertyValue, Stroke, TextAlign,
+    TextAnimator, TextContent, Transform, VideoAsset, VideoContent, VideoResolver,
 };
 pub use overrides::{
     format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,

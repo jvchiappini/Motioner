@@ -48,6 +48,7 @@ mod layout;
 mod outline;
 mod paint;
 mod panels;
+mod properties;
 mod session;
 mod start;
 mod text;
@@ -60,7 +61,7 @@ mod viewport;
 mod widgets;
 mod window;
 
-pub use assets::{format_size, AssetKindUi, AssetSummary, AssetView, AssetsModel};
+pub use assets::{format_size, AssetKindUi, AssetSummary, AssetView, AssetsModel, VideoThumb};
 pub use bounds::{hit_node, hit_node_where, node_bounds, Bounds, MeasureText};
 pub use capture::{CaptureResult, PngWriter, DELIVERY_FRAMES};
 pub use command::{
@@ -78,7 +79,7 @@ pub use host::{ProjectHost, RecoveryInfo};
 pub use input::{command_for, Modifiers, Toggles};
 pub use inspect::{
     hex, inspect_comp, inspect_node, kind_label, Axis, Channel, Editing, Field, FieldTarget,
-    Header, Item, Layout as InspectLayout, Model as InspectModel, Row, RowValue,
+    Header, Item, Layout as InspectLayout, MediaState, Model as InspectModel, Row, RowValue,
 };
 pub use json::Json;
 pub use labels::{content_label, transform_label};
@@ -86,6 +87,7 @@ pub use layout::{
     Hit, Layout, LeftTab, MenuAction, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton,
 };
 pub use outline::{outline_rows, NodeKind, OutlineRow};
+pub use properties::PropertySet;
 pub use session::{
     overrides_path, write_atomic, DiagnosticInfo, PreviewSession, SessionError, WRITE_DEBOUNCE,
 };
@@ -100,8 +102,8 @@ pub use timeline::{
     frame_to_x, tick_frames, tick_spacing, x_to_frame, TickSpacing, TickUnit, MIN_TICK_SPACING_PX,
 };
 pub use timeline_model::{
-    audio_clip_range, AudioClipRange, RowKind as TimelineRowKind, TimelineRow, TimelineRows,
-    VisibleRun,
+    audio_clip_range, video_clip_range, AudioClipRange, RowKind as TimelineRowKind, TimelineRow,
+    TimelineRows, VisibleRun,
 };
 pub use transport::{elapsed_frames, skipped_frames, timecode, Transport};
 pub use viewport::{

@@ -71,6 +71,9 @@ pub struct ImageData {
     pub height: u32,
     /// Straight-alpha sRGB RGBA8, `width * height * 4` bytes.
     pub rgba8: Vec<u8>,
+    /// Changes when the bytes for the same key change. A live video frame
+    /// reuses one key and bumps this so the texture is rewritten in place.
+    pub revision: u64,
 }
 
 /// Every decoded image a renderer may draw, keyed by content hash.
@@ -165,6 +168,17 @@ trait Canvas2d {
     /// Returns [`RenderError::Image`] when the pinned engine has no image
     /// support or the upload fails.
     fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError>;
+
+    /// Rewrites an existing image texture in place (same dimensions).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Image`] when the pinned engine rejects the
+    /// update.
+    fn update_image(&mut self, texture_id: u32, image: &ImageData) -> Result<(), RenderError>;
+
+    /// Frees an image texture so a resized frame can be registered again.
+    fn free_image(&mut self, texture_id: u32);
 
     /// Queues one sprite quad for an image texture.
     fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance);
@@ -288,6 +302,18 @@ impl Canvas2d for Pure2dHarness {
         })
     }
 
+    fn update_image(&mut self, texture_id: u32, image: &ImageData) -> Result<(), RenderError> {
+        self.renderer_mut()
+            .update_sprite_texture(texture_id, image.width, image.height, &image.rgba8)
+            .map_err(|error| RenderError::Image {
+                message: error.to_string(),
+            })
+    }
+
+    fn free_image(&mut self, texture_id: u32) {
+        self.renderer_mut().free_sprite_texture(texture_id);
+    }
+
     fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance) {
         self.draw_sprite(texture_id, instance);
     }
@@ -389,6 +415,23 @@ impl Canvas2d for ferrous_renderer::Renderer {
         })
     }
 
+    fn update_image(&mut self, texture_id: u32, image: &ImageData) -> Result<(), RenderError> {
+        ferrous_renderer::Renderer::update_sprite_texture(
+            self,
+            texture_id,
+            image.width,
+            image.height,
+            &image.rgba8,
+        )
+        .map_err(|error| RenderError::Image {
+            message: error.to_string(),
+        })
+    }
+
+    fn free_image(&mut self, texture_id: u32) {
+        ferrous_renderer::Renderer::free_sprite_texture(self, texture_id);
+    }
+
     fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance) {
         ferrous_renderer::Renderer::draw_sprite_2d(self, texture_id, instance);
     }
@@ -458,6 +501,7 @@ pub struct FrameRenderer {
     path_cache: paths::PathCache,
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
+    image_revisions: HashMap<motioner_core::ImageKey, u64>,
     texture_budget: u64,
     /// Reused across frame renders, so a preview does not rebuild the
     /// evaluator scratch or the plan's item buffers every call.
@@ -682,6 +726,14 @@ impl FrameRenderer {
     pub fn set_images(&mut self, images: ImageSet) {
         self.images = images;
         self.image_textures.clear();
+        self.image_revisions.clear();
+    }
+
+    /// Adds or replaces one decoded image without dropping the other
+    /// textures. A live video calls this every displayed frame; a newer
+    /// `revision` rewrites the same texture in place.
+    pub fn set_image(&mut self, image: ImageData) {
+        self.images.insert(image);
     }
 
     /// The configured image-texture budget in bytes.
@@ -796,6 +848,7 @@ pub struct LivePainter {
     path_cache: paths::PathCache,
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
+    image_revisions: HashMap<motioner_core::ImageKey, u64>,
 }
 
 #[cfg(feature = "live")]
@@ -846,6 +899,7 @@ impl LivePainter {
             path_cache: paths::PathCache::default(),
             images: ImageSet::new(),
             image_textures: HashMap::new(),
+            image_revisions: HashMap::new(),
         })
     }
 
@@ -859,6 +913,12 @@ impl LivePainter {
     pub fn set_images(&mut self, images: ImageSet) {
         self.images = images;
         self.image_textures.clear();
+        self.image_revisions.clear();
+    }
+
+    /// Adds or replaces one image without dropping the other textures.
+    pub fn set_image(&mut self, image: ImageData) {
+        self.images.insert(image);
     }
 
     /// Drops the cached per-node missing-glyph counts.
@@ -922,6 +982,7 @@ impl LivePainter {
             &gradients,
             &self.images,
             &mut self.image_textures,
+            &mut self.image_revisions,
             None,
         )
     }
@@ -956,6 +1017,7 @@ impl LivePainter {
             &gradients,
             &self.images,
             &mut self.image_textures,
+            &mut self.image_revisions,
             Some(hidden),
         )
     }

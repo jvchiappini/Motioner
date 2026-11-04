@@ -71,13 +71,14 @@ pub(crate) enum Builtin {
     TextBounds,
     Image,
     Audio,
+    Video,
     Bezier,
     Stagger,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 30] = [
+    pub const ALL: [(Self, &'static str); 31] = [
         (Self::Range, "range"),
         (Self::Len, "len"),
         (Self::Min, "min"),
@@ -106,6 +107,7 @@ impl Builtin {
         (Self::TextBounds, "text_bounds"),
         (Self::Image, "image"),
         (Self::Audio, "audio"),
+        (Self::Video, "video"),
         (Self::Bezier, "bezier"),
         (Self::Stagger, "stagger"),
     ];

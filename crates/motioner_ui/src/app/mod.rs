@@ -133,6 +133,12 @@ pub(crate) struct PreviewApp {
     space_dragged: bool,
     /// Project services, when the application supplied them.
     host: Option<Rc<dyn crate::ProjectHost>>,
+    /// Frame and proxy mode whose video textures are already uploaded.
+    video_last: Option<(Frame, bool)>,
+    /// Decoded-video bytes reported by the host (the profiler readout).
+    video_bytes: usize,
+    /// Proxy progress text for the top bar, when a job is running.
+    proxy_status: Option<String>,
     /// The start screen, when it is open instead of the editor.
     start: Option<crate::StartScreen>,
     /// Start-screen target under the pointer.
@@ -246,6 +252,9 @@ impl PreviewApp {
             space_down: false,
             space_dragged: false,
             host,
+            video_last: None,
+            video_bytes: 0,
+            proxy_status: None,
             start,
             start_hover: None,
             start_pressed: None,
@@ -664,6 +673,7 @@ impl PreviewApp {
         self.tick_session();
 
         self.handle_pointer(ctx, &layout);
+        self.poll_proxy_status();
         self.sync_audio();
         self.reveal(&layout);
         self.editor.session_mut().flush_overrides(Instant::now());
@@ -671,6 +681,29 @@ impl PreviewApp {
         self.editor.sync_models();
         self.marquee = self.pointer.marquee_rect();
         self.retitle();
+    }
+
+    /// Refreshes the video memory readout and the proxy progress text.
+    fn poll_proxy_status(&mut self) {
+        let Some(host) = self.host.as_ref() else {
+            return;
+        };
+        self.video_bytes = host.video_cache_bytes();
+        let Some(document) = self.editor.session().document() else {
+            self.proxy_status = None;
+            return;
+        };
+        let path = self.editor.session().path();
+        self.proxy_status = document.nodes().find_map(|node| {
+            let motioner_core::NodeContent::Video(video) = node.content() else {
+                return None;
+            };
+            host.proxy_progress(path, &video.source).map(|fraction| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u32;
+                format!("Proxy {percent}%")
+            })
+        });
     }
 
     /// Audio-layer identities muted by the editor: hidden layers, plus every
@@ -685,7 +718,10 @@ impl PreviewApp {
             .iter()
             .filter(|row| {
                 document.node(row.node).is_some_and(|node| {
-                    matches!(node.content(), motioner_core::NodeContent::Audio(_))
+                    matches!(
+                        node.content(),
+                        motioner_core::NodeContent::Audio(_) | motioner_core::NodeContent::Video(_)
+                    )
                 })
             })
             .map(|row| row.node)
@@ -762,6 +798,7 @@ impl PreviewApp {
                 .is_some_and(|limit| self.frames_presented >= limit)
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per hit target
     fn tooltip(&self, layout: &Layout) -> Option<TooltipRequest> {
         if self.pointer.pressed.is_some() || self.pointer.hover_since.elapsed() < TOOLTIP_DELAY {
             return None;
@@ -798,6 +835,11 @@ impl PreviewApp {
                 None,
                 layout.asset_toolbar().3,
             ),
+            Hit::AssetRow(_) => (
+                "Used by the layers shown in the \u{00d7}N column",
+                None,
+                Rect::default(),
+            ),
             Hit::ZoomPill => (
                 "Fit the canvas to the composition",
                 Some("F"),
@@ -830,6 +872,18 @@ impl PreviewApp {
                 None,
                 self.inspector_item_rect(item),
             ),
+            Hit::InspectSegment { item, segment }
+                if matches!(
+                    self.inspector_row_value(item),
+                    Some(inspect::RowValue::EffectAdd)
+                ) =>
+            {
+                (
+                    ["Drop shadow", "Blur", "Glow"][segment.min(2)],
+                    None,
+                    self.inspector_item_rect(item),
+                )
+            }
             Hit::TimelineStopwatch(row) => (
                 "Animate this property",
                 None,
@@ -845,7 +899,7 @@ impl PreviewApp {
         };
         Some(TooltipRequest {
             anchor,
-            label,
+            label: label.to_owned(),
             shortcut,
         })
     }
@@ -1030,6 +1084,8 @@ impl PreviewApp {
                 allocations: 0,
                 blur_ms: self.blur.last_ms(),
             },
+            video_bytes: self.video_bytes,
+            proxy_status: self.proxy_status.as_deref(),
             layer_scroll: self.scroll_px(PanelId::Layers),
             inspector_scroll: self.scroll_px(PanelId::Inspector),
             reload_pulse: facts.reload_pulse,
@@ -1093,7 +1149,7 @@ impl PreviewApp {
                 &mut p,
                 request.anchor,
                 layout.window,
-                request.label,
+                &request.label,
                 request.shortcut,
             );
         }

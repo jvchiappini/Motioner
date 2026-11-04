@@ -315,6 +315,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub struct ProjectImages {
     store: RefCell<crate::images::ImageStore>,
     aliases: HashMap<String, String>,
+    videos: HashMap<String, (PathBuf, [u8; 32])>,
+    root: PathBuf,
 }
 
 impl std::fmt::Debug for ProjectImages {
@@ -322,6 +324,8 @@ impl std::fmt::Debug for ProjectImages {
         f.debug_struct("ProjectImages")
             .field("store", &self.store)
             .field("aliases", &self.aliases)
+            .field("videos", &self.videos)
+            .field("root", &self.root)
             .finish()
     }
 }
@@ -331,7 +335,21 @@ impl ProjectImages {
     #[must_use]
     pub fn new(project: &Project) -> Self {
         let mut aliases = HashMap::new();
+        let mut videos = HashMap::new();
         for entry in project.assets() {
+            if entry.kind == AssetKind::Video {
+                let path = project.assets_dir().join(entry.file_name());
+                let digest = image_key_from_hex(&entry.hash).map_or([0; 32], |key| *key.as_bytes());
+                for alias in [
+                    entry.key.to_ascii_lowercase(),
+                    entry.original.to_ascii_lowercase(),
+                    format!("assets/{}", entry.original).to_ascii_lowercase(),
+                    entry.hash.clone(),
+                ] {
+                    videos.insert(alias, (path.clone(), digest));
+                }
+                continue;
+            }
             if entry.kind != AssetKind::Image {
                 continue;
             }
@@ -347,15 +365,21 @@ impl ProjectImages {
         Self {
             store: RefCell::new(crate::images::ImageStore::new(project.root())),
             aliases,
+            videos,
+            root: project.root().to_path_buf(),
         }
     }
 
     /// A resolver for single-file mode: project-relative paths only.
     #[must_use]
     pub fn loose(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        let store = crate::images::ImageStore::new(root.clone());
         Self {
-            store: RefCell::new(crate::images::ImageStore::new(root)),
+            store: RefCell::new(store),
             aliases: HashMap::new(),
+            videos: HashMap::new(),
+            root,
         }
     }
 
@@ -365,10 +389,61 @@ impl ProjectImages {
         self.store.borrow().decoded()
     }
 
+    /// The blob path of a video source (registry key or original name).
+    #[must_use]
+    pub fn video_path(&self, source: &str) -> Option<PathBuf> {
+        self.videos
+            .get(&source.to_ascii_lowercase())
+            .map(|(path, _)| path.clone())
+            .or_else(|| {
+                let path = self.root.join(source);
+                path.is_file().then_some(path)
+            })
+    }
+
     /// The inner store.
     #[must_use]
     pub fn into_inner(self) -> crate::images::ImageStore {
         self.store.into_inner()
+    }
+}
+
+/// Parses a 64-character lower-case SHA-256 hex string into an image key.
+#[must_use]
+pub fn image_key_from_hex(hex: &str) -> Option<motioner_core::ImageKey> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let text = std::str::from_utf8(pair).ok()?;
+        bytes[index] = u8::from_str_radix(text, 16).ok()?;
+    }
+    Some(motioner_core::ImageKey::from_bytes(bytes))
+}
+
+impl motioner_core::VideoResolver for ProjectImages {
+    fn resolve_video(&self, source: &str) -> Result<motioner_core::VideoAsset, String> {
+        let (path, digest) = if let Some(found) = self.videos.get(&source.to_ascii_lowercase()) {
+            (found.0.clone(), found.1)
+        } else {
+            let path = self.root.join(source);
+            let bytes = std::fs::read(&path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let key = image_key_from_hex(&sha256_hex(&bytes))
+                .ok_or_else(|| "cannot hash the video file".to_owned())?;
+            (path, *key.as_bytes())
+        };
+        let info = crate::video::probe(&path, &crate::FfmpegLocation::FromEnvOrPath)
+            .map_err(|error| error.to_string())?;
+        Ok(motioner_core::VideoAsset {
+            key: motioner_core::ImageKey::from_bytes(digest),
+            width: info.width,
+            height: info.height,
+            fps: motioner_core::FrameRate::new(info.fps_numerator, info.fps_denominator)
+                .map_err(|error| error.to_string())?,
+            duration: info.duration,
+        })
     }
 }
 

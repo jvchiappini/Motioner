@@ -394,6 +394,15 @@ fn effect_edits(command: &Command, document: &Document) -> Result<Vec<EditComman
         ));
     };
     let node = channels::node_of(document, id)?;
+    if !document
+        .node(node)
+        .is_some_and(|node| crate::properties::PropertySet::of(node.content()).has_visual())
+    {
+        return Err(CommandError::new(
+            ErrorKind::UnknownProperty,
+            "effects do not apply to an audio layer",
+        ));
+    }
     let stack: Vec<EffectKind> = document
         .node(node)
         .map(|node| {
@@ -466,6 +475,15 @@ fn mask_edits(command: &Command, document: &Document) -> Result<Vec<EditCommand>
             invert,
         } => {
             let node = channels::node_of(document, id)?;
+            if !document
+                .node(node)
+                .is_some_and(|node| crate::properties::PropertySet::of(node.content()).has_visual())
+            {
+                return Err(CommandError::new(
+                    ErrorKind::UnknownProperty,
+                    "masks do not apply to an audio layer",
+                ));
+            }
             let source_node = document.find(source).ok_or_else(|| {
                 CommandError::new(
                     ErrorKind::UnknownNode,
@@ -491,6 +509,15 @@ fn mask_edits(command: &Command, document: &Document) -> Result<Vec<EditCommand>
         }
         Command::MaskClear { id } => {
             let node = channels::node_of(document, id)?;
+            if !document
+                .node(node)
+                .is_some_and(|node| crate::properties::PropertySet::of(node.content()).has_visual())
+            {
+                return Err(CommandError::new(
+                    ErrorKind::UnknownProperty,
+                    "masks do not apply to an audio layer",
+                ));
+            }
             if document
                 .node(node)
                 .and_then(motioner_core::Node::mask)
@@ -728,7 +755,35 @@ fn set_value(
             format!("use {property}(id, on) for '{property}'"),
         ));
     }
+    let properties = document
+        .node(node)
+        .map(|node| crate::properties::PropertySet::of(node.content()))
+        .unwrap_or_default();
     let (base, axis) = split_property(property);
+    if Property::from_name(base).is_some() && !properties.has_visual() {
+        return Err(CommandError::new(
+            ErrorKind::UnknownProperty,
+            format!("'{property}' does not apply to an audio layer"),
+        ));
+    }
+    if property == "blend" && !properties.has_visual() {
+        return Err(CommandError::new(
+            ErrorKind::UnknownProperty,
+            "'blend' does not apply to an audio layer",
+        ));
+    }
+    if property == motioner_core::EFFECTS && !properties.has_visual() {
+        return Err(CommandError::new(
+            ErrorKind::UnknownProperty,
+            "'effects' does not apply to an audio layer",
+        ));
+    }
+    if EffectChannel::from_name(property).is_some() && !properties.has_visual() {
+        return Err(CommandError::new(
+            ErrorKind::UnknownProperty,
+            format!("'{property}' does not apply to an audio layer"),
+        ));
+    }
     if let (Some(p), Some(axis)) = (Property::from_name(base), axis) {
         let OverrideValue::Number(number) = value else {
             return Err(CommandError::new(

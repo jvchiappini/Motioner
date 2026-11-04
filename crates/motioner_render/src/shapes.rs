@@ -85,6 +85,7 @@ pub(crate) fn draw_item(
     gradients: &GradientTable,
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
+    image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -171,6 +172,7 @@ pub(crate) fn draw_item(
             canvas,
             images,
             image_textures,
+            image_revisions,
             item,
             model,
             key,
@@ -189,6 +191,7 @@ fn draw_image(
     canvas: &mut impl Canvas2d,
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
+    image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
     item: &RenderItem,
     model: Affine2,
     key: Option<motioner_core::ImageKey>,
@@ -205,10 +208,39 @@ fn draw_image(
         return 0;
     };
     let texture_id = match image_textures.get(&key) {
-        Some(&id) => id,
+        Some(&id) => {
+            if image_revisions
+                .get(&key)
+                .is_none_or(|revision| *revision != image.revision)
+            {
+                if canvas.update_image(id, image).is_err() {
+                    // A video switches between its original and proxy sizes;
+                    // drop the stale texture and register the new frame.
+                    canvas.free_image(id);
+                    match canvas.register_image(image) {
+                        Ok(new_id) => {
+                            image_textures.insert(key, new_id);
+                            image_revisions.insert(key, image.revision);
+                            new_id
+                        }
+                        Err(_) => {
+                            return draw_placeholder(
+                                canvas, item, model, width, height, z_index, total,
+                            )
+                        }
+                    }
+                } else {
+                    image_revisions.insert(key, image.revision);
+                    id
+                }
+            } else {
+                id
+            }
+        }
         None => match canvas.register_image(image) {
             Ok(id) => {
                 image_textures.insert(key, id);
+                image_revisions.insert(key, image.revision);
                 id
             }
             Err(_) => return draw_placeholder(canvas, item, model, width, height, z_index, total),

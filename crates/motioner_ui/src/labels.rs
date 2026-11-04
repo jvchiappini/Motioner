@@ -66,6 +66,7 @@ pub fn content_label(field: ContentField) -> String {
         ContentField::Start => "Start",
         ContentField::FadeIn => "Fade in",
         ContentField::FadeOut => "Fade out",
+        ContentField::Speed => "Speed",
         ContentField::FillStopOffset(_)
         | ContentField::FillStopColor(_)
         | ContentField::StrokeStopOffset(_)

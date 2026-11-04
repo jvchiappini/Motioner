@@ -153,6 +153,7 @@ pub struct PreviewSession {
     /// Text this editor last wrote or read, to recognise its own write.
     last_overrides_text: String,
     images: Rc<dyn motioner_core::ImageResolver>,
+    videos: Rc<dyn motioner_core::VideoResolver>,
 }
 
 impl PreviewSession {
@@ -181,6 +182,7 @@ impl PreviewSession {
             write_at: Instant::now(),
             last_overrides_text: String::new(),
             images: Rc::new(motioner_core::NoImages),
+            videos: Rc::new(motioner_core::NoVideos),
         }
     }
 
@@ -200,6 +202,11 @@ impl PreviewSession {
     /// Installs the image resolver used by `image()` nodes (D-0035).
     pub fn set_image_resolver(&mut self, resolver: Rc<dyn motioner_core::ImageResolver>) {
         self.images = resolver;
+    }
+
+    /// Installs the video resolver used by `video()` nodes.
+    pub fn set_video_resolver(&mut self, resolver: Rc<dyn motioner_core::VideoResolver>) {
+        self.videos = resolver;
     }
 
     /// Every decoded image, for the live painter's texture uploads.
@@ -329,6 +336,7 @@ impl PreviewSession {
 
     fn accept(&mut self, mut compiled: Compiled) {
         let issues = compiled.document.resolve_images(self.images.as_ref());
+        let _ = compiled.document.resolve_videos(self.videos.as_ref());
         self.document = Some(compiled.document);
         self.overrides = compiled.overrides;
         self.warnings = compiled

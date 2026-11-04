@@ -96,6 +96,25 @@ Not needed: the panels read pure models; the app turns input into commands.
 
 partial — last verified: 2026-11-01
 
+## Video (Phase 6)
+
+- `properties::PropertySet` is the one kind → property-set table. Audio has
+  only the audio set; video has both visual and audio; the inspector and the
+  timeline read it instead of duplicating `NodeContent` matches
+  (`crates/motioner_ui/src/properties.rs:1-60`).
+- Video inspector rows: source, natural size, width/height, fit, speed,
+  start, in/out, gain, mute and solo; timeline rows add width/height, source,
+  fit, speed, start, in/out and gain (`crates/motioner_ui/src/inspect.rs:539`,
+  `crates/motioner_ui/src/timeline_model.rs:522`).
+- Timeline draws six host-provided thumbnails through
+  `Painter::image_grid`; trim/move use `video_clip_range` and Alt-drag slips
+  `in_point` (`crates/motioner_ui/src/panels/timeline.rs:815`,
+  `crates/motioner_ui/src/app/drag.rs:150`).
+- The preview requests one decoded source frame per video layer, uploads it
+  under a stable tagged key and reads proxy progress/memory back from the
+  host (`crates/motioner_ui/src/app/canvas.rs:210`,
+  `crates/motioner_ui/src/app/mod.rs:730`).
+
 ## Audio (D-0048)
 
 - The timeline draws a waveform bar for `NodeKind::Audio` rows

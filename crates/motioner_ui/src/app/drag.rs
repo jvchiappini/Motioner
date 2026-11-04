@@ -143,6 +143,16 @@ impl PreviewApp {
                     return;
                 }
                 match clip.kind {
+                    super::pointer::ClipKind::Body if modifiers.alt => {
+                        // Slip: move the source window under a fixed clip.
+                        let slip = delta as f64 / clip.fps * clip.speed;
+                        let in_point = (clip.in_point + slip).max(0.0);
+                        let _ = self.run(&Command::Edit {
+                            id: clip.id.clone(),
+                            property: "in_point".to_owned(),
+                            value: OverrideValue::Number(in_point),
+                        });
+                    }
                     super::pointer::ClipKind::Body => {
                         let start = clip.start.saturating_add(delta).max(0);
                         let _ = self.run(&Command::Edit {
@@ -154,7 +164,8 @@ impl PreviewApp {
                     super::pointer::ClipKind::TrimStart => {
                         let start = clip.start.saturating_add(delta).max(0);
                         let actual = start - clip.start;
-                        let in_point = (clip.in_point + actual as f64 / clip.fps).max(0.0);
+                        let in_point =
+                            (clip.in_point + actual as f64 / clip.fps * clip.speed).max(0.0);
                         let _ = self.run(&Command::Edit {
                             id: clip.id.clone(),
                             property: "start".to_owned(),
@@ -168,7 +179,8 @@ impl PreviewApp {
                     }
                     super::pointer::ClipKind::TrimEnd => {
                         let end = clip.end.saturating_add(delta).max(clip.start + 1);
-                        let out_point = clip.in_point + (end - clip.start) as f64 / clip.fps;
+                        let out_point =
+                            clip.in_point + (end - clip.start) as f64 / clip.fps * clip.speed;
                         let _ = self.run(&Command::Edit {
                             id: clip.id.clone(),
                             property: "out_point".to_owned(),

@@ -64,18 +64,16 @@ fn filter_field(p: &mut Painter<'_>, v: &View<'_>) {
         if v.show_shy { t.control } else { t.raised },
         p.m.px(size::RADIUS_SM),
     );
-    p.text_in(
-        "Y",
-        shy,
-        Align::Center,
-        &p.style(
-            type_scale::CAPTION,
-            if v.show_shy {
-                t.warning
-            } else {
-                t.text_disabled
-            },
-        ),
+    icons::draw(
+        p,
+        Icon::Filter,
+        shy.inset(p.m.px(3.0)),
+        if v.show_shy {
+            t.warning
+        } else {
+            t.text_disabled
+        },
+        t.raised,
     );
     let rect = v.layout.layer_filter();
     let editing = v
@@ -178,7 +176,9 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
     }
     draw_labels(p, v, row, rect, icon_right, selected, visible || !locked);
     if hovered || selected || !visible || locked || solo || shy {
-        draw_actions(p, v, index, rect, selected, visible, locked, solo, shy);
+        draw_actions(
+            p, v, index, row.kind, rect, selected, visible, locked, solo, shy,
+        );
     }
 }
 
@@ -238,13 +238,15 @@ fn draw_labels(
     };
     let detail_style = p.style(type_scale::CAPTION, detail_ink);
     let gap = p.m.px(size::GRID * 2.0);
-    let detail_measure = if row.detail.is_empty() {
+    let actions_x = v.layout.layer_lock(rect).x;
+    let available = (actions_x - p.m.px(size::GRID) - text_x).max(0.0);
+    // When the row is tight, the secondary detail is the first thing to go:
+    // the layer name is what the user scans for.
+    let detail_measure = if row.detail.is_empty() || available < p.m.px(110.0) {
         0.0
     } else {
         p.measure(&row.detail, &detail_style)
     };
-    let actions_x = v.layout.layer_lock(rect).x;
-    let available = (actions_x - p.m.px(size::GRID) - text_x).max(0.0);
     let (name_room, detail_room) = label_rooms(available, detail_measure, gap);
     let name_style = p.style(
         type_scale::BODY,
@@ -293,6 +295,7 @@ fn draw_actions(
     p: &mut Painter<'_>,
     v: &View<'_>,
     index: usize,
+    kind: crate::outline::NodeKind,
     rect: Rect,
     selected: bool,
     visible: bool,
@@ -312,7 +315,12 @@ fn draw_actions(
     } else {
         t.warning
     };
-    icons::draw(p, Icon::Eye, eye.inset(p.m.px(2.0)), eye_ink, surface);
+    let visibility_icon = if kind == crate::outline::NodeKind::Audio {
+        Icon::Mute
+    } else {
+        Icon::Eye
+    };
+    icons::draw(p, visibility_icon, eye.inset(p.m.px(2.0)), eye_ink, surface);
     let lock = v.layout.layer_lock(rect);
     let lock_ink = if locked {
         t.warning
@@ -325,23 +333,19 @@ fn draw_actions(
     icons::draw(p, glyph, lock.inset(p.m.px(3.0)), lock_ink, surface);
     let solo_rect = v.layout.layer_solo(rect);
     let shy_rect = v.layout.layer_shy(rect);
-    p.text_in(
-        "S",
-        solo_rect,
-        Align::Center,
-        &p.style(
-            type_scale::CAPTION,
-            if solo { t.accent } else { t.text_disabled },
-        ),
+    icons::draw(
+        p,
+        Icon::Solo,
+        solo_rect.inset(p.m.px(3.0)),
+        if solo { t.accent } else { t.text_disabled },
+        surface,
     );
-    p.text_in(
-        "Y",
-        shy_rect,
-        Align::Center,
-        &p.style(
-            type_scale::CAPTION,
-            if shy { t.warning } else { t.text_disabled },
-        ),
+    icons::draw(
+        p,
+        Icon::Filter,
+        shy_rect.inset(p.m.px(3.0)),
+        if shy { t.warning } else { t.text_disabled },
+        surface,
     );
 }
 /// The collapsible "Orphans" section: overrides whose node is gone.
@@ -488,6 +492,14 @@ mod tests {
     fn a_zero_width_row_does_not_panic() {
         let (name_room, detail_room) = label_rooms(0.0, 100.0, 8.0);
         assert!(name_room.abs() < 1e-6);
+        assert!(detail_room.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_narrow_row_drops_the_secondary_detail_first() {
+        // 100 px available is below the 110 px threshold used by `draw_labels`.
+        let (name_room, detail_room) = label_rooms(100.0, 0.0, 8.0);
+        assert!((name_room - 100.0).abs() < 1e-6);
         assert!(detail_room.abs() < 1e-6);
     }
 }

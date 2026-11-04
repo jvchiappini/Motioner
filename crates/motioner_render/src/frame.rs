@@ -55,6 +55,7 @@ pub(crate) fn create(
         path_cache: PathCache::default(),
         images: crate::ImageSet::new(),
         image_textures: HashMap::new(),
+        image_revisions: HashMap::new(),
         texture_budget: crate::DEFAULT_TEXTURE_BUDGET,
         evaluator: motioner_eval::Evaluator::new(),
         plan: RenderPlan::new(),
@@ -66,11 +67,21 @@ fn prepare_images(
     canvas: &mut impl Canvas2d,
     images: &crate::ImageSet,
     textures: &mut HashMap<motioner_core::ImageKey, u32>,
+    revisions: &mut HashMap<motioner_core::ImageKey, u64>,
 ) -> Result<(), RenderError> {
     for (key, image) in images.iter() {
-        if !textures.contains_key(key) {
+        if let Some(&id) = textures.get(key) {
+            if revisions
+                .get(key)
+                .is_none_or(|revision| *revision != image.revision)
+            {
+                canvas.update_image(id, image)?;
+                revisions.insert(*key, image.revision);
+            }
+        } else {
             let id = canvas.register_image(image)?;
             textures.insert(*key, id);
+            revisions.insert(*key, image.revision);
         }
     }
     Ok(())
@@ -125,6 +136,7 @@ fn render_plan_into_target(
         &mut renderer.harness,
         &renderer.images,
         &mut renderer.image_textures,
+        &mut renderer.image_revisions,
     )?;
     let stats = paint_plan(
         &mut renderer.harness,
@@ -138,6 +150,7 @@ fn render_plan_into_target(
         &gradients,
         &renderer.images,
         &mut renderer.image_textures,
+        &mut renderer.image_revisions,
         None,
     );
     let report = renderer.harness.render_frame();
@@ -362,6 +375,7 @@ pub(crate) fn paint_plan(
     gradients: &crate::gradients::GradientTable,
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
+    image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
 ) -> PaintStats {
     let mut total = 0u32;
@@ -476,6 +490,7 @@ pub(crate) fn paint_plan(
                     gradients,
                     images,
                     image_textures,
+                    image_revisions,
                     item,
                     flip,
                     &mut z_index,

@@ -39,12 +39,12 @@ pub struct Stats {
 }
 
 /// A tooltip request: anchor rectangle, label and optional shortcut.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TooltipRequest {
     /// The widget the tooltip points at.
     pub anchor: Rect,
     /// What the widget does.
-    pub label: &'static str,
+    pub label: String,
     /// Keyboard shortcut, if any.
     pub shortcut: Option<&'static str>,
 }
@@ -97,6 +97,10 @@ pub struct View<'a> {
     pub motion_blur_preview: bool,
     /// Frame-time readouts.
     pub stats: Stats,
+    /// Decoded-video cache bytes.
+    pub video_bytes: usize,
+    /// Proxy progress text, when a background job is running.
+    pub proxy_status: Option<&'a str>,
     /// Layer list scroll offset in pixels.
     pub layer_scroll: f32,
     /// Inspector scroll offset in pixels.

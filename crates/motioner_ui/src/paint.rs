@@ -45,6 +45,57 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Draws a decoded RGBA8 image as a sampled grid of solid cells.
+    ///
+    /// The GUI batch has no textured quads; a small grid (at most `columns ×
+    /// rows`) reads as a real thumbnail at timeline scale without one engine
+    /// draw call per source pixel.
+    #[allow(clippy::too_many_arguments)] // one thumbnail's sampling inputs
+    pub fn image_grid(
+        &mut self,
+        rect: Rect,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+        columns: u32,
+        rows: u32,
+        alpha: f32,
+    ) {
+        if width == 0 || height == 0 || columns == 0 || rows == 0 || rect.is_empty() {
+            return;
+        }
+        if rgba8.len() < usize::try_from(width * height * 4).unwrap_or(usize::MAX) {
+            return;
+        }
+        let cell_w = rect.w / columns as f32;
+        let cell_h = rect.h / rows as f32;
+        for row in 0..rows {
+            for column in 0..columns {
+                #[allow(clippy::cast_precision_loss)]
+                let sx = ((column as f32 + 0.5) / columns as f32 * width as f32) as u32;
+                #[allow(clippy::cast_precision_loss)]
+                let sy = ((row as f32 + 0.5) / rows as f32 * height as f32) as u32;
+                let index = usize::try_from((sy.min(height - 1) * width + sx.min(width - 1)) * 4)
+                    .unwrap_or(0);
+                let Some(pixel) = rgba8.get(index..index + 4) else {
+                    continue;
+                };
+                let color =
+                    crate::theme::Srgb(u32::from_be_bytes([0, pixel[0], pixel[1], pixel[2]]))
+                        .alpha(alpha * f32::from(pixel[3]) / 255.0);
+                self.fill(
+                    Rect::new(
+                        rect.x + column as f32 * cell_w,
+                        rect.y + row as f32 * cell_h,
+                        cell_w.ceil(),
+                        cell_h.ceil(),
+                    ),
+                    color,
+                );
+            }
+        }
+    }
+
     /// Starts a new layer: everything drawn afterwards (text included) is
     /// painted above everything drawn before.
     pub fn layer(&mut self) {

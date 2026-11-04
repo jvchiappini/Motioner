@@ -653,6 +653,8 @@ fn track_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &TimelineRow,
     }
     if outline_row.kind == crate::outline::NodeKind::Audio {
         audio_strip(p, v, outline_row, full, bar_y, bar_h, &x_of);
+    } else if outline_row.kind == crate::outline::NodeKind::Video {
+        video_strip(p, v, outline_row, bar_y, bar_h, &x_of);
     }
     let diamond = p.m.px(10.0);
     let marker_at = |frame: Frame| {
@@ -727,26 +729,47 @@ fn audio_strip(
     let Some(entry) = entry else {
         return;
     };
-    if entry.peaks.is_empty() || strip.w <= 0.0 {
+    let Some(duration) = entry.duration.filter(|duration| *duration > 0.0) else {
+        return;
+    };
+    if entry.peak_levels.is_empty() || strip.w <= 0.0 {
         return;
     }
-    let mut colour = t.accent;
-    colour[3] = 0.55;
-    let step = (strip.w / entry.peaks.len() as f32).max(1.0);
-    for (index, peak) in entry.peaks.iter().enumerate() {
-        #[allow(clippy::cast_precision_loss)]
-        let x = strip.x + index as f32 * step;
-        let height = (strip.h * peak.clamp(0.0, 1.0)).max(1.0);
-        p.fill(
-            Rect::new(
-                x,
-                strip.center_y() - height * 0.5,
-                (step - 1.0).max(1.0),
-                height,
-            ),
-            colour,
-        );
+    let columns = strip.w.max(1.0) as usize;
+    let peaks = crate::assets::level_for_columns(&entry.peak_levels, columns);
+    if peaks.is_empty() {
+        return;
     }
+    // The clip bar is already accent-tinted; a second accent layer was
+    // invisible. The envelope is a light ink over that bar.
+    let mut colour = t.text;
+    colour[3] = 0.72;
+    let centre = strip.center_y();
+    let fps = v.rate.as_f64();
+    let in_point = audio.in_point.value().max(0.0);
+    let span = (range.end - range.start).max(1) as f64;
+    let mut x = strip.x;
+    while x < strip.right() {
+        let t0 = (f64::from(x - strip.x) / f64::from(strip.w)).clamp(0.0, 1.0);
+        let t1 = (f64::from(x + 1.0 - strip.x) / f64::from(strip.w)).clamp(0.0, 1.0);
+        let seconds0 = in_point + t0 * span / fps;
+        let seconds1 = in_point + t1 * span / fps;
+        let index0 = (seconds0 / duration * peaks.len() as f64).floor().max(0.0) as usize;
+        let index1 = (seconds1 / duration * peaks.len() as f64).ceil() as usize;
+        let peak = peaks[index0.min(peaks.len() - 1)..index1.clamp(index0 + 1, peaks.len())]
+            .iter()
+            .fold(0.0_f32, |peak, value| peak.max(*value));
+        // Silence is empty, not a dimmer clip: zero peaks draw nothing.
+        if peak > 0.0 {
+            let height = strip.h * peak.clamp(0.0, 1.0);
+            p.fill(
+                Rect::new(x, centre - height * 0.5, 1.0, height.max(1.0)),
+                colour,
+            );
+        }
+        x += 1.0;
+    }
+    p.hline(strip.x, strip.right(), centre.round(), t.hairline);
 }
 
 /// The identity of an outline row's node.
@@ -780,6 +803,77 @@ fn property_row(
     let value = v.timeline_values.get(index).map_or("", String::as_str);
     draw_row_controls(p, v, index, row, &row_rect, &row.label, value, dim);
     draw_row_keys(p, v, row, outline, &row.channel, rect, dim);
+}
+
+/// Draws the thumbnail strip of a video layer inside its clip bar.
+fn video_strip(
+    p: &mut Painter<'_>,
+    v: &View<'_>,
+    outline_row: &crate::OutlineRow,
+    bar_y: f32,
+    bar_h: f32,
+    x_of: &impl Fn(i64) -> f32,
+) {
+    let t = *p.theme;
+    let Some(video) = v
+        .document
+        .and_then(|document| document.node(outline_row.node))
+        .and_then(|node| match node.content() {
+            motioner_core::NodeContent::Video(video) => Some(video),
+            _ => None,
+        })
+    else {
+        return;
+    };
+    let entry = v
+        .assets
+        .entries
+        .iter()
+        .find(|entry| entry.original == video.source || entry.key == video.source);
+    let Some(entry) = entry else {
+        return;
+    };
+    let range = crate::timeline_model::video_clip_range(video, v.rate, entry.duration, v.duration);
+    let from = x_of(range.start).round();
+    let to = x_of(range.end).round();
+    if to <= from || entry.thumbs.is_empty() {
+        return;
+    }
+    let strip = Rect::new(from, bar_y, to - from, bar_h);
+    let in_point = video.in_point.value().max(0.0);
+    let out_point = video.out_point.value();
+    let duration = entry
+        .duration
+        .filter(|duration| *duration > 0.0)
+        .unwrap_or(1.0);
+    let end = if out_point > in_point {
+        out_point
+    } else {
+        duration
+    };
+    let span = (end - in_point).max(0.001);
+    #[allow(clippy::cast_possible_truncation)]
+    let thumb_w = strip.w * (span / duration) as f32 / entry.thumbs.len() as f32;
+    p.push_clip(strip);
+    for (index, thumb) in entry.thumbs.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let seconds = duration * (index as f64 + 0.5) / entry.thumbs.len() as f64;
+        if seconds < in_point || seconds > end {
+            continue;
+        }
+        let x = strip.x + strip.w * ((seconds - in_point) / span) as f32 - thumb_w * 0.5;
+        p.image_grid(
+            Rect::new(x, strip.y, thumb_w.max(1.0), strip.h),
+            thumb.width,
+            thumb.height,
+            &thumb.rgba8,
+            12,
+            6,
+            0.9,
+        );
+    }
+    p.pop_clip();
+    p.stroke_rounded(strip, t.accent, p.m.px(3.0), p.m.hairline());
 }
 
 #[allow(clippy::too_many_arguments)] // one row's controls, kept flat

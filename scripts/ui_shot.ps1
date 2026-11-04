@@ -26,6 +26,8 @@ param(
     [int]$Select = -1,
     [int]$Frames = 20,
     [string[]]$Commands = @(),
+    [int]$DelayMs = 0,
+    [switch]$Assets,
     [switch]$Release
 )
 
@@ -38,6 +40,7 @@ if (-not (Test-Path $exe)) { throw "build first: $exe not found" }
 $arguments = @('preview', $File, '--frame', "$Frame", '--paused', '--window-size', $Size)
 if ($Scale -ne '') { $arguments += @('--ui-scale', $Scale) }
 if ($Select -ge 0) { $arguments += @('--select', "$Select") }
+if ($Assets) { $arguments += '--assets' }
 
 Push-Location $root
 try {
@@ -61,6 +64,7 @@ try {
         foreach ($command in $Commands) {
             & $exe ctl --endpoint $endpoint (& $quote $command)
         }
+        if ($DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
         $target = $Out -replace '\\', '/'
         & $exe ctl --endpoint $endpoint (& $quote "screenshot(`"$target`")")
         & $exe ctl --endpoint $endpoint 'quit()' | Out-Null

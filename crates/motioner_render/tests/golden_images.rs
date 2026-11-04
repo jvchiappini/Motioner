@@ -86,6 +86,7 @@ fn image_set(store: &ImageStore) -> ImageSet {
             width: image.width,
             height: image.height,
             rgba8: image.rgba8,
+            revision: 0,
         });
     }
     set

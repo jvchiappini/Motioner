@@ -320,27 +320,54 @@ impl PreviewApp {
             let Some(node) = self.editor.outline().get(outline).map(|row| row.node) else {
                 return;
             };
-            let Some(motioner_core::NodeContent::Audio(audio)) =
-                document.node(node).map(motioner_core::Node::content)
-            else {
+            let Some(content) = document.node(node).map(motioner_core::Node::content) else {
                 return;
+            };
+            let (source, start, in_point, speed) = match content {
+                motioner_core::NodeContent::Audio(audio) => (
+                    audio.source.as_str(),
+                    audio.start,
+                    audio.in_point.value(),
+                    1.0,
+                ),
+                motioner_core::NodeContent::Video(video) => (
+                    video.source.as_str(),
+                    video.start,
+                    video.in_point.value(),
+                    video.speed,
+                ),
+                _ => return,
             };
             let entry = self
                 .assets
                 .entries
                 .iter()
-                .find(|entry| entry.original == audio.source || entry.key == audio.source);
-            let range = crate::timeline_model::audio_clip_range(
-                audio,
-                self.editor.transport().frame_rate(),
-                entry.and_then(|entry| entry.duration),
-                self.editor.transport().duration(),
-            );
+                .find(|entry| entry.original == source || entry.key == source);
+            let range = match content {
+                motioner_core::NodeContent::Audio(audio) => {
+                    crate::timeline_model::audio_clip_range(
+                        audio,
+                        self.editor.transport().frame_rate(),
+                        entry.and_then(|entry| entry.duration),
+                        self.editor.transport().duration(),
+                    )
+                }
+                motioner_core::NodeContent::Video(video) => {
+                    crate::timeline_model::video_clip_range(
+                        video,
+                        self.editor.transport().frame_rate(),
+                        entry.and_then(|entry| entry.duration),
+                        self.editor.transport().duration(),
+                    )
+                }
+                _ => return,
+            };
             (
                 self.editor.node_identity(node),
-                audio.start,
-                audio.in_point.value(),
+                start,
+                in_point,
                 range.end,
+                speed,
             )
         };
         self.editor.begin_gesture();
@@ -352,6 +379,7 @@ impl PreviewApp {
             in_point: captured.2,
             end: captured.3,
             fps: self.editor.transport().frame_rate().as_f64(),
+            speed: captured.4,
         }));
     }
 
@@ -566,6 +594,21 @@ impl PreviewApp {
                     mode: *mode,
                     invert: next,
                 });
+            }
+            Some(inspect::RowValue::Toggle { target, .. }) => {
+                let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {
+                    return;
+                };
+                let on = segment == 1;
+                match target {
+                    FieldTarget::AudioMute => {
+                        self.run(&Command::Visible { id, visible: !on });
+                    }
+                    FieldTarget::AudioSolo => {
+                        self.run(&Command::Solo { id, on });
+                    }
+                    _ => {}
+                }
             }
             Some(inspect::RowValue::Align { .. }) => {
                 let Some(id) = self.editor.selected().map(|n| self.editor.node_identity(n)) else {

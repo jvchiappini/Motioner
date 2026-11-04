@@ -13,7 +13,6 @@
 - **T-RENDER-0004** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0014** — 3D layers: glTF, cameras, lights, PBR and skeletal animation composited with 2D `[alta]` (actualizado 2026-11-03)
-- **T-RENDER-0015** — Video: frame-exact decode, proxies and streamed textures (prompt 11 phase 6) `[alta]` (actualizado 2026-11-04)
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)
 - **T-PHYS-0001** — GPU particles and rigid-body physics (post-1.0 spike) `[media]` (actualizado 2026-11-03)

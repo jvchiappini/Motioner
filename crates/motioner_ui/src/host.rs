@@ -76,6 +76,12 @@ pub trait ProjectHost {
     /// Image resolver for a composition.
     fn images(&self, composition: &Path) -> Rc<dyn ImageResolver>;
 
+    /// Video metadata resolver for the same composition.
+    fn videos(&self, composition: &Path) -> Option<Rc<dyn motioner_core::VideoResolver>> {
+        let _ = composition;
+        None
+    }
+
     /// The asset registry as the panel shows it, sorted by key.
     fn assets(&self, composition: &Path) -> Vec<AssetSummary>;
 
@@ -134,6 +140,43 @@ pub trait ProjectHost {
 
     /// Peak buckets for an audio asset (cached in `cache/`).
     fn waveform(&self, composition: &Path, key: &str, buckets: usize) -> Vec<f32>;
+
+    /// One decoded frame of a video asset, at the original or proxy size.
+    ///
+    /// The returned image's `asset.key` is the source key; the editor swaps in
+    /// the video layer's own texture key before uploading.
+    fn video_frame(
+        &self,
+        composition: &Path,
+        source: &str,
+        source_frame: i64,
+        proxy: bool,
+    ) -> Option<motioner_core::DecodedImage> {
+        let _ = (composition, source, source_frame, proxy);
+        None
+    }
+
+    /// Proxy generation progress in `0.0..=1.0`, when a job is running.
+    fn proxy_progress(&self, composition: &Path, source: &str) -> Option<f32> {
+        let _ = (composition, source);
+        None
+    }
+
+    /// Decoded-video bytes resident in the bounded cache.
+    fn video_cache_bytes(&self) -> usize {
+        0
+    }
+
+    /// Small thumbnails for a video's timeline strip, oldest first.
+    fn video_thumbnails(
+        &self,
+        composition: &Path,
+        source: &str,
+        count: usize,
+    ) -> Vec<motioner_core::DecodedImage> {
+        let _ = (composition, source, count);
+        Vec::new()
+    }
 
     /// Marks the project as open for this session (lock + heartbeat).
     fn begin_session(&self, composition: &Path);

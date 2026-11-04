@@ -644,6 +644,12 @@ impl Editor {
                 Some(self.session.overrides()),
                 fallback,
                 &self.font_families,
+                inspect::MediaState {
+                    muted: !document
+                        .node(node)
+                        .is_some_and(motioner_core::Node::is_visible),
+                    solo: self.solo.contains(&node),
+                },
             ),
             None => Some(inspect::inspect_comp(
                 document.composition(),

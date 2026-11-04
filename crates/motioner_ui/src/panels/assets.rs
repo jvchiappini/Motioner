@@ -1,7 +1,7 @@
 //! Assets panel: the Layers/Assets tab strip, toolbar and the virtualised
 //! list or grid of project assets.
 
-use crate::assets::{AssetKindUi, AssetView};
+use crate::assets::{AssetKindUi, AssetSummary, AssetView};
 use crate::layout::{Hit, LeftTab, Rect};
 use crate::paint::Painter;
 use crate::panels::View;
@@ -173,22 +173,34 @@ fn draw_list(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
             p.m.px(14.0),
         );
         kind_badge(p, badge, entry.kind, &t);
+        let pad = p.m.px(size::PAD);
+        let detail = p.style(type_scale::CAPTION, t.text_muted);
+        // At the minimum panel width, size and duration go first; the name and
+        // the usage token (with its tooltip) are the essential columns.
+        let detail_text = if rect.w < p.m.px(300.0) {
+            crate::assets::usage_label(entry)
+        } else {
+            v.assets.detail(index)
+        };
+        let detail_w = p
+            .measure(detail_text, &detail)
+            .min((rect.w * 0.45).max(0.0));
+        let text_x = badge.right() + pad;
         let name = p.style(type_scale::BODY, t.text_body).medium();
         p.text_in(
             &entry.key,
             Rect::new(
-                badge.right() + p.m.px(size::PAD),
+                text_x,
                 rect.y,
-                rect.w - p.m.px(140.0),
+                (rect.right() - pad - detail_w - pad - text_x).max(0.0),
                 rect.h,
             ),
             Align::Left,
             &name,
         );
-        let detail = p.style(type_scale::CAPTION, t.text_muted);
         p.text_in(
-            v.assets.detail(index),
-            Rect::new(rect.right() - p.m.px(120.0), rect.y, p.m.px(112.0), rect.h),
+            detail_text,
+            Rect::new(rect.right() - pad - detail_w, rect.y, detail_w, rect.h),
             Align::Right,
             &detail,
         );
@@ -235,8 +247,8 @@ fn draw_grid(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
             p.m.px(28.0),
         );
         match entry.kind {
-            AssetKindUi::Audio if !entry.peaks.is_empty() => {
-                waveform(p, strip, &entry.peaks, t.accent);
+            AssetKindUi::Audio if !entry.peak_levels.is_empty() => {
+                waveform(p, strip, entry, t.accent);
             }
             kind => {
                 let color = kind_color(kind, &t);
@@ -293,24 +305,29 @@ fn kind_color(kind: AssetKindUi, t: &crate::theme::Theme) -> [f32; 4] {
     }
 }
 
-fn waveform(p: &mut Painter<'_>, rect: Rect, peaks: &[f32], color: [f32; 4]) {
-    let count = peaks.len();
-    if count == 0 || rect.w <= 0.0 {
+fn waveform(p: &mut Painter<'_>, rect: Rect, entry: &AssetSummary, color: [f32; 4]) {
+    let columns = rect.w.max(1.0) as usize;
+    let peaks = crate::assets::level_for_columns(&entry.peak_levels, columns);
+    if peaks.is_empty() || rect.w <= 0.0 {
         return;
     }
-    let step = (rect.w / count as f32).max(1.0);
+    let step = (rect.w / peaks.len() as f32).max(1.0);
     let mut color = color;
     color[3] = 0.75;
+    let centre = rect.center_y();
     for (index, peak) in peaks.iter().enumerate() {
+        if *peak <= 0.0 {
+            continue;
+        }
         #[allow(clippy::cast_precision_loss)]
         let x = rect.x + index as f32 * step;
-        let height = (rect.h * peak.clamp(0.0, 1.0)).max(1.0);
+        let height = rect.h * peak.clamp(0.0, 1.0);
         p.fill(
             Rect::new(
                 x,
-                rect.center_y() - height * 0.5,
+                centre - height * 0.5,
                 (step - 1.0).max(1.0),
-                height,
+                height.max(1.0),
             ),
             color,
         );

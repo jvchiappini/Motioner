@@ -719,3 +719,58 @@ fn text_animator_commands_edit_the_whole_list() {
         ErrorKind::BadArgument
     );
 }
+
+/// An editor with one audio layer, for the kind/property parity checks.
+fn audio_editor(name: &str) -> (Editor, TempDir) {
+    let dir = std::env::temp_dir().join(format!("motioner_audio_{}_{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("audio.motion");
+    std::fs::write(
+        &path,
+        r##"
+comp("A", 640, 360, 60, 1.0)
+music = audio("tone.wav", in_point=0.5, out_point=1.5, gain=0.5, start=12,
+              pan=-0.5, fade_in=0.2, fade_out=0.3)
+music.id("music")
+sibling = rect(20, 20, 0, "#FFFFFF")
+sibling.id("sibling")
+"##,
+    )
+    .unwrap();
+    (Editor::open(&path).unwrap(), TempDir(dir))
+}
+
+#[test]
+fn audio_rejects_visual_commands_and_accepts_audio_ones() {
+    let (mut editor, _dir) = audio_editor("parity");
+    for command in [
+        "edit(\"music\", \"pos.x\", 10)",
+        "set(\"music\", \"pos\", (1, 2))",
+        "key(\"music\", \"pos.y\", 1.0, 3)",
+        "effect_add(\"music\", \"blur\")",
+        "mask_set(\"music\", \"sibling\")",
+        "mask_clear(\"music\")",
+        "edit(\"music\", \"blend\", \"add\")",
+        "edit(\"music\", \"width\", 10)",
+    ] {
+        assert_eq!(
+            error(&mut editor, command),
+            ErrorKind::UnknownProperty,
+            "{command}"
+        );
+    }
+    run(
+        &mut editor,
+        "edit(\"music\", \"gain\", 0.25)\nkey(\"music\", \"pan\", 0.5, 0.0)",
+    );
+    let set = editor.session().overrides();
+    assert_eq!(
+        set.get("music", "gain", None).unwrap().action,
+        OverrideAction::Set(OverrideValue::Number(0.25))
+    );
+    assert!(matches!(
+        set.get("music", "pan", Some(30)).unwrap().action,
+        OverrideAction::Key { .. }
+    ));
+}

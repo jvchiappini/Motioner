@@ -5,11 +5,36 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
-## Prompt 11 status (2026-11-04, phases 0–5 done)
+## Prompt 11 status (2026-11-04, phases 0–6 done)
 
-Fases 0–4.5 y **fase 5 (audio) completas**. Quedan **fase 6 (vídeo) y fase 7
-(demo/docs/release)**. Gate verde (fmt, clippy pedantic, tests, rustdoc,
-boundaries, machete, pctl validate). Sin commit.
+Fases 0–4.5, **fase 5 (audio)**, **fase 5.5 (review fixes)** y **fase 6
+(vídeo) completas**. Queda solo **fase 7 (demo/goldens/docs/release)**.
+Gate verde (fmt, clippy pedantic, tests, rustdoc, boundaries, machete,
+pctl validate). Sin commit.
+
+- Phase 5.5 (T-UI-0013): `motioner_ui::properties::PropertySet` es la única
+  tabla kind → conjunto; audio muestra Source/Start/In/Out/Gain/Pan/Fade in/out/
+  Mute/Solo y no transform/blend/efectos/máscara; las filas expandidas son
+  Gain/Pan/fades; `channels::resolve` y `resolve_edit` devuelven
+  `UnknownProperty` para comandos visuales en audio; `Icon::ALL/has_glyph`
+  cubre mute/solo/filter/shadow/blur/glow; assets muestra `×N` con tooltip y
+  el nombre se conserva a 180 px; las filas de efectos usan iconos; el
+  waveform usa una cadena de mips de picos y un envelope espejo con silencio
+  vacío. Capturas: `p11-06b-timeline-waveform`, `p11-06c-assets-narrow`,
+  `p11-06d/e/f-waveform-zoom-*`, `p11-06h-effects-icons`.
+- Phase 6 (T-RENDER-0015): `VideoContent`/`VideoAsset`/`VideoResolver`,
+  `video()` MDF, `Document::resolve_videos`, selección de frame exacta,
+  `ItemShape::Image` por nodo con `ImageKey::tagged`; `motioner_io::video`
+  (ffprobe/decode/proxy); `ImageData.revision` y actualización in-place con
+  fallback de tamaño; `motioner_app::video_cache` (LRU 192 MB/48 frames);
+  proxy all-intra 640 en `cache/<hash>.proxy.mp4` con `.proxy.done` y job de
+  fondo; UI con inspector de vídeo, thumbnails, trim/slip Alt y lecturas de
+  proxy/memoria; audio de vídeo por el mixer y mux AAC. Flujo F-0003.
+  Capturas: `p11-07-timeline-thumbs`, `p11-07-video-inspector`,
+  `p11-07-trim-slip`, `p11-07-proxy-progress`, `p11-07-1080p60-playing`.
+  Medición debug 1600x900, 1080p60 con proxy: 198 MB working set, 769 MB
+  privado, 59 UI fps, 120 dropped en ~5 s, caché de vídeo ~42 MB;
+  `out/p11-video/render.mp4` 3.000 s vídeo + 3.000 s AAC.
 
 - D-0047: `time` en `motioner_io` para edades relativas locales; la edad es
   pura con `now` inyectado y el tooltip usa el offset local.
@@ -325,8 +350,8 @@ verde: D-0045/D-0046, proyecto + assets + backups/recuperación, CLI
 `new/import/backup/migrate`, pantalla de inicio, menú File, panel de assets con
 import/conversión/colocación, comandos y docs. `hello_f120.png` sigue
 byte-idéntico (`C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`).
-C: libre ~19.6 GB. Sesión `S-2026-11-04-007` (continuación): Phase 4.5
-(T-UI-0012) y Phase 5 (T-AUDIO-0002) cerradas; T-APP-0005 cerrada. Quedan
-fase 6 (T-RENDER-0015) y fase 7 (demo/goldens/release). El informe parcial
-antiguo sigue en `out/reports/PHASE-11-PARTIAL-REPORT.md`; el informe de esta
-sesión está en `out/reports/PHASE-11-PHASE5-REPORT.md`.
+C: libre ~19.6 GB. Sesión `S-2026-11-04-002` (esta): Phase 5.5
+(T-UI-0013) y Phase 6 (T-RENDER-0015) cerradas. Queda solo la fase 7
+(demo/goldens/docs/release). Informes previos:
+`out/reports/PHASE-11-PARTIAL-REPORT.md` y
+`out/reports/PHASE-11-PHASE5-REPORT.md`. C: libre ~14.5 GB al cierre.

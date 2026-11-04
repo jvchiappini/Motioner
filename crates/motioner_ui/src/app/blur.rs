@@ -63,6 +63,16 @@ impl BlurPreview {
         }
     }
 
+    /// Adds or replaces one image (a live video frame) without dropping the
+    /// other textures.
+    pub(super) fn set_image(&mut self, image: motioner_render::ImageData) {
+        self.images.insert(image.clone());
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_image(image);
+        }
+        self.last = None;
+    }
+
     /// Renders `frame` into the composition `rect` and returns `true` when
     /// the sprite was drawn. A failure leaves the normal preview in place.
     #[allow(clippy::too_many_arguments)] // the frame's inputs, kept flat

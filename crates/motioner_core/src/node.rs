@@ -153,6 +153,8 @@ pub enum ContentField {
     FadeIn,
     /// Fade-out length in seconds (`fade_out`).
     FadeOut,
+    /// Video playback speed, source seconds per composition second (`speed`).
+    Speed,
     /// Offset of fill stop `n` (`fill_stop<n>_offset`, D-0030).
     FillStopOffset(u8),
     /// Colour of fill stop `n` (`fill_stop<n>_color`).
@@ -169,7 +171,7 @@ impl ContentField {
     /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
     /// [`ContentField::from_name`] and describe them with
     /// [`ContentField::name`].
-    pub const ALL: [(Self, &'static str); 29] = [
+    pub const ALL: [(Self, &'static str); 30] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
@@ -199,6 +201,7 @@ impl ContentField {
         (Self::Start, "start"),
         (Self::FadeIn, "fade_in"),
         (Self::FadeOut, "fade_out"),
+        (Self::Speed, "speed"),
     ];
 
     /// Whether the field has keyframes (D-0028).
@@ -222,6 +225,7 @@ impl ContentField {
                 | Self::Start
                 | Self::FadeIn
                 | Self::FadeOut
+                | Self::Speed
         )
     }
 
@@ -998,6 +1002,18 @@ impl ImageKey {
         Self(bytes)
     }
 
+    /// A derived key for a per-node texture (a video layer's live frame).
+    #[must_use]
+    pub const fn tagged(self, tag: u32) -> Self {
+        let mut bytes = self.0;
+        let tag = tag.to_le_bytes();
+        bytes[28] = tag[0];
+        bytes[29] = tag[1];
+        bytes[30] = tag[2];
+        bytes[31] = tag[3];
+        Self(bytes)
+    }
+
     /// The raw digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
@@ -1224,6 +1240,27 @@ pub trait ImageResolver {
     }
 }
 
+/// Resolves project-relative video paths to content keys and metadata.
+pub trait VideoResolver {
+    /// Resolves one path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable reason for a missing file, an invalid path or
+    /// a stream whose metadata cannot be read.
+    fn resolve_video(&self, source: &str) -> Result<VideoAsset, String>;
+}
+
+/// A resolver that rejects every path: the "no assets installed" case.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoVideos;
+
+impl VideoResolver for NoVideos {
+    fn resolve_video(&self, _source: &str) -> Result<VideoAsset, String> {
+        Err("no video loader is installed".to_owned())
+    }
+}
+
 /// A resolver that rejects every path: the "no assets installed" case.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoImages;
@@ -1277,6 +1314,102 @@ impl AudioContent {
     }
 }
 
+/// A resolved video: its content key, natural size, source rate and length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VideoAsset {
+    /// SHA-256 of the file bytes.
+    pub key: ImageKey,
+    /// Natural width in pixels.
+    pub width: u32,
+    /// Natural height in pixels.
+    pub height: u32,
+    /// Source frame rate.
+    pub fps: crate::FrameRate,
+    /// Source length in seconds.
+    pub duration: f64,
+}
+
+/// A video clip in the composition (Phase 6).
+///
+/// It draws like an image, selecting its source frame from the composition
+/// frame with exact rational time; its audio is mixed by the Phase 5 mixer
+/// using the same `in_point`, `out_point` and `gain`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoContent {
+    /// Project-relative source path (registry key or original name).
+    pub source: String,
+    /// Resolved key, natural size, source rate and duration.
+    pub asset: Option<VideoAsset>,
+    /// Source offset in seconds.
+    pub in_point: Animatable<f64>,
+    /// Source end in seconds; `0` means the file end.
+    pub out_point: Animatable<f64>,
+    /// Audio gain in the mixer.
+    pub gain: Animatable<f64>,
+    /// First composition frame of the clip.
+    pub start: i64,
+    /// Source seconds per composition second (`1.0` is real time).
+    pub speed: f64,
+    /// Destination box width in pixels; `0` keeps the natural width.
+    pub width: Animatable<f64>,
+    /// Destination box height in pixels; `0` keeps the natural height.
+    pub height: Animatable<f64>,
+    /// How the frame fills its box.
+    pub fit: ImageFit,
+}
+
+impl VideoContent {
+    /// A clip from the start of `source` at frame `start`, real time.
+    #[must_use]
+    pub fn new(source: impl Into<String>, start: i64) -> Self {
+        Self {
+            source: source.into(),
+            asset: None,
+            in_point: Animatable::new(0.0),
+            out_point: Animatable::new(0.0),
+            gain: Animatable::new(1.0),
+            start,
+            speed: 1.0,
+            width: Animatable::new(0.0),
+            height: Animatable::new(0.0),
+            fit: ImageFit::Contain,
+        }
+    }
+
+    /// The source frame shown at composition `frame`, or `None` outside the
+    /// clip. The math is exact: source time is sampled from the composition
+    /// rate, never from a wall clock.
+    #[must_use]
+    pub fn source_frame(&self, frame: Frame, rate: crate::FrameRate) -> Option<i64> {
+        let asset = self.asset?;
+        let local = frame - self.start;
+        if local < 0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let seconds = local as f64 / rate.as_f64();
+        let source = self.in_point.value() + seconds * self.speed;
+        let out = self.out_point.value();
+        if out > self.in_point.value() && source >= out {
+            return None;
+        }
+        if source < 0.0 || source >= asset.duration {
+            return None;
+        }
+        let source_frame = (source * asset.fps.as_f64()).floor();
+        #[allow(clippy::cast_possible_truncation)]
+        let source_frame = source_frame as i64;
+        Some(source_frame.max(0))
+    }
+
+    /// The stable texture key of this node's frames. Two nodes on the same
+    /// source never collide.
+    #[must_use]
+    pub fn texture_key(&self, node: NodeId) -> Option<ImageKey> {
+        self.asset.map(|asset| asset.key.tagged(node.raw()))
+    }
+}
+
 /// What a node draws.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
@@ -1323,6 +1456,8 @@ pub enum NodeContent {
     Image(ImageContent),
     /// An audio clip (D-0048); it contributes samples, never pixels.
     Audio(AudioContent),
+    /// A video clip (Phase 6): pixels like an image, samples like audio.
+    Video(VideoContent),
 }
 
 impl NodeContent {
@@ -1371,6 +1506,7 @@ impl NodeContent {
             Self::Text(_) => "text",
             Self::Image(_) => "image",
             Self::Audio(_) => "audio",
+            Self::Video(_) => "video",
         }
     }
 
@@ -1458,6 +1594,18 @@ impl NodeContent {
                     | ContentField::FadeIn
                     | ContentField::FadeOut
             ),
+            Self::Video(_) => matches!(
+                field,
+                ContentField::Width
+                    | ContentField::Height
+                    | ContentField::Source
+                    | ContentField::Fit
+                    | ContentField::InPoint
+                    | ContentField::OutPoint
+                    | ContentField::Gain
+                    | ContentField::Start
+                    | ContentField::Speed
+            ),
         }
     }
 
@@ -1471,7 +1619,7 @@ impl NodeContent {
             Self::Rect { paint, .. } | Self::Circle { paint, .. } | Self::Path { paint, .. } => {
                 paint.gradient(slot).map_or(0, Gradient::len)
             }
-            Self::Text(_) | Self::Group | Self::Image(_) | Self::Audio(_) => 0,
+            Self::Text(_) | Self::Group | Self::Image(_) | Self::Audio(_) | Self::Video(_) => 0,
         }
     }
 
@@ -1500,7 +1648,7 @@ impl NodeContent {
                     .gradient(slot)
                     .is_some_and(|gradient| index < gradient.len())
             }
-            Self::Group | Self::Image(_) | Self::Audio(_) => false,
+            Self::Group | Self::Image(_) | Self::Audio(_) | Self::Video(_) => false,
         }
     }
 
@@ -1556,6 +1704,11 @@ impl NodeContent {
             (Self::Audio(audio), ContentField::OutPoint) => number(&audio.out_point),
             (Self::Audio(audio), ContentField::Gain) => number(&audio.gain),
             (Self::Audio(audio), ContentField::Pan) => number(&audio.pan),
+            (Self::Video(video), ContentField::Width) => number(&video.width),
+            (Self::Video(video), ContentField::Height) => number(&video.height),
+            (Self::Video(video), ContentField::InPoint) => number(&video.in_point),
+            (Self::Video(video), ContentField::OutPoint) => number(&video.out_point),
+            (Self::Video(video), ContentField::Gain) => number(&video.gain),
             _ => None,
         }
     }
@@ -1570,7 +1723,7 @@ impl NodeContent {
                 Self::Rect { paint, .. }
                 | Self::Circle { paint, .. }
                 | Self::Path { paint, .. } => paint.gradient(slot)?.stop(index)?,
-                Self::Group | Self::Image(_) | Self::Audio(_) => return None,
+                Self::Group | Self::Image(_) | Self::Audio(_) | Self::Video(_) => return None,
             };
             return Some(match part {
                 StopPart::Offset => ContentValue::Number(stop.offset.value()),
@@ -1676,6 +1829,31 @@ impl NodeContent {
             (Self::Audio(audio), ContentField::FadeOut) => {
                 Some(ContentValue::Number(audio.fade_out))
             }
+            (Self::Video(video), ContentField::Width) => {
+                Some(ContentValue::Number(video.width.value()))
+            }
+            (Self::Video(video), ContentField::Height) => {
+                Some(ContentValue::Number(video.height.value()))
+            }
+            (Self::Video(video), ContentField::Source) => {
+                Some(ContentValue::Text(video.source.clone()))
+            }
+            (Self::Video(video), ContentField::Fit) => Some(ContentValue::Fit(video.fit)),
+            (Self::Video(video), ContentField::InPoint) => {
+                Some(ContentValue::Number(video.in_point.value()))
+            }
+            (Self::Video(video), ContentField::OutPoint) => {
+                Some(ContentValue::Number(video.out_point.value()))
+            }
+            (Self::Video(video), ContentField::Gain) => {
+                Some(ContentValue::Number(video.gain.value()))
+            }
+            (Self::Video(video), ContentField::Start) =>
+            {
+                #[allow(clippy::cast_precision_loss)]
+                Some(ContentValue::Number(video.start as f64))
+            }
+            (Self::Video(video), ContentField::Speed) => Some(ContentValue::Number(video.speed)),
             _ => None,
         }
     }
@@ -1798,6 +1976,26 @@ impl NodeContent {
                     Some("fade_in")
                 } else if audio.fade_out < 0.0 {
                     Some("fade_out")
+                } else {
+                    None
+                }
+            }
+            Self::Video(video) => {
+                let non_negative = |channel: &Animatable<f64>| {
+                    bad(channel.value()) || channel.keys().iter().any(|key| bad(key.value))
+                };
+                if non_negative(&video.width) {
+                    Some("width")
+                } else if non_negative(&video.height) {
+                    Some("height")
+                } else if non_negative(&video.in_point) {
+                    Some("in_point")
+                } else if non_negative(&video.out_point) {
+                    Some("out_point")
+                } else if non_negative(&video.gain) {
+                    Some("gain")
+                } else if !video.speed.is_finite() || video.speed <= 0.0 {
+                    Some("speed")
                 } else {
                     None
                 }
@@ -1996,5 +2194,57 @@ impl Node {
     #[must_use]
     pub fn mask(&self) -> Option<crate::mask::MaskSpec> {
         self.mask
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+
+    fn clip(fps: u32) -> VideoContent {
+        let mut video = VideoContent::new("clip.mp4", 0);
+        video.asset = Some(VideoAsset {
+            key: ImageKey::from_bytes([7; 32]),
+            width: 320,
+            height: 180,
+            fps: crate::FrameRate::new(fps, 1).unwrap(),
+            duration: 10.0,
+        });
+        video
+    }
+
+    #[test]
+    fn frame_selection_is_exact_for_every_source_rate() {
+        let composition = crate::FrameRate::new(60, 1).unwrap();
+        for source in [24_u32, 25, 30, 60] {
+            let video = clip(source);
+            assert_eq!(video.source_frame(0, composition), Some(0));
+            assert_eq!(video.source_frame(60, composition), Some(i64::from(source)));
+            assert_eq!(
+                video.source_frame(30, composition),
+                Some(i64::from(source / 2))
+            );
+        }
+    }
+
+    #[test]
+    fn trim_and_speed_choose_the_source_frame() {
+        let composition = crate::FrameRate::new(60, 1).unwrap();
+        let mut video = clip(24);
+        video.in_point = Animatable::new(0.5);
+        assert_eq!(video.source_frame(60, composition), Some(36));
+        video.in_point = Animatable::new(0.0);
+        video.speed = 2.0;
+        assert_eq!(video.source_frame(60, composition), Some(48));
+        video.out_point = Animatable::new(1.0);
+        assert_eq!(video.source_frame(60, composition), None);
+    }
+
+    #[test]
+    fn a_video_texture_key_depends_on_the_node() {
+        let video = clip(30);
+        let first = video.texture_key(NodeId::from_raw(1)).unwrap();
+        let second = video.texture_key(NodeId::from_raw(2)).unwrap();
+        assert_ne!(first, second);
     }
 }

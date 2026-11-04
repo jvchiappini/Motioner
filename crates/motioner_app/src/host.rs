@@ -24,6 +24,9 @@ pub struct Host {
     state_path: PathBuf,
     root: PathBuf,
     audio: RefCell<Option<crate::audio_out::AudioOutput>>,
+    video_cache: RefCell<crate::video_cache::VideoCache>,
+    proxies: RefCell<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU32>>>,
+    proxy_done: RefCell<HashMap<String, std::time::Instant>>,
 }
 
 impl Host {
@@ -37,6 +40,9 @@ impl Host {
             state_path,
             root,
             audio: RefCell::new(None),
+            video_cache: RefCell::new(crate::video_cache::VideoCache::default()),
+            proxies: RefCell::new(HashMap::new()),
+            proxy_done: RefCell::new(HashMap::new()),
         }
     }
 
@@ -44,6 +50,29 @@ impl Host {
     #[must_use]
     pub fn state(&self) -> AppState {
         self.state.borrow().clone()
+    }
+
+    /// Decoded-video bytes resident in the bounded cache.
+    #[must_use]
+    pub fn video_cache_bytes(&self) -> usize {
+        self.video_cache.borrow().bytes()
+    }
+
+    /// Starts a proxy job for `hash` once, when the file does not exist yet.
+    fn ensure_proxy(&self, project: &Project, hash: &str, source: &Path) {
+        if crate::video_cache::has_proxy(project, hash) {
+            return;
+        }
+        let mut proxies = self.proxies.borrow_mut();
+        if proxies.contains_key(hash) {
+            return;
+        }
+        let duration = motioner_io::probe_video(source, &FfmpegLocation::FromEnvOrPath)
+            .map_or(0.0, |info| info.duration);
+        let destination = crate::video_cache::proxy_path(project, hash);
+        let job =
+            crate::video_cache::spawn_proxy(source.to_path_buf(), destination, duration.max(0.1));
+        proxies.insert(hash.to_owned(), job);
     }
 
     /// Persists the application state; failures are not fatal.
@@ -247,6 +276,15 @@ impl ProjectHost for Host {
         }
     }
 
+    fn videos(&self, composition: &Path) -> Option<Rc<dyn motioner_core::VideoResolver>> {
+        match Project::open(composition) {
+            Ok(project) => Some(Rc::new(ProjectImages::new(&project))),
+            Err(_) => Some(Rc::new(ProjectImages::loose(
+                composition.parent().unwrap_or(Path::new(".")),
+            ))),
+        }
+    }
+
     fn assets(&self, composition: &Path) -> Vec<AssetSummary> {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();
@@ -283,7 +321,7 @@ impl ProjectHost for Host {
             }
         }
         if entry.kind == AssetKind::Audio {
-            let _ = self.waveform(composition, &entry.key, 96);
+            let _ = self.waveform(composition, &entry.key, 2048);
             let _ = motioner_io::decode_to_cache(
                 &project.assets_dir().join(entry.file_name()),
                 &project.cache_dir(),
@@ -327,9 +365,8 @@ impl ProjectHost for Host {
             .find_asset(key)
             .ok_or_else(|| format!("no asset has the key {key:?}"))?;
         match entry.kind {
-            AssetKind::Image | AssetKind::Audio => {}
+            AssetKind::Image | AssetKind::Audio | AssetKind::Video => {}
             AssetKind::Font => return Err("fonts are used by text layers, not placed".to_owned()),
-            AssetKind::Video => return Err("video layers arrive with phase 6 (D-0045)".to_owned()),
         }
         let path = project.composition_path(&project.settings().main);
         let source = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
@@ -362,7 +399,15 @@ impl ProjectHost for Host {
                         entry.key, entry.original, entry.original,
                     );
                 }
-                AssetKind::Font | AssetKind::Video => {}
+                AssetKind::Video => {
+                    let start = frame.unwrap_or(0);
+                    let _ = write!(
+                        text,
+                        "\n# asset {:?} ({})\n{variable} = video({:?}, start={start})\n{variable}.pos = ({x:.1}, {y:.1})\n",
+                        entry.key, entry.original, entry.original,
+                    );
+                }
+                AssetKind::Font => {}
             }
             if let Some(frame) = frame {
                 let _ = writeln!(text, "# placed at frame {frame}");
@@ -501,6 +546,64 @@ impl ProjectHost for Host {
         }
     }
 
+    fn video_frame(
+        &self,
+        composition: &Path,
+        source: &str,
+        source_frame: i64,
+        proxy: bool,
+    ) -> Option<motioner_core::DecodedImage> {
+        let project = Project::open(composition).ok()?;
+        let entry = crate::video_cache::video_entry(&project, source)?;
+        if proxy {
+            self.ensure_proxy(&project, &entry.hash, &entry.path);
+        }
+        crate::video_cache::decode(
+            &project,
+            &entry,
+            &mut self.video_cache.borrow_mut(),
+            source_frame,
+            proxy,
+        )
+    }
+
+    fn video_cache_bytes(&self) -> usize {
+        Host::video_cache_bytes(self)
+    }
+
+    fn proxy_progress(&self, composition: &Path, source: &str) -> Option<f32> {
+        let project = Project::open(composition).ok()?;
+        let entry = crate::video_cache::video_entry(&project, source)?;
+        if crate::video_cache::has_proxy(&project, &entry.hash) {
+            // Keep the completed indicator on screen briefly: the job can
+            // finish between two UI frames.
+            let mut done = self.proxy_done.borrow_mut();
+            let started = *done
+                .entry(entry.hash.clone())
+                .or_insert_with(std::time::Instant::now);
+            return (started.elapsed() < std::time::Duration::from_secs(3)).then_some(1.0);
+        }
+        let proxies = self.proxies.borrow();
+        let job = proxies.get(&entry.hash)?;
+        #[allow(clippy::cast_precision_loss)]
+        Some(job.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10_000.0)
+    }
+
+    fn video_thumbnails(
+        &self,
+        composition: &Path,
+        source: &str,
+        count: usize,
+    ) -> Vec<motioner_core::DecodedImage> {
+        let Ok(project) = Project::open(composition) else {
+            return Vec::new();
+        };
+        let Some(entry) = crate::video_cache::video_entry(&project, source) else {
+            return Vec::new();
+        };
+        crate::video_cache::thumbnails(&project, &entry, count)
+    }
+
     fn waveform(&self, composition: &Path, key: &str, buckets: usize) -> Vec<f32> {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();
@@ -538,12 +641,37 @@ fn summary(project: &Project, entry: &motioner_io::AssetEntry, used_by: usize) -
     } else {
         None
     };
-    let duration = cached_peaks.as_ref().map(|peaks| peaks.duration);
+    let duration = if entry.kind == AssetKind::Video {
+        motioner_io::probe_video(&path, &FfmpegLocation::FromEnvOrPath)
+            .ok()
+            .map(|info| info.duration)
+    } else {
+        cached_peaks.as_ref().map(|peaks| peaks.duration)
+    };
     let kind = match entry.kind {
         AssetKind::Image => AssetKindUi::Image,
         AssetKind::Font => AssetKindUi::Font,
         AssetKind::Audio => AssetKindUi::Audio,
         AssetKind::Video => AssetKindUi::Video,
+    };
+    let thumbs = if entry.kind == AssetKind::Video {
+        crate::video_cache::video_entry(project, &entry.key)
+            .map(|video| {
+                crate::video_cache::thumbnails(project, &video, 6)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, frame)| motioner_ui::VideoThumb {
+                        width: frame.asset.width,
+                        height: frame.asset.height,
+                        rgba8: frame.rgba8,
+                        #[allow(clippy::cast_precision_loss)]
+                        seconds: duration.unwrap_or(0.0) * (index as f64 + 0.5) / 6.0,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
     };
     AssetSummary {
         key: entry.key.clone(),
@@ -552,9 +680,9 @@ fn summary(project: &Project, entry: &motioner_io::AssetEntry, used_by: usize) -
         size_bytes,
         duration,
         used_by,
-        peaks: cached_peaks
-            .map(|peaks| resample(&peaks.peaks, 32))
-            .unwrap_or_default(),
+        peaks: cached_peaks.map(|peaks| peaks.peaks).unwrap_or_default(),
+        peak_levels: Vec::new(),
+        thumbs,
     }
 }
 
@@ -573,6 +701,7 @@ fn used_keys(project: &Project) -> HashMap<String, usize> {
             let name = match node.content() {
                 NodeContent::Image(image) => image.source.as_str(),
                 NodeContent::Audio(audio) => audio.source.as_str(),
+                NodeContent::Video(video) => video.source.as_str(),
                 _ => continue,
             };
             if let Some(entry) = project.find_asset(name) {

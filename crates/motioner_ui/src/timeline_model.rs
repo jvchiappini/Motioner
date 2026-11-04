@@ -190,31 +190,37 @@ impl TimelineRows {
             if !expanded.contains(&index) {
                 continue;
             }
-            for (property, axis) in CHANNELS {
-                let channel = channels::Channel::Transform(property, axis);
-                let keys = channels::keys(document, node, channel);
-                if only_animated && keys.is_empty() {
-                    continue;
+            let properties = document
+                .node(node)
+                .map(|node| crate::properties::PropertySet::of(node.content()))
+                .unwrap_or_default();
+            if properties.has_visual() {
+                for (property, axis) in CHANNELS {
+                    let channel = channels::Channel::Transform(property, axis);
+                    let keys = channels::keys(document, node, channel);
+                    if only_animated && keys.is_empty() {
+                        continue;
+                    }
+                    let eases = channels::eases(document, node, channel);
+                    rows.push(TimelineRow {
+                        kind: RowKind::Transform {
+                            outline: index,
+                            property,
+                            axis,
+                        },
+                        visible: Vec::new(),
+                        summary: Vec::new(),
+                        inherited: Vec::new(),
+                        animated: !keys.is_empty(),
+                        keys,
+                        eases,
+                        on_key: false,
+                        depth: outline_row.depth + 1,
+                        label: crate::labels::transform_label(property, axis),
+                        channel: channels::channel_name(property, axis),
+                        node,
+                    });
                 }
-                let eases = channels::eases(document, node, channel);
-                rows.push(TimelineRow {
-                    kind: RowKind::Transform {
-                        outline: index,
-                        property,
-                        axis,
-                    },
-                    visible: Vec::new(),
-                    summary: Vec::new(),
-                    inherited: Vec::new(),
-                    animated: !keys.is_empty(),
-                    keys,
-                    eases,
-                    on_key: false,
-                    depth: outline_row.depth + 1,
-                    label: crate::labels::transform_label(property, axis),
-                    channel: channels::channel_name(property, axis),
-                    node,
-                });
             }
             if let Some(content) = document.node(node).map(motioner_core::Node::content) {
                 for field in content_fields(content) {
@@ -386,8 +392,18 @@ pub fn write_content_text(
         | ContentField::Pan
         | ContentField::Start
         | ContentField::FadeIn
-        | ContentField::FadeOut => {
-            if let Some(value) = sampled_number(document, node, field, frame) {
+        | ContentField::FadeOut
+        | ContentField::Speed => {
+            let value = sampled_number(document, node, field, frame).or_else(|| {
+                match document
+                    .node(node)
+                    .and_then(|node| node.content().static_value(field))
+                {
+                    Some(motioner_core::ContentValue::Number(value)) => Some(value),
+                    _ => None,
+                }
+            });
+            if let Some(value) = value {
                 write_round(out, value);
             } else {
                 out.push_str("n/a");
@@ -545,14 +561,21 @@ fn base_fields(content: &NodeContent) -> Vec<ContentField> {
             ContentField::Fit,
         ],
         NodeContent::Audio(_) => vec![
-            ContentField::Source,
-            ContentField::Start,
-            ContentField::InPoint,
-            ContentField::OutPoint,
             ContentField::Gain,
             ContentField::Pan,
             ContentField::FadeIn,
             ContentField::FadeOut,
+        ],
+        NodeContent::Video(_) => vec![
+            ContentField::Width,
+            ContentField::Height,
+            ContentField::Source,
+            ContentField::Fit,
+            ContentField::Speed,
+            ContentField::Start,
+            ContentField::InPoint,
+            ContentField::OutPoint,
+            ContentField::Gain,
         ],
     }
 }
@@ -626,18 +649,58 @@ pub fn audio_clip_range(
     }
 }
 
+/// The clip range of a video layer, as half-open composition frames.
+#[must_use]
+pub fn video_clip_range(
+    video: &motioner_core::VideoContent,
+    rate: FrameRate,
+    asset_duration: Option<f64>,
+    composition_duration: Frame,
+) -> AudioClipRange {
+    let fps = rate.as_f64();
+    let seconds = composition_duration as f64 / fps;
+    let in_point = video.in_point.value().max(0.0);
+    let out_point = video.out_point.value();
+    let source_length = if out_point > in_point {
+        out_point - in_point
+    } else {
+        (asset_duration.unwrap_or(seconds) - in_point).max(0.0)
+    };
+    let length = source_length / video.speed.max(0.001);
+    let start = video.start.max(0);
+    #[allow(clippy::cast_possible_truncation)]
+    let frames = (length * fps).round() as i64;
+    let end = start.saturating_add(frames).min(composition_duration);
+    AudioClipRange {
+        start,
+        end: end.max(start.saturating_add(1)),
+    }
+}
+
 /// Whether `node` (and its ancestors) are drawn at `frame`.
 #[must_use]
 pub fn is_visible_at(document: &Document, node: NodeId, frame: Frame) -> bool {
-    if let Some(NodeContent::Audio(audio)) = document.node(node).map(motioner_core::Node::content) {
-        let range = audio_clip_range(
-            audio,
-            document.composition().frame_rate(),
-            None,
-            document.composition().duration(),
-        );
-        if frame < range.start || frame >= range.end {
-            return false;
+    if let Some(content) = document.node(node).map(motioner_core::Node::content) {
+        match content {
+            NodeContent::Audio(audio) => {
+                let range = audio_clip_range(
+                    audio,
+                    document.composition().frame_rate(),
+                    None,
+                    document.composition().duration(),
+                );
+                if frame < range.start || frame >= range.end {
+                    return false;
+                }
+            }
+            NodeContent::Video(video)
+                if video
+                    .source_frame(frame, document.composition().frame_rate())
+                    .is_none() =>
+            {
+                return false;
+            }
+            _ => {}
         }
     }
     let mut current = Some(node);
@@ -1198,5 +1261,45 @@ mod tests {
         // The bar is clamped to the composition.
         let range = audio_clip_range(&audio, rate, Some(5.0), 60);
         assert_eq!(range, AudioClipRange { start: 30, end: 60 });
+    }
+
+    #[test]
+    fn expanded_audio_rows_are_gain_pan_and_fades_only() {
+        let document = motioner_dsl::run(
+            r#"
+comp("A", 640, 360, 60, 1.0)
+music = audio("tone.wav", in_point=0.5, out_point=1.5, gain=0.5, start=12,
+              pan=-0.5, fade_in=0.2, fade_out=0.3)
+music.id("music")
+"#,
+            &motioner_dsl::Limits::default(),
+        )
+        .unwrap();
+        let outline = crate::outline_rows(&document);
+        let mut expanded = BTreeSet::new();
+        expanded.insert(0);
+        let rows = TimelineRows::compute(&document, &outline, &expanded, false);
+        let audio_rows: Vec<(&str, bool)> = rows
+            .rows()
+            .iter()
+            .filter(|row| matches!(row.kind, RowKind::Content { .. }))
+            .map(|row| (row.label.as_str(), row.animated))
+            .collect();
+        assert_eq!(
+            audio_rows,
+            vec![
+                ("Gain", false),
+                ("Pan", false),
+                ("Fade in", false),
+                ("Fade out", false)
+            ]
+        );
+        assert!(
+            !rows
+                .rows()
+                .iter()
+                .any(|row| matches!(row.kind, RowKind::Transform { .. })),
+            "audio has no transform rows"
+        );
     }
 }

@@ -112,6 +112,8 @@ pub(super) struct ClipDrag {
     pub(super) in_point: f64,
     pub(super) end: Frame,
     pub(super) fps: f64,
+    /// Video playback speed; `1.0` for audio.
+    pub(super) speed: f64,
 }
 
 /// What a gizmo drag needs from its press.
@@ -441,7 +443,7 @@ impl PreviewApp {
         } else if let Some(clip) = in_tracks
             .then_some(outline)
             .flatten()
-            .and_then(|outline| self.audio_clip_rect(layout, outline))
+            .and_then(|outline| self.clip_rect(layout, outline))
             .filter(|clip| clip.contains(mx, my))
             .map(|clip| (clip, outline))
         {
@@ -468,8 +470,8 @@ impl PreviewApp {
         })
     }
 
-    /// The bar rectangle of an audio layer's clip, when `outline` is one.
-    pub(super) fn audio_clip_rect(&self, layout: &Layout, outline: usize) -> Option<Rect> {
+    /// The bar rectangle of an audio or video layer's clip.
+    pub(super) fn clip_rect(&self, layout: &Layout, outline: usize) -> Option<Rect> {
         let row = self.timeline_layout.rows.iter().find(|row| {
             matches!(
                 self.editor.timeline().rows().get(row.row).map(|entry| entry.kind),
@@ -478,20 +480,32 @@ impl PreviewApp {
         })?;
         let document = self.editor.session().document()?;
         let node = self.editor.outline().get(outline)?.node;
-        let motioner_core::NodeContent::Audio(audio) = document.node(node)?.content() else {
-            return None;
+        let content = document.node(node)?.content();
+        let source = match content {
+            motioner_core::NodeContent::Audio(audio) => audio.source.as_str(),
+            motioner_core::NodeContent::Video(video) => video.source.as_str(),
+            _ => return None,
         };
         let entry = self
             .assets
             .entries
             .iter()
-            .find(|entry| entry.original == audio.source || entry.key == audio.source);
-        let range = crate::timeline_model::audio_clip_range(
-            audio,
-            self.editor.transport().frame_rate(),
-            entry.and_then(|entry| entry.duration),
-            self.editor.transport().duration(),
-        );
+            .find(|entry| entry.original == source || entry.key == source);
+        let range = match content {
+            motioner_core::NodeContent::Audio(audio) => crate::timeline_model::audio_clip_range(
+                audio,
+                self.editor.transport().frame_rate(),
+                entry.and_then(|entry| entry.duration),
+                self.editor.transport().duration(),
+            ),
+            motioner_core::NodeContent::Video(video) => crate::timeline_model::video_clip_range(
+                video,
+                self.editor.transport().frame_rate(),
+                entry.and_then(|entry| entry.duration),
+                self.editor.transport().duration(),
+            ),
+            _ => return None,
+        };
         let x0 = self.frame_x(layout, range.start);
         let x1 = self.frame_x(layout, range.end);
         let h = layout.metrics.px(12.0);

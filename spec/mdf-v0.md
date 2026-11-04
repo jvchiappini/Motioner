@@ -123,7 +123,7 @@ The v0 surface:
 | `text(content, font="Roboto", size=48, color="#ffffff", align="left", weight=400, tracking=0.0, line_height=1.0)` | Text |
 | `latex(expression, size=48, color="#ffffff", display=False)` | LaTeX math |
 | `image(source, width=None, height=None, fit="contain")` | Image |
-| `video(source, in_point=0.0, out_point=None)` | Video clip |
+| `video(source, in_point=0.0, out_point=None, start=0, speed=1.0, width=None, height=None, fit="contain", gain=1.0)` | Video clip |
 | `audio(source, in_point=0.0, out_point=None, gain=1.0, start=0, pan=0.0, fade_in=0, fade_out=0)` | Audio clip (D-0048) |
 | `camera(pos=(0, 0, 8), target=(0, 0, 0), fov=45)` | 3D camera |
 | `light(kind="directional", intensity=1.0, color="#ffffff")` | 3D light |
@@ -155,9 +155,17 @@ keyable channels, and `fade_in`/`fade_out` are seconds. The mixer combines
 every visible audio layer to 48 kHz stereo; the editor's mute is the layer
 visibility and its solo mode silences the other audio layers.
 
+`video()` draws a project asset like `image()` (width, height, fit, blend,
+effects and masks) and selects its source frame from the composition frame
+with exact rational time: `source_frame = floor((in_point + (frame - start) /
+fps) * speed * source_fps)`. `out_point=None` means the file end. Its audio
+uses the same `gain`, `in_point` and `out_point` through the Phase 5 mixer.
+The preview decodes low-resolution all-intra proxies from `cache/`; `render`
+and `still` always decode the original at full resolution.
+
 Every content field except `text`, `align`, `weight`, `cap`, `join`,
-`source`, `fit`, `in_point`, `out_point`, `start`, `fade_in` and `fade_out`
-is an **animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
+`source`, `fit`, `in_point`, `out_point`, `start`, `speed`, `fade_in` and
+`fade_out` is an **animatable channel**: `key("fill", t, "#RRGGBB")`, `key("size", t, 72)`,
 `key("tracking", t, 0.02)`, `key("line_height", t, 1.4)`,
 `key("stroke_width", t, 8)`, `key("trim_end", t, 1)`,
 `key("gain", t, 0.5)`, `key("pan", t, -0.5)`. Colours interpolate

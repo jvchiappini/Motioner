@@ -50,8 +50,27 @@ pub struct AssetSummary {
     pub duration: Option<f64>,
     /// Number of layers that refer to it.
     pub used_by: usize,
-    /// Waveform peaks in `0.0..=1.0` (audio only).
+    /// Waveform peaks in `0.0..=1.0` (audio only), finest cached level.
     pub peaks: Vec<f32>,
+    /// Waveform mip chain, finest first. The timeline picks the level whose
+    /// bucket count is closest to its pixel width, so zooming never redraws
+    /// thousands of blocks per pixel.
+    pub peak_levels: Vec<Vec<f32>>,
+    /// Small source frames for a video timeline strip.
+    pub thumbs: Vec<VideoThumb>,
+}
+
+/// One small video frame for the timeline's thumbnail strip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoThumb {
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Straight-alpha sRGB RGBA8.
+    pub rgba8: Vec<u8>,
+    /// Source timestamp in seconds.
+    pub seconds: f64,
 }
 
 /// List or grid presentation.
@@ -97,6 +116,9 @@ impl AssetsModel {
                 .to_ascii_lowercase()
                 .cmp(&right.key.to_ascii_lowercase())
         });
+        for entry in &mut entries {
+            entry.peak_levels = build_peak_levels(&entry.peaks);
+        }
         self.entries = entries;
         self.generation = generation;
         self.detail.clear();
@@ -171,6 +193,39 @@ impl AssetsModel {
     }
 }
 
+/// Half-resolution levels of a peak envelope, finest first.
+#[must_use]
+pub fn build_peak_levels(peaks: &[f32]) -> Vec<Vec<f32>> {
+    let mut levels = Vec::new();
+    let mut current = peaks.to_vec();
+    while current.len() > 16 {
+        levels.push(current.clone());
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks_exact(2) {
+            next.push(pair[0].max(pair[1]));
+        }
+        current = next;
+    }
+    if !current.is_empty() {
+        levels.push(current);
+    }
+    levels
+}
+
+/// The mip level whose bucket count is closest to `columns` without doubling
+/// the work.
+#[must_use]
+pub fn level_for_columns(levels: &[Vec<f32>], columns: usize) -> &[f32] {
+    let Some(first) = levels.first() else {
+        return &[];
+    };
+    let target = columns.max(1);
+    levels
+        .iter()
+        .find(|level| level.len() <= target.saturating_mul(2))
+        .unwrap_or(first)
+}
+
 /// Case-insensitive ASCII substring search that allocates nothing.
 #[must_use]
 pub fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
@@ -194,9 +249,29 @@ pub fn detail_line(entry: &AssetSummary) -> String {
     if entry.used_by == 0 {
         let _ = write!(text, "  unused");
     } else {
-        let _ = write!(text, "  used by {}", entry.used_by);
+        // Compact usage column; the full sentence lives in the row tooltip.
+        let _ = write!(text, "  \u{00d7}{}", entry.used_by);
     }
     text
+}
+
+/// The short usage token used when the panel is too narrow for size and
+/// duration.
+#[must_use]
+pub fn usage_label(entry: &AssetSummary) -> &'static str {
+    match entry.used_by {
+        0 => "unused",
+        1 => "\u{00d7}1",
+        2 => "\u{00d7}2",
+        3 => "\u{00d7}3",
+        4 => "\u{00d7}4",
+        5 => "\u{00d7}5",
+        6 => "\u{00d7}6",
+        7 => "\u{00d7}7",
+        8 => "\u{00d7}8",
+        9 => "\u{00d7}9",
+        _ => "\u{00d7}9+",
+    }
 }
 
 /// Formats bytes without allocating more than one string (used by the host
@@ -233,6 +308,8 @@ mod tests {
             duration: None,
             used_by,
             peaks: Vec::new(),
+            peak_levels: Vec::new(),
+            thumbs: Vec::new(),
         }
     }
 
@@ -250,8 +327,31 @@ mod tests {
     }
 
     #[test]
-    fn the_detail_line_names_usage() {
-        assert_eq!(detail_line(&entry("logo", 2)), "2 KB  used by 2");
+    fn the_detail_line_names_usage_compactly() {
+        assert_eq!(detail_line(&entry("logo", 2)), "2 KB  \u{00d7}2");
         assert!(detail_line(&entry("logo", 0)).ends_with("unused"));
+    }
+
+    #[test]
+    fn a_full_usage_sentence_is_available_for_the_tooltip() {
+        let entry = entry("logo", 12);
+        assert_eq!(entry.used_by, 12);
+        assert!(detail_line(&entry).ends_with("\u{00d7}12"));
+    }
+
+    #[test]
+    fn the_usage_token_is_short_enough_for_the_narrow_panel() {
+        assert_eq!(usage_label(&entry("logo", 3)), "\u{00d7}3");
+        assert_eq!(usage_label(&entry("logo", 0)), "unused");
+    }
+
+    #[test]
+    fn peak_levels_halve_and_keep_the_strongest_sample() {
+        let peaks: Vec<f32> = (0..64).map(|value| value as f32 / 64.0).collect();
+        let levels = build_peak_levels(&peaks);
+        assert_eq!(levels.first().unwrap().len(), 64);
+        assert_eq!(levels[1].len(), 32);
+        assert!((levels[1][0] - peaks[1]).abs() < 1e-6);
+        assert_eq!(level_for_columns(&levels, 30).len(), 32);
     }
 }

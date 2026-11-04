@@ -21,10 +21,11 @@ mod images;
 mod media;
 mod png_writer;
 mod project;
+mod video;
 
 pub use assets::{
-    converted_image, project_fonts, safe_relative, sha256_hex, valid_key, AssetError,
-    ImportOutcome, ProjectImages,
+    converted_image, image_key_from_hex, project_fonts, safe_relative, sha256_hex, valid_key,
+    AssetError, ImportOutcome, ProjectImages,
 };
 pub use audio::{
     decode_to_cache, mix_document, write_wav_i16, AudioPcm, AudioStore, CHANNELS, SAMPLE_RATE,
@@ -46,3 +47,4 @@ pub use project::{
     RecentProject, WindowPlacement, ASSETS_DIR, BACKUPS_DIR, CACHE_DIR, COMPOSITIONS_DIR,
     EDITOR_FILE, FORMAT_VERSION, PROJECT_EXTENSION, PROJECT_FILE, TRACES_DIR,
 };
+pub use video::{decode_frame, make_proxy, probe as probe_video, VideoInfo};

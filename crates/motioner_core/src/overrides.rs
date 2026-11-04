@@ -607,7 +607,14 @@ fn content_value(field: ContentField, value: &OverrideValue) -> Result<ContentVa
             | ContentField::Dash
             | ContentField::DashOffset
             | ContentField::FillStopOffset(_)
-            | ContentField::StrokeStopOffset(_),
+            | ContentField::StrokeStopOffset(_)
+            | ContentField::Gain
+            | ContentField::Pan
+            | ContentField::Start
+            | ContentField::FadeIn
+            | ContentField::FadeOut
+            | ContentField::InPoint
+            | ContentField::OutPoint,
             OverrideValue::Number(n),
         ) => Ok(ContentValue::Number(*n)),
         (

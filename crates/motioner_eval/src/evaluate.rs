@@ -207,7 +207,16 @@ impl Evaluator {
                     });
                 }
             }
-            if let Some(shape) = item_shape(node.content(), time, plan) {
+            if let NodeContent::Video(video) = node.content() {
+                if video.asset.is_some()
+                    && video
+                        .source_frame(frame, document.composition().frame_rate())
+                        .is_none()
+                {
+                    continue;
+                }
+            }
+            if let Some(shape) = item_shape(node.id(), node.content(), time, plan) {
                 plan.items.push(RenderItem {
                     node: node.id(),
                     transform,
@@ -257,7 +266,12 @@ fn resolved_effects(node: &Node, time: f64) -> Vec<EffectValue> {
         .collect()
 }
 
-fn item_shape(content: &NodeContent, time: f64, plan: &mut RenderPlan) -> Option<ItemShape> {
+fn item_shape(
+    node: motioner_core::NodeId,
+    content: &NodeContent,
+    time: f64,
+    plan: &mut RenderPlan,
+) -> Option<ItemShape> {
     match content {
         NodeContent::Group | NodeContent::Audio(_) => None,
         NodeContent::Rect {
@@ -337,6 +351,20 @@ fn item_shape(content: &NodeContent, time: f64, plan: &mut RenderPlan) -> Option
             );
             Some(ItemShape::Image {
                 key: image.asset.map(|asset| asset.key),
+                width: layout.width,
+                height: layout.height,
+                uv: layout.uv,
+            })
+        }
+        NodeContent::Video(video) => {
+            let layout = motioner_core::ImageLayout::compute(
+                sample_at(&video.width, time),
+                sample_at(&video.height, time),
+                video.fit,
+                video.asset.map(|asset| (asset.width, asset.height)),
+            );
+            Some(ItemShape::Image {
+                key: video.texture_key(node),
                 width: layout.width,
                 height: layout.height,
                 uv: layout.uv,

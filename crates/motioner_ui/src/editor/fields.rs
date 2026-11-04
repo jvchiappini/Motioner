@@ -271,7 +271,11 @@ impl Editor {
                 let curve = BezierEase::new(x1, y1, x2, y2).ok()?;
                 return Some(Command::SetEase(Ease::Bezier(curve)));
             }
-            FieldTarget::Content(_) | FieldTarget::Filter | FieldTarget::None => return None,
+            FieldTarget::Content(_)
+            | FieldTarget::Filter
+            | FieldTarget::AudioMute
+            | FieldTarget::AudioSolo
+            | FieldTarget::None => return None,
         };
         Some(Command::Edit {
             id,

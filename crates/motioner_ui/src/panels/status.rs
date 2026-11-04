@@ -81,6 +81,14 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
         use std::fmt::Write as _;
         let _ = write!(&mut readout, "   \u{00b7}   Blur {:.0} ms", v.stats.blur_ms);
     }
+    if v.video_bytes > 0 {
+        use std::fmt::Write as _;
+        let _ = write!(
+            &mut readout,
+            "   \u{00b7}   Video {:.0} MB",
+            v.video_bytes as f64 / (1024.0 * 1024.0)
+        );
+    }
     let readout_w = p.measure(&readout, &style);
     let readout_x = bar.right() - pad - readout_w;
     p.text_in(

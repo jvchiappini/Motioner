@@ -12,7 +12,8 @@ use motioner_core::{
     ContentChannel, ContentField, ContentValue, CoreError, Document, Ease, Effect, EffectChannel,
     EffectKind, EffectParam, EffectValueInput, FrameRate, Gradient, ImageContent, ImageFit,
     LineCap, LineJoin, MaskMode, NodeContent, NodeId, NodeIdentity, Paint, PathGeometry, PathPoint,
-    Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Vec2, MAX_CANVAS_SIZE,
+    Property, PropertyValue, Stroke, TextAlign, TextAnimator, TextContent, Vec2, VideoContent,
+    MAX_CANVAS_SIZE,
 };
 
 use crate::diagnostic::{ErrorCategory, Span};
@@ -175,6 +176,7 @@ impl Scene {
             Builtin::Text => self.text(args, site),
             Builtin::Image => self.image(args, site),
             Builtin::Audio => self.audio(args, site),
+            Builtin::Video => self.video(args, site),
             Builtin::Stagger => self.stagger(args, site),
             Builtin::Path => self.path(args, site),
             Builtin::Polygon => self.polygon(args, site),
@@ -416,6 +418,82 @@ impl Scene {
                 (5, "pan"),
                 (6, "fade_in"),
                 (7, "fade_out"),
+            ] {
+                self.record(id, property, bound.source(index));
+            }
+        }
+        Ok(node)
+    }
+
+    /// `video(source, in_point=0.0, out_point=None, start=0, speed=1.0,
+    /// width=None, height=None, fit="contain", gain=1.0)` (Phase 6).
+    fn video(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let params = [
+            "source",
+            "in_point",
+            "out_point",
+            "start",
+            "speed",
+            "width",
+            "height",
+            "fit",
+            "gain",
+        ];
+        let bound = bind("video", &params, 1, args)?;
+        let source = bound.string_or(0, "")?;
+        if source.is_empty() {
+            return Err(HostError::value_error(
+                "video(): 'source' must be a non-empty project-relative path",
+            ));
+        }
+        let optional = |index: usize, name: &str| -> HostResult<f64> {
+            match bound.get(index) {
+                None | Some(Value::None) => Ok(0.0),
+                Some(Value::Number(number)) => Ok(*number),
+                Some(other) => Err(HostError::type_error(format!(
+                    "video(): '{name}' must be a number or None, got {}",
+                    other.type_name()
+                ))),
+            }
+        };
+        let start = bound.number_or(3, 0.0)?;
+        if !start.is_finite() {
+            return Err(HostError::value_error("video(): 'start' must be finite"));
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let start = start.round() as i64;
+        let speed = bound.number_or(4, 1.0)?;
+        if !speed.is_finite() || speed <= 0.0 {
+            return Err(HostError::value_error(
+                "video(): 'speed' must be a positive number",
+            ));
+        }
+        let fit_name = bound.string_or(7, "contain")?;
+        let fit = ImageFit::from_name(&fit_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "video(): unknown fit {fit_name:?}; use \"contain\", \"cover\" or \"fill\""
+            ))
+        })?;
+        let mut content = VideoContent::new(source.to_string(), start);
+        content.in_point = motioner_core::Animatable::new(bound.number_or(1, 0.0)?);
+        content.out_point = motioner_core::Animatable::new(optional(2, "out_point")?);
+        content.speed = speed;
+        content.width = motioner_core::Animatable::new(optional(5, "width")?);
+        content.height = motioner_core::Animatable::new(optional(6, "height")?);
+        content.fit = fit;
+        content.gain = motioner_core::Animatable::new(bound.number_or(8, 1.0)?);
+        let node = self.create(NodeContent::Video(content), site)?;
+        if let Value::Node(id) = node {
+            for (index, property) in [
+                (0, "source"),
+                (1, "in_point"),
+                (2, "out_point"),
+                (3, "start"),
+                (4, "speed"),
+                (5, "width"),
+                (6, "height"),
+                (7, "fit"),
+                (8, "gain"),
             ] {
                 self.record(id, property, bound.source(index));
             }
@@ -1730,6 +1808,7 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::Start
         | ContentField::FadeIn
         | ContentField::FadeOut
+        | ContentField::Speed
         | ContentField::FillStopOffset(_)
         | ContentField::StrokeStopOffset(_) => number(value),
         ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_) => match value {

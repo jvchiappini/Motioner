@@ -67,6 +67,9 @@ impl PreviewApp {
         let mut session = PreviewSession::new(&composition);
         session.set_text_metrics(self.metrics());
         session.set_image_resolver(host.images(&composition));
+        if let Some(videos) = host.videos(&composition) {
+            session.set_video_resolver(videos);
+        }
         let _ = session.reload();
         let fonts = host.fonts(&composition);
         let mut families: Vec<String> =

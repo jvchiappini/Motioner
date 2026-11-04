@@ -250,6 +250,46 @@ impl Document {
         issues
     }
 
+    /// Resolves every video node's source and metadata.
+    pub fn resolve_videos(
+        &mut self,
+        resolver: &dyn crate::node::VideoResolver,
+    ) -> Vec<crate::node::ImageIssue> {
+        let mut issues = Vec::new();
+        for node in &mut self.nodes {
+            let NodeContent::Video(video) = &mut node.content else {
+                continue;
+            };
+            match resolver.resolve_video(&video.source) {
+                Ok(asset) => video.asset = Some(asset),
+                Err(message) => {
+                    video.asset = None;
+                    issues.push(crate::node::ImageIssue {
+                        node: node.id,
+                        source: video.source.clone(),
+                        message,
+                    });
+                }
+            }
+        }
+        issues
+    }
+
+    /// The first unresolved video node, if any.
+    #[must_use]
+    pub fn first_unresolved_video(&self) -> Option<crate::node::ImageIssue> {
+        self.nodes.iter().find_map(|node| {
+            let NodeContent::Video(video) = &node.content else {
+                return None;
+            };
+            video.asset.is_none().then(|| crate::node::ImageIssue {
+                node: node.id,
+                source: video.source.clone(),
+                message: "the video could not be resolved".to_owned(),
+            })
+        })
+    }
+
     /// The first unresolved image node, if any.
     ///
     /// `still`/`render` use this to fail with a typed error before rendering.

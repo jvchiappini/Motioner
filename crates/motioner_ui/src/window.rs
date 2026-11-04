@@ -63,6 +63,8 @@ pub struct PreviewOptions {
     /// project-rooted loader; without one every image stays unresolved and
     /// draws a placeholder.
     pub image_resolver: Option<std::rc::Rc<dyn motioner_core::ImageResolver>>,
+    /// Resolver for `video()` metadata.
+    pub video_resolver: Option<std::rc::Rc<dyn motioner_core::VideoResolver>>,
     /// Project services (D-0045); without one the start screen is read-only.
     pub host: Option<std::rc::Rc<dyn crate::ProjectHost>>,
     /// Open the window on the start screen with this state.
@@ -118,6 +120,9 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     }
     if let Some(resolver) = options.image_resolver.clone() {
         session.set_image_resolver(resolver);
+    }
+    if let Some(resolver) = options.video_resolver.clone() {
+        session.set_video_resolver(resolver);
     }
     match session.reload() {
         Ok(()) | Err(SessionError::Diagnostic(_)) => {}

@@ -52,6 +52,11 @@ documented `LivePainter` exception.
 - Styled text (`tracking`, `line_height`, `\n`, per-glyph `GlyphDraw2d`)
   goes through `draw_text_2d_styled` / `draw_glyphs_2d`:
   `crates/motioner_render/src/frame.rs`.
+- Image and video textures carry a `revision`; the painter rewrites a
+  same-size frame with `Renderer::update_sprite_texture` and only frees and
+  re-registers when a proxy/original size changes
+  (`crates/motioner_render/src/shapes.rs:207-245`,
+  `crates/motioner_render/src/frame.rs:64-90`).
 
 ## Diagram
 

@@ -179,25 +179,46 @@ pub fn mix_document<S: BuildHasher>(
         return out;
     }
     for node in document.nodes() {
-        let NodeContent::Audio(audio) = node.content() else {
-            continue;
-        };
+        let pan_enabled = matches!(node.content(), NodeContent::Audio(_));
+        let (source, start, in_point, out_point, gain, pan, fade_in, fade_out, speed) =
+            match node.content() {
+                NodeContent::Audio(audio) => (
+                    audio.source.as_str(),
+                    audio.start,
+                    motioner_eval::sample_at(&audio.in_point, 0.0),
+                    motioner_eval::sample_at(&audio.out_point, 0.0),
+                    &audio.gain,
+                    &audio.pan,
+                    audio.fade_in.max(0.0),
+                    audio.fade_out.max(0.0),
+                    1.0,
+                ),
+                NodeContent::Video(video) => (
+                    video.source.as_str(),
+                    video.start,
+                    motioner_eval::sample_at(&video.in_point, 0.0),
+                    motioner_eval::sample_at(&video.out_point, 0.0),
+                    &video.gain,
+                    &video.gain,
+                    0.0,
+                    0.0,
+                    video.speed.max(0.001),
+                ),
+                _ => continue,
+            };
         if !node.is_visible() || muted.contains(node.identity().as_str()) {
             continue;
         }
-        let Some(pcm) = store.get(&audio.source) else {
+        let Some(pcm) = store.get(source) else {
             continue;
         };
-        let start_seconds = audio.start as f64 / rate;
-        let in_point = motioner_eval::sample_at(&audio.in_point, 0.0);
-        let out_point = motioner_eval::sample_at(&audio.out_point, 0.0);
-        let clip_end = if out_point > in_point {
-            start_seconds + (out_point - in_point)
+        let start_seconds = start as f64 / rate;
+        let source_length = if out_point > in_point {
+            out_point - in_point
         } else {
-            start_seconds + (pcm.duration() - in_point).max(0.0)
+            (pcm.duration() - in_point).max(0.0)
         };
-        let fade_in = audio.fade_in.max(0.0);
-        let fade_out = audio.fade_out.max(0.0);
+        let clip_end = start_seconds + source_length / speed;
         let pcm_frames = pcm.frames();
         #[allow(clippy::cast_precision_loss)]
         for index in 0..count {
@@ -207,7 +228,7 @@ pub fn mix_document<S: BuildHasher>(
             if time < start_seconds || time >= clip_end {
                 continue;
             }
-            let local = time - start_seconds + in_point;
+            let local = (time - start_seconds) * speed + in_point;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let frame = (local * f64::from(pcm.sample_rate)).floor() as usize;
             if frame >= pcm_frames {
@@ -222,8 +243,12 @@ pub fn mix_document<S: BuildHasher>(
             }
             fade = fade.clamp(0.0, 1.0);
             let composition_frame = time * rate;
-            let gain = motioner_eval::sample_at(&audio.gain, composition_frame).max(0.0);
-            let pan = motioner_eval::sample_at(&audio.pan, composition_frame).clamp(-1.0, 1.0);
+            let gain = motioner_eval::sample_at(gain, composition_frame).max(0.0);
+            let pan = if pan_enabled {
+                motioner_eval::sample_at(pan, composition_frame).clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
             let angle = (pan + 1.0) * std::f64::consts::FRAC_PI_4;
             let left = angle.cos();
             let right = angle.sin();

@@ -213,7 +213,13 @@ fn draw_value(
         RowValue::Blend { mode, .. } => blend_tiles(p, v, segments, *mode, item),
         RowValue::EffectOps { .. } => label_tiles(p, v, segments, &["Up", "Dn", "Del"], item),
         RowValue::EffectAdd => {
-            label_tiles(p, v, segments, &["Shadow", "Blur", "Glow"], item);
+            icon_tiles(
+                p,
+                v,
+                segments,
+                &[Icon::Shadow, Icon::Blur, Icon::Glow],
+                item,
+            );
         }
         RowValue::TextAnimAdd => {
             label_tiles(p, v, segments, &["Fade", "Rise", "Colour"], item);
@@ -225,6 +231,10 @@ fn draw_value(
         }
         RowValue::Cycle { current, .. } => {
             label_tiles(p, v, segments, &[current], item);
+        }
+        RowValue::Toggle { on, .. } => {
+            let active = usize::from(*on);
+            active_tiles(p, v, segments, &["Off", "On"], active, item);
         }
         RowValue::MaskMode { mode, .. } => {
             let active = match mode {
@@ -253,6 +263,29 @@ fn label_tiles(p: &mut Painter<'_>, v: &View<'_>, tiles: &[Rect], labels: &[&str
         p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
         let style = p.style(type_scale::BODY, t.text_muted);
         p.text_in(label, *rect, Align::Center, &style);
+    }
+}
+
+/// Tiles with a centered icon; hover is highlighted. Icons keep the row from
+/// truncating labels at the minimum inspector width, and the tooltip names
+/// each effect.
+fn icon_tiles(p: &mut Painter<'_>, v: &View<'_>, tiles: &[Rect], icons: &[Icon], item: usize) {
+    let t = *p.theme;
+    for (segment, (rect, icon)) in tiles.iter().zip(icons).enumerate() {
+        let state = v.interaction(Hit::InspectSegment { item, segment });
+        let fill = if state.hovered {
+            t.control_hover
+        } else {
+            t.raised
+        };
+        p.fill_rounded(*rect, fill, p.m.px(size::RADIUS_SM));
+        icons::draw(
+            p,
+            *icon,
+            rect.inset(p.m.px(4.0)),
+            if state.hovered { t.text } else { t.text_muted },
+            t.raised,
+        );
     }
 }
 

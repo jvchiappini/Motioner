@@ -31,6 +31,7 @@ fn image_set(images: Vec<motioner_core::DecodedImage>) -> ImageSet {
             width: image.asset.width,
             height: image.asset.height,
             rgba8: image.rgba8,
+            revision: 0,
         });
     }
     set
@@ -121,6 +122,7 @@ impl PreviewApp {
             self.blur_generation = Some(generation);
         }
         let playing = self.editor.transport().is_playing();
+        self.update_video_images(frame, playing);
         let blur_on = self.editor.motion_blur_preview()
             && self
                 .editor
@@ -197,6 +199,56 @@ impl PreviewApp {
                 .map_or(Pick::Nothing, Pick::Node)
         });
         (out, picked)
+    }
+
+    /// Uploads the current source frame of every video layer, reusing one
+    /// texture per layer. Called only when the frame or proxy mode changes.
+    fn update_video_images(&mut self, frame: i64, playing: bool) {
+        if self.video_last == Some((frame, playing)) {
+            return;
+        }
+        self.video_last = Some((frame, playing));
+        let Some(host) = self.host.clone() else {
+            return;
+        };
+        let path = self.editor.session().path().to_path_buf();
+        let requests: Vec<(String, i64, motioner_core::ImageKey)> = {
+            let Some(document) = self.editor.session().document() else {
+                return;
+            };
+            let rate = document.composition().frame_rate();
+            document
+                .nodes()
+                .filter_map(|node| {
+                    let motioner_core::NodeContent::Video(video) = node.content() else {
+                        return None;
+                    };
+                    let source_frame = video.source_frame(frame, rate)?;
+                    Some((
+                        video.source.clone(),
+                        source_frame,
+                        video.texture_key(node.id())?,
+                    ))
+                })
+                .collect()
+        };
+        let revision = u64::try_from(frame).unwrap_or(0) * 2 + u64::from(playing);
+        for (source, source_frame, key) in requests {
+            let Some(decoded) = host.video_frame(&path, &source, source_frame, playing) else {
+                continue;
+            };
+            let image = ImageData {
+                key,
+                width: decoded.asset.width,
+                height: decoded.asset.height,
+                rgba8: decoded.rgba8,
+                revision,
+            };
+            if let Some(painter) = self.painter.as_mut() {
+                painter.set_image(image.clone());
+            }
+            self.blur.set_image(image);
+        }
     }
 
     fn hovered_node(&self) -> Option<NodeId> {

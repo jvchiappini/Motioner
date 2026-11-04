@@ -94,19 +94,25 @@ pub fn channel_name(property: Property, axis: Option<Axis>) -> String {
 /// the content fields its kind accepts and can animate.
 #[must_use]
 pub fn node_channels(document: &Document, node: NodeId) -> Vec<Channel> {
-    let mut channels: Vec<Channel> = CHANNELS
-        .into_iter()
-        .map(|(property, axis)| Channel::Transform(property, axis))
-        .collect();
-    if let Some(content) = document.node(node).map(motioner_core::Node::content) {
-        for field in crate::timeline_model::content_fields(content) {
-            if field.is_animatable() {
-                channels.push(Channel::Content(field));
-            }
+    let Some(entry) = document.node(node) else {
+        return Vec::new();
+    };
+    let properties = crate::properties::PropertySet::of(entry.content());
+    let mut channels: Vec<Channel> = if properties.has_visual() {
+        CHANNELS
+            .into_iter()
+            .map(|(property, axis)| Channel::Transform(property, axis))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for field in crate::timeline_model::content_fields(entry.content()) {
+        if field.is_animatable() {
+            channels.push(Channel::Content(field));
         }
     }
-    if let Some(node) = document.node(node) {
-        for effect in node.effects() {
+    if properties.has_visual() {
+        for effect in entry.effects() {
             for &param in effect.kind().params() {
                 if param.is_vector() {
                     for axis in [Axis::X, Axis::Y] {
@@ -123,6 +129,31 @@ pub fn node_channels(document: &Document, node: NodeId) -> Vec<Channel> {
     channels
 }
 
+/// The property set of `node`, or a typed error when it is gone.
+fn property_set(
+    document: &Document,
+    node: NodeId,
+    property: &str,
+) -> Result<crate::properties::PropertySet, CommandError> {
+    let content = document
+        .node(node)
+        .map(motioner_core::Node::content)
+        .ok_or_else(|| unknown_property(property))?;
+    Ok(crate::properties::PropertySet::of(content))
+}
+
+/// Rejects a visual property on a kind that has no visual set.
+fn require_visual(document: &Document, node: NodeId, property: &str) -> Result<(), CommandError> {
+    if property_set(document, node, property)?.has_visual() {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            ErrorKind::UnknownProperty,
+            format!("'{property}' does not apply to an audio layer"),
+        ))
+    }
+}
+
 /// Resolves `id` and a channel name to a node and channel.
 ///
 /// # Errors
@@ -137,6 +168,7 @@ pub fn resolve(
 ) -> Result<(NodeId, Channel), CommandError> {
     let node = node_of(document, id)?;
     if let Some(channel) = EffectChannel::from_name(property) {
+        require_visual(document, node, property)?;
         let has = document
             .node(node)
             .is_some_and(|node| node.effect(channel.kind).is_some());
@@ -201,6 +233,7 @@ pub fn resolve(
             ),
         ));
     };
+    require_visual(document, node, property)?;
     if axis.is_some() && !parsed.is_vector() {
         return Err(CommandError::new(
             ErrorKind::UnknownProperty,

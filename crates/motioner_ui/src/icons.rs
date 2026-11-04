@@ -65,15 +65,116 @@ pub enum Icon {
     Image,
     /// An audio clip.
     Audio,
+    /// A video clip.
+    Video,
     /// Assets panel, list view.
     List,
     /// Assets panel, grid view.
     Grid,
     /// Remove unused assets (bin).
     Clean,
+    /// Muted audio (speaker with a cross).
+    Mute,
+    /// Soloed layer (headphones).
+    Solo,
+    /// Layer filter / shy layers (funnel).
+    Filter,
+    /// Drop-shadow effect.
+    Shadow,
+    /// Blur effect.
+    Blur,
+    /// Glow effect.
+    Glow,
 }
 
 impl Icon {
+    /// Every icon, for exhaustive draw tests.
+    #[cfg(test)]
+    pub const ALL: [Self; 36] = [
+        Self::Play,
+        Self::Pause,
+        Self::StepBack,
+        Self::StepForward,
+        Self::ToStart,
+        Self::ToEnd,
+        Self::Loop,
+        Self::Eye,
+        Self::Lock,
+        Self::Unlock,
+        Self::Text,
+        Self::Circle,
+        Self::Rect,
+        Self::Path,
+        Self::Group,
+        Self::ChevronDown,
+        Self::ChevronRight,
+        Self::Stopwatch,
+        Self::Error,
+        Self::Warning,
+        Self::Check,
+        Self::SafeArea,
+        Self::Snap,
+        Self::Mask,
+        Self::Image,
+        Self::Audio,
+        Self::Video,
+        Self::List,
+        Self::Grid,
+        Self::Clean,
+        Self::Mute,
+        Self::Solo,
+        Self::Filter,
+        Self::Shadow,
+        Self::Blur,
+        Self::Glow,
+    ];
+
+    /// Whether the icon has a glyph. Every id must; anything else would fall
+    /// through to a label, which is exactly the bug this guards against.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn has_glyph(self) -> bool {
+        matches!(
+            self,
+            Self::Play
+                | Self::Pause
+                | Self::StepBack
+                | Self::StepForward
+                | Self::ToStart
+                | Self::ToEnd
+                | Self::Loop
+                | Self::Eye
+                | Self::Lock
+                | Self::Unlock
+                | Self::Text
+                | Self::Circle
+                | Self::Rect
+                | Self::Path
+                | Self::Group
+                | Self::ChevronDown
+                | Self::ChevronRight
+                | Self::Stopwatch
+                | Self::Error
+                | Self::Warning
+                | Self::Check
+                | Self::SafeArea
+                | Self::Snap
+                | Self::Mask
+                | Self::Image
+                | Self::Audio
+                | Self::Video
+                | Self::List
+                | Self::Grid
+                | Self::Clean
+                | Self::Mute
+                | Self::Solo
+                | Self::Filter
+                | Self::Shadow
+                | Self::Blur
+                | Self::Glow
+        )
+    }
+
     /// The icon for an outline node kind.
     #[must_use]
     pub const fn for_kind(kind: NodeKind) -> Self {
@@ -85,6 +186,7 @@ impl Icon {
             NodeKind::Text => Self::Text,
             NodeKind::Image => Self::Image,
             NodeKind::Audio => Self::Audio,
+            NodeKind::Video => Self::Video,
         }
     }
 }
@@ -307,6 +409,14 @@ fn layer(
                 p.fill_rounded(g.r(x, top, 1.5, height), color, g.len(0.5));
             }
         }
+        Icon::Video => {
+            p.stroke_rounded(g.r(1.5, 3.0, 13.0, 10.0), color, g.len(1.5), stroke);
+            p.fill_rounded(g.r(3.0, 4.5, 3.0, 2.0), color, g.len(0.5));
+            p.fill_rounded(g.r(3.0, 9.5, 3.0, 2.0), color, g.len(0.5));
+            p.fill_rounded(g.r(10.0, 4.5, 3.0, 2.0), color, g.len(0.5));
+            p.fill_rounded(g.r(10.0, 9.5, 3.0, 2.0), color, g.len(0.5));
+            p.polygon(&[g.p(7.0, 6.0), g.p(10.0, 8.0), g.p(7.0, 10.0)], color);
+        }
         Icon::List => {
             for row in 0..3 {
                 let y = 3.5 + row as f32 * 4.0;
@@ -330,6 +440,71 @@ fn layer(
             p.fill_rounded(g.r(6.0, 1.5, 4.0, 1.75), color, g.len(0.5));
             p.stroke_rounded(g.r(5.0, 5.0, 6.0, 9.0), color, g.len(1.0), stroke);
             p.vline(g.x + g.len(8.5), g.y + g.len(7.5), g.y + g.len(11.5), color);
+        }
+        Icon::Mute => {
+            p.polygon(
+                &[
+                    g.p(2.5, 6.0),
+                    g.p(5.5, 6.0),
+                    g.p(8.0, 3.0),
+                    g.p(8.0, 13.0),
+                    g.p(5.5, 10.0),
+                    g.p(2.5, 10.0),
+                ],
+                color,
+            );
+            p.line(g.p(10.5, 5.5), g.p(14.0, 10.0), stroke, color);
+            p.line(g.p(14.0, 5.5), g.p(10.5, 10.0), stroke, color);
+        }
+        Icon::Solo => {
+            p.stroke_rounded(g.r(3.0, 3.0, 10.0, 6.0), color, g.len(4.0), stroke);
+            p.fill_rounded(g.r(2.0, 8.0, 2.5, 4.0), color, g.len(0.75));
+            p.fill_rounded(g.r(11.5, 8.0, 2.5, 4.0), color, g.len(0.75));
+        }
+        Icon::Filter => {
+            p.polygon(
+                &[
+                    g.p(2.5, 3.0),
+                    g.p(13.5, 3.0),
+                    g.p(9.5, 8.0),
+                    g.p(9.5, 12.5),
+                    g.p(6.5, 14.0),
+                    g.p(6.5, 8.0),
+                ],
+                color,
+            );
+        }
+        Icon::Shadow => {
+            p.fill_rounded(g.r(3.0, 3.0, 8.5, 8.5), color, g.len(1.0));
+            p.stroke_rounded(g.r(5.5, 5.5, 8.5, 8.5), color, g.len(1.0), stroke);
+        }
+        Icon::Blur => {
+            p.ring(
+                g.x + g.len(8.0),
+                g.y + g.len(8.0),
+                g.len(6.0),
+                stroke,
+                color,
+            );
+            p.ring(
+                g.x + g.len(8.0),
+                g.y + g.len(8.0),
+                g.len(3.6),
+                stroke,
+                color,
+            );
+            p.circle(g.x + g.len(8.0), g.y + g.len(8.0), g.len(1.2), color);
+        }
+        Icon::Glow => {
+            p.circle(g.x + g.len(8.0), g.y + g.len(8.0), g.len(2.6), color);
+            for (x, y, w, h) in [
+                (7.25, 1.0, 1.5, 2.5),
+                (7.25, 12.5, 1.5, 2.5),
+                (1.0, 7.25, 2.5, 1.5),
+                (12.5, 7.25, 2.5, 1.5),
+            ] {
+                p.fill_rounded(g.r(x, y, w, h), color, g.len(0.5));
+            }
         }
         _ => return false,
     }
@@ -371,5 +546,20 @@ fn status(p: &mut Painter<'_>, icon: Icon, g: Grid, color: [f32; 4], surface: [f
             p.stroke_rounded(g.r(4.0, 5.5, 8.0, 5.0), color, g.len(0.75), stroke);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Icon;
+
+    #[test]
+    fn every_icon_id_has_a_glyph_and_never_falls_back_to_text() {
+        for icon in Icon::ALL {
+            assert!(
+                icon.has_glyph(),
+                "{icon:?} has no glyph and would render as a stray letter"
+            );
+        }
     }
 }

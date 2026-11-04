@@ -138,6 +138,19 @@ fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
         let x = v.layout.snap_toggle.x - width - p.m.px(size::PAD);
         widgets::pill(p, x, v.layout.top_bar.center_y(), text, &style, t.raised);
     }
+    if let Some(progress) = v.proxy_status {
+        let style = p.style(type_scale::CAPTION, t.warning);
+        let width = widgets::pill_width(p, progress, &style);
+        let x = v.layout.snap_toggle.x - width - p.m.px(size::PAD);
+        widgets::pill(
+            p,
+            x,
+            v.layout.top_bar.center_y(),
+            progress,
+            &style,
+            t.raised,
+        );
+    }
     let toggle = v.layout.safe_area_toggle;
     let mut state = v.interaction(Hit::Toggle(TopBarToggle::SafeArea));
     state.active = v.safe_area;

@@ -95,6 +95,7 @@ fn load() -> Result<(motioner_core::Document, ImageSet), Box<dyn Error>> {
             width: image.width,
             height: image.height,
             rgba8: image.rgba8,
+            revision: 0,
         });
     }
     Ok((document, images))

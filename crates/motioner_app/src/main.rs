@@ -23,6 +23,7 @@
 mod agent;
 mod audio_out;
 mod host;
+mod video_cache;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -36,9 +37,9 @@ use motioner_core::{Document, NodeContent};
 use motioner_dsl::Limits;
 
 use motioner_io::{
-    decode_to_cache, mix_document, write_png, write_wav_i16, AssetKind, AudioStore, ExportError,
-    FfmpegLocation, Mp4Encoder, Project, ProjectImages, ProjectOptions, ProjectSettings,
-    VideoSettings, SAMPLE_RATE,
+    decode_frame, decode_to_cache, mix_document, write_png, write_wav_i16, AssetKind, AudioStore,
+    ExportError, FfmpegLocation, Mp4Encoder, Project, ProjectImages, ProjectOptions,
+    ProjectSettings, VideoSettings, SAMPLE_RATE,
 };
 use motioner_render::{CpuTextMetrics, FontSet, ImageData, ImageSet};
 use motioner_render::{FrameRenderer, RenderError};
@@ -1053,10 +1054,10 @@ fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
 fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
     let target = resolve_input(&args.input)?;
     let fonts = project_fonts(&target);
-    let resolver = match &target.project {
+    let resolver = std::rc::Rc::new(match &target.project {
         Some(project) => ProjectImages::new(project),
         None => ProjectImages::loose(&target.root),
-    };
+    });
     let options = motioner_ui::PreviewOptions {
         frame: args.frame,
         paused: args.paused,
@@ -1070,7 +1071,8 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         control: args.control.clone(),
         text_metrics: Some(Arc::new(CpuTextMetrics::new(fonts.clone()))),
         fonts: Some(fonts),
-        image_resolver: Some(std::rc::Rc::new(resolver)),
+        image_resolver: Some(resolver.clone()),
+        video_resolver: Some(resolver),
         host: Some(std::rc::Rc::new(host::Host::new(
             std::env::current_dir().unwrap_or_default(),
         ))),
@@ -1153,6 +1155,12 @@ fn load_document(
                     issue.source, issue.node, issue.message
                 );
             }
+            for issue in document.resolve_videos(&images) {
+                eprintln!(
+                    "warning: video {} ({}): {}",
+                    issue.source, issue.node, issue.message
+                );
+            }
             Ok((source, document, images))
         }
         Err(diagnostic) => Err(Failure::Diagnostic(diagnostic.render(&source, &name))),
@@ -1168,6 +1176,7 @@ fn image_set(images: &ProjectImages) -> ImageSet {
             width: image.width,
             height: image.height,
             rgba8: image.rgba8,
+            revision: 0,
         });
     }
     set
@@ -1394,6 +1403,9 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
         project_fonts(&target),
     )?;
     renderer.set_images(image_set(&images));
+    for image in video_images(&images, &document, args.frame)? {
+        renderer.set_image(image);
+    }
     let mut rgba = Vec::new();
     renderer.render_frame(&document, args.frame, &mut rgba)?;
     write_png(
@@ -1413,6 +1425,60 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
     Ok(())
 }
 
+/// Decodes the source frame of every video node visible at `frame`.
+///
+/// `still`/`render` always decode the original at full resolution; the
+/// returned images reuse one texture key per node and bump the revision.
+fn video_images(
+    images: &ProjectImages,
+    document: &Document,
+    frame: motioner_core::Frame,
+) -> Result<Vec<ImageData>> {
+    if let Some(issue) = document.first_unresolved_video() {
+        return Err(anyhow!(RenderError::UnresolvedImage {
+            source: issue.source,
+        }));
+    }
+    let rate = document.composition().frame_rate();
+    let mut out = Vec::new();
+    for node in document.nodes() {
+        let NodeContent::Video(video) = node.content() else {
+            continue;
+        };
+        let Some(asset) = video.asset else {
+            continue;
+        };
+        let Some(source_frame) = video.source_frame(frame, rate) else {
+            continue;
+        };
+        let Some(key) = video.texture_key(node.id()) else {
+            continue;
+        };
+        let Some(path) = images.video_path(&video.source) else {
+            return Err(anyhow!(RenderError::UnresolvedImage {
+                source: video.source.clone(),
+            }));
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let seconds = source_frame as f64 / asset.fps.as_f64();
+        let rgba8 = decode_frame(
+            &path,
+            seconds,
+            asset.width,
+            asset.height,
+            &FfmpegLocation::FromEnvOrPath,
+        )?;
+        out.push(ImageData {
+            key,
+            width: asset.width,
+            height: asset.height,
+            rgba8,
+            revision: u64::try_from(frame).unwrap_or(0) + 1,
+        });
+    }
+    Ok(out)
+}
+
 /// Decodes every audio asset a document references, keyed by registry key and
 /// original name so the MDF source resolves either way.
 fn audio_store(
@@ -1423,13 +1489,15 @@ fn audio_store(
     let project = target.project.as_ref()?;
     let mut store = AudioStore::default();
     for node in document.nodes() {
-        let NodeContent::Audio(audio) = node.content() else {
+        let source = match node.content() {
+            NodeContent::Audio(audio) => audio.source.as_str(),
+            NodeContent::Video(video) => video.source.as_str(),
+            _ => continue,
+        };
+        let Some(entry) = project.find_asset(source) else {
             continue;
         };
-        let Some(entry) = project.find_asset(&audio.source) else {
-            continue;
-        };
-        if entry.kind != AssetKind::Audio {
+        if !matches!(entry.kind, AssetKind::Audio | AssetKind::Video) {
             continue;
         }
         let Ok(pcm) = decode_to_cache(
@@ -1540,6 +1608,9 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
 
     for frame in from..to {
         let render_start = Instant::now();
+        for image in video_images(&images, &document, frame)? {
+            renderer.set_image(image);
+        }
         let stats = renderer.render_frame(&document, frame, &mut rgba)?;
         render_time += render_start.elapsed();
         missing_glyphs = missing_glyphs.saturating_add(u64::from(stats.missing_glyphs));

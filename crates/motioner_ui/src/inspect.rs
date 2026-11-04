@@ -64,6 +64,10 @@ pub enum FieldTarget {
     Bezier(BezierPart),
     /// The layers-panel search filter.
     Filter,
+    /// Audio layer mute (the layer visibility switch).
+    AudioMute,
+    /// Audio layer preview solo.
+    AudioSolo,
     /// Not editable (composition summary rows).
     None,
 }
@@ -246,6 +250,13 @@ pub enum RowValue {
         /// Whether the coverage is inverted.
         invert: bool,
     },
+    /// A two-state switch.
+    Toggle {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// Whether the switch is on.
+        on: bool,
+    },
     /// A three-state segmented control.
     Align {
         /// What an edit writes.
@@ -282,6 +293,15 @@ pub struct Row {
     pub value: RowValue,
     /// Animatable channel, when the row has a stopwatch and diamonds.
     pub channel: Option<Channel>,
+}
+
+/// Editor-only media state the inspector cannot read from the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MediaState {
+    /// Whether the layer is muted (its visibility switch is off).
+    pub muted: bool,
+    /// Whether the layer is soloed in the preview.
+    pub solo: bool,
 }
 
 /// Everything the inspector shows for a selection.
@@ -501,6 +521,7 @@ fn content_rows(
     content: &NodeContent,
     frame: Frame,
     font_families: &[String],
+    media: MediaState,
 ) -> Vec<Row> {
     match content {
         NodeContent::Group => Vec::new(),
@@ -509,8 +530,149 @@ fn content_rows(
         NodeContent::Path { geometry, .. } => path_rows(document, node, geometry, frame),
         NodeContent::Text(text) => text_rows(document, node, text, frame, font_families),
         NodeContent::Image(image) => image_rows(document, node, image, frame),
-        NodeContent::Audio(audio) => audio_rows(document, node, audio, frame),
+        NodeContent::Audio(audio) => audio_rows(document, node, audio, frame, media),
+        NodeContent::Video(video) => video_rows(document, node, video, frame, media),
     }
+}
+
+/// The Video section: image geometry plus the clip's audio controls.
+#[allow(clippy::too_many_lines)] // one row per video field, in inspector order
+fn video_rows(
+    document: &Document,
+    node: NodeId,
+    video: &motioner_core::VideoContent,
+    frame: Frame,
+    media: MediaState,
+) -> Vec<Row> {
+    let natural = video.asset.map_or_else(
+        || "unresolved".to_owned(),
+        |asset| format!("{} x {}", asset.width, asset.height),
+    );
+    let mut rows = vec![
+        row(
+            "Video",
+            "Source",
+            RowValue::Text {
+                target: FieldTarget::Content(ContentField::Source),
+                text: video.source.clone(),
+            },
+            None,
+        ),
+        row("Video", "Natural size", RowValue::ReadOnly(natural), None),
+        row(
+            "Video",
+            "Width",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Width),
+                "",
+                number_or_zero(document, node, ContentField::Width, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Width, frame)),
+        ),
+        row(
+            "Video",
+            "Height",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Height),
+                "",
+                number_or_zero(document, node, ContentField::Height, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Height, frame)),
+        ),
+        row(
+            "Video",
+            "Fit",
+            RowValue::Cycle {
+                target: FieldTarget::Content(ContentField::Fit),
+                current: video.fit.name().to_owned(),
+                options: vec!["contain".to_owned(), "cover".to_owned(), "fill".to_owned()],
+            },
+            None,
+        ),
+        row(
+            "Video",
+            "Speed",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Speed),
+                "",
+                video.speed,
+                1.0,
+                "x",
+            )),
+            None,
+        ),
+        row(
+            "Video",
+            "Start",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Start),
+                "",
+                number_or_zero(document, node, ContentField::Start, frame),
+                1.0,
+                " fr",
+            )),
+            None,
+        ),
+        row(
+            "Video",
+            "In point",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::InPoint),
+                "",
+                number_or_zero(document, node, ContentField::InPoint, frame),
+                1.0,
+                " s",
+            )),
+            None,
+        ),
+        row(
+            "Video",
+            "Out point",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::OutPoint),
+                "",
+                number_or_zero(document, node, ContentField::OutPoint, frame),
+                1.0,
+                " s",
+            )),
+            None,
+        ),
+    ];
+    rows.push(row(
+        "Audio",
+        "Gain",
+        RowValue::Single(field(
+            FieldTarget::Content(ContentField::Gain),
+            "",
+            number_or_zero(document, node, ContentField::Gain, frame),
+            1.0,
+            "",
+        )),
+        Some(content_channel(document, node, ContentField::Gain, frame)),
+    ));
+    rows.push(row(
+        "Audio",
+        "Mute",
+        RowValue::Toggle {
+            target: FieldTarget::AudioMute,
+            on: media.muted,
+        },
+        None,
+    ));
+    rows.push(row(
+        "Audio",
+        "Solo",
+        RowValue::Toggle {
+            target: FieldTarget::AudioSolo,
+            on: media.solo,
+        },
+        None,
+    ));
+    rows
 }
 
 fn audio_rows(
@@ -518,6 +680,7 @@ fn audio_rows(
     node: NodeId,
     audio: &motioner_core::AudioContent,
     frame: Frame,
+    media: MediaState,
 ) -> Vec<Row> {
     let mut rows = vec![
         row(
@@ -548,7 +711,7 @@ fn audio_rows(
                 FieldTarget::Content(ContentField::InPoint),
                 "",
                 number_or_zero(document, node, ContentField::InPoint, frame),
-                0.01,
+                1.0,
                 " s",
             )),
             None,
@@ -560,7 +723,7 @@ fn audio_rows(
                 FieldTarget::Content(ContentField::OutPoint),
                 "",
                 number_or_zero(document, node, ContentField::OutPoint, frame),
-                0.01,
+                1.0,
                 " s",
             )),
             None,
@@ -579,13 +742,31 @@ fn audio_rows(
                 FieldTarget::Content(content_field),
                 "",
                 number_or_zero(document, node, content_field, frame),
-                0.01,
+                1.0,
                 "",
             )),
             (content_field == ContentField::Gain || content_field == ContentField::Pan)
                 .then(|| content_channel(document, node, content_field, frame)),
         ));
     }
+    rows.push(row(
+        "Audio",
+        "Mute",
+        RowValue::Toggle {
+            target: FieldTarget::AudioMute,
+            on: media.muted,
+        },
+        None,
+    ));
+    rows.push(row(
+        "Audio",
+        "Solo",
+        RowValue::Toggle {
+            target: FieldTarget::AudioSolo,
+            on: media.solo,
+        },
+        None,
+    ));
     rows
 }
 
@@ -648,7 +829,18 @@ fn path_rows(
 }
 
 fn number_or_zero(document: &Document, node: NodeId, field: ContentField, frame: Frame) -> f64 {
-    crate::editor::channels::sampled_number(document, node, field, frame).unwrap_or(0.0)
+    if field.is_animatable() {
+        if let Some(value) = crate::editor::channels::sampled_number(document, node, field, frame) {
+            return value;
+        }
+    }
+    match document
+        .node(node)
+        .and_then(|node| node.content().static_value(field))
+    {
+        Some(ContentValue::Number(value)) => value,
+        _ => 0.0,
+    }
 }
 
 fn colour_of(
@@ -1082,6 +1274,7 @@ pub const fn kind_label(content: &NodeContent) -> &'static str {
         NodeContent::Text(_) => "Text layer",
         NodeContent::Image(_) => "Image layer",
         NodeContent::Audio(_) => "Audio layer",
+        NodeContent::Video(_) => "Video layer",
     }
 }
 
@@ -1324,29 +1517,35 @@ pub fn inspect_node(
     overrides: Option<&OverrideSet>,
     fallback_name: &str,
     font_families: &[String],
+    media: MediaState,
 ) -> Option<Model> {
     let n = document.node(node)?;
-    // Blend sits at the top: it is a whole-node property, and the segmented
-    // grid needs the first screenful.
-    let mut rows = vec![row(
-        "Composite",
-        "Blend",
-        RowValue::Blend {
-            target: FieldTarget::None,
-            mode: n.blend(),
-        },
-        None,
-    )];
-    // Effects sit next to Blend: both are whole-node properties.
-    rows.extend(effect_rows(document, node, frame));
-    rows.extend(mask_rows(document, node));
-    rows.extend(transform_rows(n.transform(), frame));
+    let properties = crate::properties::PropertySet::of(n.content());
+    let mut rows = Vec::new();
+    if properties.has_visual() {
+        // Blend sits at the top: it is a whole-node property, and the
+        // segmented grid needs the first screenful.
+        rows.push(row(
+            "Composite",
+            "Blend",
+            RowValue::Blend {
+                target: FieldTarget::None,
+                mode: n.blend(),
+            },
+            None,
+        ));
+        // Effects sit next to Blend: both are whole-node properties.
+        rows.extend(effect_rows(document, node, frame));
+        rows.extend(mask_rows(document, node));
+        rows.extend(transform_rows(n.transform(), frame));
+    }
     rows.extend(content_rows(
         document,
         node,
         n.content(),
         frame,
         font_families,
+        media,
     ));
     let name = display_name(document, node, overrides)
         .filter(|name| !name.is_empty())
@@ -1619,7 +1818,8 @@ pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
             }
             RowValue::TextAnimRemove { .. }
             | RowValue::MaskSource { .. }
-            | RowValue::Cycle { .. } => {
+            | RowValue::Cycle { .. }
+            | RowValue::Toggle { .. } => {
                 segments = vec![Rect::new(value_x, field_y, value_w, field_h)];
             }
             RowValue::MaskMode { .. } => {
@@ -1736,8 +1936,26 @@ mod tests {
     fn transform_values_follow_the_frame() {
         let document = hello();
         let title = document.roots()[0];
-        let start = inspect_node(&document, title, 0, None, "Title", &[]).unwrap();
-        let settled = inspect_node(&document, title, 120, None, "Title", &[]).unwrap();
+        let start = inspect_node(
+            &document,
+            title,
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        let settled = inspect_node(
+            &document,
+            title,
+            120,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         let position_x = field_of(&start, "Pos X");
         match &position_x.value {
             RowValue::Single(field) => {
@@ -1771,12 +1989,30 @@ mod tests {
     fn stopwatch_state_reports_keys_and_the_playhead() {
         let document = hello();
         let title = document.roots()[0];
-        let model = inspect_node(&document, title, 48, None, "Title", &[]).unwrap();
+        let model = inspect_node(
+            &document,
+            title,
+            48,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         let opacity = field_of(&model, "Opacity").channel.clone().unwrap();
         assert!(opacity.keyed);
         assert!(opacity.on_key, "frame 48 is a key (0.8 s at 60 fps)");
         assert_eq!(opacity.frames, vec![0, 48]);
-        let between = inspect_node(&document, title, 20, None, "Title", &[]).unwrap();
+        let between = inspect_node(
+            &document,
+            title,
+            20,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         assert!(
             !field_of(&between, "Opacity")
                 .channel
@@ -1799,7 +2035,16 @@ mod tests {
             motioner_core::NAME,
             OverrideAction::Set(OverrideValue::Text("Headline".to_owned())),
         ));
-        let model = inspect_node(&document, title, 0, Some(&set), "Title", &[]).unwrap();
+        let model = inspect_node(
+            &document,
+            title,
+            0,
+            Some(&set),
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         match &field_of(&model, "Name").value {
             RowValue::Text { text, .. } => assert_eq!(text, "Headline"),
             other => panic!("{other:?}"),
@@ -1810,7 +2055,16 @@ mod tests {
     fn layout_matches_the_model_and_has_no_overlaps() {
         let document = hello();
         let title = document.roots()[0];
-        let model = inspect_node(&document, title, 0, None, "Title", &[]).unwrap();
+        let model = inspect_node(
+            &document,
+            title,
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         let m = Metrics::new(1.0);
         let out = layout(&model, body(), 0.0, m);
         let rows: Vec<&Item> = out
@@ -1865,13 +2119,31 @@ mod tests {
             .iter()
             .find(|r| r.kind == crate::NodeKind::Rect)
             .unwrap();
-        let model = inspect_node(&document, rect.node, 0, None, "Rect 1", &[]).unwrap();
+        let model = inspect_node(
+            &document,
+            rect.node,
+            0,
+            None,
+            "Rect 1",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         let labels: Vec<&str> = model.rows.iter().map(|r| r.label.as_str()).collect();
         assert!(labels.contains(&"Size"));
         assert!(labels.contains(&"Radius"));
         assert!(labels.contains(&"Fill"));
         assert!(labels.contains(&"Stroke width"));
-        let text = inspect_node(&document, document.roots()[0], 0, None, "Title", &[]).unwrap();
+        let text = inspect_node(
+            &document,
+            document.roots()[0],
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         assert!(text.rows.iter().any(|r| r.label == "Text"));
         assert!(text.rows.iter().any(|r| r.label == "Align"));
     }
@@ -1891,7 +2163,16 @@ mod tests {
         document
             .set_effect(node, channel, motioner_core::EffectValueInput::Number(12.0))
             .unwrap();
-        let model = inspect_node(&document, node, 0, None, "Title", &[]).unwrap();
+        let model = inspect_node(
+            &document,
+            node,
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
         assert!(model.rows.iter().any(|row| row.label == "Blur"));
         assert!(model.rows.iter().any(|row| row.label == "Radius"));
         assert!(model
@@ -1935,6 +2216,75 @@ mod tests {
         )
         .unwrap();
         let document = hello();
-        assert!(inspect_node(&other, document.roots()[0], 0, None, "Title", &[]).is_none());
+        assert!(inspect_node(
+            &other,
+            document.roots()[0],
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn an_audio_layer_shows_only_audio_rows() {
+        let document = motioner_dsl::run(
+            r#"
+comp("A", 640, 360, 60, 1.0)
+music = audio("tone.wav", in_point=0.5, out_point=1.5, gain=0.5, start=12,
+              pan=-0.5, fade_in=0.2, fade_out=0.3)
+music.id("music")
+"#,
+            &motioner_dsl::Limits::default(),
+        )
+        .unwrap();
+        let node = document.find("music").unwrap();
+        let model = inspect_node(
+            &document,
+            node,
+            0,
+            None,
+            "Music",
+            &[],
+            MediaState::default(),
+        )
+        .expect("audio model");
+        let sections: Vec<&str> = model.rows.iter().map(|row| row.section).collect();
+        for forbidden in ["Composite", "Effects", "Mask", "Transform"] {
+            assert!(
+                !sections.contains(&forbidden),
+                "audio must not show {forbidden}: {sections:?}"
+            );
+        }
+        let labels: Vec<&str> = model.rows.iter().map(|row| row.label.as_str()).collect();
+        for required in [
+            "Source",
+            "Start",
+            "In point",
+            "Out point",
+            "Gain",
+            "Pan",
+            "Fade in",
+            "Fade out",
+            "Mute",
+            "Solo",
+        ] {
+            assert!(labels.contains(&required), "missing {required}: {labels:?}");
+        }
+        let shown = |label: &str| {
+            let row = model.rows.iter().find(|row| row.label == label).unwrap();
+            match &row.value {
+                RowValue::Single(field) => field.text.clone(),
+                other => panic!("{label} is not a single field: {other:?}"),
+            }
+        };
+        assert_eq!(shown("Start"), "12");
+        assert_eq!(shown("In point"), "0.5");
+        assert_eq!(shown("Out point"), "1.5");
+        assert_eq!(shown("Gain"), "0.5");
+        assert_eq!(shown("Pan"), "-0.5");
+        assert_eq!(shown("Fade in"), "0.2");
     }
 }
