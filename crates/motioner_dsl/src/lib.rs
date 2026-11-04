@@ -21,6 +21,7 @@
 pub mod ast;
 mod bake;
 mod builtins;
+mod code_edit;
 mod diagnostic;
 mod host;
 mod interpreter;
@@ -30,11 +31,14 @@ mod naming;
 mod origins;
 mod overrides_file;
 mod parser;
+mod plan;
 mod scene;
 mod token;
 mod value;
+mod write_text;
 
 pub use bake::{bake, BakeOutcome};
+pub use code_edit::{CodeEdit, CodeEditError, Replacement, Strategy};
 pub use diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
 pub use interpreter::{
     execute, execute_detailed, execute_detailed_with_metrics, execute_full,
@@ -49,6 +53,7 @@ pub use origins::{
     ValueOrigins, ValueSource,
 };
 pub use parser::{parse, MAX_EXPR_DEPTH};
+pub use plan::{plan, verify, Plan};
 pub use token::{Keyword, Op, Token, TokenKind};
 
 use motioner_core::{Document, NodeId, OverrideSet};

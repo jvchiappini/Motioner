@@ -12,6 +12,7 @@
 mod animation;
 mod color;
 mod document;
+mod edit;
 mod effect;
 mod error;
 mod gradient;
@@ -28,6 +29,7 @@ pub mod bounds;
 pub use animation::{Animatable, AnimatableVec2, Axis, BezierEase, BezierError, Ease, Keyframe};
 pub use color::{Color, ColorParseError};
 pub use document::{Composition, Document, MAX_CANVAS_SIZE};
+pub use edit::{EditCommand, KeyRef, MoveKey};
 pub use effect::{
     BlurEffect, DropShadowEffect, Effect, EffectChannel, EffectChannelMut, EffectChannelRef,
     EffectKind, EffectParam, EffectValueInput, GlowEffect,
@@ -44,8 +46,8 @@ pub use node::{
     TextAnimator, TextContent, Transform, VideoAsset, VideoContent, VideoResolver,
 };
 pub use overrides::{
-    format_number, quote, seconds_of, split_property, OverrideAction, OverrideEntry, OverrideIssue,
-    OverrideSet, OverrideValue, EFFECTS, LOCKED, MASK, NAME, VISIBLE,
+    format_number, quote, seconds_of, split_property, value_text, OverrideAction, OverrideEntry,
+    OverrideIssue, OverrideSet, OverrideValue, EFFECTS, LOCKED, MASK, NAME, VISIBLE,
 };
 pub use path::{
     DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,

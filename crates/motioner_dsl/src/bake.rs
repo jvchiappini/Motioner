@@ -5,17 +5,13 @@
 //! returns the new program text plus the overrides it could not fold in. It
 //! never writes files (the app does that, atomically).
 //!
-//! Two mechanisms, in this order:
-//!
-//! 1. **In place.** When the overridden value came from a private plain
-//!    literal in the program (evaluated exactly once), the literal text is
-//!    replaced and the override is dropped. A keyframe edits the arguments of
-//!    its `.key(...)` call. This also reaches nodes created in loops and
-//!    functions when their particular literal is private.
-//! 2. **Generated block.** Anything else falls back to D-0022: nodes bound to
-//!    a top-level variable get `var.property = value` statements appended
-//!    after the marker; loop- and function-created nodes without a binding
-//!    keep their overrides and a refusal reason.
+//! Bake is the batch form of the write-through planner (D-0036): each
+//! override is offered to [`crate::plan`], which tries a private literal and
+//! then a local assignment next to the node's last write. Anything the planner
+//! refuses falls back to D-0022: nodes bound to a top-level variable get
+//! `var.property = value` statements appended after the marker;
+//! loop- and function-created nodes without a binding keep their overrides and
+//! a refusal reason.
 //!
 //! In-place edits shift the byte-offset provenance keys of later nodes, so
 //! every remaining override is re-keyed by the exact edit offsets in the same
@@ -26,13 +22,15 @@
 use std::collections::BTreeMap;
 
 use motioner_core::{
-    format_number, quote, seconds_of, CharValue, Document, Ease, EffectChannel, EffectParam,
-    FrameRate, NodeContent, NodeId, OverrideAction, OverrideEntry, OverrideSet, OverrideValue,
-    Property, TextAnimator, Transform, Vec2, LOCKED, NAME, VISIBLE,
+    format_number, quote, seconds_of, value_text, CharValue, Document, EditCommand, EffectChannel,
+    EffectParam, FrameRate, NodeId, OverrideAction, OverrideEntry, OverrideSet, OverrideValue,
+    Property, TextAnimator, LOCKED, NAME,
 };
 
-use crate::diagnostic::Span;
-use crate::origins::{Literal, ValueOrigin, ValueOrigins};
+use crate::code_edit::CodeEdit;
+use crate::origins::ValueOrigins;
+use crate::plan::{plan, Plan};
+use crate::write_text::{pair_text, set_value_text};
 
 /// First line of the generated block.
 pub const MARKER: &str = "# --- baked by motioner (do not edit above this line by hand) ---";
@@ -63,13 +61,6 @@ pub struct BakeOutcome {
     pub refused: Vec<BakeRefusal>,
 }
 
-/// One literal replacement in the program.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PlannedEdit {
-    span: Span,
-    text: String,
-}
-
 /// Folds `overrides` into `program`, in place where that is exact.
 ///
 /// `only` limits baking to those identities when it is not empty.
@@ -94,54 +85,12 @@ pub fn bake(
 }
 
 /// Whether re-running the baked program with the remaining overrides gives the
-/// expected composition (node identities shift with in-place edits by design,
-/// so they are compared by position).
+/// expected composition (the shared verifier compares node identities by
+/// position, D-0027).
 fn is_exact(outcome: &BakeOutcome, expected: &Document) -> bool {
     let rate = expected.composition().frame_rate();
     let overrides = outcome.overrides.to_mdf(rate);
-    let Ok(compiled) = crate::run_with_overrides(
-        &outcome.program,
-        Some(&overrides),
-        &crate::Limits::default(),
-    ) else {
-        return false;
-    };
-    if !compiled.warnings.is_empty() {
-        return false;
-    }
-    semantics(&compiled.document) == semantics(expected)
-}
-
-/// A document's observable composition, ignoring provenance identities (which
-/// an in-place edit shifts by design).
-type Semantics = (
-    NodeContent,
-    Transform,
-    motioner_core::BlendMode,
-    Vec<motioner_core::Effect>,
-    Option<motioner_core::MaskSpec>,
-    bool,
-    Option<usize>,
-    Option<String>,
-);
-
-fn semantics(document: &Document) -> Vec<Semantics> {
-    let index = |id: NodeId| document.nodes().position(|node| node.id() == id);
-    document
-        .nodes()
-        .map(|node| {
-            (
-                node.content().clone(),
-                node.transform().clone(),
-                node.blend(),
-                node.effects().to_vec(),
-                node.mask(),
-                node.is_visible(),
-                node.parent().and_then(index),
-                node.name().map(str::to_owned),
-            )
-        })
-        .collect()
+    crate::verify(&outcome.program, Some(&overrides), expected)
 }
 
 /// One bake pass; `in_place` selects the hybrid or the historical behaviour.
@@ -157,7 +106,7 @@ fn bake_once(
 ) -> BakeOutcome {
     let rate = document.composition().frame_rate();
     let mut statements = Vec::new();
-    let mut edits: Vec<PlannedEdit> = Vec::new();
+    let mut combined: Option<CodeEdit> = None;
     let mut remaining = OverrideSet::new();
     let mut refused = Vec::new();
     let mut entries_baked: Vec<bool> = Vec::with_capacity(overrides.entries().len());
@@ -168,16 +117,26 @@ fn bake_once(
             entries_baked.push(false);
             continue;
         }
+        let mut planner_reason = None;
         if in_place {
-            if let Some(planned) = plan_in_place(entry, document, origins) {
-                if planned.iter().all(|edit| !conflicts(&edits, edit)) {
-                    for edit in planned {
-                        if !edits.iter().any(|existing| existing.span == edit.span) {
-                            edits.push(edit);
+            if let Some(change) = change_for(entry) {
+                match plan(program, origins, document, &change) {
+                    Plan::Code(edit) => {
+                        let candidate = match &combined {
+                            Some(existing) => {
+                                CodeEdit::combine([existing.clone(), edit.clone()]).ok()
+                            }
+                            None => Some(edit),
+                        };
+                        if let Some(candidate) = candidate {
+                            combined = Some(candidate);
+                            entries_baked.push(true);
+                            continue;
                         }
+                        planner_reason =
+                            Some("the code edit conflicts with another baked edit".to_owned());
                     }
-                    entries_baked.push(true);
-                    continue;
+                    Plan::Fallback(reason) => planner_reason = Some(reason),
                 }
             }
         }
@@ -187,10 +146,7 @@ fn bake_once(
                 entries_baked.push(true);
             }
             Err(reason) => {
-                let reason = match in_place
-                    .then(|| in_place_hint(entry, document, origins))
-                    .flatten()
-                {
+                let reason = match planner_reason {
                     Some(hint) => format!("{reason}; {hint}"),
                     None => reason,
                 };
@@ -205,10 +161,16 @@ fn bake_once(
         }
     }
 
-    // Re-key every override that stays: the in-place edits shift the offsets
-    // of anything created after them (D-0025).
-    let remaining = rekey(remaining, &edits);
-    let mut program = apply_edits(program, &edits);
+    let (remaining, mut program) = match combined {
+        Some(edit) => {
+            let remaining = edit.rekey_overrides(&remaining);
+            let Some(text) = edit.apply(program).ok() else {
+                return bake_once(program, document, bindings, origins, overrides, only, false);
+            };
+            (remaining, text)
+        }
+        None => (remaining, program.to_owned()),
+    };
     if !statements.is_empty() {
         program = append_block(&program, &statements);
     }
@@ -219,6 +181,33 @@ fn bake_once(
         overrides: remaining,
         baked,
         refused,
+    }
+}
+
+/// The resolved edit equivalent of one override entry, when the planner can
+/// reason about it.
+fn change_for(entry: &OverrideEntry) -> Option<EditCommand> {
+    match &entry.action {
+        OverrideAction::Set(value) if entry.property != NAME && entry.property != LOCKED => {
+            Some(EditCommand::SetValue {
+                id: entry.id.clone(),
+                property: entry.property.clone(),
+                value: value.clone(),
+            })
+        }
+        OverrideAction::Key { frame, value, ease } => Some(EditCommand::SetKey {
+            id: entry.id.clone(),
+            property: entry.property.clone(),
+            axis: None,
+            frame: *frame,
+            value: value.clone(),
+            ease: *ease,
+        }),
+        OverrideAction::Visible(visible) => Some(EditCommand::SetVisible {
+            id: entry.id.clone(),
+            visible: *visible,
+        }),
+        OverrideAction::Set(_) | OverrideAction::Locked(_) | OverrideAction::Unkey { .. } => None,
     }
 }
 
@@ -241,241 +230,6 @@ fn fully_baked(overrides: &OverrideSet, entries_baked: &[bool]) -> Vec<String> {
         }
     }
     order
-}
-
-/// Two edits conflict when they overlap or replace the same span differently.
-fn conflicts(edits: &[PlannedEdit], edit: &PlannedEdit) -> bool {
-    edits.iter().any(|existing| {
-        (existing.span == edit.span && existing.text != edit.text)
-            || (existing.span.start < edit.span.end && edit.span.start < existing.span.end)
-    })
-}
-
-/// The edits that fold one override in place, or `None` when it cannot be
-/// done exactly.
-fn plan_in_place(
-    entry: &OverrideEntry,
-    document: &Document,
-    origins: &ValueOrigins,
-) -> Option<Vec<PlannedEdit>> {
-    if matches!(entry.property.as_str(), NAME | LOCKED) {
-        return None;
-    }
-    let node = document.find(&entry.id)?;
-    match &entry.action {
-        OverrideAction::Set(value) => {
-            let origin = origins.set_origin(node, &entry.property)?;
-            if !origins.is_private(origin) {
-                return None;
-            }
-            Some(vec![PlannedEdit {
-                span: origin.span,
-                text: set_replacement(origin, &entry.property, value)?,
-            }])
-        }
-        OverrideAction::Key { frame, value, ease } => {
-            let origin = origins.key_origin(node, &entry.property, *frame)?;
-            if !origins.is_private(origin) {
-                return None;
-            }
-            let mut planned = vec![PlannedEdit {
-                span: origin.span,
-                text: key_replacement(origin, value)?,
-            }];
-            match &origin.ease {
-                Some(current) => {
-                    if current.name != ease.mdf_value() {
-                        planned.push(PlannedEdit {
-                            span: current.span,
-                            text: ease.mdf_literal(),
-                        });
-                    }
-                }
-                None if *ease != Ease::Linear => return None,
-                None => {}
-            }
-            Some(planned)
-        }
-        OverrideAction::Visible(visible) => {
-            let origin = origins.set_origin(node, VISIBLE)?;
-            if !origins.is_private(origin) || origin.literal != Some(Literal::Bool) {
-                return None;
-            }
-            Some(vec![PlannedEdit {
-                span: origin.span,
-                text: if *visible { "True" } else { "False" }.to_owned(),
-            }])
-        }
-        OverrideAction::Locked(_) | OverrideAction::Unkey { .. } => None,
-    }
-}
-
-/// A short explanation for the refusal when an origin existed but was not
-/// private.
-fn in_place_hint(
-    entry: &OverrideEntry,
-    document: &Document,
-    origins: &ValueOrigins,
-) -> Option<String> {
-    let node = document.find(&entry.id)?;
-    if matches!(entry.property.as_str(), NAME | LOCKED) {
-        return None;
-    }
-    let origin = match &entry.action {
-        OverrideAction::Key { frame, .. } => origins.key_origin(node, &entry.property, *frame),
-        OverrideAction::Set(_) | OverrideAction::Visible(_) => {
-            origins.set_origin(node, &entry.property)
-        }
-        OverrideAction::Locked(_) | OverrideAction::Unkey { .. } => None,
-    }?;
-    if origin.literal.is_none() {
-        return Some(
-            "the value is computed in the program, so it cannot be edited in place".to_owned(),
-        );
-    }
-    if !origins.is_private(origin) {
-        return Some(format!(
-            "the literal is shared (evaluated {} times), so editing it would change other nodes",
-            origins.count(origin)
-        ));
-    }
-    None
-}
-
-/// The literal text for a static override.
-fn set_replacement(origin: &ValueOrigin, property: &str, value: &OverrideValue) -> Option<String> {
-    match (origin.literal?, value) {
-        (Literal::Number, OverrideValue::Number(number)) => Some(format_number(*number)),
-        (Literal::Text, OverrideValue::Text(text)) => Some(optional_none(property, text)),
-        (Literal::None, OverrideValue::Text(text)) if is_optional(property) => {
-            Some(optional_none(property, text))
-        }
-        (Literal::Pair, OverrideValue::Vec2(pair)) => Some(pair_text(*pair)),
-        _ => None,
-    }
-}
-
-/// The literal text for a key value.
-fn key_replacement(origin: &ValueOrigin, value: &OverrideValue) -> Option<String> {
-    match (origin.literal?, value) {
-        (Literal::Number, OverrideValue::Number(number)) => Some(format_number(*number)),
-        (Literal::Pair, OverrideValue::Vec2(pair)) => Some(pair_text(*pair)),
-        (Literal::Text, OverrideValue::Text(text)) => Some(optional_none(&origin.property, text)),
-        (Literal::None, OverrideValue::Text(text)) if is_optional(&origin.property) => {
-            Some(optional_none(&origin.property, text))
-        }
-        _ => None,
-    }
-}
-
-/// `None` for an optional colour field cleared with `"none"`, else the quoted
-/// string.
-fn optional_none(property: &str, text: &str) -> String {
-    if is_optional(property) && text.eq_ignore_ascii_case("none") {
-        "None".to_owned()
-    } else {
-        quote(text)
-    }
-}
-
-/// Whether a content field accepts `None`.
-fn is_optional(property: &str) -> bool {
-    matches!(property, "fill" | "stroke")
-}
-
-fn pair_text(pair: Vec2) -> String {
-    format!("({}, {})", format_number(pair.x), format_number(pair.y))
-}
-
-/// Applies the planned edits to the source, from the end backwards.
-fn apply_edits(program: &str, edits: &[PlannedEdit]) -> String {
-    let mut sorted = edits.to_vec();
-    sorted.sort_by_key(|edit| edit.span.start);
-    let mut out = String::with_capacity(program.len() + edits.len() * 4);
-    let mut cursor = 0;
-    for edit in sorted {
-        let start = edit.span.start.min(program.len());
-        let end = edit.span.end.min(program.len());
-        if start < cursor || end < start {
-            continue;
-        }
-        out.push_str(&program[cursor..start]);
-        out.push_str(&edit.text);
-        cursor = end;
-    }
-    out.push_str(&program[cursor..]);
-    out
-}
-
-/// Re-keys an override set after in-place edits shifted the byte offsets.
-fn rekey(set: OverrideSet, edits: &[PlannedEdit]) -> OverrideSet {
-    if edits.is_empty() {
-        return set;
-    }
-    let mut out = OverrideSet::new();
-    for entry in set.entries() {
-        let mut entry = entry.clone();
-        entry.id = shift_identity(&entry.id, edits);
-        out.push(entry);
-    }
-    out
-}
-
-/// Shifts the byte offsets embedded in a provenance key. Explicit identities
-/// (`.id("name")`) are unchanged.
-fn shift_identity(id: &str, edits: &[PlannedEdit]) -> String {
-    let mut rest = id;
-    let mut out = String::with_capacity(id.len());
-    if let Some(after) = rest.strip_prefix('@') {
-        let (digits, tail) = split_digits(after);
-        let Ok(offset) = digits.parse::<usize>() else {
-            return id.to_owned();
-        };
-        out.push('@');
-        out.push_str(&shift_offset(offset, edits).to_string());
-        rest = tail;
-    }
-    while !rest.is_empty() {
-        if let Some(after) = rest.strip_prefix("/c") {
-            let (digits, tail) = split_digits(after);
-            let Ok(offset) = digits.parse::<usize>() else {
-                return id.to_owned();
-            };
-            out.push_str("/c");
-            out.push_str(&shift_offset(offset, edits).to_string());
-            rest = tail;
-        } else if let Some(after) = rest.strip_prefix("/i") {
-            let (digits, tail) = split_digits(after);
-            out.push_str("/i");
-            out.push_str(digits);
-            rest = tail;
-        } else {
-            // Not a provenance key (an explicit `.id()`); leave it alone.
-            return id.to_owned();
-        }
-    }
-    out
-}
-
-fn split_digits(text: &str) -> (&str, &str) {
-    let digits = text
-        .as_bytes()
-        .iter()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count();
-    text.split_at(digits)
-}
-
-/// The offset an edit moved an original byte position to.
-fn shift_offset(offset: usize, edits: &[PlannedEdit]) -> usize {
-    let mut value = offset.cast_signed();
-    for edit in edits {
-        if edit.span.end <= offset {
-            let old = edit.span.end.saturating_sub(edit.span.start);
-            value += edit.text.len().cast_signed() - old.cast_signed();
-        }
-    }
-    usize::try_from(value).unwrap_or(offset)
 }
 
 /// Folds one override into the generated block (D-0022 behaviour).
@@ -709,23 +463,6 @@ fn effect_set_statement(
     ))
 }
 
-fn set_value_text(property: &str, value: &OverrideValue) -> String {
-    if let OverrideValue::Text(text) = value {
-        if is_optional(property) && text.eq_ignore_ascii_case("none") {
-            return "None".to_owned();
-        }
-    }
-    value_text(value)
-}
-
-fn value_text(value: &OverrideValue) -> String {
-    match value {
-        OverrideValue::Number(n) => format_number(*n),
-        OverrideValue::Vec2(v) => pair_text(*v),
-        OverrideValue::Text(text) => quote(text),
-    }
-}
-
 fn append_block(program: &str, statements: &[String]) -> String {
     let mut out = String::with_capacity(program.len() + 256);
     out.push_str(program.trim_end());
@@ -855,7 +592,10 @@ mod tests {
         assert!(baked.refused.is_empty(), "{baked:?}");
         assert!(baked.overrides.is_empty(), "{baked:?}");
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -888,7 +628,10 @@ mod tests {
         assert!(baked.program.contains("color=\"#00FF88\""));
         assert!(!baked.program.contains(MARKER), "nothing was appended");
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     const EFFECTS_SOURCE: &str = "comp(name=\"T\", width=200, height=100, fps=60, duration=2.0)\ncard = rect(40, 40)\ncard.effect(\"drop_shadow\", opacity=0.5, blur=4)\ncard.effect(\"blur\", radius=2)\n";
@@ -935,7 +678,10 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -967,7 +713,10 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     const MASKS_SOURCE: &str = "comp(name=\"T\", width=200, height=100, fps=60, duration=2.0)\ncard = rect(40, 40)\ncutout = rect(20, 20)\n";
@@ -1000,7 +749,10 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
 
         // Clearing an existing mask folds as the explicit `mask(None)`.
         let masked = format!("{MASKS_SOURCE}card.mask(cutout, mode=\"luma\", invert=True)\n");
@@ -1027,7 +779,10 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -1085,7 +840,10 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -1128,7 +886,10 @@ mod tests {
         let actual =
             crate::run_with_overrides(&baked.program, Some(&remaining), &crate::Limits::default())
                 .unwrap();
-        assert_eq!(semantics(&actual.document), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual.document),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -1260,7 +1021,10 @@ mod tests {
         );
         let before = expected(&compiled, &set);
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -1336,7 +1100,10 @@ mod tests {
         assert!(baked.overrides.is_empty(), "{baked:?}");
         let before = expected(&compiled, &set);
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
         let _ = rate();
     }
 
@@ -1386,7 +1153,10 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -1422,6 +1192,9 @@ mod tests {
             baked.program
         );
         let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
-        assert_eq!(semantics(&actual), semantics(&before));
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 }

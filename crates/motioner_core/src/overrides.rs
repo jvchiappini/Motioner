@@ -709,7 +709,9 @@ pub fn seconds_of(frame: Frame, rate: FrameRate) -> f64 {
     frame * f64::from(rate.denominator()) / f64::from(rate.numerator())
 }
 
-fn value_text(value: &OverrideValue) -> String {
+/// The MDF text for an override value: a number, `(x, y)` or a quoted string.
+#[must_use]
+pub fn value_text(value: &OverrideValue) -> String {
     match value {
         OverrideValue::Number(n) => format_number(*n),
         OverrideValue::Vec2(v) => format!("({}, {})", format_number(v.x), format_number(v.y)),
