@@ -35,9 +35,20 @@ document, plus value origins and bake. The language is the project format
   call stack (call site, definition, parameters, returns-the-node), and whether
   the expression is a literal, a parameter, a loop variable or computed:
   `crates/motioner_dsl/src/origins.rs:1-518`.
-- `bake` — edits private literals in place, otherwise appends a generated
-  block, then verifies by re-running (D-0027):
-  `crates/motioner_dsl/src/bake.rs:77-208`.
+- `CodeEdit` — ordered, non-overlapping byte-range replacements with apply,
+  invert (byte-exact undo), compose, provenance re-keying and override
+  re-keying: `crates/motioner_dsl/src/code_edit.rs:132-365`.
+- `plan` — resolves one core `EditCommand` into a `CodeEdit` or a
+  `Fallback(reason)`: private literal, then local assignment next to the
+  node's last write. `verify` re-runs the program (with optional overrides)
+  and compares the document by position; bake, the editor and tests share it
+  (D-0036): `crates/motioner_dsl/src/plan.rs:62-140`.
+- `bake` — batch write-through: each override goes through `plan`; refusals
+  fall back to the generated block (D-0022) and verification uses the same
+  function: `crates/motioner_dsl/src/bake.rs:68-220`.
+- `write_text` — one set of number/pair/quote/optional-`None` rules for
+  planner snippets and the generated block:
+  `crates/motioner_dsl/src/write_text.rs`.
 - `override_set` parsing and execution — the overrides file shares the MDF
   syntax with the editor's command layer: `crates/motioner_dsl/src/overrides_file.rs`.
 

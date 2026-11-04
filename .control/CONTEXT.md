@@ -5,11 +5,38 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
-## Prompt 12 status (2026-11-04, phase 0.5 and phase 1 done)
+## Prompt 12 status (2026-11-04, phases 0.5-2 done)
 
-**Origins v2 + audio loop fix.** No commit; working tree for review. Gate green
-(fmt, clippy pedantic, workspace tests, rustdoc, boundaries, machete,
-`pctl validate`).
+**Origins v2, audio loop fix and the code planner.** Phase 1 is committed at
+`9f6a1c8`; phase 2 is the working tree for review. Gate green (fmt, clippy
+pedantic, workspace tests, rustdoc, boundaries, machete, `pctl validate`).
+
+### Phase 2 (T-DSL-0008)
+
+- `motioner_dsl::CodeEdit`: ordered non-overlapping byte replacements with
+  `apply`, `invert` (byte-exact undo), `compose`, `rekey_identity`,
+  `rekey_overrides` and `combine`, with typed errors. D-0027 offset
+  arithmetic now lives here.
+- `motioner_dsl::plan(program, origins, document, &EditCommand)` returns
+  `Plan::Code(CodeEdit)` or `Plan::Fallback(reason)`. Strategies: private
+  literal (moved from bake) and local assignment after the node's last write,
+  editing an existing assignment instead of adding a second one. Loops,
+  functions and structural commands fall back with a reason for phases 3-5.
+- `verify(program, overrides, expected)` is the one re-run/position check used
+  by the planner and bake.
+- `EditCommand` / `KeyRef` / `MoveKey` moved to `motioner_core` so the planner
+  consumes the same resolved command the editor applies; `motioner_ui` still
+  re-exports them. `value_text` is public.
+- `bake` now offers every override to `plan`; refusals still append the D-0022
+  generated block. Shared snippet formatting lives in `write_text.rs`.
+- Tests: `code_edit` unit tests, `tests/planner.rs` (private literal, computed
+  and shared values, existing assignment, CRLF/indentation, loops, keys,
+  unsupported commands) and the existing bake suite.
+- **Interpreter budget:** phase 2 changed neither `interpreter.rs` nor
+  `origins.rs` (`git diff 9f6a1c8` empty). Host measurements under Defender
+  load ranged 1.6-2.5 ms/run on `showcase_pro.motion`, so the absolute number
+  is not comparable; the phase adds no interpreter work. Disk stayed above
+  8 GB (8.3 GB free), so no cleanup was needed.
 
 - **Phase 0.5 (T-APP-0006).** `AudioOutput::ended` reports a consumed range;
   `ProjectHost::audio_ended` exposes it. `Transport::follow_audio`
