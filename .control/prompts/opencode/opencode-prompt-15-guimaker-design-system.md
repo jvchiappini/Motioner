@@ -85,6 +85,24 @@ controls behave like native ones. Concretely:
    any size, scale and theme. A model iterates on UI the way it iterates on
    code: write, look, read the explanation, fix.
 7. **Less code than HTML + CSS** for the same screen (measured in Phase 9).
+8. **The lightest UI stack there is.** The user's goal is that the engine and
+   GUIMaker are each perfect at their own job and that a UI built on them
+   uses **less memory, CPU and GPU than any other UI library** (egui, iced,
+   Slint, Dear ImGui, Qt, Electron/WebView2). Measured, not claimed (Phase
+   9B). An idle window costs 0 % CPU and 0 % GPU.
+
+### Resource budgets (every phase measures against them; release build, the
+start-screen recipe at 1920×1080, scale 1.5, on this 8 GB machine)
+
+| What | Budget |
+|---|---|
+| Idle (no input, no animation) | 0 frames rendered, ~0 % CPU, ~0 % GPU, no timers waking the thread more than once per caret blink |
+| Hover / typing | redraw only the damaged region; CPU per frame (build + layout + routing + command list) < 0.3 ms; GPU per frame < 0.5 ms |
+| Steady state | **zero heap allocations per frame** in the GUIMaker core (counted by a test allocator); buffers and arenas reused |
+| Layout | unchanged subtrees are not re-laid out (memoised by a hash of style + content + available size); a 10 000-row virtual list scrolls with < 1 ms CPU per frame |
+| Memory | GUIMaker core < 1 MB heap for the start screen; whole process RSS for a minimal GUIMaker app < 60 MB, GPU memory < 64 MB (glyph atlas sized to the glyphs actually used, no 3D resources for 2D apps) |
+| Startup | first visible frame < 300 ms warm, never "Not responding" (Phase 0B) |
+| Binary | release size of the minimal example reported; no dependency added without its size in the decision |
 
 Phase 0B (the startup freeze) is engine-only and independent of the rest;
 it may run first while prompt 11 is still in progress, as long as it does
@@ -129,6 +147,12 @@ and sends "continue with Phase N".
   `core.autocrlf=true`.
 - **Look at every screenshot you produce** and fix the worst visible problem
   first. A green test with an ugly picture is not done.
+- **Resources are a feature.** Every phase ends with its numbers against the
+  budget table (frame CPU, allocations per frame, memory, GPU time, idle
+  wake-ups) in the phase report. A regression of more than 10 % against the
+  previous phase's numbers blocks the phase like a failing test. Prefer
+  flat arrays, indices and arenas over `Box<dyn>` trees, `Rc` and per-node
+  `String`s (interned or borrowed text); no `clone` of the view per frame.
 
 GUIMaker gate: `cargo fmt -- --check`,
 `cargo clippy --workspace --all-targets -j 2 -- -D warnings`,
@@ -172,7 +196,14 @@ documented fallback and continue).
    - **Programming model.** Recommended, justify or replace: a declarative
      tree rebuilt every frame from the app's state (cheap, no stale widgets,
      ideal for a model to write), laid out, then input is routed through
-     *this frame's* tree (no one-frame lag), then painted. Persistent state
+     *this frame's* tree (no one-frame lag), then painted. **Rebuilding is
+     event-driven, not continuous**: the view is rebuilt only when input
+     arrives, app state signals a change, or an animation is running; layout
+     and draw commands of unchanged subtrees are reused (memoised by hash);
+     the engine is asked to repaint only damaged regions. The tree lives in a
+     reused arena (flat `Vec` + indices), so a rebuild allocates nothing in
+     steady state. The decision must show this model meets the budget table,
+     or pick a retained model that does. Persistent state
      (hover/press animation, focus, scroll offsets, text-edit cursors,
      open popovers) lives in a store keyed by a stable id path
      (explicit `.key(...)` for lists). Interaction returns **typed messages**
@@ -233,8 +264,15 @@ loads fonts, the project, thumbnails…). Prove it before fixing it:
 3. **Motioner side** (after prompt 11 is committed): move its own slow
    startup work (project load, thumbnails, recent list, font loading) behind
    the loading path so the start screen appears at once and fills in.
-4. **Acceptance**: time from launch to first visible frame and to "fully
-   interactive", cold and warm, before and after, in the report; the window
+4. **Idle cost** (same phase, also engine): measure CPU %, GPU %, wake-ups per
+   second and RSS of an idle Motioner window and an idle engine example. The
+   runner must use `ControlFlow::Wait` when nothing is animating and the app
+   has not requested a redraw (a generic "request redraw / request animation
+   frame until T" API for apps), present only when something changed, prefer
+   the low-power adapter for 2D/UI apps (configurable), and not allocate 3D,
+   HDRI or post-processing resources in `Flat2D`/`Pure2D` modes.
+5. **Acceptance**: time from launch to first visible frame and to "fully
+   interactive", cold and warm, before and after, plus idle numbers, in the report; the window
    never shows "Not responding"; an engine test or example that fails if the
    message thread blocks longer than a budget during startup (measured with
    the startup timeline). Engine docs: a "Startup performance" page.
@@ -520,6 +558,34 @@ Every gallery story and recipe must lint clean across the sweep.
   numeric literals, and side-by-side screenshots. Target: fewer lines than
   HTML + CSS together, **zero** numeric literals in the GUIMaker view.
 
+## Phase 9B — The lightest UI library: optimisation and comparison
+
+1. **Instrumentation** in GUIMaker (behind a feature, zero cost when off):
+   per-frame counters (nodes built, nodes re-laid out, draw commands,
+   commands reused, allocations, bytes), shown in the gallery's debug overlay
+   and exported as JSON for benches.
+2. **Benchmarks** (`criterion` or a hand-written harness; decision first):
+   build + layout + route + command list for the start screen, a 10 000-row
+   list, a 500-field form, a dense editor shell; idle wake-ups; memory.
+   Stored results so regressions are visible across phases.
+3. **Engine side, generic** (dev clone): damage-rect / scissored partial
+   redraw, persistent GPU vertex/instance buffers grown geometrically and
+   never shrunk per frame, one draw call per texture/clip batch, glyph atlas
+   that grows on demand and evicts unused glyphs, staging buffers released,
+   texture budget respected (prompt 10's), GPU timings via timestamp queries
+   where supported. Documented in an engine "UI performance" page.
+4. **Comparison**: build the same start screen in **egui** and **Slint**
+   (and, if feasible in time, a WebView2/HTML page as the Electron-class
+   reference) as standalone bench apps in `GUIMaker/bench/` (excluded from
+   the workspace; their dependencies never reach the library; a decision
+   records that). Measure for each: idle CPU/GPU, CPU and GPU per frame while
+   hovering and typing, RSS, GPU memory, startup to first frame, release
+   binary size. Report a table. Where GUIMaker is not the lightest, profile
+   (`cargo flamegraph`/ETW, heap counts) and fix it, or record precisely
+   why and what it would take.
+5. Optimise until every row of the budget table is met; the bench numbers go
+   in the GUIMaker README.
+
 ## Phase 10 — Motioner adopts GUIMaker (after prompt 11 is committed)
 
 1. Motioner ADR (`pctl decision-new`) **"Editor chrome on GUIMaker"**:
@@ -573,6 +639,8 @@ Every gallery story and recipe must lint clean across the sweep.
 
 `pctl session-log` in Motioner and a session note in GUIMaker. Final report
 **in Spanish**: what changed per phase; before/after screenshots of the start
-screen; the HTML + CSS comparison numbers; decisions (G-NNNN, Motioner ADR)
+screen; the HTML + CSS comparison numbers; the resource table against the
+budget and against egui/Slint/WebView2, and Motioner's idle and startup
+numbers before and after; decisions (G-NNNN, Motioner ADR)
 and dependencies; engine changes waiting for a push and pin bump; gate
 results in every repository; free space on C:; what is left.
