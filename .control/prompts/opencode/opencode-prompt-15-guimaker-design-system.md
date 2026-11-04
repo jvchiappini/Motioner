@@ -18,6 +18,13 @@ You are the orchestrator of a very long, multi-phase job in three folders:
   and the dialogs from prompt 11 on the new library. Run those phases **after**
   `opencode-prompt-11-projects-assets-media.md` is committed.
 
+### Visual contract
+
+`.control/design/ui-target-v1.md` is the visual target for this prompt: tokens
+(phase 1), components (phase 6), motion (phase 7), the screenshot acceptance
+checks (phase 5) and the Motioner screens (phase 10). Read it before phase 1.
+Deviations need a one-line reason in the phase report.
+
 ### Why this prompt exists
 
 Motioner's start screen (`crates/motioner_ui/src/start.rs`, 934 lines) was
