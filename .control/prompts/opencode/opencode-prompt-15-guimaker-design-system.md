@@ -97,6 +97,8 @@ start-screen recipe at 1920×1080, scale 1.5, on this 8 GB machine)
 | What | Budget |
 |---|---|
 | Idle (no input, no animation) | 0 frames rendered, ~0 % CPU, ~0 % GPU, no timers waking the thread more than once per caret blink |
+| Idle with a focused text field | only the caret's rect repainted at the blink interval; ≤ 2 wake-ups/s |
+| Pointer move | hit test < 5 µs with 10 000 interactive nodes; no work if the hovered element does not change |
 | Hover / typing | redraw only the damaged region; CPU per frame (build + layout + routing + command list) < 0.3 ms; GPU per frame < 0.5 ms |
 | Steady state | **zero heap allocations per frame** in the GUIMaker core (counted by a test allocator); buffers and arenas reused |
 | Layout | unchanged subtrees are not re-laid out (memoised by a hash of style + content + available size); a 10 000-row virtual list scrolls with < 1 ms CPU per frame |
@@ -271,7 +273,35 @@ loads fonts, the project, thumbnails…). Prove it before fixing it:
    frame until T" API for apps), present only when something changed, prefer
    the low-power adapter for 2D/UI apps (configurable), and not allocate 3D,
    HDRI or post-processing resources in `Flat2D`/`Pure2D` modes.
-5. **Acceptance**: time from launch to first visible frame and to "fully
+5. **Render flags and the redraw scheduler** (generic engine API; GUIMaker
+   and apps drive it). A still window sometimes must update a few things —
+   a blinking caret, a spinner, a progress bar, a playing video or preview,
+   a clock, a thumbnail that finished loading on a worker, a file watcher.
+   Instead of "render every frame" or "never", every source declares what it
+   needs:
+   - per-element / per-region **render flags**: `Static` (default),
+     `Animating { until }`, `Periodic { interval }` (caret blink 530 ms,
+     clock 1 s), `Continuous { max_fps }` (video playback, live preview,
+     capped and paused when the window is hidden or minimised), and
+     `Dirty` (one repaint after a change);
+   - a thread-safe **redraw handle** (`RedrawProxy`, cloneable, `Send`) that
+     workers use to mark a region dirty and wake the loop — no polling;
+   - the scheduler computes the next deadline as the minimum over all flags
+     and sleeps with `ControlFlow::WaitUntil(deadline)`; at wake-up it
+     repaints **only the union of regions whose flags fired** (a caret blink
+     repaints a few pixels, not the window); frames are aligned to vsync
+     when continuous;
+   - occlusion: minimised or fully covered windows drop to zero frames;
+     unfocused windows may lower `max_fps` (configurable);
+   - every frame records **why** it was rendered (which flag, which element,
+     which region); the debug overlay and the frame counters show it, so
+     an unexpected redraw is a one-glance diagnosis. A test fails if an idle
+     view renders any frame without a flag that explains it.
+   GUIMaker components set their flags themselves (text field → `Periodic`
+   while focused, spinner → `Continuous { 60 }` only while visible, hover
+   transitions → `Animating { until }`); app code only sets flags for its
+   own live content (Motioner: the playing preview).
+6. **Acceptance**: time from launch to first visible frame and to "fully
    interactive", cold and warm, before and after, plus idle numbers, in the report; the window
    never shows "Not responding"; an engine test or example that fails if the
    message thread blocks longer than a budget during startup (measured with
@@ -396,6 +426,29 @@ Motioner already has `crates/motioner_ui/src/text_edit.rs` and pointer/drag
 code in `app/pointer.rs`, `app/drag.rs`: read them, move what is generic into
 GUIMaker, and leave Motioner importing it (no copy remains).
 
+- **Algorithms first** (this toolkit runs on every input event, so it must be
+  the cheapest part of the frame; document the complexity of each in
+  rustdoc and prove it with benches at 100, 1 000 and 10 000 interactive
+  nodes):
+  - hit testing through a **spatial index** (uniform grid or BVH over the
+    laid-out interactive rects, z-order and clips baked in) rebuilt only
+    when layout changes, incrementally for moved subtrees; a query is
+    O(log n) or O(cell), never a walk of the whole tree;
+  - hover is recomputed only when the pointer moves or the layout under it
+    changes; a pointer move that stays inside the same hovered element does
+    no work beyond one rect test (cache the last hit and its rect);
+  - pointer moves are coalesced to one per frame; high-frequency drags use
+    the latest position and keep sub-frame samples only when a widget asks
+    for them (e.g. drawing strokes);
+  - event dispatch is allocation-free: bubbling and capture paths are walked
+    by parent indices; messages go into a reused buffer;
+  - focus order, type-ahead and shortcut lookup use precomputed tables
+    rebuilt only when the tree changes (a hash map from chord to handler, a
+    sorted focus array);
+  - text editing: caret and selection positions come from cached line and
+    grapheme boundaries of the laid-out text, invalidated only when the text
+    or its width changes; a keystroke in a 10 000-character field re-shapes
+    only the affected line.
 - **Pointer**: click with the platform double-click time and distance, double
   and triple click, right click / context menu, middle click, long press,
   drag with a start threshold and capture outside the window, drag and drop
