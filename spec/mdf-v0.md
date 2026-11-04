@@ -180,7 +180,11 @@ stops)` are paint values accepted by `fill`, `stroke` and text `color`
 them; offsets are `0..=1` and are sorted when the ramp is sampled, so a
 keyed offset may cross a neighbour. Two stops at one offset make a hard
 edge. Gradient geometry is authored in the node's local pixels: moving,
-rotating or scaling the node transforms the ramp with it.
+rotating or scaling the node transforms the ramp with it. For a radial
+gradient the centre and the local `+x` edge point are transformed separately
+and the world radius is the length of that difference, so the last stop lands
+exactly on `radius × scale` even when the node is off-centre. Under a
+non-uniform scale the engine pass draws a circle and follows the x-axis scale.
 
 The stop offset and colour are ordinary content channels:
 
@@ -279,7 +283,7 @@ shared), node `i` gets a linear key at `start + i*step` and an eased key at
 `sine_in_out` key per `1/frequency` seconds with value `base ± amplitude`
 from a deterministic SplitMix64 stream.
 
-### 7.1 Text layout, measurement and per-character animation (D-0034)
+### 7.5 Text layout, measurement and per-character animation (D-0034)
 
 `text()` accepts `font`, `weight`, `tracking` (extra advance between
 characters, em units) and `line_height` (multiplier of the font's natural line
@@ -298,6 +302,22 @@ ease="linear", order="forward")` appends a per-character animator. Properties
 are `opacity`, `offset`, `scale`, `rotation` and `color`; order is `forward`,
 `reverse` or `center`. Whitespace counts for the stagger but draws no quad.
 Animators are deterministic and bakeable.
+
+### 7.6 Images (D-0035)
+
+`image(source, width=None, height=None, fit="contain")` loads a
+project-relative PNG. `source` is resolved against the program's project root;
+absolute paths and `..` are rejected. `width`/`height` are the destination box
+in composition pixels; `None` or `0` means the natural size and one dimension
+keeps the aspect. `fit` is `contain`, `cover` or `fill`.
+
+The image key is the SHA-256 of the file bytes. `width`, `height`, `source`
+and `fit` are ordinary content fields (`key`/`edit`/`set` work by name);
+the destination rectangle, the crop and the decoded key reach the renderer
+through the plan. A missing or invalid file is a typed `still`/`render` error
+naming the path; the live preview draws a checker placeholder instead.
+PNG only for v0; palette, greyscale and 16-bit files are expanded to RGBA8,
+and `gAMA`/`iCCP` are ignored.
 
 ## 8. Control flow example
 
@@ -350,9 +370,12 @@ their keyframes. Vector properties have independently keyable axes:
 `key("pos", t, (x, y))` keys both. The editor shows one timeline row per axis.
 
 Content fields are animatable channels with no axes (D-0028): `width`,
-`height`, `radius`, `fill`, `stroke`, `stroke_width` (rect/circle) and `size`,
-`color` (text). `key("fill", t, value)`, `override_key("id", "fill", t, value)`
-and `override_unkey("id", "fill", t)` work exactly like transform channels.
+`height`, `radius`, `fill`, `stroke`, `stroke_width` (rect/circle),
+`trim_start`, `trim_end`, `trim_offset`, `dash`, `dash_offset` (path),
+`size`, `color`, `tracking`, `line_height` (text), `width`, `height`
+(image) and every gradient stop offset/colour plus every effect parameter.
+`key("fill", t, value)`, `override_key("id", "fill", t, value)` and
+`override_unkey("id", "fill", t)` work exactly like transform channels.
 Colours are interpolated in linear-light sRGB; an optional colour keyed to
 `None` holds the previous value as a step. `text` and `align` are discrete and
 reject `key`/`override_key`.
@@ -398,6 +421,12 @@ the call, its overrides become orphans; `motioner query` lists them with a
 ranked `suggestions` array, and `assign_id("@old", "@new")` moves them to the
 node's new identity. The orphans list in the layers panel offers the same
 re-binding with one click (D-0025 addendum).
+
+Outline and graph state is editor-only: collapse, `filter_layers`, `solo`,
+`shy` and `show_shy` never reach the document or `render`/`still`, and
+`graph_open`/`graph_view` only change the view. Display names are the `name`
+override; graph drags are ordinary `ease` (with a `bezier(...)` value) and
+`move_key_value` commands, so they are undoable and visible to agents.
 
 ## 10. Modules
 

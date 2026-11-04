@@ -60,6 +60,23 @@ timeline. Edits are **overrides** (D-0022) stored next to the program; the
   tall by default, its splitter is draggable and it scrolls to a new selection
   and to newly selected keys.
 
+### Big scenes and the graph editor
+
+- Every layer has a **display name**: `node.name = "..."` in MDF, double-click
+  in the layers panel, or `rename(id, name)`. Identity and override keys do
+  not change; a node without a name falls back to its first binding.
+- The layers header has a **filter box** (`filter_layers(text)`); chevrons
+  collapse groups, and the row menu marks **solo** or **shy** layers. Solo/shy
+  are preview-only and never affect `render`/`still`.
+- Double-clicking a numeric timeline row opens the **value graph**: keys are
+  points and a bezier segment shows two draggable handles. A handle drag is one
+  `ease(..., bezier(...))` command; dragging a key is `move_key_value`. Named
+  eases are displayed read-only and can be converted to an editable curve.
+- The **status bar** shows evaluation time, UI fps, dropped frames and, when
+  built with `--features alloc-count`, the chrome's per-frame allocations. The
+  counter covers the layers panel and the timeline; with the engine reusing
+  its `GuiBatch` it reads **0** in the steady state (D-0044).
+
 ### Keyframe markers
 
 One visual language everywhere (timeline layer rows, property rows, the
@@ -74,7 +91,8 @@ inspector and the ◆ buttons), drawn by `widgets::key_marker`:
 
 Own keys of hidden or locked layers are drawn grey.
 - **Status bar** — errors, then override warnings in the warning colour, then
-  evaluation time, UI fps and dropped frames.
+  evaluation time, UI fps, dropped frames and (with `alloc-count`) the
+  per-frame chrome allocations.
 
 Selection is shared by the layers list, the timeline, the canvas and the
 inspector. Panels are resizable with splitters. Saving the program or the

@@ -74,7 +74,10 @@ Every one of them prints **one JSON object per line** on stdout.
   reports the gradient as an object (`kind`, `start`/`end` or
   `center`/`radius`, `stops`) and the stop channels like any other channel.
   The gradient structure itself is authored in MDF; the editor and `edit`
-  change stop colours and offsets.
+  change stop colours and offsets. A radial gradient's ramp is evaluated in
+  world space and ends exactly at `radius × scale`, so an off-centre glow
+  reaches zero alpha at its silhouette; additive and screen gradients add only
+  `alpha × colour` and leave the backdrop unchanged at the edge.
 - **Animatable content fields** (D-0028): every field above except `text`,
   `align`, `weight`, `cap` and `join` is a channel with no axes.
   `tracking` and `line_height` are ordinary text channels (D-0034).
@@ -232,6 +235,17 @@ file, `bake` and `query` round-trip every form; `query` prints a bezier as
   property's static value.
 
 `motioner --help` prints the same list from the code, so it cannot drift.
+
+## Profiling a running editor
+
+Build the app with `--features alloc-count` and open a composition. The status
+bar reports evaluation milliseconds, UI fps, dropped frames and the chrome's
+**per-frame allocations**. The counter covers the layers panel and the
+timeline, including their pushes into the engine `GuiBatch`; the engine now
+clears and reuses that batch, so a steady-state (non-rescrolling) frame reads
+`Alloc 0` (D-0044). Release numbers on the reference machine: `showcase.motion`
+7.778 ms/frame, `showcase_pro.motion` 16.499 ms/frame with 8-sample motion
+blur, preview at 1600x900 59 fps.
 
 ## Typography (D-0034)
 

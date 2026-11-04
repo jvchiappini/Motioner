@@ -152,8 +152,12 @@ For every fill, stroke and text draw the instance colour is
 [r_linear, g_linear, b_linear, (colour.a / 255) * item.opacity]
 ```
 
-The output is straight-alpha sRGB RGBA8; the engine's blending is straight
-alpha, not premultiplied.
+The headless readback is straight-alpha sRGB RGBA8. Inside the engine every
+Pure2D fragment is written **premultiplied** (the shader multiplies RGB by the
+final coverage) and every pipeline uses a premultiplied blend state, including
+the offscreen-layer composite. That is why additive and screen gradients add
+only `alpha × colour` and leave the backdrop untouched where the ramp reaches
+zero alpha.
 
 ## Depth and painter order
 
@@ -247,8 +251,14 @@ colour, clamps the offsets to `0..1` and sorts them (D-0030).
 `gradients::GradientTable` turns the arena into the engine's flat vec4 table
 (headers, world-space geometry and one colour/offset pair per stop). The
 transform of the item that owns a gradient maps its local geometry into
-composition space, so a ramp follows its node. A radial gradient under a
-non-uniform scale uses the x-axis scale (the engine pass draws a circle).
+composition space, so a ramp follows its node. A radial gradient transforms
+the centre and the local `+x` edge point separately and takes the length of
+that world difference, so its radius is `radius * scale` and its alpha reaches
+zero exactly at the node's silhouette. (The old code transformed the
+already-transformed centre again, which folded the node translation into the
+radius.) Under a non-uniform scale the ramp uses the x-axis scale because the
+engine pass draws a circle. `tests/render.rs` pins the fade for all seven
+blend modes with an off-centre circle.
 
 The table is uploaded on every frame and both shape and text instances
 reference an entry (`with_gradient`), so gradients are unconditional since the
@@ -256,10 +266,10 @@ pin that carries the Pure2D gradient pass (D-0030). Nothing silently falls
 back to a solid colour except a gradient that does not fit the engine's
 512-slot table.
 
-Until the next pin, text gradients and backdrop-aware blends are gated by the
-temporary `engine-text-gradient` and `engine-composite` features: with the
-default build, `FrameRenderer::render` returns a typed
-`RenderError::Unsupported` for them.
+Text gradients and the backdrop-aware blend modes are unconditional since the
+pin that carries the Pure2D gradient and composite passes. There is no
+`Unsupported` path left for them; the only fallback is a gradient that does
+not fit the engine's 512-slot table, which uses its solid first stop.
 
 ## Radius and stroke approximations
 
@@ -275,10 +285,16 @@ absent (the document asked for no visible outline). If `radius + stroke_width /
 2` exceeds half the smallest grown side, the radius is clamped so the engine SDF
 stays well-behaved; fills receive the same clamp to half the smallest side.
 
-## Known engine limitations
+## Known limitations
 
-- Blending is straight alpha only; Motioner's `Normal` blend mode is the only
-  one rendered.
+- `Multiply` omits the `Cs × (1 − Ad)` term over a transparent backdrop (the
+  engine's fixed-function contract, D-0031), so a semi-transparent multiply is
+  darker than a reference compositor. `Overlay`, `darken` and `lighten` need a
+  readable destination and fall back to `normal` at a root target that cannot
+  be snapshotted.
+- A translucent **GUI** polyline (not a Motioner shape) composites the round
+  caps at each shared endpoint twice; the engine documents the coverage and
+  pins the geometry in `GuiBatch::polyline`.
 - Readback is not pipelined yet: every `render` call renders, then copies and
   maps the target synchronously. The engine already exposes
   `submit_readback` / `take_readback` (a two-slot ring that overlaps the copy of
@@ -322,8 +338,8 @@ nb_read_frames=300
 ```
 
 The golden still is `crates/motioner_testkit/golden/hello_f120.png`
-(1920x1080, 92,536 bytes, frame 120). Its SHA-256 is
-`ebebab4eab0c7b3da97e1b9139aef83fa9fb88e4c8cc950f0f75edf71875fe44`;
+(1920x1080, frame 120). Its SHA-256 is
+`c2173badd7f23933461473c5d682e40fc9fc1dcbd4ebbe10a1c7c1c7de5cf15c`;
 `crates/motioner_testkit/tests/golden_hello.rs` stores it, re-renders frame 120
 and compares with a maximum per-channel difference of 2 and a limit of 0.1 % of
 differing pixels, skipping cleanly without a GPU.
@@ -342,6 +358,28 @@ What the checked frames show:
   orientation (visually the same square pose), title and circles unchanged.
 - **299** (5 s, last frame): same as frame 240; the animation has reached its
   final pose.
+
+### Phase 12 release numbers
+
+Measured once on the reference machine from the release binary
+(`cargo build --release -p motioner_app`, 5m56s):
+
+```text
+examples/showcase.motion      Rendered 720 frames in 8.079 s
+                              render+readback: 7.778 ms/frame
+                              encode:          3.065 ms/frame
+
+examples/showcase_pro.motion  Rendered 1440 frames in 26.621 s
+                              render+readback: 16.499 ms/frame
+                              encode:          1.763 ms/frame
+```
+
+`showcase_pro.motion` enables `motion_blur=True` with 8 samples, so its
+16.5 ms/frame is the average of eight sub-frame renders per output frame. The
+editor preview at 1600x900 plays the same composition at **59 UI fps**
+(evaluation 0.03 ms, **0 chrome allocations/frame** with `alloc-count`), with
+the canvas at a 39 % fit. The numbers are also in the Phase 12 report under
+`out/reports/` and in `.control/CONTEXT.md`.
 
 ## Layers, blend modes and effects
 

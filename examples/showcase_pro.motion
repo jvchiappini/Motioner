@@ -18,6 +18,7 @@ comp(name="Showcase Pro", width=1920, height=1080, fps=60, duration=24.0,
 
 INK = "#F4F7FF"
 MUTED = "#93A0B8"
+CAPTION = "#C9D4E8"
 DIM = "#141A2A"
 BLUE = "#5B8CFF"
 VIOLET = "#9B7BFF"
@@ -60,6 +61,14 @@ def scene(t_in, t_out):
     holder.key("opacity", t_out + 0.35, 0.0, ease="quad_in")
     return holder
 
+def add_capsule(parent, colour, height, alpha):
+    capsule = rect(1560, height, radius=height / 2,
+                   fill=linear_gradient(start=(-780, 0), end=(780, 0),
+                                        stops=[(0.0, "#00000000"),
+                                               (0.5, colour + alpha),
+                                               (1.0, "#00000000")]))
+    parent.add(capsule)
+
 def label(content, size, color, x, y):
     node = text(content, font="Inter", size=size, weight=600, color=color,
                 align="center")
@@ -81,12 +90,14 @@ bg.key("fill_stop1_color", 12.0, "#083A3A", ease=bezier(0.45, 0.0, 0.25, 1.0))
 bg.key("fill_stop1_color", 18.0, "#3A1020", ease=bezier(0.45, 0.0, 0.25, 1.0))
 bg.key("fill_stop1_color", 24.0, "#0D1530", ease=bezier(0.45, 0.0, 0.25, 1.0))
 
-# Three soft colour orbs drift under everything.
+# Three faint colour orbs drift under everything. Their opacity is keyed so
+# they support the brand and colour scenes, step back behind the glass and
+# disappear for the mask scene, instead of tinting every frame.
 for i in range(3):
     orb = circle(260,
                  fill=radial_gradient(center=(0, 0), radius=260,
-                                      stops=[(0.0, PALETTE[i] + "33"),
-                                             (0.5, PALETTE[(i + 3) % 7] + "10"),
+                                      stops=[(0.0, PALETTE[i] + "20"),
+                                             (0.5, PALETTE[(i + 3) % 7] + "08"),
                                              (1.0, "#00000000")]))
     orb.blend = "add"
     x0 = 220 + i * 740
@@ -98,46 +109,61 @@ for i in range(3):
     orb.key("scale", 0.0, 0.8)
     orb.key("scale", 12.0, 1.0, ease="sine_in_out")
     orb.key("scale", 24.0, 0.8, ease="sine_in_out")
+    peak = 0.8 - i * 0.1
+    orb.key("opacity", 0.0, peak)
+    orb.key("opacity", 4.0, peak)
+    orb.key("opacity", 8.0, peak * 0.4, ease="sine_in_out")
+    orb.key("opacity", 11.8, peak * 0.4)
+    orb.key("opacity", 12.3, 0.0, ease="quad_in")
+    orb.key("opacity", 16.0, 0.0)
+    orb.key("opacity", 16.6, peak * 0.8, ease="quad_out")
+    orb.key("opacity", 22.4, peak * 0.8)
+    orb.key("opacity", 24.0, 0.0, ease="quad_in")
 
-# Blend-mode light leaks sweep across the whole piece.
-for i in range(4):
-    leak = rect(1500, 90, radius=45,
-                fill=linear_gradient(start=(-750, 0), end=(750, 0),
-                                     stops=[(0.0, "#00000000"),
-                                            (0.5, PALETTE[(i * 2) % 7] + "66"),
-                                            (1.0, "#00000000")]))
-    leak.blend = "screen"
-    leak.rotation = 18 + i * 6
-    leak.pos = (-900 + i * 120, 180 + i * 250)
-    leak.key("pos", 0.0, (-900 + i * 120, 180 + i * 250))
-    leak.key("pos", 12.0, (2820 - i * 120, 700 - i * 180), ease="sine_in_out")
-    leak.key("pos", 24.0, (-900 + i * 120, 180 + i * 250), ease="sine_in_out")
-    leak.key("opacity", 0.0, 0.0)
-    leak.key("opacity", 1.5 + i * 0.2, 0.85, ease="sine_in_out")
-    leak.key("opacity", 22.5, 0.85)
-    leak.key("opacity", 24.0, 0.0, ease="quad_in")
+# Blend-mode light leaks sweep across the piece. Each leak is a faint wide
+# capsule plus a brighter core, so its long edges fall off instead of ending on
+# a hard line; the linear gradient already fades both ends to transparent.
+for i in range(3):
+    colour = PALETTE[(i * 2) % 7]
+    leak_group = group()
+    leak_group.blend = "screen"
+    leak_group.rotation = 18 + i * 7
+    leak_group.pos = (-900 + i * 120, 180 + i * 250)
+    leak_group.key("pos", 0.0, (-900 + i * 120, 180 + i * 250))
+    leak_group.key("pos", 12.0, (2820 - i * 120, 700 - i * 180),
+                   ease="sine_in_out")
+    leak_group.key("pos", 24.0, (-900 + i * 120, 180 + i * 250),
+                   ease="sine_in_out")
+    leak_group.key("opacity", 0.0, 0.0)
+    leak_group.key("opacity", 1.5 + i * 0.2, 0.8, ease="sine_in_out")
+    leak_group.key("opacity", 22.5, 0.8)
+    leak_group.key("opacity", 24.0, 0.0, ease="quad_in")
+    add_capsule(leak_group, colour, 170, "14")
+    add_capsule(leak_group, colour, 86, "44")
 
 # ---- scene 1: brand (0-4 s) ------------------------------------------------
 
 s1 = scene(0.0, 3.7)
 s1.key("opacity", 0.0, 1.0)
 
-# A monogram drawn as two trimmed paths: line art that writes itself.
-mark_left = path([(-150, 120), (-150, -120), (0, 20)], closed=False, fill=None,
+# A monogram drawn as two trimmed paths: line art that writes itself. Both
+# halves share the same origin and apex, so the join is exact and the shape
+# reads as one clean M (matching the closing mark).
+mark_left = path([(-170, 140), (-170, -140), (0, 20)], closed=False, fill=None,
                  stroke=INK, stroke_width=16, cap="round", join="round")
-mark_left.pos = (-20, -150)
+mark_left.pos = (0, -150)
 mark_left.key("trim_end", 0.25, 0.0)
 mark_left.key("trim_end", 1.35, 1.0, ease=bezier(0.65, 0.0, 0.25, 1.0))
 s1.add(mark_left)
 
-mark_right = path([(0, 20), (150, -120), (150, 120)], closed=False, fill=None,
+mark_right = path([(0, 20), (170, -140), (170, 140)], closed=False, fill=None,
                   stroke=BLUE, stroke_width=16, cap="round", join="round")
-mark_right.pos = (20, -150)
+mark_right.pos = (0, -150)
 mark_right.key("trim_end", 0.45, 0.0)
 mark_right.key("trim_end", 1.55, 1.0, ease=bezier(0.65, 0.0, 0.25, 1.0))
 s1.add(mark_right)
 
-# A star and an arc orbit the mark: polygon fills, trim and dash.
+# A star and a wide halo orbit the mark: polygon fills, trim and dash.
 orbit = group()
 orbit.pos = (0, -150)
 orbit.key("rotation", 0.0, 0.0)
@@ -147,7 +173,7 @@ star_a.pos = (300, -250)
 star_a.key("rotation", 0.0, 0.0)
 star_a.key("rotation", 4.0, 40.0, ease="sine_in_out")
 s1.add(star_a)
-arc_a = arc(150, -170, -20, fill=None, stroke=CYAN, stroke_width=7, cap="round")
+arc_a = arc(235, -168, -12, fill=None, stroke=CYAN, stroke_width=7, cap="round")
 arc_a.key("trim_end", 0.6, 0.0)
 arc_a.key("trim_end", 2.0, 1.0, ease="cubic_in_out")
 orbit.add(arc_a)
@@ -162,7 +188,7 @@ word.animate_chars("offset", (0, 70), (0, 0), 0.75, 0.08, 0.45,
                    ease="cubic_out")
 s1.add(word)
 
-kicker = label("MOTION DESIGN, WRITTEN AS CODE", 28, MUTED, 0, 300)
+kicker = label("MOTION DESIGN, WRITTEN AS CODE", 30, CAPTION, 0, 300)
 fade_in(kicker, 1.7, 0.6)
 s1.add(kicker)
 
@@ -179,7 +205,7 @@ s2 = scene(4.1, 7.7)
 heading2 = label("Colour is a channel", 84, INK, 0, -330)
 rise(heading2, 0, -330, 4.2, 40, 0.6)
 s2.add(heading2)
-eyebrow2 = label("PALETTE / GRADIENT / BLEND", 24, CYAN, 0, -405)
+eyebrow2 = label("PALETTE / GRADIENT / BLEND", 28, CYAN, 0, -405)
 fade_in(eyebrow2, 4.2, 0.4)
 s2.add(eyebrow2)
 
@@ -195,7 +221,7 @@ for i in range(7):
     bar.key("fill", 4.6, PALETTE[i])
     bar.key("fill", 5.9, PALETTE[(i + 3) % 7], ease="sine_in_out")
     bar.key("fill", 7.4, PALETTE[i], ease="sine_in_out")
-    tag = label(str(i + 1), 20, "#05070D", x, 235)
+    tag = label(str(i + 1), 28, "#05070D", x, 235)
     fade_in(tag, 4.4 + i * 0.05, 0.3)
     s2.add(tag)
 
@@ -214,7 +240,7 @@ sheen.key("fill_stop1_offset", 4.8, 0.35)
 sheen.key("fill_stop1_offset", 7.2, 0.75, ease="quad_in_out")
 s2.add(sheen)
 
-caption2 = label("stops animate; light modes add", 26, MUTED, 0, 430)
+caption2 = label("stops animate; light modes add", 30, CAPTION, 0, 430)
 fade_in(caption2, 5.0, 0.5)
 s2.add(caption2)
 
@@ -237,7 +263,7 @@ hero.add(hero_body)
 photo = image("examples/assets/stripes.png", width=600, height=410,
               fit="cover")
 hero.add(photo)
-hero_label = label("COVER FIT / GLASS / SHADOW", 22, "#FFFFFF", 0, -250)
+hero_label = label("COVER FIT / GLASS / SHADOW", 28, "#FFFFFF", 0, -250)
 hero.add(hero_label)
 s3.add(hero)
 
@@ -257,9 +283,9 @@ for i in range(2):
     dot = circle(34, fill=[BLUE, MINT][i])
     dot.pos = (0, -70)
     side.add(dot)
-    name = label(["COMPOSITE", "MATTE"][i], 26, INK, 0, 20)
+    name = label(["COMPOSITE", "MATTE"][i], 30, INK, 0, 20)
     side.add(name)
-    note = label(["shadow + opacity", "mask + blend"][i], 18, MUTED, 0, 70)
+    note = label(["shadow + opacity", "mask + blend"][i], 28, CAPTION, 0, 70)
     side.add(note)
     pop(side, 8.5 + i * 0.12, 0.7)
     s3.add(side)
@@ -276,9 +302,14 @@ plate_grad = rect(1280, 300, radius=30,
                                        stops=[(0.0, "#5A7CFF"), (0.5, "#33F2E6"),
                                               (1.0, "#8A5AFF")]))
 plate.add(plate_grad)
+# Cap-height optical centring: the text origin is the baseline, so the ink box
+# from `text_bounds` tells us how far to push the baseline down to centre the
+# capitals (not the descender line) in the card.
+reveal_ink = text_bounds("REVEAL", 190, font="Inter", weight=700,
+                         tracking=0.02, align="center")
 plate_word = text("REVEAL", font="Inter", size=190, weight=700, color="#05070D",
                   align="center", tracking=0.02)
-plate_word.pos = (0, 0)
+plate_word.pos = (0, 0 - (reveal_ink[1] + reveal_ink[3]) / 2)
 plate.add(plate_word)
 
 wipe = rect(1500, 400, radius=40, fill="#FFFFFF")
@@ -302,7 +333,7 @@ kinetic.animate_chars("offset", (0, 34), (0, 0), 13.0, 0.06, 0.4,
                       order="reverse", ease="quad_out")
 s4.add(kinetic)
 
-caption4 = label("alpha mask - per-character animation", 24, MUTED, 0, 410)
+caption4 = label("alpha mask - per-character animation", 30, CAPTION, 0, 410)
 fade_in(caption4, 13.2, 0.5)
 s4.add(caption4)
 
@@ -344,11 +375,11 @@ for i in range(8):
 stagger(bars5, "height", [(20, 160)], 16.8, 0.08, 0.6, ease="back_out")
 
 badge = circle(26, fill=AMBER)
-badge.pos = (0, 430)
+badge.pos = (0, 390)
 badge.wiggle("pos.x", 11, 2.4, 30, 16.6, 19.4)
 s5.add(badge)
 
-caption5 = label("bezier / stagger / wiggle / motion blur", 24, MUTED, 0, 470)
+caption5 = label("bezier / stagger / wiggle / motion blur", 30, CAPTION, 0, 470)
 fade_in(caption5, 16.9, 0.5)
 s5.add(caption5)
 
@@ -370,11 +401,10 @@ outro.pos = (0, 150)
 outro.animate_chars("opacity", 0.0, 1.0, 20.8, 0.04, 0.3, ease="quad_out")
 s6.add(outro)
 
-tagline = label("one program - every frame deterministic", 24, MUTED, 0, 220)
+tagline = label("one program - every frame deterministic", 30, CAPTION, 0, 220)
 fade_in(tagline, 21.4, 0.5)
 s6.add(tagline)
 
-footer = label("1920 x 1080 / 60 fps / MDF", 18, DIM, 0, 430)
-footer.color = MUTED
+footer = label("1920 x 1080 / 60 fps / MDF", 28, CAPTION, 0, 430)
 fade_in(footer, 21.8, 0.5)
 s6.add(footer)

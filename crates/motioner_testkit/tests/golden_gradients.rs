@@ -23,12 +23,12 @@ const GOLDENS: [(i64, &[u8], &str); 2] = [
     (
         30,
         include_bytes!("../golden/gradients_f30.png"),
-        "c00a1a41df80b3bc0cc89ac5c63faaa2044f5e2dda00a26d6774f06a390b485d",
+        "7fbd4bf40ef3daf6fee171bc7e97fba445e81d95e1c4de565c87345959338d9d",
     ),
     (
         105,
         include_bytes!("../golden/gradients_f105.png"),
-        "ccd98a6a710f6f6622deee48b1ff23ffb96f01be3a265d93cfcb0ffa1edb47c6",
+        "e5d237d9f9f9a517468cbc05906260523e37590599013b56022e9dfbded1aea7",
     ),
 ];
 /// Source of the example composition.

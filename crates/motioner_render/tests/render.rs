@@ -607,6 +607,91 @@ fn fixed_blend_modes_render_through_layers() {
 }
 
 #[test]
+fn translucent_radial_gradient_fades_to_the_backdrop_in_every_blend_mode() {
+    let _gpu = motioner_testkit::gpu::lock();
+    const W: u32 = 600;
+    const H: u32 = 300;
+    const RADIUS_PX: u32 = 100;
+    const RADIUS: f64 = RADIUS_PX as f64;
+    // The circle sits 100 px right of the canvas centre, which is exactly the
+    // case the old radial encoding got wrong: it folded the item translation
+    // into the radius (200 instead of 100), so the ramp still had ink at the
+    // silhouette. Every mode must leave the backdrop untouched at the edge.
+    const CENTRE_X: u32 = 400;
+    const CENTRE_Y: u32 = 150;
+    let modes = [
+        BlendMode::Normal,
+        BlendMode::Add,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Overlay,
+        BlendMode::Darken,
+        BlendMode::Lighten,
+    ];
+    for mode in modes {
+        let Some(mut renderer) = try_renderer(W, H) else {
+            return;
+        };
+        let mut document = composition(W, H, BLACK);
+        let id = document
+            .add_node(NodeContent::circle(RADIUS, filled(WHITE)))
+            .unwrap();
+        let gradient = motioner_core::Gradient::radial(
+            Vec2::ZERO,
+            RADIUS,
+            [
+                (0.0, Color::rgba(255, 255, 255, 128)),
+                (0.9, Color::rgba(255, 255, 255, 0)),
+                (1.0, Color::rgba(255, 255, 255, 0)),
+            ],
+        )
+        .unwrap();
+        document
+            .set_content(
+                id,
+                motioner_core::ContentField::Fill,
+                motioner_core::ContentValue::Gradient(Some(gradient)),
+            )
+            .unwrap();
+        set_position(&mut document, id, f64::from(CENTRE_X), f64::from(CENTRE_Y));
+        document.set_blend(id, mode).unwrap();
+
+        let plan = evaluate(&document, 0);
+        let mut out = Vec::new();
+        renderer.render(&document, &plan, &mut out).unwrap();
+
+        // One and two pixels inside the silhouette: the ramp has already
+        // reached its transparent stop, so the backdrop survives exactly.
+        for inside in [1_u32, 2] {
+            let edge = pixel(&out, W, CENTRE_X + RADIUS_PX - inside, CENTRE_Y);
+            assert!(
+                edge[0] <= 2 && edge[1] <= 2 && edge[2] <= 2,
+                "{mode:?}: {inside} px inside the edge is not the backdrop: {edge:?}"
+            );
+        }
+        let outside = pixel(&out, W, CENTRE_X + RADIUS_PX + 2, CENTRE_Y);
+        assert!(
+            outside[0] <= 2 && outside[1] <= 2 && outside[2] <= 2,
+            "{mode:?}: outside the circle is not the backdrop: {outside:?}"
+        );
+
+        // At the centre the ramp is white at alpha 0x80 (0.502). Add, normal,
+        // screen and the lightening modes composite 0.502 linear over black;
+        // multiply and darken keep black.
+        let centre = pixel(&out, W, CENTRE_X, CENTRE_Y);
+        let expected = if matches!(mode, BlendMode::Multiply | BlendMode::Darken) {
+            0..=4
+        } else {
+            182..=194
+        };
+        assert!(
+            expected.contains(&centre[0]),
+            "{mode:?}: centre {centre:?} outside {expected:?}"
+        );
+    }
+}
+
+#[test]
 fn backdrop_blend_modes_render_through_layers() {
     let _gpu = motioner_testkit::gpu::lock();
     let Some(mut renderer) = try_renderer(64, 64) else {

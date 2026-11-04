@@ -23,32 +23,32 @@ const GOLDENS: [(i64, &[u8], &str); 6] = [
     (
         180,
         include_bytes!("../../motioner_testkit/golden/showcase_pro_f180.png"),
-        "6dd9e0f558b93acc4ba1d0faf105418f06809fe58243434f2f6c8332a7a81547",
+        "394e63dfa455fe94426b4ae975512b689069ee2297eb6940ce668cd5d432e88c",
     ),
     (
         330,
         include_bytes!("../../motioner_testkit/golden/showcase_pro_f330.png"),
-        "c5a0ab9ef72e53feb145c24f664bb49b70f10ec7a63432de0ea1619c94076989",
+        "a6a227c54d5a5212d10dce6c3d49766c2226f01fe5e26a567840af14fbd79688",
     ),
     (
         600,
         include_bytes!("../../motioner_testkit/golden/showcase_pro_f600.png"),
-        "ed48c54a9822b77262b6e30ad9d9c99d234400b2faa07baecbb77707d377df30",
+        "12c61ef096b2e5f3981a0e80a0c7a3f1cf808b7c2841b7b4331be8620fc0dbe4",
     ),
     (
         810,
         include_bytes!("../../motioner_testkit/golden/showcase_pro_f810.png"),
-        "7b36dcba2ff57d827830493a10bc81a924b226b9137a3f4e9c6e8a911ee32de3",
+        "7b322626429208ab7a03d9fc231506aaa72cac32baac4a68d2935b4d5f2dd16c",
     ),
     (
         1086,
         include_bytes!("../../motioner_testkit/golden/showcase_pro_f1086.png"),
-        "f01cc207b8ff46abd5808f429952292c365e09b89b2a80c169d1a3de918e6851",
+        "1560326b5d4d867885a74920ead3c73d4cd67bcce7e4c1123f1e7e10d1c017d0",
     ),
     (
         1320,
         include_bytes!("../../motioner_testkit/golden/showcase_pro_f1320.png"),
-        "1e221faf8a27059fbe75bcc254772276a2fa27dd87fc5c553cc7ddb72630618d",
+        "0be8f9a114f4aef00a43ac73eb8fbc07d38ec8e4995e079e290d76b64fab86e8",
     ),
 ];
 
@@ -79,7 +79,11 @@ fn project_root() -> &'static Path {
 }
 
 fn load() -> Result<(motioner_core::Document, ImageSet), Box<dyn Error>> {
-    let mut document = motioner_dsl::run(SOURCE, &motioner_dsl::Limits::default())?;
+    // The program asks `text_bounds` for the optical baseline of "REVEAL", so
+    // it must run with the real layout metrics, exactly like `still`/`render`.
+    let metrics = motioner_render::CpuTextMetrics::new(motioner_render::FontSet::bundled());
+    let mut document =
+        motioner_dsl::run_with_metrics(SOURCE, &motioner_dsl::Limits::default(), &metrics)?;
     let cached = CachedImages::new(ImageStore::new(project_root()));
     let issues = document.resolve_images(&cached);
     assert!(issues.is_empty(), "{issues:?}");

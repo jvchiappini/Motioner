@@ -16,6 +16,23 @@ undo/redo. The program itself changes only through motioner bake, which edits
 private literals in place and falls back to a generated block for the rest
 (D-0027). FerrousEngine is vendored as a pinned submodule; GUIMaker is not.
 
+## Showcase
+
+`examples/showcase_pro.motion` is the 24 s, 1920x1080, 60 fps demo reel:
+animated colour stops, self-drawing line art, a shifting gradient background,
+glass cards with shadows, a masked headline, per-character kinetic type in
+Inter, a cover-fit image, soft screen light leaks, `bezier(...)` timing,
+`stagger`/`wiggle` and 8-sample motion blur. `examples/showcase.motion` stays
+as the v0 baseline. Both go through the same deterministic evaluator,
+`render` and `still`.
+
+Release build on the reference machine (Ryzen 5 8645HS, RTX 4050 Laptop):
+`showcase.motion` renders at **7.8 ms/frame** (render+readback) and
+`showcase_pro.motion` at **16.5 ms/frame** with motion blur on; the editor
+preview at 1600x900 plays the Pro reel at **59 fps** (evaluation 0.03 ms,
+**0 allocations/frame** of chrome). The numbers and the method are in
+`out/reports/` and `.control/CONTEXT.md`.
+
 ## What it will do
 
 - Author compositions with a timeline, viewport, inspector and node
@@ -76,6 +93,7 @@ spec/                 language and format specifications
 
 ```
 motioner render  examples/hello.motion --out out/hello.mp4
+motioner render  examples/showcase_pro.motion --out out/showcase_pro.mp4
 motioner still   examples/hello.motion --frame 120 --out out/hello.png
 motioner still   examples/animatable.motion --frame 45 --out out/animatable.png
 motioner info    examples/hello.motion [--json]
@@ -102,7 +120,10 @@ line draws itself and a dash pattern marches (D-0029; see
 `examples/paths.motion`). Paint gradients (`linear_gradient`,
 `radial_gradient`) use animatable stop offsets and colours, show one row per
 stop in the timeline and inspector, and render through the Pure2D gradient
-pass when the engine pin includes it (D-0030; see `examples/gradients.motion`).
+pass (D-0030; see `examples/gradients.motion`). The radial geometry transforms
+the centre and the local +x edge separately before measuring the world radius,
+so an off-centre glow reaches zero alpha exactly at its silhouette in every
+blend mode.
 Nodes blend with `normal`, `add`, `multiply`, `screen`, `overlay`, `darken` and
 `lighten`, chosen from a segmented grid at the top of the inspector and
 overridable with `set(id, "blend", "multiply")` (D-0031; see
@@ -114,14 +135,20 @@ radius, intensity)`. Every parameter is an animatable channel
 (`drop_shadow.blur`, `glow.radius`, `drop_shadow.offset.x`), the effects apply
 to the node and its subtree as one offscreen layer, and the inspector has an
 Effects section with add/reorder/remove tiles (D-0032; see
-`examples/effects.motion`). Rendering waits for the engine effect passes in the
-pin and reports a typed `Unsupported` error until then.
+`examples/effects.motion`). The pinned engine carries the effect, mask and
+blend passes, so `still`, `render` and `preview` all composite them.
 The canvas zooms around the
 pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
 `F` or a click on the zoom pill; zoom and pan are view state and never change
 a rendered frame (D-0026). Selection is shared by the canvas, the lists and
 the inspector; saving the `.motion` or the overrides file reloads it, and MDF
 errors appear as a banner, a red file dot and a status-bar diagnostic.
+
+Layers carry display names (`node.name`, `rename`), a filter box, collapse and
+preview-only solo/shy; a numeric timeline row opens the value graph editor with
+draggable bezier handles. The status bar shows evaluation time, UI fps,
+dropped frames and, when built with `--features alloc-count`, the chrome's
+per-frame allocations (0 in the steady state).
 
 Edits do not touch the program: they are written 300 ms after the last change to
 `<name>.overrides.motion` (`override`, `override_key`, `override_unkey`,

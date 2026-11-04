@@ -99,12 +99,24 @@ fn geometry(gradient: &ResolvedGradient, transform: Affine2) -> [f32; 4] {
             [start.x as f32, start.y as f32, end.x as f32, end.y as f32]
         }
         GradientKind::Radial { center, radius } => {
-            let center = transform.apply(center);
+            // `center` and `radius` are authored in the item's local space. The
+            // curve only sees world positions, so both the centre and the +x
+            // edge point are transformed first; taking the length of that
+            // *world* difference gives `radius * scale`. Transforming the
+            // already-transformed centre again (the old bug) folded the item's
+            // translation into the radius, so an off-centre glow ended inside
+            // or outside the disc and its alpha never reached zero at the edge.
+            let center_world = transform.apply(center);
             // The engine pass draws a circle; under a non-uniform scale the
             // authored ellipse becomes the x-axis scale. Documented in D-0030.
-            let edge = transform.apply(motioner_core::Vec2::new(center.x + radius, center.y));
-            let radius = (edge - center).length();
-            [center.x as f32, center.y as f32, radius as f32, 0.0]
+            let edge_world = transform.apply(motioner_core::Vec2::new(center.x + radius, center.y));
+            let radius = (edge_world - center_world).length();
+            [
+                center_world.x as f32,
+                center_world.y as f32,
+                radius as f32,
+                0.0,
+            ]
         }
     }
 }
@@ -179,6 +191,46 @@ mod tests {
     use super::*;
     use motioner_core::Vec2;
     use motioner_eval::{ResolvedStop, ResolvedStroke};
+
+    #[test]
+    fn radial_radius_is_scaled_not_shifted_by_the_translation() {
+        let gradient = ResolvedGradient {
+            kind: GradientKind::Radial {
+                center: Vec2::ZERO,
+                radius: 150.0,
+            },
+            stops: vec![
+                ResolvedStop {
+                    offset: 0.0,
+                    color: Color::WHITE,
+                },
+                ResolvedStop {
+                    offset: 1.0,
+                    color: Color::BLACK,
+                },
+            ],
+        };
+        let flip = Affine2 {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: -1.0,
+            tx: -480.0,
+            ty: 270.0,
+        };
+        let transform = flip.then(Affine2::translation(Vec2::new(360.0, 210.0)));
+        let encoded = geometry(&gradient, transform);
+        assert!((encoded[0] - -120.0).abs() < 1e-3, "centre x");
+        assert!((encoded[1] - 60.0).abs() < 1e-3, "centre y");
+        assert!(
+            (encoded[2] - 150.0).abs() < 1e-3,
+            "radius must stay 150, got {}",
+            encoded[2]
+        );
+
+        let scaled = geometry(&gradient, transform.then(Affine2::scale(Vec2::splat(2.0))));
+        assert!((scaled[2] - 300.0).abs() < 1e-3, "scaled radius");
+    }
 
     #[test]
     fn encodes_a_linear_gradient() {
