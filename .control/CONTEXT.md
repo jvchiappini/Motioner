@@ -18,14 +18,16 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
 - Prompts live in `.control/prompts/{opencode,claude}/`. Work only inside
   Motioner, FerrousEngine and GUIMaker.
 - The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
-- Prompt 10 is a 12-phase job. **Phases 1-8 are done** (phase 8 images and
-  the phase 7 leftovers landed at pin e0cc574). **Phase 9 is done** (easing,
-  motion blur, helpers; D-0037/D-0038). **Phase 10 is done** (names, outline
-  filter/collapse/solo/shy, graph editor, 1000-layer performance, live blur
-  preview; D-0044) and its review fixes are done (Part A: engine lines,
-  in-place blur texture, cached chrome, full name paths). **Phase 11 is done**
-  (`examples/showcase_pro.motion`, six goldens, MP4 and contact sheet).
-  Phase 12 remains.
+- Prompt 10 is a 12-phase job and **all 12 phases are done**. Phases 1-8
+  landed by pin e0cc574; phase 9 added easing/motion blur/helpers (D-0037/
+  D-0038); phase 10 added names, outline filter/collapse/solo/shy, the graph
+  editor, 1000-layer performance and the live blur preview (D-0044), plus its
+  review fixes (engine lines, in-place blur texture, cached chrome). Phase 11
+  added `examples/showcase_pro.motion`, six goldens, the MP4 and the contact
+  sheet; the Phase 11 review (T-PERF-0003) fixed the radial-gradient radius,
+  did the Showcase Pro art pass and landed the engine batch recycle. Phase 12
+  (T-PERF-0002) recorded release numbers, updated the docs, closed/backlogged
+  tasks and delivered the Spanish report.
 - **FerrousEngine is a general-purpose engine, not a Motioner backend.** A
   missing render capability is built in the clone as a public engine feature
   with rustdoc, `crates/<crate>/docs/`, an `mkdocs.yml` entry and engine
@@ -103,6 +105,19 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
 - **GPU tests**: `motioner_testkit::gpu::lock()` serializes them; the normal
   `cargo test --workspace` gate is green without `--test-threads=1`.
 
+## Phase 12 release numbers (reference machine)
+
+- Release build once: `cargo build --release -p motioner_app -j 2` with
+  `CARGO_INCREMENTAL=0`, 5m56s.
+- `showcase.motion`: 720 frames in 8.079 s, **7.778 ms/frame**
+  render+readback, 3.065 ms/frame encode.
+- `showcase_pro.motion`: 1440 frames in 26.621 s, **16.499 ms/frame**
+  render+readback (8-sample motion blur), 1.763 ms/frame encode.
+- Preview (release + `alloc-count`, 1600x900, Pro reel playing): **59 UI fps**,
+  eval 0.03 ms, **0 chrome allocations/frame**, canvas at a 39 % fit.
+  Captures: `out/ui/p12-01-alloc.png`, `out/ui/p12-02-fps-1600.png`.
+- Report (Spanish): `out/reports/PHASE-12-REPORT.md`.
+
 ## Goldens
 
 - `hello_f120.png` (byte-identical), `blend_f30.png`,
@@ -121,6 +136,11 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
 - Showcase Pro (Phase 11): `showcase_pro_f180/f330/f600/f810/f1086/f1320.png`
   (1920x1080) pinned by `motioner_render/tests/golden_showcase_pro.rs`.
   Deliverables: `out/showcase_pro.mp4` and `out/showcase_pro_sheet.png`.
+- **Phase 11 review re-pins (2026-11-03)**: the radial fix changed
+  `gradients_f30` (`7fbd4bf4…`) and `gradients_f105` (`e5d237d9…`), and the
+  art pass + radial fix changed the six showcase goldens (`394e63df…`,
+  `a6a227c5…`, `12c61ef0…`, `7b322626…`, `1560326b…`, `0be8f9a1…` in
+  frame order). `hello_f120.png` is still byte-identical.
 - `hello_f120.png` stays byte-identical after Phases 10-11:
   SHA-256 `C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`.
 
@@ -169,15 +189,23 @@ the composition. Scope and decisions: REF-0001..0004, D-0010..D-0035.
     shadow alpha, budget, oversized error).
   - Docs: `crates/ferrous_2d/docs/images.md` (linked from the README and
     `mkdocs.yml`), `ferrous_font/docs/README.md`.
-- **Clone commit `6a30e7d` (Phase 10 review fixes, not yet in Motioner history)**:
+- **Pinned clone commit `6a30e7d` (Phase 10 review fixes, in Motioner history)**:
   `GuiBatch::line`/`polyline` with `LINE_BIT (1 << 9, shader 0x200)`,
   round-capped anti-aliased segments in `gui.wgsl`/`gui_web.wgsl`, docs in
   `ferrous_ui_render/docs/RENDER.md` and two batch tests;
   `Renderer::update_sprite_texture` with `TextureUpdateError` (in-place
   `queue.write_texture` for same-size frames), docs in
-  `ferrous_2d/docs/images.md` and the `pure2d_images` test. Motioner's
-  `engine/ferrous` working tree is checked out at `6a30e7d`; the reviewer must
-  commit the pin.
+  `ferrous_2d/docs/images.md` and the `pure2d_images` test.
+- **Clone commit `e482b3c` (Phase 12, not yet in Motioner history)**: the
+  `gui.wgsl`/`gui_web.wgsl` comment now says `0x200`; `GuiBatch::polyline`
+  documents the translucent double-cap joint and
+  `polyline_joints_overlap_at_the_shared_endpoint` pins the geometry;
+  `FramePacket::remove`, `FrameBuilder::take_ui_batch` and
+  `Renderer::take_recycled_ui_batch` let `runner/frame.rs` clear and reuse one
+  `GuiBatch` instead of building a fresh one, so Motioner's counter reads
+  0/frame. Engine tests for `ferrous_ui_render`, `ferrous_render_graph`,
+  `ferrous_renderer` and `ferrous_engine` pass. The reviewer must commit the
+  submodule pointer (working tree is checked out at `e482b3c`).
 - **Flaky GPU tests**: the first parallel run after a build can fail with
   `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
   Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
@@ -203,19 +231,28 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-Phase 10 review fixes (T-UI-0009): engine line primitive and in-place sprite
-update (clone `6a30e7d`); anti-aliased graph curve/stems sampled per screen
-column, key-fit view and a caption outside the plot; blur preview at 28 ms
-paused full / 9 ms playing 4 samples at both 960x540 and 1080p (the old
-"UI 1 fps" was the one-second first paused render, not idle redraw); cached
-values/labels/chrome with a per-thread alloc reading of 9/frame (engine
-`GuiBatch`, D-0044 amended); names use the full loop/call path.
+Phase 12 + Phase 11 review (T-PERF-0002/T-PERF-0003, session
+`S-2026-11-03-005`):
 
-Phase 11 (T-APP-0003): `examples/showcase_pro.motion` (24 s 1080p60, 80
-nodes, six scenes), six goldens pinned by
-`motioner_render/tests/golden_showcase_pro.rs`, `out/showcase_pro.mp4`
-(1440 frames) and `out/showcase_pro_sheet.png`. Captures
-`out/ui/p10-11-graph-fixed.png`, `p10-12/13-alloc-*`, `fps-960/1080-*`.
-Gate green; `hello_f120.png` still `C2173BAD...` byte-identical. Next:
-Phase 12 (release numbers, docs, final report). Reviewer must commit the
-engine clone and bump the pin.
+- **A1**: `motioner_render::gradients::geometry` transformed the centre and
+  then `centre + radius` again; the radius folded the item translation, so an
+  off-centre radial ramp never reached zero alpha at the silhouette and
+  additive orbs read as hard discs. It now transforms the centre and the local
+  `+x` edge separately. Unit + GPU regression tests cover all seven blend
+  modes; `gradients_f30/f105` and six showcase goldens re-pinned; `hello_f120`
+  byte-identical.
+- **A2**: Showcase Pro art pass: REVEAL optically centred from
+  `text_bounds`, all captions 28-30 px and brighter, orbs dimmer and retired
+  for the mask scene, light leaks as faint wide + bright core capsules, scene 1
+  monogram apex joined and the halo moved outside the mark. MP4 and contact
+  sheet re-rendered.
+- **A3**: engine clone `e482b3c` (comment fix, polyline limitation + test,
+  `GuiBatch` recycle). The editor alloc counter reads **0/frame** (was 9).
+- **Phase 12**: release numbers above; docs (spec, agents, READMEs); tasks
+  T-PERF-0002/0003 done; backlog T-AUDIO-0001, T-NLE-0001, T-RENDER-0014,
+  T-PHYS-0001 plus the existing T-UI-0007; Spanish report at
+  `out/reports/PHASE-12-REPORT.md`; C: free ~25.8 GB.
+- Gate green: fmt, clippy pedantic `-D warnings`, workspace tests, rustdoc
+  `-D warnings`, boundaries, machete, `pctl validate`.
+- Reviewer: commit the `engine/ferrous` pointer at `e482b3c` (or the pushed
+  clone head) and keep the pin bump in one commit.

@@ -63,15 +63,19 @@ Not needed: the plan is a flat list and the painter walks it twice.
 - D-0028 — keyed colours reach the renderer already interpolated in linear
   light; the golden tolerance is shared.
 - D-0029 — vector paths, the tessellation cache and the lyon dependency.
-- D-0031 — blended nodes render inside an engine layer; overlay/darken/lighten need the backdrop composite and return Unsupported until the pin bump.
-- D-0030 — gradients are a per-frame table (`gradients`), rendered since pin
-  e9fb90d.
+- D-0031 — blended nodes render inside an engine layer; overlay/darken/lighten
+  need the backdrop composite, which the pin carries.
+- D-0030 — gradients are a per-frame table (`gradients`). The radial radius
+  transforms the centre and the local `+x` edge separately, so an off-centre
+  ramp reaches zero alpha at the silhouette; a GPU test covers all seven blend
+  modes (`crates/motioner_render/src/gradients.rs`,
+  `crates/motioner_render/tests/render.rs`).
 - D-0034 — Inter 400/600/700, project-first font lookup, CPU measurement via
   `TextMetrics`, and per-character animators (rendered since pin 06a8adf).
 
 ## Documentation status
 
-partial — last verified: 2026-11-02
+partial — last verified: 2026-11-03
 
 ## Images (D-0035)
 

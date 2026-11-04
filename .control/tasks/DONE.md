@@ -16,6 +16,7 @@
 - **T-ARCH-0005** — Pin FerrousEngine and document the update flow `[alta]` (actualizado 2026-10-31)
 - **T-ARCH-0006** — Set up CI, format and lint gates `[alta]` (actualizado 2026-10-31)
 - **T-CORE-0001** — Animatable content properties (width, height, radius, fill, stroke, size, color) `[alta]` (actualizado 2026-11-01)
+- **T-PERF-0003** — Phase 11 review fixes: radial gradient alpha, Showcase Pro art pass and engine batch reuse `[alta]` (actualizado 2026-11-03)
 - **T-RENDER-0007** — Vector paths and trim paths (path, polygon, star, arc, trim, dash) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0008** — Gradients for fill and stroke (linear and radial, animatable stops) `[alta]` (actualizado 2026-11-01)
 - **T-RENDER-0009** — Blend modes (normal, add, multiply, screen, overlay, darken, lighten) `[alta]` (actualizado 2026-11-01)
@@ -34,3 +35,4 @@
 - **T-DSL-0006** — Hybrid bake: edit literal arguments in the program, overrides for the rest `[media]` (actualizado 2026-11-01)
 - **T-RENDER-0006** — FerrousEngine: honour a screenshot request made in update `[media]` (actualizado 2026-11-01)
 - **T-RENDER-0013** — Images (project-relative, content-hash cache, fit modes) `[media]` (actualizado 2026-11-02)
+- **T-PERF-0002** — Professional motion performance, docs and final report `[baja]` (actualizado 2026-11-03)
