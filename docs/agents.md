@@ -452,10 +452,22 @@ error in `still`/`render`/`info`). Kinds:
 came from a private plain literal (a constructor argument, a
 `node.property = literal` assignment or a `.key(...)` value/ease). A literal
 is private when the run evaluated it once; values created in a loop or in a
-function called twice are shared, so they are never edited. Everything else
-keeps the older behaviour: bound nodes get `var.property = value` statements
-after the generated-block marker, and loop-created nodes without a binding
-keep their overrides with a refusal reason.
+function called twice are shared, so they are not edited in place. A node made
+in a loop gets a guard at the loop body's indentation, after its last write:
+
+```python
+for i in range(5):
+    c = circle(40)
+    if i == 3:
+        c.radius = 80
+```
+
+Repeated iterations merge into `if i in (1, 3):`; an existing guard is
+extended; `for _` is renamed and a repeated non-literal value is rewritten to
+`for i, x in enumerate(xs):`. A guard that becomes equal to the shared value
+again is removed. Everything else keeps the older behaviour: bound nodes get
+`var.property = value` statements after the generated-block marker, and
+unbound function calls keep their overrides with a refusal reason.
 
 In-place edits shift the byte-offset keys of later nodes; bake re-keys every
 override that stays in the same atomic write (D-0025, D-0027). The result is

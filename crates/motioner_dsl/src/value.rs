@@ -44,6 +44,7 @@ impl RangeValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Builtin {
     Range,
+    Enumerate,
     Len,
     Min,
     Max,
@@ -78,8 +79,9 @@ pub(crate) enum Builtin {
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 31] = [
+    pub const ALL: [(Self, &'static str); 32] = [
         (Self::Range, "range"),
+        (Self::Enumerate, "enumerate"),
         (Self::Len, "len"),
         (Self::Min, "min"),
         (Self::Max, "max"),

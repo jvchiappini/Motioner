@@ -55,6 +55,16 @@ impl Plan {
     }
 }
 
+/// How wide a loop edit applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scope {
+    /// Only the selected iteration (a guard), the default (D-0036).
+    #[default]
+    This,
+    /// Every instance made by the same loop call (a shared literal edit).
+    All,
+}
+
 /// Plans `change` against `program`. `document` is what the program produces
 /// now; the plan is verified to produce the same document with the change
 /// applied.
@@ -64,6 +74,18 @@ pub fn plan(
     origins: &ValueOrigins,
     document: &Document,
     change: &EditCommand,
+) -> Plan {
+    plan_with_scope(program, origins, document, change, Scope::This)
+}
+
+/// [`plan`] with the "this one / all" choice for nodes made in a loop.
+#[must_use]
+pub fn plan_with_scope(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    change: &EditCommand,
+    scope: Scope,
 ) -> Plan {
     let rate = document.composition().frame_rate();
     let resolved = match resolve(change) {
@@ -76,7 +98,11 @@ pub fn plan(
             resolved.entry.id
         ));
     };
-    let Some(expected) = expected_document(document, &resolved.entry) else {
+    let Some(expected) = (if scope == Scope::All {
+        expected_document_all(origins, document, &resolved.entry, node)
+    } else {
+        expected_document(document, &resolved.entry)
+    }) else {
         return Plan::Fallback(format!(
             "'{}' does not apply to this node",
             resolved.entry.property
@@ -84,11 +110,51 @@ pub fn plan(
     };
     let mut reason = String::from("no exact code edit");
 
+    // An edit that leaves every iteration with the same value is a shared
+    // literal edit: the guards have become dead code (D-0036 section 2.2).
+    if scope == Scope::This {
+        if let Some(edit) = automatic_shared_value(program, origins, document, &resolved, node) {
+            return Plan::Code(edit);
+        }
+    }
+
+    // A guard that became equal to the unguarded value is dead code; remove it
+    // before the private-literal edit would rewrite the guarded literal.
+    if let Ok(Some(edit)) = crate::loop_guard::remove_redundant(program, origins, &resolved, node) {
+        if verify_edit(program, &edit, &expected) {
+            return Plan::Code(edit);
+        }
+    }
+
     if let Some(edit) = private_literal(&resolved, node, origins) {
         if verify_edit(program, &edit, &expected) {
             return Plan::Code(edit);
         }
         "the private literal did not reproduce the document".clone_into(&mut reason);
+    }
+
+    if scope == Scope::All {
+        match crate::loop_guard::shared_value(program, origins, &resolved, node) {
+            Ok(Some(edit)) => {
+                if verify_edit(program, &edit, &expected) {
+                    return Plan::Code(edit);
+                }
+                "the shared literal did not reproduce the document".clone_into(&mut reason);
+            }
+            Ok(None) => {}
+            Err(error) => reason = error,
+        }
+    }
+
+    match crate::loop_guard::plan_loop(program, origins, &resolved, node, rate) {
+        Ok(Some(edit)) => {
+            if verify_edit(program, &edit, &expected) {
+                return Plan::Code(edit);
+            }
+            "the loop guard did not reproduce the document".clone_into(&mut reason);
+        }
+        Ok(None) => {}
+        Err(error) => reason = error,
     }
 
     match local_assignment(program, origins, &resolved, node, rate) {
@@ -105,15 +171,44 @@ pub fn plan(
         }
         Err(error) => {
             let structural = local_assignment_reason(&resolved, origins, node);
-            reason = if structural.starts_with("no exact code edit") {
-                error
-            } else {
-                structural
-            };
+            if reason == "no exact code edit" {
+                reason = if structural.starts_with("no exact code edit") {
+                    error
+                } else {
+                    structural
+                };
+            }
         }
     }
 
     Plan::Fallback(reason)
+}
+
+/// The shared-literal edit when the new value already matches every other
+/// iteration, verified against the all-instances document.
+fn automatic_shared_value(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    resolved: &Resolved,
+    node: NodeId,
+) -> Option<CodeEdit> {
+    if !matches!(resolved.action, Action::Set) {
+        return None;
+    }
+    let rhs = crate::loop_guard::value_text(resolved).ok()?;
+    if !crate::loop_guard::siblings_have_value(
+        program,
+        origins,
+        node,
+        &resolved.entry.property,
+        &rhs,
+    ) {
+        return None;
+    }
+    let edit = crate::loop_guard::shared_value(program, origins, resolved, node).ok()??;
+    let expected = expected_document_all(origins, document, &resolved.entry, node)?;
+    verify_edit(program, &edit, &expected).then_some(edit)
 }
 
 /// Whether `program` (plus `overrides`, when given) produces `expected`.
@@ -133,12 +228,12 @@ pub fn verify(program: &str, overrides: Option<&str>, expected: &Document) -> bo
 }
 
 /// One resolved change: its override entry and the action-specific data.
-struct Resolved {
-    entry: OverrideEntry,
-    action: Action,
+pub(crate) struct Resolved {
+    pub(crate) entry: OverrideEntry,
+    pub(crate) action: Action,
 }
 
-enum Action {
+pub(crate) enum Action {
     Set,
     Key { frame: i64, ease: Ease },
     Visible(bool),
@@ -267,6 +362,32 @@ fn expected_document(document: &Document, entry: &OverrideEntry) -> Option<Docum
     let mut set = OverrideSet::new();
     set.insert(entry.clone());
     set.apply(&mut expected).is_empty().then_some(expected)
+}
+
+/// The document after applying `entry` to every node made by the same loop
+/// call as `node` ("all" scope).
+fn expected_document_all(
+    origins: &ValueOrigins,
+    document: &Document,
+    entry: &OverrideEntry,
+    node: NodeId,
+) -> Option<Document> {
+    let creation = origins.node_origin(node)?.creation.start;
+    let mut expected = document.clone();
+    let mut set = OverrideSet::new();
+    for origin in origins
+        .nodes()
+        .iter()
+        .filter(|origin| origin.creation.start == creation)
+    {
+        let Some(target) = document.node(origin.node) else {
+            continue;
+        };
+        let mut sibling = entry.clone();
+        target.identity().as_str().clone_into(&mut sibling.id);
+        set.push(sibling);
+    }
+    (!set.is_empty() && set.apply(&mut expected).is_empty()).then_some(expected)
 }
 
 fn verify_edit(program: &str, edit: &CodeEdit, expected: &Document) -> bool {
@@ -651,7 +772,8 @@ fn value_origin<'a>(
 }
 
 /// The observable composition, ignoring provenance identities (which an
-/// in-place edit shifts by design).
+/// in-place edit shifts by design) and display names (presentation only,
+/// D-0044: a generated binding legitimately renames a node).
 pub(crate) type Semantics = (
     motioner_core::NodeContent,
     motioner_core::Transform,
@@ -660,7 +782,6 @@ pub(crate) type Semantics = (
     Option<motioner_core::MaskSpec>,
     bool,
     Option<usize>,
-    Option<String>,
 );
 
 pub(crate) fn semantics(document: &Document) -> Vec<Semantics> {
@@ -676,7 +797,6 @@ pub(crate) fn semantics(document: &Document) -> Vec<Semantics> {
                 node.mask(),
                 node.is_visible(),
                 node.parent().and_then(index),
-                node.name().map(str::to_owned),
             )
         })
         .collect()

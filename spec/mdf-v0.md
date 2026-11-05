@@ -76,7 +76,8 @@ there is no separate integer division rule: `/` always produces a float,
 - `return expression` or `return`.
 - `if condition:` / `elif` / `else`.
 - `for name in iterable:` over lists, ranges, strings and dicts (keys in
-  stable insertion order).
+  stable insertion order). A comma-separated target unpacks a pair:
+  `for i, name in enumerate(names):`.
 - `while condition:`.
 - `break`, `continue`, `pass`.
 - `use("path")` returns a module handle (see section 10).
@@ -88,16 +89,19 @@ Supported operators, from lowest to highest precedence:
 - `or`
 - `and`
 - `not`
-- comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`
+- comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in`
 - `+`, `-`
 - `*`, `/`, `//`, `%`
 - unary `-`, `+`
 - calls, attribute access, indexing
 - literals, names, parenthesized expressions
 
-Built-ins in v0: `len`, `range`, `str`, `int`, `float`, `bool`, `min`,
-`max`, `abs`, `round`, `sorted`, `reversed`, `enumerate`, `zip`, `seed`,
-`rand`, `sin`, `cos`, `tan`, `radians`, `degrees`, `lerp`, `clamp`.
+Built-ins implemented in v0: `len`, `range`, `str`, `int`, `float`, `min`,
+`max`, `abs`, `round`, `enumerate`, `sin`, `cos`, `lerp`, `clamp`,
+`text_width`, `text_bounds` and `bezier`. `enumerate(value, start=0)`
+returns `(index, item)` pairs and feeds the guarded loop edits:
+`for i, name in enumerate(names):`. `bool`, `sorted`, `reversed`, `zip`,
+`seed`, `rand`, `tan`, `radians` and `degrees` are deferred (section 17).
 
 `seed(value)` initializes the deterministic generator; `rand()` returns
 a deterministic float in `[0, 1)`. Using `rand()` without `seed` is an
@@ -427,7 +431,7 @@ reject `key`/`override_key`.
 ### 9.3 Bake
 
 `motioner bake <file.motion> [--id ID]...` folds overrides into the program in
-two ways (D-0027):
+three ways (D-0027, D-0036):
 
 1. **In place** when the overridden value came from a private plain literal:
    a constructor argument, a `node.property = literal` assignment, or the
@@ -437,12 +441,19 @@ two ways (D-0027):
    the literal text (numbers keep `format_number`, strings are quoted, pairs
    are `(x, y)`, booleans `True`/`False`, optional colours `None`); a key
    edits its value and, when the call has one, its `ease` literal.
-2. **Generated block** for everything else reachable from a top-level
+2. **Loop guard** when the node was created in a `for` body: the statement is
+   inserted at the loop body's indentation, after the node's last write, as
+   `if i == 3:` (nested loops join with `and`). Repeated iterations merge into
+   `if i in (1, 3):`; an existing guard for the same node is extended. A `_`
+   loop variable is renamed, a repeated or non-literal iteration value is
+   rewritten to `for i, x in enumerate(xs):`, and an inline node gets a
+   readable binding. A guard that becomes equal to the shared value again is
+   removed.
+3. **Generated block** for everything else reachable from a top-level
    variable binding: statements appended after
    `# --- baked by motioner (do not edit above this line by hand) ---`, then
-   the overrides are removed. Nodes created inside loops or unbound function
-   calls with shared or computed values are refused with a message and keep
-   their overrides.
+   the overrides are removed. Unbound function calls with shared or computed
+   values are refused with a message and keep their overrides.
 
 In-place edits change the program length, so every provenance key after them
 is re-keyed by the exact edit offsets in the same write (D-0025). Bake is
@@ -533,7 +544,8 @@ expression     = or_expr ;
 or_expr        = and_expr { "or" and_expr } ;
 and_expr       = not_expr { "and" not_expr } ;
 not_expr       = [ "not" ] comparison ;
-comparison     = additive { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) additive } ;
+comparison     = additive [ ( "==" | "!=" | "<" | "<=" | ">" | ">="
+                           | "in" | "not" "in" ) additive ] ;
 additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = unary { ( "*" | "/" | "//" | "%" ) unary } ;
 unary          = [ "-" | "+" ] postfix ;
@@ -543,7 +555,9 @@ primary        = NAME | NUMBER | STRING | "True" | "False" | "None"
 compound_stmt  = if_stmt | for_stmt | while_stmt | def_stmt ;
 if_stmt        = "if" expression ":" block { "elif" expression ":" block }
                [ "else" ":" block ] ;
-for_stmt       = "for" NAME "in" expression ":" block ;
+for_stmt       = "for" for_target "in" expression ":" block ;
+for_target     = NAME { "," NAME }
+               | "(" NAME { "," NAME } ")" ;
 while_stmt     = "while" expression ":" block ;
 def_stmt       = "def" NAME "(" [ params ] ")" ":" block ;
 block          = NEWLINE INDENT { statement } DEDENT ;

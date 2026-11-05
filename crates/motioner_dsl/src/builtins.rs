@@ -31,6 +31,7 @@ pub(crate) fn call(
         Builtin::TextWidth => text_measure("text_width", args, metrics, false),
         Builtin::TextBounds => text_measure("text_bounds", args, metrics, true),
         Builtin::Range => range(args),
+        Builtin::Enumerate => enumerate(args, limits, budget),
         Builtin::Len => {
             let bound = bind("len", &["value"], 1, args)?;
             let length = length(bound.get(0).unwrap_or(&Value::None), budget)?;
@@ -342,6 +343,35 @@ pub(crate) fn items(value: &Value, limits: &Limits, budget: &mut Budget) -> Host
             other.type_name()
         ))),
     }
+}
+
+/// `enumerate(iterable, start=0)`: pairs of `(index, item)`.
+///
+/// The iterable is materialized once; the number of produced pairs charges one
+/// step each and is checked against the list cap.
+fn enumerate(args: CallArgs, limits: &Limits, budget: &mut Budget) -> HostResult<Value> {
+    let bound = bind("enumerate", &["iterable", "start"], 1, args)?;
+    let start = match bound.get(1) {
+        None | Some(Value::None) => 0,
+        Some(_) => {
+            let start = bound.number(1)?;
+            as_integer(start).ok_or_else(|| {
+                HostError::value_error("enumerate(): 'start' must be a whole number")
+            })?
+        }
+    };
+    let items = items(bound.get(0).unwrap_or(&Value::None), limits, budget)?;
+    limits.check_list_len(items.len())?;
+    budget.charge_items(items.len())?;
+    let pairs = items
+        .into_iter()
+        .enumerate()
+        .map(|(offset, item)| {
+            let index = start.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX));
+            Value::tuple(vec![Value::Number(f64_from_i64(index)), item])
+        })
+        .collect();
+    Ok(Value::list(pairs))
 }
 
 fn range(args: CallArgs) -> HostResult<Value> {

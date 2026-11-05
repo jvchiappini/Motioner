@@ -786,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_loop_literal_is_refused() {
+    fn a_loop_literal_is_specialised_with_a_guard() {
         let compiled = compiled();
         let circle = compiled.document.roots()[1];
         let circle_id = id_of(&compiled, circle);
@@ -795,6 +795,7 @@ mod tests {
             "radius",
             OverrideAction::Set(OverrideValue::Number(30.0)),
         )]);
+        let before = expected(&compiled, &set);
         let baked = bake(
             HELLO,
             &compiled.document,
@@ -803,10 +804,19 @@ mod tests {
             &set,
             &[],
         );
-        assert_eq!(baked.program, HELLO, "the loop body is untouched");
-        assert_eq!(baked.refused.len(), 1, "{baked:?}");
-        assert!(baked.refused[0].reason.contains("shared"), "{baked:?}");
-        assert_eq!(baked.overrides.len(), 1);
+        assert!(baked.refused.is_empty(), "{baked:?}");
+        assert!(
+            baked
+                .program
+                .contains("    if i == 0:\n        dot.radius = 30\n"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&before)
+        );
     }
 
     #[test]
@@ -850,10 +860,12 @@ mod tests {
     fn shifting_an_in_place_edit_rekeys_the_remaining_overrides() {
         let compiled = compiled();
         let title_id = title(&compiled);
-        let circle = compiled.document.roots()[1];
-        let circle_id = id_of(&compiled, circle);
+        // A node made inside `spinner()` has no top-level binding, so its
+        // override must stay in the file after the title's in-place edit.
+        let spinner = compiled.document.roots()[6];
+        let spinner_id = id_of(&compiled, spinner);
         // The title's size grows by one byte; every later key shifts, and the
-        // circle's rotation override must follow it.
+        // spinner's override must follow it.
         let set = overrides(&[
             (
                 &title_id,
@@ -861,9 +873,9 @@ mod tests {
                 OverrideAction::Set(OverrideValue::Number(1000.0)),
             ),
             (
-                &circle_id,
-                "rotation",
-                OverrideAction::Set(OverrideValue::Number(45.0)),
+                &spinner_id,
+                "pos",
+                OverrideAction::Set(OverrideValue::Vec2(Vec2::new(1.0, 2.0))),
             ),
         ]);
         let before = expected(&compiled, &set);
@@ -878,8 +890,8 @@ mod tests {
         assert!(baked.program.contains("size=1000"), "{}", baked.program);
         let remaining = baked.overrides.to_mdf(rate());
         assert!(
-            remaining.contains("override(\"@") && remaining.contains("\"rotation\", 45"),
-            "the circle's override stays, re-keyed: {remaining}"
+            remaining.contains("override(\"@") && remaining.contains("\"pos\""),
+            "the spinner's override stays, re-keyed: {remaining}"
         );
         let left = baked.overrides.len();
         assert!(left >= 1);
@@ -927,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_created_nodes_are_refused_with_a_reason() {
+    fn loop_created_nodes_are_specialised_with_a_guard() {
         let source = "comp(name=\"L\", duration=2.0)\nfor i in range(3):\n    d = circle(radius=8)\n    d.pos = (10 + i * 20, 50)\n";
         let program = crate::parse(source).unwrap();
         let execution = crate::execute_detailed(&program, &crate::Limits::default()).unwrap();
@@ -947,6 +959,8 @@ mod tests {
             "pos",
             OverrideAction::Set(OverrideValue::Vec2(Vec2::new(1.0, 2.0))),
         )]);
+        let mut expected = execution.document.clone();
+        set.apply(&mut expected);
         let baked = bake(
             source,
             &execution.document,
@@ -955,10 +969,19 @@ mod tests {
             &set,
             &[],
         );
-        assert_eq!(baked.program, source, "nothing was appended");
-        assert_eq!(baked.refused.len(), 1);
-        assert!(baked.refused[0].reason.contains("top-level variable"));
-        assert_eq!(baked.overrides.len(), 1, "the override is kept");
+        assert!(baked.refused.is_empty(), "{baked:?}");
+        assert!(
+            baked
+                .program
+                .contains("    if i == 0:\n        d.pos = (1, 2)\n"),
+            "{}",
+            baked.program
+        );
+        let actual = crate::run(&baked.program, &crate::Limits::default()).unwrap();
+        assert_eq!(
+            crate::plan::semantics(&actual),
+            crate::plan::semantics(&expected)
+        );
     }
 
     #[test]

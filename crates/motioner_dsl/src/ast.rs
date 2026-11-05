@@ -48,10 +48,10 @@ pub enum StmtKind {
         /// The `else` body; empty when absent.
         otherwise: Vec<Stmt>,
     },
-    /// `for variable in iterable:` and its body.
+    /// `for variable(s) in iterable:` and its body.
     For {
-        /// Loop variable.
-        variable: Rc<str>,
+        /// Loop variables, in order; more than one unpacks a tuple.
+        variables: Vec<Rc<str>>,
         /// The iterated expression.
         iterable: Expr,
         /// Loop body.
@@ -264,6 +264,10 @@ pub enum CompareOp {
     Gt,
     /// `>=`
     Ge,
+    /// `in`
+    In,
+    /// `not in`
+    NotIn,
 }
 
 /// Boolean operators.

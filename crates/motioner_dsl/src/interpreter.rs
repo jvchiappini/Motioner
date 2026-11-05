@@ -447,10 +447,10 @@ impl Interpreter<'_> {
                 self.exec_block(otherwise)
             }
             StmtKind::For {
-                variable,
+                variables,
                 iterable,
                 body,
-            } => self.exec_for(variable, iterable, body, statement.span),
+            } => self.exec_for(variables, iterable, body, statement.span),
             StmtKind::Break => Ok(Flow::Break),
             StmtKind::Continue => Ok(Flow::Continue),
             StmtKind::Pass => Ok(Flow::Normal),
@@ -459,7 +459,7 @@ impl Interpreter<'_> {
 
     fn exec_for(
         &mut self,
-        variable: &Rc<str>,
+        variables: &[Rc<str>],
         iterable: &Expr,
         body: &[Stmt],
         span: Span,
@@ -468,28 +468,31 @@ impl Interpreter<'_> {
         if let Value::Range(range) = sequence {
             // Ranges are iterated lazily so `range(10**7)` needs no memory.
             let values = (0..range.len()).map(|i| Value::Number(f64_from_i64(range.at(i))));
-            return self.run_loop(variable, body, span, iterable.span, values);
+            return self.run_loop(variables, body, span, iterable.span, values);
         }
         let items = builtins::items(&sequence, self.limits, &mut self.budget)
             .map_err(|e| self.host_error(iterable.span, e))?;
-        self.run_loop(variable, body, span, iterable.span, items.into_iter())
+        self.run_loop(variables, body, span, iterable.span, items.into_iter())
     }
 
     fn run_loop(
         &mut self,
-        variable: &Rc<str>,
+        variables: &[Rc<str>],
         body: &[Stmt],
         span: Span,
         iterable: Span,
         values: impl Iterator<Item = Value>,
     ) -> Exec<Flow> {
         let body_origin = BlockOrigin::of(body);
-        let variable_id = self.scene.intern_name(variable);
-        let variables: Rc<[(Rc<str>, NameId)]> = Rc::from(vec![(variable.clone(), variable_id)]);
+        let variable_ids: Vec<(Rc<str>, NameId)> = variables
+            .iter()
+            .map(|variable| (Rc::clone(variable), self.scene.intern_name(variable)))
+            .collect();
+        let variables: Rc<[(Rc<str>, NameId)]> = Rc::from(variable_ids);
         for (index, value) in values.enumerate() {
             let iteration = i64::try_from(index).unwrap_or(i64::MAX);
             let iteration_value = iteration_value_of(&value);
-            self.store(variable.clone(), value);
+            self.bind_loop_value(&variables, value, span)?;
             // The loop index is part of every node's provenance key, so the
             // same iteration of the same call yields the same identity. It is
             // also part of the display-name path (outermost first).
@@ -515,6 +518,47 @@ impl Interpreter<'_> {
             }
         }
         Ok(Flow::Normal)
+    }
+
+    /// Binds one iteration value to the loop variables, unpacking a tuple for
+    /// `for i, x in enumerate(...)`.
+    fn bind_loop_value(
+        &mut self,
+        variables: &[(Rc<str>, NameId)],
+        value: Value,
+        span: Span,
+    ) -> Exec<()> {
+        if let [(name, _)] = variables {
+            self.store(Rc::clone(name), value);
+            return Ok(());
+        }
+        let (Value::List(items) | Value::Tuple(items)) = &value else {
+            return Err(self.diagnostic(
+                ErrorCategory::Type,
+                span,
+                format!(
+                    "cannot unpack a {} into {} loop variables",
+                    value.type_name(),
+                    variables.len()
+                ),
+            ));
+        };
+        let items = items.borrow();
+        if items.len() != variables.len() {
+            return Err(self.diagnostic(
+                ErrorCategory::Value,
+                span,
+                format!(
+                    "expected {} values to unpack, got {}",
+                    variables.len(),
+                    items.len()
+                ),
+            ));
+        }
+        for ((name, _), item) in variables.iter().zip(items.iter()) {
+            self.store(Rc::clone(name), item.clone());
+        }
+        Ok(())
     }
 
     fn assign(&mut self, target: &Target, op: AssignOp, value: &Expr, span: Span) -> Exec<()> {
@@ -940,8 +984,65 @@ fn compare(
         CompareOp::Le => builtins::compare(left, right, budget)?.is_le(),
         CompareOp::Gt => builtins::compare(left, right, budget)?.is_gt(),
         CompareOp::Ge => builtins::compare(left, right, budget)?.is_ge(),
+        CompareOp::In => contains(right, left, limits, budget)?,
+        CompareOp::NotIn => !contains(right, left, limits, budget)?,
     };
     Ok(Value::Bool(result))
+}
+
+/// Python membership: `item in container` for lists, tuples, ranges and
+/// strings.
+///
+/// The scan charges one step per item compared and the bytes it reads for a
+/// string, so a hostile container is always bounded.
+fn contains(
+    container: &Value,
+    item: &Value,
+    limits: &Limits,
+    budget: &mut Budget,
+) -> HostResult<bool> {
+    match container {
+        Value::List(items) | Value::Tuple(items) => {
+            let items = items.borrow();
+            for candidate in items.iter() {
+                budget.charge(1)?;
+                if item.equals(candidate, limits, budget)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Value::Str(text) => {
+            let Value::Str(needle) = item else {
+                return Err(HostError::type_error(format!(
+                    "'in <string>' requires a string, got {}",
+                    item.type_name()
+                )));
+            };
+            budget.charge_string(text.len())?;
+            Ok(text.contains(&**needle))
+        }
+        Value::Range(range) => {
+            let Value::Number(number) = item else {
+                return Ok(false);
+            };
+            let Some(value) =
+                as_integer(*number).filter(|value| (*value - range.start) % range.step == 0)
+            else {
+                return Ok(false);
+            };
+            let inside = if range.step > 0 {
+                value >= range.start && value < range.stop
+            } else {
+                value <= range.start && value > range.stop
+            };
+            Ok(inside)
+        }
+        other => Err(HostError::type_error(format!(
+            "a {} is not a membership container",
+            other.type_name()
+        ))),
+    }
 }
 
 /// Resolves a Python-style index (negative counts from the end).

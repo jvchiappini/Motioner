@@ -212,7 +212,7 @@ c = circle(10)
 }
 
 #[test]
-fn a_loop_created_node_falls_back_to_overrides() {
+fn a_loop_created_node_gets_a_guard() {
     let source = r#"comp(name="P", duration=1.0)
 for i in range(2):
     c = circle(40)
@@ -224,9 +224,12 @@ for i in range(2):
         &execution.document,
         &set_value(&execution, 0, "radius", OverrideValue::Number(80.0)),
     );
+    let edit = plan.code().expect("a loop instance is exact");
+    assert_eq!(edit.strategy(), Strategy::LoopGuard);
+    let after = edit.apply(source).unwrap();
     assert!(
-        plan.reason().is_some_and(|reason| reason.contains("loop")),
-        "{plan:?}"
+        after.contains("    if i == 0:\n        c.radius = 80\n"),
+        "{after}"
     );
 }
 

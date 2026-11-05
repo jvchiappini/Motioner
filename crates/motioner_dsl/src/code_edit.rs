@@ -17,6 +17,10 @@ pub enum Strategy {
     PrivateLiteral,
     /// A static value or key is written next to the node's last write.
     LocalAssignment,
+    /// A guarded statement is inserted or extended inside the loop body.
+    LoopGuard,
+    /// A literal shared by every iteration is edited for every instance.
+    LoopSharedValue,
     /// Several single-change edits combined into one bake write.
     Combined,
 }
@@ -28,6 +32,8 @@ impl Strategy {
         match self {
             Self::PrivateLiteral => "private-literal",
             Self::LocalAssignment => "local-assignment",
+            Self::LoopGuard => "loop-guard",
+            Self::LoopSharedValue => "loop-shared-value",
             Self::Combined => "combined",
         }
     }

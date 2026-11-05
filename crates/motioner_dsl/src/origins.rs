@@ -310,17 +310,14 @@ impl ValueOrigins {
         id
     }
 
-    /// Records `origin`, replacing an earlier static value or key of the same
-    /// node and property (the later write wins, as in the document).
+    /// Records `origin`.
+    ///
+    /// Every write is kept, in program order: the planner needs the unguarded
+    /// value of a property even after a guarded write replaces it, and the
+    /// privacy check must count every evaluation of the same span. The latest
+    /// write still wins for [`Self::set_origin`] and [`Self::key_origin`],
+    /// which search from the end.
     pub fn record(&mut self, origin: ValueOrigin) {
-        self.entries.retain(|existing| {
-            let same_write = match (existing.kind, origin.kind) {
-                (OriginKind::Set, OriginKind::Set) => true,
-                (OriginKind::Key(a), OriginKind::Key(b)) => a == b,
-                _ => false,
-            };
-            !(same_write && existing.node == origin.node && existing.property == origin.property)
-        });
         self.entries.push(origin);
     }
 

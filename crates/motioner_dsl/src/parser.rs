@@ -390,7 +390,7 @@ impl Parser {
 
     fn for_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance().span;
-        let (variable, _) = self.expect_name("a loop variable name")?;
+        let variables = self.for_variables()?;
         self.expect_kind(&TokenKind::Keyword(Keyword::In), "'in'")?;
         let iterable = self.expression()?;
         self.loop_depth += 1;
@@ -399,12 +399,38 @@ impl Parser {
         let span = body.last().map_or(start, |last| start.to(last.span));
         Ok(Stmt {
             kind: StmtKind::For {
-                variable,
+                variables,
                 iterable: iterable.expr,
                 body,
             },
             span,
         })
+    }
+
+    /// Parses `x`, `i, x` or `(i, x)` before the `in` of a `for`.
+    fn for_variables(&mut self) -> ParseResult<Vec<Rc<str>>> {
+        let parenthesized = self.eat_op(Op::LParen);
+        let mut variables = Vec::new();
+        loop {
+            let (name, span) = self.expect_name("a loop variable name")?;
+            if variables.contains(&name) {
+                return Err(parse_error(
+                    span,
+                    format!("duplicate loop variable '{name}'"),
+                ));
+            }
+            variables.push(name);
+            if !self.eat_op(Op::Comma) {
+                break;
+            }
+            if parenthesized && self.check_op(Op::RParen) {
+                break;
+            }
+        }
+        if parenthesized {
+            self.expect_op(Op::RParen, "')'")?;
+        }
+        Ok(variables)
     }
 
     // ---- expressions --------------------------------------------------
@@ -477,6 +503,9 @@ impl Parser {
             return Ok(left);
         };
         let operator = self.advance().span;
+        if op == CompareOp::NotIn {
+            self.expect_kind(&TokenKind::Keyword(Keyword::In), "'in' after 'not'")?;
+        }
         let right = self.additive()?;
         if self.compare_op().is_some() {
             return Err(unsupported(
@@ -506,6 +535,12 @@ impl Parser {
             TokenKind::Op(Op::Le) => Some(CompareOp::Le),
             TokenKind::Op(Op::Gt) => Some(CompareOp::Gt),
             TokenKind::Op(Op::Ge) => Some(CompareOp::Ge),
+            TokenKind::Keyword(Keyword::In) => Some(CompareOp::In),
+            TokenKind::Keyword(Keyword::Not)
+                if self.peek_kind_at(1) == Some(&TokenKind::Keyword(Keyword::In)) =>
+            {
+                Some(CompareOp::NotIn)
+            }
             _ => None,
         }
     }

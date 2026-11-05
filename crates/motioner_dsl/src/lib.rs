@@ -27,6 +27,7 @@ mod host;
 mod interpreter;
 mod lexer;
 mod limits;
+mod loop_guard;
 mod naming;
 mod origins;
 mod overrides_file;
@@ -53,7 +54,7 @@ pub use origins::{
     ValueOrigins, ValueSource,
 };
 pub use parser::{parse, MAX_EXPR_DEPTH};
-pub use plan::{plan, verify, Plan};
+pub use plan::{plan, plan_with_scope, verify, Plan, Scope};
 pub use token::{Keyword, Op, Token, TokenKind};
 
 use motioner_core::{Document, NodeId, OverrideSet};
