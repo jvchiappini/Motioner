@@ -17,9 +17,9 @@ const HELLO: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../examples/hello.motion"
 ));
-const TITLE: &str = "@288";
-const CIRCLE_1: &str = "@586/i0";
-const GROUP_1: &str = "@800/c1172";
+const TITLE: &str = "@281";
+const CIRCLE_1: &str = "@569/i0";
+const GROUP_1: &str = "@780/c1127";
 
 /// A private copy of `hello.motion`, removed when dropped.
 struct Project(PathBuf);
@@ -58,7 +58,8 @@ fn motioner(args: &[&str]) -> Output {
 
 fn edit(program: &Path, commands: &[&str]) -> String {
     let path = program.to_str().unwrap();
-    let mut args = vec!["edit", path];
+    // This suite pins the D-0022 override sink; write-through has its own tests.
+    let mut args = vec!["edit", path, "--overrides"];
     args.extend_from_slice(commands);
     let out = motioner(&args);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -172,8 +173,8 @@ fn a_program_edit_orphans_overrides_and_they_rebind_with_suggestions() {
     edit(
         &program,
         &[
-            "edit(\"@288\", \"rotation\", 12)",
-            "visible(\"@586/i1\", false)",
+            "edit(\"@281\", \"rotation\", 12)",
+            "visible(\"@569/i1\", false)",
         ],
     );
     let before = document(
@@ -185,22 +186,22 @@ fn a_program_edit_orphans_overrides_and_they_rebind_with_suggestions() {
     fs::write(&program, format!("# shifted\n{HELLO}")).unwrap();
     let out = motioner(&["query", program.to_str().unwrap()]);
     let query = String::from_utf8_lossy(&out.stdout);
-    assert!(query.contains("\"id\":\"@288\""), "{query}");
+    assert!(query.contains("\"id\":\"@281\""), "{query}");
     assert!(
-        query.contains("\"suggestions\":[\"@298\""),
+        query.contains("\"suggestions\":[\"@291\""),
         "the shifted title is suggested first: {query}"
     );
-    assert!(query.contains("\"id\":\"@586/i1\""), "{query}");
+    assert!(query.contains("\"id\":\"@569/i1\""), "{query}");
     assert!(
-        query.contains("\"suggestions\":[\"@596/i1\""),
+        query.contains("\"suggestions\":[\"@579/i1\""),
         "the same loop iteration is suggested first: {query}"
     );
 
     edit(
         &program,
         &[
-            "assign_id(\"@288\", \"@298\")",
-            "assign_id(\"@586/i1\", \"@596/i1\")",
+            "assign_id(\"@281\", \"@291\")",
+            "assign_id(\"@569/i1\", \"@579/i1\")",
         ],
     );
     let after = document(
@@ -218,17 +219,17 @@ fn the_prompt_08_run_through_the_command_line_matches_the_edit_layer() {
         &program,
         &[
             "seek(120)",
-            "select(\"@288\")",
+            "select(\"@281\")",
             "add_keys()",
-            "edit(\"@288\", \"pos\", (960, 520))",
+            "edit(\"@281\", \"pos\", (960, 520))",
             "undo()",
             "redo()",
-            "edit(\"@288\", \"color\", \"#FF3366\")",
-            "select_keys([(\"@288\", \"pos.y\", frame(120))])",
+            "edit(\"@281\", \"color\", \"#FF3366\")",
+            "select_keys([(\"@281\", \"pos.y\", frame(120))])",
             "retime_keys(30)",
             "set_ease(\"quad_out\")",
-            "visible(\"@586/i0\", false)",
-            "lock(\"@800/c1172\", true)",
+            "visible(\"@569/i0\", false)",
+            "lock(\"@780/c1127\", true)",
         ],
     );
     let written = fs::read_to_string(project.overrides()).unwrap();
@@ -278,8 +279,8 @@ fn the_prompt_08_run_through_the_command_line_matches_the_edit_layer() {
     assert!(baked.contains("baked by motioner"));
     assert_eq!(document(&baked, Some(&left)), before);
     // The circle (created in a loop) and the lock (editor only) stay.
-    assert!(left.contains("override_visible(\"@586/i0\", false)"));
-    assert!(left.contains("override_locked(\"@800/c1172\", true)"));
+    assert!(left.contains("override_visible(\"@569/i0\", false)"));
+    assert!(left.contains("override_locked(\"@780/c1127\", true)"));
 }
 
 #[test]
@@ -289,8 +290,8 @@ fn a_failed_command_writes_nothing_and_reports_a_typed_error() {
     let out = motioner(&[
         "edit",
         path.to_str().unwrap(),
-        "visible(\"@586/i0\", false)",
-        "unkey(\"@288\", \"rotation\", 1)",
+        "visible(\"@569/i0\", false)",
+        "unkey(\"@281\", \"rotation\", 1)",
     ]);
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -309,14 +310,15 @@ fn dry_run_prints_the_overrides_without_writing() {
     let out = motioner(&[
         "edit",
         path.to_str().unwrap(),
+        "--overrides",
         "--dry-run",
-        "set(\"@288\", \"rotation\", 12)",
+        "set(\"@281\", \"rotation\", 12)",
     ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}");
     assert!(stdout.contains("\"written\":null"), "{stdout}");
     assert!(
-        stdout.contains("override(\\\"@288\\\", \\\"rotation\\\", 12)"),
+        stdout.contains("override(\\\"@281\\\", \\\"rotation\\\", 12)"),
         "{stdout}"
     );
     assert!(!project.overrides().exists());

@@ -1,9 +1,11 @@
 //! Pure edit commands on an [`OverrideSet`], and the undo stack.
 //!
-//! The editor never mutates the program: every gesture becomes one
-//! [`EditCommand`], which produces one override entry (or a small group of
-//! them) in the set. [`UndoStack`] snapshots the set before a gesture, so undo
-//! and redo are exact and a continuous drag coalesces into a single step.
+//! Every gesture becomes one [`EditCommand`], which produces one override entry
+//! (or a small group of them) in the set. Since write-through (D-0036) the
+//! editor may instead write the same change into the program text, so the undo
+//! stack records both the program bytes and the override set: undoing a gesture
+//! restores the exact previous program and state. A continuous drag coalesces
+//! into a single step.
 
 use std::collections::VecDeque;
 
@@ -170,7 +172,17 @@ fn apply_reassign(set: &mut OverrideSet, from: &str, to: &str) {
     }
     set.remove_id(from);
 }
-/// A bounded undo/redo history of override sets.
+/// Everything undo must restore: the exact program bytes and the override set
+/// that was applied on top of them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UndoState {
+    /// Program text before (or after) the gesture.
+    pub source: String,
+    /// Overrides applied on top of that program.
+    pub overrides: OverrideSet,
+}
+
+/// A bounded undo/redo history of editor states.
 ///
 /// A gesture is the unit of undo: [`Self::begin_gesture`] opens one,
 /// [`Self::record`] stores the state before the *first* change of the gesture
@@ -178,8 +190,8 @@ fn apply_reassign(set: &mut OverrideSet, from: &str, to: &str) {
 /// a gesture each record their own step.
 #[derive(Debug)]
 pub struct UndoStack {
-    undo: VecDeque<OverrideSet>,
-    redo: Vec<OverrideSet>,
+    undo: VecDeque<UndoState>,
+    redo: Vec<UndoState>,
     limit: usize,
     gesture_open: bool,
     gesture_recorded: bool,
@@ -249,7 +261,7 @@ impl UndoStack {
     /// Stores `before` as an undo step.
     ///
     /// Inside a gesture, only the first call stores; later ones are no-ops.
-    pub fn record(&mut self, before: OverrideSet) {
+    pub fn record(&mut self, before: UndoState) {
         if self.gesture_open && self.gesture_recorded {
             return;
         }
@@ -265,14 +277,14 @@ impl UndoStack {
 
     /// Moves the current state onto the redo stack and returns the state to
     /// restore, if any.
-    pub fn undo(&mut self, current: &OverrideSet) -> Option<OverrideSet> {
+    pub fn undo(&mut self, current: &UndoState) -> Option<UndoState> {
         let previous = self.undo.pop_back()?;
         self.redo.push(current.clone());
         Some(previous)
     }
 
     /// Returns the next redo state, if any.
-    pub fn redo(&mut self, current: &OverrideSet) -> Option<OverrideSet> {
+    pub fn redo(&mut self, current: &UndoState) -> Option<UndoState> {
         let next = self.redo.pop()?;
         self.undo.push_back(current.clone());
         Some(next)
@@ -297,6 +309,13 @@ mod tests {
             OverrideAction::Set(OverrideValue::Number(value)),
         ));
         set
+    }
+
+    fn state_with(source: &str, value: f64) -> UndoState {
+        UndoState {
+            source: source.to_owned(),
+            overrides: set_with(value),
+        }
     }
 
     #[test]
@@ -487,9 +506,9 @@ mod tests {
     #[test]
     fn undo_and_redo_are_symmetric() {
         let mut stack = UndoStack::default_limit();
-        let state0 = OverrideSet::new();
-        let state1 = set_with(0.5);
-        let state2 = set_with(0.9);
+        let state0 = state_with("a", 0.0);
+        let state1 = state_with("b", 0.5);
+        let state2 = state_with("c", 0.9);
         stack.record(state0.clone());
         stack.record(state1.clone());
         let back = stack.undo(&state2).unwrap();
@@ -507,7 +526,7 @@ mod tests {
     #[test]
     fn a_gesture_is_one_undo_step() {
         let mut stack = UndoStack::default_limit();
-        let before = OverrideSet::new();
+        let before = state_with("a", 0.0);
         stack.begin_gesture();
         for step in 0..10 {
             stack.record(before.clone());
@@ -515,7 +534,7 @@ mod tests {
         }
         stack.end_gesture();
         assert_eq!(stack.len(), 1);
-        let current = set_with(1.0);
+        let current = state_with("b", 1.0);
         assert_eq!(stack.undo(&current), Some(before));
         assert!(!stack.can_undo());
     }
@@ -523,14 +542,14 @@ mod tests {
     #[test]
     fn a_new_edit_clears_redo_and_the_stack_is_bounded() {
         let mut stack = UndoStack::new(2);
-        stack.record(OverrideSet::new());
-        let current = set_with(0.1);
+        stack.record(state_with("a", 0.0));
+        let current = state_with("a", 0.1);
         assert!(stack.undo(&current).is_some());
         assert!(stack.can_redo());
-        stack.record(OverrideSet::new());
+        stack.record(state_with("a", 0.0));
         assert!(!stack.can_redo());
         for _ in 0..10 {
-            stack.record(OverrideSet::new());
+            stack.record(state_with("a", 0.0));
         }
         assert_eq!(stack.len(), 2, "bounded");
     }

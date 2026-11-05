@@ -332,6 +332,31 @@ fn promotion_keeps_crlf_and_the_call_layout() {
 }
 
 #[test]
+fn a_multiline_definition_header_is_rewritten_when_promoting() {
+    let source = "comp(name=\"C\", duration=1.0)\n\
+                  def badge(\n\
+                  \x20   x,\n\
+                  ):\n\
+                  \x20   c = circle(x, fill=\"#ffffff\")\n\
+                  \x20   c.pos = (x, 0)\n\
+                  badge(10)\n\
+                  badge(20)\n";
+    let (after, strategy) = applied(
+        source,
+        plan_value(source, 1, "fill", OverrideValue::Text("#ff0000".into())),
+    );
+    assert_eq!(strategy, Strategy::CallPromotion);
+    assert!(
+        after.contains("def badge(x, fill=\"#ffffff\"):"),
+        "the multiline header is collapsed: {after}"
+    );
+    assert!(
+        after.contains("badge(20, fill=\"#ff0000\")"),
+        "the edited call passes the new parameter: {after}"
+    );
+}
+
+#[test]
 fn a_multiline_call_appends_its_argument_on_a_new_line() {
     let source = "comp(name=\"C\", duration=1.0)\n\
                   def badge(\n\

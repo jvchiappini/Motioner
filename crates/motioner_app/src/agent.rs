@@ -7,7 +7,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use motioner_ui::{parse_commands, Command, CommandError, Editor, Endpoint, ErrorKind, Json};
+use motioner_ui::{
+    parse_commands, Command, CommandError, EditMode, Editor, Endpoint, ErrorKind, Json,
+};
 
 /// Arguments of `query`.
 #[derive(Debug, PartialEq, Eq)]
@@ -29,8 +31,26 @@ pub struct EditArgs {
     pub frame: Option<i64>,
     /// Print the resulting overrides instead of writing them.
     pub dry_run: bool,
+    /// Keep the D-0022 behaviour: every edit becomes an override entry.
+    pub overrides: bool,
     /// Commands in their text form, run in order.
     pub commands: Vec<String>,
+}
+
+/// Arguments of `fmt`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FmtArgs {
+    /// Program, project folder or manifest.
+    pub input: PathBuf,
+    /// Report non-canonical files instead of rewriting them.
+    pub check: bool,
+}
+
+/// Arguments of `lint`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LintArgs {
+    /// Program, project folder or manifest.
+    pub input: PathBuf,
 }
 
 /// Arguments of `ctl`.
@@ -103,7 +123,10 @@ pub fn run_query(args: &QueryArgs) -> Status {
     }
 }
 
-/// `motioner edit`: runs commands on the overrides file, all or nothing.
+/// `motioner edit`: runs commands through the editor and writes code
+/// (write-through, D-0036) or overrides (`--overrides`, D-0022), all or
+/// nothing.
+#[allow(clippy::too_many_lines)] // the JSON report keeps the transaction in one place
 pub fn run_edit(args: &EditArgs) -> Status {
     let mut editor = match open(&args.input, args.frame) {
         Ok(editor) => editor,
@@ -112,12 +135,24 @@ pub fn run_edit(args: &EditArgs) -> Status {
             return Status::Failed;
         }
     };
+    editor.set_edit_mode(if args.overrides {
+        EditMode::Overrides
+    } else {
+        EditMode::Code
+    });
+    // Buffer every write so the whole command list is all-or-nothing: a later
+    // failure must not leave earlier commands written (D-0024).
+    editor.session_mut().set_write_enabled(false);
     let rate = editor
         .session()
         .composition()
         .map(motioner_core::Composition::frame_rate);
+    let before_source = editor.session().source().to_owned();
     let before = rate.map(|rate| editor.session().overrides().to_mdf(rate));
     let mut results = Vec::new();
+    let mut strategies: Vec<String> = Vec::new();
+    let mut overrides_kept = 0_usize;
+    let mut fallback_reasons: Vec<String> = Vec::new();
     let mut index = 0;
     for text in &args.commands {
         let commands = match parse_commands(text) {
@@ -129,9 +164,21 @@ pub fn run_edit(args: &EditArgs) -> Status {
         };
         for command in commands {
             match editor.execute(&command, Duration::ZERO) {
-                Ok(outcome) => results.push((command.to_text(), outcome.summary)),
+                Ok(outcome) => {
+                    if let Some(report) = editor.last_commit() {
+                        for strategy in &report.strategies {
+                            let name = strategy.name().to_owned();
+                            if !strategies.contains(&name) {
+                                strategies.push(name);
+                            }
+                        }
+                        overrides_kept += report.overrides;
+                        fallback_reasons.extend(report.reasons.iter().cloned());
+                    }
+                    results.push((command.to_text(), outcome.summary));
+                }
                 Err(error) => {
-                    // Nothing has been written yet: the file is untouched.
+                    // Nothing has been written yet: both files are untouched.
                     println!("{}", error_json(&error, Some(index)));
                     return Status::Failed;
                 }
@@ -139,12 +186,17 @@ pub fn run_edit(args: &EditArgs) -> Status {
             index += 1;
         }
     }
+    let after_source = editor.session().source().to_owned();
     let after = rate.map(|rate| editor.session().overrides().to_mdf(rate));
-    let written = if args.dry_run || before == after {
+    let program_changed = after_source != before_source;
+    let overrides_changed = before != after;
+    let written = if args.dry_run || !(program_changed || overrides_changed) {
         None
-    } else if let Err(error) = editor.save_now() {
+    } else if let Err(error) = editor.flush_now() {
         println!("{}", error_json(&error, None));
         return Status::Failed;
+    } else if program_changed {
+        Some(editor.session().path().display().to_string())
     } else {
         Some(editor.session().overrides_path().display().to_string())
     };
@@ -157,6 +209,7 @@ pub fn run_edit(args: &EditArgs) -> Status {
             .collect()
     };
     let (old, new) = (lines(&before), lines(&after));
+    let (code_removed, code_added) = diff_lines(&before_source, &after_source);
     let mut j = Json::new();
     j.begin_object();
     j.key("ok").boolean(true);
@@ -178,13 +231,155 @@ pub fn run_edit(args: &EditArgs) -> Status {
         j.string(line);
     }
     j.end_array();
+    j.key("strategies").begin_array();
+    for strategy in &strategies {
+        j.string(strategy);
+    }
+    j.end_array();
+    j.key("overrides_kept")
+        .int(i64::try_from(overrides_kept).unwrap_or(i64::MAX));
+    j.key("fallback_reasons").begin_array();
+    for reason in &fallback_reasons {
+        j.string(reason);
+    }
+    j.end_array();
+    j.key("code").begin_object();
+    j.key("removed").begin_array();
+    for line in &code_removed {
+        j.string(line);
+    }
+    j.end_array();
+    j.key("added").begin_array();
+    for line in &code_added {
+        j.string(line);
+    }
+    j.end_array();
+    j.end_object();
     j.key("written").opt_string(written.as_deref());
     if args.dry_run {
         j.key("overrides").opt_string(after.as_deref());
+        j.key("program").string(&after_source);
     }
     j.end_object();
     println!("{}", j.finish());
     Status::Ok
+}
+
+/// The lines added and removed between two texts (set difference, preserving
+/// order). Used for the `edit` code diff and adequate for the local changes a
+/// gesture makes.
+fn diff_lines(before: &str, after: &str) -> (Vec<String>, Vec<String>) {
+    let old: Vec<&str> = before.lines().collect();
+    let new: Vec<&str> = after.lines().collect();
+    let removed = old
+        .iter()
+        .filter(|line| !new.contains(line))
+        .map(|line| (*line).to_owned())
+        .collect();
+    let added = new
+        .iter()
+        .filter(|line| !old.contains(line))
+        .map(|line| (*line).to_owned())
+        .collect();
+    (removed, added)
+}
+
+/// Resolves an input (program, project folder or manifest) to its composition.
+fn target(input: &Path) -> Result<PathBuf, String> {
+    crate::resolve_input(input)
+        .map(|target| target.composition)
+        .map_err(|failure| failure.to_string())
+}
+
+/// `motioner fmt`: rewrites a program in the canonical style, or reports it
+/// with `--check`.
+pub fn run_fmt(args: &FmtArgs) -> Status {
+    let path = match target(&args.input) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return Status::Failed;
+        }
+    };
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("error: cannot read {}: {error}", path.display());
+            return Status::Failed;
+        }
+    };
+    let canonical = match motioner_dsl::printer::format(&source) {
+        Ok(canonical) => canonical,
+        Err(diagnostic) => {
+            eprintln!(
+                "{}:{}:{}: {}",
+                path.display(),
+                diagnostic.span.line,
+                diagnostic.span.column,
+                diagnostic.message
+            );
+            return Status::Failed;
+        }
+    };
+    if canonical == source {
+        println!("{}: already formatted", path.display());
+        return Status::Ok;
+    }
+    if args.check {
+        println!("{}: not formatted", path.display());
+        return Status::Failed;
+    }
+    if let Err(error) = motioner_ui::write_atomic(&path, &canonical) {
+        eprintln!("error: cannot write {}: {error}", path.display());
+        return Status::Failed;
+    }
+    println!("Formatted {}", path.display());
+    Status::Ok
+}
+
+/// `motioner lint`: prints advisory diagnostics; it only fails on tool errors.
+pub fn run_lint(args: &LintArgs) -> Status {
+    let path = match target(&args.input) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return Status::Failed;
+        }
+    };
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("error: cannot read {}: {error}", path.display());
+            return Status::Failed;
+        }
+    };
+    match motioner_dsl::lint::lint(&source) {
+        Ok(diagnostics) => {
+            for diagnostic in &diagnostics {
+                println!(
+                    "{}:{}:{}: {}",
+                    path.display(),
+                    diagnostic.span.line,
+                    diagnostic.span.column,
+                    diagnostic.message
+                );
+            }
+            if diagnostics.is_empty() {
+                println!("{}: no findings", path.display());
+            }
+            Status::Ok
+        }
+        Err(diagnostic) => {
+            eprintln!(
+                "{}:{}:{}: {}",
+                path.display(),
+                diagnostic.span.line,
+                diagnostic.span.column,
+                diagnostic.message
+            );
+            Status::Failed
+        }
+    }
 }
 
 /// `motioner ctl`: sends requests to a running editor and prints each reply.
@@ -246,4 +441,90 @@ pub fn command_help() -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HELLO: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hello.motion"
+    ));
+
+    fn temp_program(name: &str) -> (PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("motioner_app_edit_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hello.motion");
+        std::fs::write(&path, HELLO).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn fmt_and_lint_accept_a_loose_program() {
+        let path =
+            std::env::temp_dir().join(format!("motioner_app_fmt_{}.motion", std::process::id()));
+        std::fs::write(&path, "comp(name=\"A\", duration=1.0)\n").unwrap();
+        assert!(matches!(
+            run_fmt(&FmtArgs {
+                input: path.clone(),
+                check: false,
+            }),
+            Status::Ok
+        ));
+        assert!(matches!(
+            run_fmt(&FmtArgs {
+                input: path.clone(),
+                check: true,
+            }),
+            Status::Ok
+        ));
+        assert!(matches!(
+            run_lint(&LintArgs {
+                input: path.clone(),
+            }),
+            Status::Ok
+        ));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn edit_writes_code_by_default_and_overrides_on_request() {
+        let (dir, path) = temp_program("write_through");
+        let args = EditArgs {
+            input: path.clone(),
+            frame: None,
+            dry_run: false,
+            overrides: false,
+            commands: vec!["edit(\"@281\", \"color\", \"#00FF88\")".to_owned()],
+        };
+        assert!(matches!(run_edit(&args), Status::Ok));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("#00FF88"));
+        assert!(
+            !dir.join("hello.overrides.motion").exists(),
+            "write-through writes the program, not the overrides"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_overrides_flag_keeps_the_program_untouched() {
+        let (dir, path) = temp_program("overrides");
+        let before = std::fs::read_to_string(&path).unwrap();
+        let args = EditArgs {
+            input: path.clone(),
+            frame: None,
+            dry_run: false,
+            overrides: true,
+            commands: vec!["edit(\"@281\", \"color\", \"#00FF88\")".to_owned()],
+        };
+        assert!(matches!(run_edit(&args), Status::Ok));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert!(std::fs::read_to_string(dir.join("hello.overrides.motion"))
+            .unwrap()
+            .contains("#00FF88"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

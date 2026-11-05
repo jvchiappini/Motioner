@@ -503,8 +503,8 @@ mod tests {
     /// name it. The example itself is never modified.
     fn hello_with_bound_spinner() -> String {
         HELLO.replace(
-            "spinner(240, 220, 96, 1.0)",
-            "spinner1 = spinner(240, 220, 96, 1.0)",
+            "spinner(240, 220, 96, 1)",
+            "spinner1 = spinner(240, 220, 96, 1)",
         )
     }
 
@@ -889,7 +889,7 @@ mod tests {
         );
         assert!(baked.program.contains("size=1000"), "{}", baked.program);
         assert!(
-            baked.program.contains(" = spinner(240, 220, 96, 1.0)"),
+            baked.program.contains(" = spinner(240, 220, 96, 1)"),
             "the call result is bound: {}",
             baked.program
         );

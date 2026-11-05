@@ -15,7 +15,7 @@
 //! edit("title", "pos.x", 900)
 //! key("title", "opacity", 1.5, 0.5, ease="quad_out")
 //! move_key("title", "pos.x", 0.8, frame(60))
-//! visible("@586/i1", false)
+//! visible("@569/i1", false)
 //! ```
 //!
 //! Times are seconds like the overrides file; `frame(N)` names a frame

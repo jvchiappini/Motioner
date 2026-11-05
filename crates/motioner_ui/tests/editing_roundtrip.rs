@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use motioner_core::{Ease, OverrideValue, Property, Vec2};
 use motioner_ui::{
-    apply_edit, overrides_path, EditCommand, PreviewSession, UndoStack, WRITE_DEBOUNCE,
+    apply_edit, overrides_path, EditCommand, PreviewSession, UndoStack, UndoState, WRITE_DEBOUNCE,
 };
 
 const SOURCE: &str = include_str!(concat!(
@@ -159,7 +159,10 @@ fn undo_redo_survives_a_recompile() {
         .rotation
         .value();
 
-    undo.record(set.clone());
+    undo.record(UndoState {
+        source: session.source().to_owned(),
+        overrides: set.clone(),
+    });
     apply_edit(
         &EditCommand::SetKey {
             id: title.clone(),
@@ -183,8 +186,13 @@ fn undo_redo_survives_a_recompile() {
         .len();
     assert_eq!(changed, 1);
 
-    let restored = undo.undo(&set).unwrap();
-    assert!(session.edit_overrides(&restored, Instant::now()));
+    let restored = undo
+        .undo(&UndoState {
+            source: session.source().to_owned(),
+            overrides: set.clone(),
+        })
+        .unwrap();
+    assert!(session.edit_overrides(&restored.overrides, Instant::now()));
     assert_eq!(
         session
             .document()
@@ -198,7 +206,7 @@ fn undo_redo_survives_a_recompile() {
         0
     );
     let redone = undo.redo(&restored).unwrap();
-    assert!(session.edit_overrides(&redone, Instant::now()));
+    assert!(session.edit_overrides(&redone.overrides, Instant::now()));
     assert_eq!(
         session
             .document()

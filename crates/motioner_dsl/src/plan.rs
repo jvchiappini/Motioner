@@ -87,6 +87,33 @@ pub fn plan_with_scope(
     change: &EditCommand,
     scope: Scope,
 ) -> Plan {
+    plan_with_scope_and_metrics(
+        program,
+        origins,
+        document,
+        change,
+        scope,
+        &motioner_core::NoTextMetrics,
+    )
+}
+
+/// [`plan_with_scope`] with the text metrics the document was produced with.
+///
+/// The verification re-runs the program; a program that calls `text_width`
+/// must be re-run with the same metrics, otherwise the exact strategy would be
+/// rejected as a mismatch.
+#[must_use]
+pub fn plan_with_scope_and_metrics(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    change: &EditCommand,
+    scope: Scope,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
+    if let Some(plan) = crate::structural::plan_edit_command(program, origins, document, change) {
+        return plan;
+    }
     let rate = document.composition().frame_rate();
     let resolved = match resolve(change) {
         Ok(resolved) => resolved,
@@ -113,7 +140,9 @@ pub fn plan_with_scope(
     // An edit that leaves every iteration with the same value is a shared
     // literal edit: the guards have become dead code (D-0036 section 2.2).
     if scope == Scope::This {
-        if let Some(edit) = automatic_shared_value(program, origins, document, &resolved, node) {
+        if let Some(edit) =
+            automatic_shared_value(program, origins, document, &resolved, node, metrics)
+        {
             return Plan::Code(edit);
         }
     }
@@ -121,13 +150,13 @@ pub fn plan_with_scope(
     // A guard that became equal to the unguarded value is dead code; remove it
     // before the private-literal edit would rewrite the guarded literal.
     if let Ok(Some(edit)) = crate::loop_guard::remove_redundant(program, origins, &resolved, node) {
-        if verify_edit(program, &edit, &expected) {
+        if verify_edit(program, &edit, &expected, metrics) {
             return Plan::Code(edit);
         }
     }
 
     if let Some(edit) = private_literal(&resolved, node, origins) {
-        if verify_edit(program, &edit, &expected) {
+        if verify_edit(program, &edit, &expected, metrics) {
             return Plan::Code(edit);
         }
         "the private literal did not reproduce the document".clone_into(&mut reason);
@@ -136,7 +165,7 @@ pub fn plan_with_scope(
     if scope == Scope::All {
         match crate::loop_guard::shared_value(program, origins, &resolved, node) {
             Ok(Some(edit)) => {
-                if verify_edit(program, &edit, &expected) {
+                if verify_edit(program, &edit, &expected, metrics) {
                     return Plan::Code(edit);
                 }
                 "the shared literal did not reproduce the document".clone_into(&mut reason);
@@ -148,7 +177,7 @@ pub fn plan_with_scope(
 
     match crate::loop_guard::plan_loop(program, origins, &resolved, node, rate) {
         Ok(Some(edit)) => {
-            if verify_edit(program, &edit, &expected) {
+            if verify_edit(program, &edit, &expected, metrics) {
                 return Plan::Code(edit);
             }
             "the loop guard did not reproduce the document".clone_into(&mut reason);
@@ -159,7 +188,7 @@ pub fn plan_with_scope(
 
     match crate::call_site::plan_call(program, origins, &resolved, node, rate) {
         Ok(Some(edit)) => {
-            if verify_edit(program, &edit, &expected) {
+            if verify_edit(program, &edit, &expected, metrics) {
                 return Plan::Code(edit);
             }
             "the call-site edit did not reproduce the document".clone_into(&mut reason);
@@ -170,7 +199,7 @@ pub fn plan_with_scope(
 
     match local_assignment(program, origins, &resolved, node, rate) {
         Ok(Some(edit)) => {
-            if verify_edit(program, &edit, &expected) {
+            if verify_edit(program, &edit, &expected, metrics) {
                 return Plan::Code(edit);
             }
             "the local assignment did not reproduce the document".clone_into(&mut reason);
@@ -203,6 +232,7 @@ fn automatic_shared_value(
     document: &Document,
     resolved: &Resolved,
     node: NodeId,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Option<CodeEdit> {
     if !matches!(resolved.action, Action::Set) {
         return None;
@@ -219,7 +249,7 @@ fn automatic_shared_value(
     }
     let edit = crate::loop_guard::shared_value(program, origins, resolved, node).ok()??;
     let expected = expected_document_all(origins, document, &resolved.entry, node)?;
-    verify_edit(program, &edit, &expected).then_some(edit)
+    verify_edit(program, &edit, &expected, metrics).then_some(edit)
 }
 
 /// Whether `program` (plus `overrides`, when given) produces `expected`.
@@ -228,8 +258,27 @@ fn automatic_shared_value(
 /// in-place edit legitimately renumbers the keys of later nodes (D-0027).
 #[must_use]
 pub fn verify(program: &str, overrides: Option<&str>, expected: &Document) -> bool {
-    let Ok(compiled) = crate::run_with_overrides(program, overrides, &crate::Limits::default())
-    else {
+    verify_with_metrics(program, overrides, expected, &motioner_core::NoTextMetrics)
+}
+
+/// [`verify`] with the text metrics the document was produced with.
+///
+/// A program that measures text must be re-run with the same metrics, or the
+/// verifier would compare against different text bounds and refuse an exact
+/// edit.
+#[must_use]
+pub fn verify_with_metrics(
+    program: &str,
+    overrides: Option<&str>,
+    expected: &Document,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> bool {
+    let Ok(compiled) = crate::run_with_overrides_and_metrics(
+        program,
+        overrides,
+        &crate::Limits::default(),
+        metrics,
+    ) else {
         return false;
     };
     if !compiled.warnings.is_empty() {
@@ -300,11 +349,15 @@ fn resolve(change: &EditCommand) -> Result<Resolved, String> {
         EditCommand::RemoveKey { .. }
         | EditCommand::MoveKeys(_)
         | EditCommand::ToggleStopwatch { .. }
-        | EditCommand::SetLocked { .. }
-        | EditCommand::SetName { .. }
-        | EditCommand::Reassign { .. }
-        | EditCommand::Remove { .. } => Err(format!(
-            "the write-through planner does not handle {} yet",
+        | EditCommand::SetName { .. } => Err(format!(
+            "{} is planned as a structural code edit",
+            command_name(change)
+        )),
+        EditCommand::SetLocked { .. } => {
+            Err("'locked' is editor state stored in editor.motion, not program code".to_owned())
+        }
+        EditCommand::Reassign { .. } | EditCommand::Remove { .. } => Err(format!(
+            "{} changes overrides, not the program",
             command_name(change)
         )),
     }
@@ -401,11 +454,16 @@ fn expected_document_all(
     (!set.is_empty() && set.apply(&mut expected).is_empty()).then_some(expected)
 }
 
-fn verify_edit(program: &str, edit: &CodeEdit, expected: &Document) -> bool {
+fn verify_edit(
+    program: &str,
+    edit: &CodeEdit,
+    expected: &Document,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> bool {
     let Ok(after) = edit.apply(program) else {
         return false;
     };
-    verify(&after, None, expected)
+    verify_with_metrics(&after, None, expected, metrics)
 }
 
 /// Strategy 1: replace a private literal, its key value and its ease.
@@ -610,14 +668,14 @@ fn action_label(action: &Action) -> &'static str {
     }
 }
 
-fn binding_for(origin: &NodeOrigin) -> Option<&BindingOrigin> {
+pub(crate) fn binding_for(origin: &NodeOrigin) -> Option<&BindingOrigin> {
     origin
         .bindings
         .iter()
         .find(|binding| !binding.reassigned_later)
 }
 
-fn last_write_end(
+pub(crate) fn last_write_end(
     origins: &ValueOrigins,
     node: NodeId,
     binding: &BindingOrigin,
@@ -632,7 +690,7 @@ fn last_write_end(
     end
 }
 
-fn existing_set<'a>(
+pub(crate) fn existing_set<'a>(
     origins: &'a ValueOrigins,
     node: NodeId,
     property: &str,
@@ -648,7 +706,7 @@ fn existing_set<'a>(
     })
 }
 
-fn existing_key<'a>(
+pub(crate) fn existing_key<'a>(
     origins: &'a ValueOrigins,
     node: NodeId,
     property: &str,
@@ -704,7 +762,7 @@ fn insert_assignment(program: &str, statement_end: usize, statement: &str) -> Re
         text.push_str(eol);
     }
     text.push_str(&indent);
-    text.push_str(statement);
+    text.push_str(&crate::printer::format_snippet(statement));
     text.push_str(eol);
     Replacement::insert(offset, text)
 }
@@ -810,7 +868,7 @@ pub(crate) fn semantics(document: &Document) -> Vec<Semantics> {
         .nodes()
         .map(|node| {
             (
-                node.content().clone(),
+                normalized_content(node.content()),
                 node.transform().clone(),
                 node.blend(),
                 node.effects().to_vec(),
@@ -820,4 +878,20 @@ pub(crate) fn semantics(document: &Document) -> Vec<Semantics> {
             )
         })
         .collect()
+}
+
+/// The program-controlled content, with resolver-owned media fields cleared.
+///
+/// `resolve_images`/`resolve_videos` fill the asset key and natural size from
+/// the file system. The verifier re-runs the program without a resolver, so
+/// comparing those fields would reject every exact edit to a program that
+/// contains an image or a video. The source path, box and fit stay compared.
+fn normalized_content(content: &motioner_core::NodeContent) -> motioner_core::NodeContent {
+    let mut content = content.clone();
+    match &mut content {
+        motioner_core::NodeContent::Image(image) => image.asset = None,
+        motioner_core::NodeContent::Video(video) => video.asset = None,
+        _ => {}
+    }
+    content
 }

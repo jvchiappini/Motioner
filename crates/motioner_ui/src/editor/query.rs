@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn query_filters_one_node_and_rejects_unknown_ids() {
         let (editor, _dir) = hello_editor("query_one");
-        let one = editor.query_json(Some("@288")).unwrap();
+        let one = editor.query_json(Some("@281")).unwrap();
         assert_eq!(one.matches("\"kind\":").count(), 1);
         assert_eq!(
             editor.query_json(Some("nope")).unwrap_err().kind,
@@ -541,13 +541,13 @@ mod tests {
         let (mut editor, dir) = hello_editor("query_orphan");
         std::fs::write(
             dir.0.join("hello.overrides.motion"),
-            "override(\"@298\", \"rotation\", 5)\n",
+            "override(\"@291\", \"rotation\", 5)\n",
         )
         .unwrap();
         assert!(editor.reload(std::time::Duration::ZERO));
         let json = editor.query_json(None).unwrap();
         assert!(
-            json.contains("\"orphans\":[{\"id\":\"@298\",\"property\":\"rotation\""),
+            json.contains("\"orphans\":[{\"id\":\"@291\",\"property\":\"rotation\""),
             "{json}"
         );
         assert!(json.contains("\"suggestions\":[\"@"), "{json}");

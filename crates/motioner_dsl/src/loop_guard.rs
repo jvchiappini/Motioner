@@ -278,7 +278,7 @@ pub(crate) fn write_statement(
     binding: &str,
     rate: FrameRate,
 ) -> String {
-    match resolved.action {
+    let statement = match resolved.action {
         Action::Set | Action::Visible(_) => format!("{binding}.{property} = {rhs}"),
         Action::Key { frame, ease } => {
             let time = format_number(seconds_of(frame, rate));
@@ -289,7 +289,8 @@ pub(crate) fn write_statement(
             };
             format!("{binding}.key({}, {time}, {rhs}{ease})", quote(property))
         }
-    }
+    };
+    crate::printer::format_snippet(&statement)
 }
 
 fn action_label(action: &Action) -> &'static str {
@@ -392,6 +393,19 @@ fn sanitize_name(name: &str) -> String {
     out.trim_matches('_').to_owned()
 }
 
+/// A readable binding name from `base`, unique against `used`.
+pub(crate) fn fresh_binding(base: &str, used: &mut HashSet<String>) -> String {
+    let sanitized = sanitize_name(base);
+    let sanitized = if sanitized.is_empty() {
+        "layer".to_owned()
+    } else if sanitized.starts_with(|character: char| character.is_ascii_digit()) {
+        format!("layer_{sanitized}")
+    } else {
+        sanitized
+    };
+    fresh(&sanitized, used)
+}
+
 fn fresh(base: &str, used: &mut HashSet<String>) -> String {
     if used.insert(base.to_owned()) {
         return base.to_owned();
@@ -417,6 +431,27 @@ pub(crate) fn program_names(program: &str) -> HashSet<String> {
             .collect(),
         Err(_) => HashSet::new(),
     }
+}
+
+/// The guard condition for a node created in a loop, plus the loop-header
+/// edits it needs (`_` rename, `enumerate` rewrite).
+///
+/// This is the same construction [`plan_loop`] uses, exposed so the structural
+/// planner can guard key removal, retiming, stopwatches and loop-instance
+/// deletes without duplicating the rules (D-0036 section 2.2).
+pub(crate) fn node_guard_condition(
+    program: &str,
+    origins: &ValueOrigins,
+    node: NodeId,
+) -> Result<(String, Vec<Replacement>), String> {
+    let Some(origin) = origins.node_origin(node) else {
+        return Err("the node has no recorded creation site".to_owned());
+    };
+    if origin.site.loops.is_empty() {
+        return Err("the node is not created in a loop".to_owned());
+    }
+    let mut used = program_names(program);
+    guard_condition(program, origins, &origin.site.loops, &mut used)
 }
 
 /// Builds the guard condition for the whole loop stack and the header edits it
@@ -830,7 +865,7 @@ fn containing_span(body: &[Stmt], offset: usize) -> Option<crate::Span> {
         .map(|statement| statement.span)
 }
 
-fn loop_body(program: &Program, span_start: usize) -> Option<&[Stmt]> {
+pub(crate) fn loop_body(program: &Program, span_start: usize) -> Option<&[Stmt]> {
     find_loop_body(&program.body, span_start)
 }
 

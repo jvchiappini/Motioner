@@ -79,6 +79,9 @@ const COPIED_PULSE: Duration = Duration::from_millis(1200);
 pub(crate) struct PreviewApp {
     editor: Editor,
     watch: FileWatch,
+    /// Program-write counter of the last frame, so the window's own watcher
+    /// ignores writes the editor made through write-through.
+    program_writes: u64,
     options: PreviewOptions,
     /// Project faces for the live painter, when the app supplied them.
     fonts: Option<motioner_render::FontSet>,
@@ -186,6 +189,7 @@ impl PreviewApp {
         title: String,
     ) -> Self {
         let watch = FileWatch::new(editor.session().path());
+        let program_writes = editor.session().program_writes();
         let start_playing = !options.paused && options.start.is_none();
         let host = options.host.clone();
         let start = options.start.clone();
@@ -208,6 +212,7 @@ impl PreviewApp {
         Self {
             editor,
             watch,
+            program_writes,
             options,
             fonts,
             timeline_layout: timeline_model::RowsLayout {
@@ -637,6 +642,13 @@ impl PreviewApp {
         }
         self.handle_keys(ctx);
         let now = Instant::now();
+        // Write-through wrote the program itself; do not treat that as an
+        // external change in this window's watcher.
+        let writes = self.editor.session().program_writes();
+        if writes != self.program_writes {
+            self.program_writes = writes;
+            self.watch.reset();
+        }
         if (self.watch.check(now) || self.editor.session_mut().poll_changes(now))
             && self.editor.reload(self.clock)
         {

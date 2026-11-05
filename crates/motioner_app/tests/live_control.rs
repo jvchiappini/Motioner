@@ -82,12 +82,12 @@ fn ctl_drives_a_running_editor() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    assert!(ctl(&endpoint, "select(\"@288\")").contains("\"ok\":true"));
+    assert!(ctl(&endpoint, "select(\"@281\")").contains("\"ok\":true"));
     assert!(ctl(&endpoint, "seek(30)").contains("\"result\":\"frame 30\""));
-    assert!(ctl(&endpoint, "visible(\"@586/i0\", false)").contains("\"ok\":true"));
+    assert!(ctl(&endpoint, "visible(\"@569/i0\", false)").contains("\"ok\":true"));
     let state = ctl(&endpoint, "state()");
     assert!(state.contains("\"frame\":30"), "{state}");
-    assert!(state.contains("\"selected\":\"@288\""), "{state}");
+    assert!(state.contains("\"selected\":\"@281\""), "{state}");
     assert!(state.contains("\"undo_depth\":1"), "{state}");
     assert!(state.contains("\"playing\":false"), "{state}");
 

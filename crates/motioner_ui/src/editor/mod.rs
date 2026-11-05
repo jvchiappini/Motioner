@@ -23,18 +23,75 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use motioner_core::{
-    Document, Ease, Frame, NoTextMetrics, NodeId, OverrideAction, OverrideEntry, OverrideSet,
-    TextMetrics,
+    split_property, Document, Ease, Frame, NoTextMetrics, NodeId, OverrideAction, OverrideEntry,
+    OverrideSet, OverrideValue, TextMetrics,
 };
+use motioner_dsl::{CodeEdit, Plan, Strategy, ValueOrigins};
 
 use crate::command::{Command, CommandError, ErrorKind, Panel};
-use crate::edit::{self, EditCommand, KeyRef, UndoStack};
+use crate::edit::{self, EditCommand, KeyRef, UndoStack, UndoState};
 use crate::inspect;
 use crate::layout::PanelSizes;
 use crate::timeline_model::TimelineRows;
 use crate::{outline_rows, InspectModel, OutlineRow, PreviewSession, Transport};
 
 pub use channels::{channel_name, Channel, CHANNELS};
+pub use motioner_dsl::Strategy as CodeStrategy;
+
+/// Where a committed edit is written (D-0036).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditMode {
+    /// Patch the program text and keep overrides only as a fallback.
+    #[default]
+    Code,
+    /// Keep the D-0022 behaviour: every edit becomes an override entry.
+    Overrides,
+}
+
+impl EditMode {
+    /// The stable lower-case name (`code` or `overrides`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Overrides => "overrides",
+        }
+    }
+}
+
+/// What the last committed gesture did: whether it wrote code, the strategies
+/// it used, and how many edits had to stay as overrides (with reasons).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CommitSummary {
+    /// Whether the whole gesture was written into the program.
+    pub code: bool,
+    /// Strategies used by the code edits, in edit order.
+    pub strategies: Vec<Strategy>,
+    /// Number of edits that stayed as overrides.
+    pub overrides: usize,
+    /// Why the effect stayed as an override, if it did.
+    pub reasons: Vec<String>,
+}
+
+impl CommitSummary {
+    fn code(strategies: Vec<Strategy>) -> Self {
+        Self {
+            code: true,
+            strategies,
+            overrides: 0,
+            reasons: Vec::new(),
+        }
+    }
+
+    fn overrides(count: usize, reasons: Vec<String>) -> Self {
+        Self {
+            code: false,
+            strategies: Vec::new(),
+            overrides: count,
+            reasons,
+        }
+    }
+}
 
 /// Whether a channel has a key at `frame`.
 #[must_use]
@@ -187,6 +244,12 @@ pub struct Editor {
     selected_keys: Vec<KeyRef>,
     undo: UndoStack,
     gesture: Option<Gesture>,
+    /// Where committed edits are written (D-0036; `code` by default).
+    edit_mode: EditMode,
+    /// What the last commit did, for the CLI and the fallback chip.
+    last_commit: Option<CommitSummary>,
+    /// A transient note, for example that disk won over a pending gesture.
+    notice: Option<String>,
     view: ViewState,
     /// Families the text inspector offers: bundled plus project faces.
     font_families: Vec<String>,
@@ -222,6 +285,9 @@ impl Editor {
             selected_keys: Vec::new(),
             undo: UndoStack::default_limit(),
             gesture: None,
+            edit_mode: EditMode::Code,
+            last_commit: None,
+            notice: None,
             view: ViewState {
                 safe_area: false,
                 snap: true,
@@ -323,6 +389,8 @@ impl Editor {
         self.selected_keys.clear();
         self.undo = UndoStack::default_limit();
         self.gesture = None;
+        self.last_commit = None;
+        self.notice = None;
         self.view.zoom = None;
         self.view.pan = (0.0, 0.0);
         self.model_generation = u64::MAX;
@@ -528,6 +596,29 @@ impl Editor {
         (self.undo.len(), self.undo.redo_len())
     }
 
+    /// Where committed edits are written (`code` by default, D-0036).
+    #[must_use]
+    pub const fn edit_mode(&self) -> EditMode {
+        self.edit_mode
+    }
+
+    /// Selects the write-through sink or the D-0022 override fallback.
+    pub fn set_edit_mode(&mut self, mode: EditMode) {
+        self.edit_mode = mode;
+    }
+
+    /// What the last committed edit did (strategies, overrides kept, reasons).
+    #[must_use]
+    pub fn last_commit(&self) -> Option<&CommitSummary> {
+        self.last_commit.as_ref()
+    }
+
+    /// A transient note for the UI (currently: a disk/gesture conflict).
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
     /// The identity of `node`.
     #[must_use]
     pub fn node_identity(&self, node: NodeId) -> String {
@@ -704,7 +795,21 @@ impl Editor {
 
     /// Reloads both files from disk. Returns `false` (keeping the last good
     /// document) when the program does not compile.
+    ///
+    /// The selection is kept by node identity, because an external edit may
+    /// renumber the provenance keys. If a gesture was open, disk wins: the
+    /// gesture is discarded and the conflict reported in [`Self::notice`].
     pub fn reload(&mut self, now: Duration) -> bool {
+        let previous = self.selected.and_then(|node| {
+            self.document()
+                .and_then(|document| document.node(node))
+                .map(|node| node.identity().as_str().to_owned())
+        });
+        if self.gesture.take().is_some() {
+            self.undo.end_gesture();
+            self.notice =
+                Some("the file changed on disk; the pending gesture was discarded".to_owned());
+        }
         if self.session.reload().is_err() {
             self.refresh_models();
             return false;
@@ -713,6 +818,10 @@ impl Editor {
             self.transport
                 .retime(composition.frame_rate(), composition.duration(), now);
         }
+        self.selected = previous.and_then(|identity| {
+            self.document()
+                .and_then(|document| document.find(&identity))
+        });
         self.refresh_models();
         true
     }
@@ -731,9 +840,24 @@ impl Editor {
     }
 
     /// Ends the drag.
-    pub fn end_gesture(&mut self) {
-        self.gesture = None;
+    ///
+    /// In code mode the whole gesture is planned, applied and written as one
+    /// program write; when any edit cannot be written exactly, the gesture
+    /// stays as overrides (D-0036).
+    ///
+    /// # Errors
+    ///
+    /// A typed [`CommandError`] when the program or the overrides file cannot
+    /// be written.
+    pub fn end_gesture(&mut self) -> Result<(), CommandError> {
         self.undo.end_gesture();
+        let Some(gesture) = self.gesture.take() else {
+            return Ok(());
+        };
+        if self.edit_mode == EditMode::Overrides {
+            return Ok(());
+        }
+        self.commit_gesture_code(&gesture)
     }
 
     /// Whether a drag is open.
@@ -742,25 +866,41 @@ impl Editor {
         self.gesture.is_some()
     }
 
-    /// Writes the pending overrides now instead of after the debounce.
+    /// Writes every pending editor file now (program and overrides) instead of
+    /// waiting for the debounce.
+    ///
+    /// A no-op while writes are disabled (the buffered CLI transaction calls
+    /// [`Self::flush_now`] itself).
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Io`](crate::ErrorKind::Io) when the file cannot be written.
+    /// [`ErrorKind::Io`](crate::ErrorKind::Io) when a file cannot be written.
     pub fn save_now(&mut self) -> Result<(), CommandError> {
-        if !self.session.is_dirty() {
+        if !self.session.writes_enabled() {
             return Ok(());
         }
-        let far = Instant::now() + crate::WRITE_DEBOUNCE * 2;
-        if self.session.flush_overrides(far) {
-            Ok(())
-        } else {
-            let message = self.session.diagnostics().first().map_or_else(
-                || "cannot write the overrides file".to_owned(),
-                |d| d.message.clone(),
-            );
-            Err(CommandError::new(ErrorKind::Io, message))
+        self.flush_now()
+    }
+
+    /// Writes the program and the overrides unconditionally (the transaction
+    /// commit of `motioner edit`).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Io`](crate::ErrorKind::Io) when a file cannot be written.
+    pub fn flush_now(&mut self) -> Result<(), CommandError> {
+        if self.session.path().as_os_str().is_empty() {
+            return Ok(());
         }
+        // Overrides first: a crash between the writes leaves the old program,
+        // never a stale override on top of new code.
+        self.session
+            .write_overrides_now()
+            .map_err(|error| CommandError::new(ErrorKind::Io, error.to_string()))?;
+        self.session
+            .write_program_now()
+            .map(|_| ())
+            .map_err(|error| CommandError::new(ErrorKind::Io, error.to_string()))
     }
 
     // ---- executing commands ----------------------------------------------------
@@ -773,6 +913,8 @@ impl Editor {
     /// A typed [`CommandError`]; the state is unchanged on error.
     #[allow(clippy::too_many_lines)] // one arm per command family
     pub fn execute(&mut self, command: &Command, now: Duration) -> Result<Outcome, CommandError> {
+        // Each command reports its own commit; a view command reports nothing.
+        self.last_commit = None;
         match command {
             Command::Play
             | Command::Pause
@@ -806,9 +948,12 @@ impl Editor {
             Command::Undo => self.undo_redo(true),
             Command::Redo => self.undo_redo(false),
             Command::Bake(ids) => self.bake(ids),
-            Command::Save => match self.session.force_write() {
-                Ok(path) => Ok(Outcome::done(format!("saved {}", path.display()))),
-                Err(error) => Err(CommandError::new(ErrorKind::Io, error.to_string())),
+            Command::Save => match self.save_now() {
+                Ok(()) => Ok(Outcome::done(format!(
+                    "saved {}",
+                    self.session.path().display()
+                ))),
+                Err(error) => Err(error),
             },
             Command::SaveAs { path } => Ok(Outcome {
                 summary: format!("write a copy under {path}"),
@@ -906,21 +1051,35 @@ impl Editor {
         channels::key_at(document, node, channel, key.frame).map(|(_, ease)| ease)
     }
 
+    fn undo_state(&self) -> UndoState {
+        UndoState {
+            source: self.session.source().to_owned(),
+            overrides: self.session.overrides().clone(),
+        }
+    }
+
     fn undo_redo(&mut self, undo: bool) -> Result<Outcome, CommandError> {
-        let current = self.session.overrides().clone();
+        let current = self.undo_state();
         let restored = if undo {
             self.undo.undo(&current)
         } else {
             self.undo.redo(&current)
         };
-        let Some(set) = restored else {
+        let Some(state) = restored else {
             return Ok(Outcome::done(if undo {
                 "nothing to undo"
             } else {
                 "nothing to redo"
             }));
         };
-        if !self.session.edit_overrides(&set, Instant::now()) {
+        let applied = if state.source == self.session.source() {
+            self.session
+                .edit_overrides(&state.overrides, Instant::now())
+        } else {
+            self.session
+                .apply_program(&state.source, &state.overrides, Instant::now())
+        };
+        if !applied {
             return Err(self.compile_error());
         }
         self.refresh_models();
@@ -959,7 +1118,7 @@ impl Editor {
     }
 
     /// Applies edits on top of the gesture start (or the current set),
-    /// records one undo step and recompiles.
+    /// records one undo step and commits them (write-through in code mode).
     fn commit(&mut self, edits: &[EditCommand]) -> Result<(), CommandError> {
         let current = self.session.overrides().clone();
         let base = self
@@ -973,16 +1132,283 @@ impl Editor {
         if set == current {
             return Ok(());
         }
-        self.undo.record(if self.gesture.is_some() {
-            base
-        } else {
-            current
+        self.undo.record(UndoState {
+            source: self.session.source().to_owned(),
+            overrides: base,
         });
+
+        // A drag patches the document in memory and waits for its end; the
+        // whole gesture becomes one program write (D-0036).
+        if self.gesture.is_some() {
+            if !self.session.edit_overrides(&set, Instant::now()) {
+                return Err(self.compile_error());
+            }
+            self.refresh_models();
+            return Ok(());
+        }
+
+        if self.edit_mode == EditMode::Code {
+            if let Some(document) = self.session.document().cloned() {
+                if let Some(origins) = self.session.origins().cloned() {
+                    let source = self.session.source().to_owned();
+                    match self.try_write_through(edits, &document, &current, &source, &origins) {
+                        Ok(true) => {
+                            self.refresh_models();
+                            return Ok(());
+                        }
+                        Ok(false) => {}
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    self.last_commit = Some(CommitSummary::overrides(
+                        edits.len(),
+                        vec!["the program has no recorded origins".to_owned()],
+                    ));
+                }
+            }
+        }
+
+        // Fallback (or overrides mode): the D-0022 path.
         if !self.session.edit_overrides(&set, Instant::now()) {
             return Err(self.compile_error());
         }
+        let already_reported = self.last_commit.as_ref().is_some_and(|report| !report.code);
+        if !already_reported {
+            self.last_commit = Some(CommitSummary::overrides(edits.len(), Vec::new()));
+        }
         self.refresh_models();
         Ok(())
+    }
+
+    /// Plans `commands` against the program and writes the code when every
+    /// command is exact.
+    ///
+    /// Returns `Ok(true)` when the program was written, `Ok(false)` when the
+    /// caller must fall back to overrides (a report is stored either way).
+    fn try_write_through(
+        &mut self,
+        commands: &[EditCommand],
+        document: &Document,
+        base: &OverrideSet,
+        source: &str,
+        origins: &ValueOrigins,
+    ) -> Result<bool, CommandError> {
+        let mut code_edits: Vec<CodeEdit> = Vec::with_capacity(commands.len());
+        let mut strategies: Vec<Strategy> = Vec::with_capacity(commands.len());
+        let mut reasons = Vec::new();
+        for command in commands {
+            match Self::plan_command(
+                command,
+                document,
+                source,
+                origins,
+                self.session.text_metrics(),
+            ) {
+                Ok(edit) => {
+                    strategies.push(edit.strategy());
+                    code_edits.push(edit);
+                }
+                Err(reason) => reasons.push(reason),
+            }
+        }
+        if !reasons.is_empty() || code_edits.is_empty() {
+            self.last_commit = Some(CommitSummary::overrides(commands.len(), reasons));
+            return Ok(false);
+        }
+        let Ok(combined) = CodeEdit::combine(code_edits) else {
+            self.last_commit = Some(CommitSummary::overrides(
+                commands.len(),
+                vec!["the code edits conflict with each other".to_owned()],
+            ));
+            return Ok(false);
+        };
+        let Ok(new_source) = combined.apply(source) else {
+            self.last_commit = Some(CommitSummary::overrides(
+                commands.len(),
+                vec!["the code edit does not fit the program".to_owned()],
+            ));
+            return Ok(false);
+        };
+        let mut delta = OverrideSet::new();
+        for command in commands {
+            edit::apply(command, &mut delta);
+        }
+        let mut expected = document.clone();
+        if !delta.apply(&mut expected).is_empty() {
+            self.last_commit = Some(CommitSummary::overrides(
+                commands.len(),
+                vec!["the expected document could not be built".to_owned()],
+            ));
+            return Ok(false);
+        }
+        // The program now contains these edits, so their override slots are
+        // removed; unrelated overrides stay and are re-keyed by the edit.
+        let mut remaining = base.clone();
+        for entry in delta.entries() {
+            remaining.remove_slot(&entry.id, &entry.property, entry.frame());
+        }
+        let remaining = combined.rekey_overrides(&remaining);
+        let rate = document.composition().frame_rate();
+        let overrides_text = remaining.to_mdf(rate);
+        let overrides_arg = (!overrides_text.trim().is_empty()).then_some(overrides_text.as_str());
+        if !motioner_dsl::verify_with_metrics(
+            &new_source,
+            overrides_arg,
+            &expected,
+            self.session.text_metrics(),
+        ) {
+            self.last_commit = Some(CommitSummary::overrides(
+                commands.len(),
+                vec!["the code edit did not reproduce the document".to_owned()],
+            ));
+            return Ok(false);
+        }
+        if !self
+            .session
+            .apply_program(&new_source, &remaining, Instant::now())
+        {
+            return Err(self.compile_error());
+        }
+        self.last_commit = Some(CommitSummary::code(strategies));
+        Ok(true)
+    }
+
+    /// Plans one resolved edit. Key, stopwatch and name changes are already
+    /// structural `EditCommand`s and go through the same planner ladder.
+    fn plan_command(
+        command: &EditCommand,
+        document: &Document,
+        source: &str,
+        origins: &ValueOrigins,
+        metrics: &dyn motioner_core::TextMetrics,
+    ) -> Result<CodeEdit, String> {
+        match motioner_dsl::plan_with_scope_and_metrics(
+            source,
+            origins,
+            document,
+            command,
+            motioner_dsl::Scope::This,
+            metrics,
+        ) {
+            Plan::Code(edit) => Ok(edit),
+            Plan::Fallback(reason) => Err(reason),
+        }
+    }
+
+    /// Runs a phase 5 structural gesture (add, delete, duplicate, rename,
+    /// reorder, reparent, place asset) through the write-through sink.
+    ///
+    /// A structural command has no override equivalent: either the planner
+    /// produces an exact code edit, which is written once and recorded as one
+    /// undo step, or the command is refused with the planner's reason. The
+    /// program file is the only sink.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NoDocument`] when no program is loaded,
+    /// [`ErrorKind::Refused`] when the edit cannot be represented exactly, and
+    /// [`ErrorKind::BadValue`] when the resulting program does not compile.
+    pub fn execute_structural(
+        &mut self,
+        command: &motioner_dsl::structural::StructuralCommand,
+    ) -> Result<Outcome, CommandError> {
+        let document = self.require_document()?.clone();
+        let origins = self.session.origins().cloned().ok_or_else(|| {
+            CommandError::new(ErrorKind::NoDocument, "the program has no recorded origins")
+        })?;
+        let source = self.session.source().to_owned();
+        let edit = match motioner_dsl::structural::plan_structural(
+            &source, &origins, &document, command,
+        ) {
+            Plan::Code(edit) => edit,
+            Plan::Fallback(reason) => return Err(CommandError::new(ErrorKind::Refused, reason)),
+        };
+        let new_source = edit
+            .apply(&source)
+            .map_err(|error| CommandError::new(ErrorKind::Refused, error.to_string()))?;
+        let before = self.session.overrides().clone();
+        let remaining = edit.rekey_overrides(&before);
+        self.undo.record(UndoState {
+            source: source.clone(),
+            overrides: before,
+        });
+        if !self
+            .session
+            .apply_program(&new_source, &remaining, Instant::now())
+        {
+            return Err(self.compile_error());
+        }
+        // Adding a layer selects it, so the next gesture targets the new
+        // layer (the layers panel and the inspector both follow the
+        // selection).
+        if matches!(
+            command,
+            motioner_dsl::structural::StructuralCommand::AddLayer { .. }
+                | motioner_dsl::structural::StructuralCommand::PlaceAsset { .. }
+        ) {
+            let before: BTreeSet<String> = document
+                .nodes()
+                .map(|node| node.identity().as_str().to_owned())
+                .collect();
+            if let Some(added) = self.session.document().and_then(|document| {
+                document
+                    .nodes()
+                    .find(|node| !before.contains(node.identity().as_str()))
+                    .map(motioner_core::Node::id)
+            }) {
+                self.selected = Some(added);
+            }
+        }
+        self.last_commit = Some(CommitSummary::code(vec![edit.strategy()]));
+        self.refresh_models();
+        Ok(Outcome::done("structural edit written as code"))
+    }
+
+    /// Finishes a gesture in code mode: plans the whole accumulated change and
+    /// writes it as one program write, or keeps it as overrides.
+    fn commit_gesture_code(&mut self, gesture: &Gesture) -> Result<(), CommandError> {
+        let current = self.session.overrides().clone();
+        let delta: Vec<OverrideEntry> = current
+            .entries()
+            .iter()
+            .filter(|entry| !gesture.set.entries().contains(entry))
+            .cloned()
+            .collect();
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let Some(document) = gesture.document.clone() else {
+            self.last_commit = Some(CommitSummary::overrides(delta.len(), Vec::new()));
+            return self.flush_gesture_overrides();
+        };
+        let (commands, reasons) = commands_for_delta(&delta);
+        let Some(origins) = self.session.origins().cloned() else {
+            self.last_commit = Some(CommitSummary::overrides(
+                delta.len(),
+                vec!["the program has no recorded origins".to_owned()],
+            ));
+            return self.flush_gesture_overrides();
+        };
+        if !reasons.is_empty() {
+            self.last_commit = Some(CommitSummary::overrides(delta.len(), reasons));
+            return self.flush_gesture_overrides();
+        }
+        let source = self.session.source().to_owned();
+        match self.try_write_through(&commands, &document, &gesture.set, &source, &origins) {
+            Ok(true) => {
+                self.refresh_models();
+                Ok(())
+            }
+            Ok(false) => self.flush_gesture_overrides(),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn flush_gesture_overrides(&mut self) -> Result<(), CommandError> {
+        self.session
+            .write_overrides_now()
+            .map(|_| ())
+            .map_err(|error| CommandError::new(ErrorKind::Io, error.to_string()))
     }
 
     /// The key selection after an edit, from the selection before it
@@ -1038,6 +1464,93 @@ fn empty_inspector() -> InspectModel {
         header: None,
         rows: Vec::new(),
     }
+}
+
+/// The resolved commands an accumulated gesture delta stands for.
+///
+/// Overrides store a key move as an `Unkey` plus a `Key`; the planner speaks
+/// `MoveKeys`, so the two entries are paired back into one command. A lone
+/// `Unkey` is a key removal, a lone `Key` is a key addition, `name` is a
+/// rename and `locked` stays editor state.
+fn commands_for_delta(delta: &[OverrideEntry]) -> (Vec<EditCommand>, Vec<String>) {
+    let mut commands = Vec::with_capacity(delta.len());
+    let mut reasons = Vec::new();
+    let mut consumed = vec![false; delta.len()];
+    for (index, entry) in delta.iter().enumerate() {
+        if consumed[index] {
+            continue;
+        }
+        let (property, axis) = split_property(&entry.property);
+        match &entry.action {
+            OverrideAction::Unkey { frame } => {
+                let moved = delta.iter().enumerate().find(|(other, candidate)| {
+                    !consumed.get(*other).copied().unwrap_or(true)
+                        && candidate.id == entry.id
+                        && candidate.property == entry.property
+                        && matches!(candidate.action, OverrideAction::Key { .. })
+                });
+                if let Some((other, candidate)) = moved {
+                    if let OverrideAction::Key {
+                        frame: to,
+                        value,
+                        ease,
+                    } = &candidate.action
+                    {
+                        consumed[other] = true;
+                        commands.push(EditCommand::MoveKeys(vec![crate::edit::MoveKey {
+                            key: KeyRef {
+                                id: entry.id.clone(),
+                                property: entry.property.clone(),
+                                frame: *frame,
+                            },
+                            to: *to,
+                            value: value.clone(),
+                            ease: *ease,
+                        }]));
+                    }
+                } else {
+                    commands.push(EditCommand::RemoveKey {
+                        id: entry.id.clone(),
+                        property: property.to_owned(),
+                        axis,
+                        frame: *frame,
+                    });
+                }
+            }
+            OverrideAction::Key { frame, value, ease } => commands.push(EditCommand::SetKey {
+                id: entry.id.clone(),
+                property: property.to_owned(),
+                axis,
+                frame: *frame,
+                value: value.clone(),
+                ease: *ease,
+            }),
+            OverrideAction::Set(value) if entry.property == motioner_core::NAME => {
+                let name = match value {
+                    OverrideValue::Text(text) => text.clone(),
+                    _ => String::new(),
+                };
+                commands.push(EditCommand::SetName {
+                    id: entry.id.clone(),
+                    name,
+                });
+            }
+            OverrideAction::Set(value) => commands.push(EditCommand::SetValue {
+                id: entry.id.clone(),
+                property: entry.property.clone(),
+                value: value.clone(),
+            }),
+            OverrideAction::Visible(visible) => commands.push(EditCommand::SetVisible {
+                id: entry.id.clone(),
+                visible: *visible,
+            }),
+            OverrideAction::Locked(_) => reasons.push(format!(
+                "'{}' is editor state and stays as an override",
+                entry.property
+            )),
+        }
+    }
+    (commands, reasons)
 }
 
 fn on_off(on: bool) -> &'static str {

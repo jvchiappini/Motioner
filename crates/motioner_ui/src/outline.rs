@@ -256,7 +256,7 @@ fn describe(content: &NodeContent, ordinal: u32) -> (String, String) {
 /// Marks rows hidden by a collapsed ancestor or by the layer filter.
 ///
 /// `filter` matches the display name, the kind ("Circle") and the identity
-/// (`@288`, `title`) case-insensitively. A matching row keeps its whole
+/// (`@281`, `title`) case-insensitively. A matching row keeps its whole
 /// ancestor chain visible; with no filter every row outside a collapsed
 /// subtree is visible.
 pub fn apply_visibility(

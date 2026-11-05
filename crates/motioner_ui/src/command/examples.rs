@@ -138,7 +138,7 @@ impl CommandKind {
                 name: "Big \"title\"".to_owned(),
             },
             Self::AssignId => Command::AssignId {
-                from: "@288".to_owned(),
+                from: "@281".to_owned(),
                 to: id(),
             },
             Self::DeleteOrphan => Command::DeleteOrphan {

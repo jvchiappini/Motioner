@@ -1,14 +1,17 @@
 //! Loading an MDF program and its overrides, and writing edits back.
 //!
 //! A [`PreviewSession`] owns the program text, the last good document, the
-//! override set that was applied to it, and the analysis cache. A reload
-//! compiles with [`motioner_dsl::run_with_overrides`], so orphaned overrides
-//! arrive as warnings instead of failing the load.
+//! override set that was applied to it, the value origins the planner needs,
+//! and the analysis cache. A reload compiles with
+//! [`motioner_dsl::run_with_overrides`], so orphaned overrides arrive as
+//! warnings instead of failing the load.
 //!
-//! Edits never touch the program: they update the override set, recompile from
-//! the cached program text and write `<name>.overrides.motion` **debounced**
-//! (300 ms after the last change) and atomically. The file watcher ignores the
-//! editor's own write because the watcher is reset after it.
+//! Override edits update the override set, recompile from the cached program
+//! text and write `<name>.overrides.motion` **debounced** (300 ms after the
+//! last change) and atomically. Write-through edits ([`Self::apply_program`])
+//! replace the program text, compile it with whatever overrides remain and
+//! write the program atomically. The file watcher ignores the editor's own
+//! writes because each watcher is reset after its write.
 
 use std::fmt;
 use std::fs;
@@ -17,8 +20,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use motioner_core::{Composition, Document, FrameRate, NoTextMetrics, OverrideSet, TextMetrics};
-use motioner_dsl::{Compiled, Diagnostic, Limits};
+use motioner_core::{
+    Composition, Document, FrameRate, NoTextMetrics, NodeId, OverrideSet, TextMetrics,
+};
+use motioner_dsl::{Compiled, Diagnostic, Limits, ValueOrigins};
 use motioner_eval::{Evaluator, RenderPlan};
 
 use crate::file_watch::FileWatch;
@@ -130,6 +135,11 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The fallback rate used before a composition has loaded.
+fn default_rate() -> FrameRate {
+    FrameRate::new(60, 1).expect("60/1 is a valid frame rate")
+}
+
 /// The last good document, its overrides, and the latest diagnostics.
 pub struct PreviewSession {
     path: PathBuf,
@@ -145,6 +155,9 @@ pub struct PreviewSession {
     plan_frame: Option<i64>,
     plan_generation: u64,
     generation: u64,
+    /// Number of program writes performed (the window uses it to ignore its
+    /// own writes in its separate file watcher).
+    program_writes: u64,
     program_watch: FileWatch,
     overrides_watch: FileWatch,
     /// Text of the pending write, if an edit has not been flushed yet.
@@ -152,6 +165,14 @@ pub struct PreviewSession {
     write_at: Instant,
     /// Text this editor last wrote or read, to recognise its own write.
     last_overrides_text: String,
+    /// Program text this editor last wrote or read.
+    last_program_text: String,
+    /// Value origins of the last good compile (the write-through planner).
+    origins: Option<ValueOrigins>,
+    /// Top-level variable bindings of the last good compile.
+    bindings: Vec<(String, NodeId)>,
+    /// Whether file writes are enabled (disabled by `motioner edit --dry-run`).
+    write_enabled: bool,
     images: Rc<dyn motioner_core::ImageResolver>,
     videos: Rc<dyn motioner_core::VideoResolver>,
 }
@@ -178,9 +199,14 @@ impl PreviewSession {
             plan_frame: None,
             plan_generation: 0,
             generation: 0,
+            program_writes: 0,
             dirty: None,
             write_at: Instant::now(),
             last_overrides_text: String::new(),
+            last_program_text: String::new(),
+            origins: None,
+            bindings: Vec::new(),
+            write_enabled: true,
             images: Rc::new(motioner_core::NoImages),
             videos: Rc::new(motioner_core::NoVideos),
         }
@@ -191,6 +217,12 @@ impl PreviewSession {
     /// Must be called before [`Self::reload`] for a program that measures text.
     pub fn set_text_metrics(&mut self, metrics: Arc<dyn TextMetrics>) {
         self.text_metrics = Some(metrics);
+    }
+
+    /// The text metrics the program is compiled with.
+    #[must_use]
+    pub fn text_metrics(&self) -> &dyn TextMetrics {
+        self.text_metrics.as_deref().unwrap_or(&NoTextMetrics)
     }
 
     /// The source path.
@@ -239,6 +271,43 @@ impl PreviewSession {
         &self.overrides
     }
 
+    /// The value origins recorded by the last good compile.
+    ///
+    /// The write-through planner needs these to find where a node and its
+    /// values were written in the program (D-0036). `None` before the first
+    /// successful load.
+    #[must_use]
+    pub fn origins(&self) -> Option<&ValueOrigins> {
+        self.origins.as_ref()
+    }
+
+    /// The top-level variable bindings of the last good compile.
+    #[must_use]
+    pub fn bindings(&self) -> &[(String, NodeId)] {
+        &self.bindings
+    }
+
+    /// Enables or disables file writes (in-memory edits still apply).
+    ///
+    /// `motioner edit --dry-run` turns writes off so it can show the diff
+    /// without touching either file.
+    pub fn set_write_enabled(&mut self, enabled: bool) {
+        self.write_enabled = enabled;
+    }
+
+    /// Whether file writes are enabled.
+    #[must_use]
+    pub const fn writes_enabled(&self) -> bool {
+        self.write_enabled
+    }
+
+    /// Whether a program write is waiting (currently always `false`: program
+    /// writes are immediate and atomic per committed gesture).
+    #[must_use]
+    pub const fn is_program_dirty(&self) -> bool {
+        false
+    }
+
     /// Whether an edit is waiting for its debounced write.
     #[must_use]
     pub fn is_dirty(&self) -> bool {
@@ -267,6 +336,13 @@ impl PreviewSession {
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Number of program writes performed so far (for the window's own file
+    /// watcher to ignore its writes).
+    #[must_use]
+    pub fn program_writes(&self) -> u64 {
+        self.program_writes
     }
 
     /// The plan cached by the last [`Self::evaluate`] call.
@@ -320,6 +396,7 @@ impl PreviewSession {
             metrics,
         ) {
             Ok(compiled) => {
+                self.last_program_text = source.clone();
                 self.source = source;
                 self.last_overrides_text = overrides_text;
                 self.accept(compiled);
@@ -339,6 +416,8 @@ impl PreviewSession {
         let _ = compiled.document.resolve_videos(self.videos.as_ref());
         self.document = Some(compiled.document);
         self.overrides = compiled.overrides;
+        self.origins = Some(compiled.origins);
+        self.bindings = compiled.bindings;
         self.warnings = compiled
             .warnings
             .iter()
@@ -392,6 +471,157 @@ impl PreviewSession {
         }
     }
 
+    /// Replaces the program text, compiles it with `set` and writes both files
+    /// atomically (unless writes are disabled).
+    ///
+    /// This is the write-through sink (D-0036): the editor passes the program
+    /// with the new code already applied and the overrides that remain. The
+    /// document and origins are updated only when the new program compiles.
+    /// Returns `false` and keeps the previous program and document when it
+    /// does not.
+    ///
+    /// The program is written **once** per committed gesture; the overrides
+    /// file is only rewritten when the remaining set differs from what is on
+    /// disk.
+    pub fn apply_program(&mut self, source: &str, set: &OverrideSet, _now: Instant) -> bool {
+        let rate = self
+            .composition()
+            .map_or_else(default_rate, Composition::frame_rate);
+        let overrides_text = set.to_mdf(rate);
+        let overrides_arg = (!overrides_text.trim().is_empty()).then_some(overrides_text.as_str());
+        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
+        let compiled = match motioner_dsl::run_with_overrides_and_metrics(
+            source,
+            overrides_arg,
+            &Limits::default(),
+            metrics,
+        ) {
+            Ok(compiled) => compiled,
+            Err(diagnostic) => {
+                self.diagnostics = vec![DiagnosticInfo::from_diagnostic(&diagnostic)];
+                return false;
+            }
+        };
+        let program_changed = source != self.source;
+        let overrides_changed = self.overrides_need_write(set, &overrides_text);
+        let writable = self.write_enabled && !self.path.as_os_str().is_empty();
+        if writable {
+            // Write the overrides first: a crash between the two writes leaves
+            // the program unchanged, never a stale override over new code.
+            if overrides_changed {
+                if let Err(error) = write_atomic(&self.overrides_path, &overrides_text) {
+                    self.diagnostics = vec![DiagnosticInfo::io(&self.overrides_path, &error)];
+                    return false;
+                }
+            }
+            if program_changed {
+                if let Err(error) = write_atomic(&self.path, source) {
+                    self.diagnostics = vec![DiagnosticInfo::io(&self.path, &error)];
+                    return false;
+                }
+                self.program_writes = self.program_writes.saturating_add(1);
+            }
+            source.clone_into(&mut self.last_program_text);
+            self.last_overrides_text.clone_from(&overrides_text);
+        }
+        source.clone_into(&mut self.source);
+        self.accept(compiled);
+        self.diagnostics.clear();
+        self.dirty = None;
+        if writable {
+            self.program_watch.reset();
+            if overrides_changed {
+                self.overrides_watch.reset();
+            }
+        }
+        true
+    }
+
+    /// Whether the overrides text differs from disk, treating "no file and no
+    /// overrides" as equal (so write-through does not create an empty file).
+    fn overrides_need_write(&self, set: &OverrideSet, text: &str) -> bool {
+        if set.is_empty() && self.last_overrides_text.is_empty() {
+            return false;
+        }
+        text != self.last_overrides_text
+    }
+
+    /// Compiles and accepts `new_source` with the current overrides, then
+    /// writes it atomically. The previous document and source survive a
+    /// failure so the caller can fall back to overrides.
+    pub fn edit_program(&mut self, new_source: &str, now: Instant) -> bool {
+        let set = self.overrides.clone();
+        self.apply_program(new_source, &set, now)
+    }
+
+    /// Writes the current program text atomically when it differs from disk.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Io`] when the file cannot be written.
+    pub fn write_program_now(&mut self) -> Result<PathBuf, SessionError> {
+        if self.path.as_os_str().is_empty() {
+            return Err(SessionError::Io {
+                path: self.path.clone(),
+                message: "no program file".to_owned(),
+            });
+        }
+        if self.source != self.last_program_text {
+            if let Err(error) = write_atomic(&self.path, &self.source) {
+                self.diagnostics = vec![DiagnosticInfo::io(&self.path, &error)];
+                return Err(SessionError::Io {
+                    path: self.path.clone(),
+                    message: error.to_string(),
+                });
+            }
+            self.last_program_text = self.source.clone();
+            self.program_writes = self.program_writes.saturating_add(1);
+            self.program_watch.reset();
+        }
+        Ok(self.path.clone())
+    }
+
+    /// Writes the program now when it changed. Returns whether a write
+    /// happened.
+    pub fn flush_program(&mut self, _now: Instant) -> bool {
+        if !self.write_enabled {
+            return false;
+        }
+        let before = self.last_program_text.clone();
+        self.write_program_now().is_ok() && self.last_program_text != before
+    }
+
+    /// Writes the current override set atomically when it differs from disk.
+    ///
+    /// Used by the buffered CLI transaction, where an edit is only persisted
+    /// after every command succeeded.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Io`] when the file cannot be written.
+    pub fn write_overrides_now(&mut self) -> Result<PathBuf, SessionError> {
+        if self.path.as_os_str().is_empty() {
+            return Ok(self.overrides_path.clone());
+        }
+        let rate = self
+            .composition()
+            .map_or_else(default_rate, Composition::frame_rate);
+        let text = self.overrides.to_mdf(rate);
+        if self.overrides_need_write(&self.overrides, &text) {
+            if let Err(error) = write_atomic(&self.overrides_path, &text) {
+                self.diagnostics = vec![DiagnosticInfo::io(&self.overrides_path, &error)];
+                return Err(SessionError::Io {
+                    path: self.overrides_path.clone(),
+                    message: error.to_string(),
+                });
+            }
+            self.last_overrides_text = text;
+            self.overrides_watch.reset();
+        }
+        self.dirty = None;
+        Ok(self.overrides_path.clone())
+    }
+
     /// Writes the pending overrides when the debounce elapsed.
     ///
     /// Returns `true` when a file was written. A failed write leaves the edit
@@ -443,22 +673,26 @@ impl PreviewSession {
 
     /// Polls both files and reports whether an external change should reload.
     ///
-    /// The editor's own debounced write is not a change: the watcher is reset
-    /// after writing and the on-disk text is compared with what was written.
+    /// The editor's own writes are not changes: each watcher is reset after
+    /// writing and the on-disk text is compared with what was written.
     pub fn poll_changes(&mut self, now: Instant) -> bool {
-        let program_changed = self.program_watch.check(now);
-        let overrides_changed = self.overrides_watch.check(now);
-        if !overrides_changed {
-            return program_changed;
-        }
-        match fs::read_to_string(&self.overrides_path) {
-            Ok(text) if text == self.last_overrides_text => false,
-            Ok(text) if self.dirty.as_deref() == Some(text.as_str()) => {
-                self.overrides_watch.reset();
-                false
+        let mut changed = false;
+        if self.program_watch.check(now) {
+            match fs::read_to_string(&self.path) {
+                Ok(text) if text == self.last_program_text => self.program_watch.reset(),
+                _ => changed = true,
             }
-            _ => true,
         }
+        if self.overrides_watch.check(now) {
+            match fs::read_to_string(&self.overrides_path) {
+                Ok(text) if text == self.last_overrides_text => self.overrides_watch.reset(),
+                Ok(text) if self.dirty.as_deref() == Some(text.as_str()) => {
+                    self.overrides_watch.reset();
+                }
+                _ => changed = true,
+            }
+        }
+        changed
     }
 
     /// Forces the next poll to reload everything (the `R` shortcut).
@@ -667,6 +901,24 @@ mod tests {
         write(&path, "one");
         write_atomic(&path, "two").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "two");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn edit_program_writes_and_keeps_the_previous_source_on_failure() {
+        let path = temp_path("edit_program");
+        write(&path, HELLO);
+        let mut session = PreviewSession::new(&path);
+        session.reload().unwrap();
+        let original = session.source().to_owned();
+        let added = format!("{original}\n# written through\n");
+        assert!(session.edit_program(&added, Instant::now()));
+        assert_eq!(session.source(), added);
+        assert_eq!(fs::read_to_string(&path).unwrap(), added);
+        let generation = session.generation();
+        assert!(!session.edit_program("comp(name=\"Broken\"\n", Instant::now()));
+        assert_eq!(session.source(), added, "a failure keeps the last program");
+        assert_eq!(session.generation(), generation);
         cleanup(&path);
     }
 }

@@ -5,7 +5,7 @@
 # need a source on both sides of the backdrop, and overlay switches formula at
 # the source midpoint.  The labels are ordinary text nodes (always normal).
 
-comp(name="Blend modes", width=960, height=540, fps=60, duration=2.0)
+comp(name="Blend modes", width=960, height=540, fps=60, duration=2)
 
 bg = rect(960, 540, fill="#808080")
 bg.pos = (480, 270)

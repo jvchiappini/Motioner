@@ -8,6 +8,12 @@ use crate::edit::UndoStack;
 
 impl Editor {
     pub(super) fn bake(&mut self, ids: &[String]) -> Result<Outcome, CommandError> {
+        if !self.session.writes_enabled() {
+            return Ok(Outcome {
+                summary: "bake is disabled while writes are turned off".to_owned(),
+                effect: Effect::None,
+            });
+        }
         self.save_now()?;
         let source = self.session.source().to_owned();
         let overrides_path = self.session.overrides_path().to_owned();

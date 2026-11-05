@@ -83,6 +83,7 @@ impl PreviewApp {
         self.editor.set_font_families(families);
         self.fonts = Some(fonts);
         self.watch = FileWatch::new(&composition);
+        self.program_writes = self.editor.session().program_writes();
         self.painter_generation = None;
         self.blur_generation = None;
         self.last_bounds = None;
@@ -117,6 +118,7 @@ impl PreviewApp {
         self.start = Some(StartScreen::new(recents, examples));
         self.menu_open = false;
         self.editor = Editor::blank(self.metrics());
+        self.program_writes = 0;
         self.asset_generation = self.asset_generation.saturating_add(1);
         self.assets.set_entries(Vec::new(), self.asset_generation);
         self.painter_generation = None;

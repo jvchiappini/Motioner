@@ -290,7 +290,7 @@ mod tests {
         let (mut editor, dir) = hello_editor("rebind");
         run(
             &mut editor,
-            "edit(\"@288\", \"rotation\", 12)\nvisible(\"@586/i1\", false)",
+            "edit(\"@281\", \"rotation\", 12)\nvisible(\"@569/i1\", false)",
         );
         let before = editor.session().document().unwrap().clone();
         editor.save_now().unwrap();
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn candidates_already_holding_the_property_are_skipped() {
         let (mut editor, dir) = hello_editor("rebind_taken");
-        run(&mut editor, "edit(\"@288\", \"rotation\", 12)");
+        run(&mut editor, "edit(\"@281\", \"rotation\", 12)");
         editor.save_now().unwrap();
         let path = dir.0.join("hello.motion");
         let source = std::fs::read_to_string(&path).unwrap();

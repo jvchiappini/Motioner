@@ -219,15 +219,23 @@ fn promote_literal(
     let Some(function) = find_function(ast, call.definition.start) else {
         return Err("the function definition could not be located".to_owned());
     };
-    if program[function.span.start..function.span.end].contains('\n') {
-        return Err(
-            "the function parameter list spans several lines; put it on one line first".to_owned(),
-        );
-    }
     let property = resolved.entry.property.as_str();
     let parameter = parameter_name(property, function);
     let old = program[write.span.start..write.span.end].trim().to_owned();
-    let definition = append_to_definition(program, function.span, &format!("{parameter}={old}"))
+    // The header may have been written over several lines. Rewrite it through
+    // the canonical printer instead of refusing (the phase 7 printer collapses
+    // a multiline parameter list); a comment inside the header is the only
+    // shape the printer cannot preserve, so it still falls back.
+    let header = &program[function.span.start..function.span.end];
+    if header.contains('#') {
+        return Err(
+            "the function header has a comment inside the parameter list; put it on its own line \
+             first"
+                .to_owned(),
+        );
+    }
+    let definition = rewrite_definition(header, &format!("{parameter}={old}"))
+        .map(|text| Replacement::new(function.span.start, function.span.end, text))
         .ok_or_else(|| "the function parameter list could not be located".to_owned())?;
     let mut replacements = vec![
         Replacement::new(write.span.start, write.span.end, parameter.clone()),
@@ -375,14 +383,20 @@ fn insert_after(program: &str, statement_end: usize, statement: &str) -> Replace
         text.push_str(eol);
     }
     text.push_str(&indent);
-    text.push_str(statement);
+    text.push_str(&crate::printer::format_snippet(statement));
     text.push_str(eol);
     Replacement::insert(offset, text)
 }
 
 /// The innermost statement at any block depth that contains `offset`.
-fn statement_containing(body: &[Stmt], offset: usize) -> Option<&Stmt> {
+pub(crate) fn statement_containing(body: &[Stmt], offset: usize) -> Option<&Stmt> {
     for statement in body {
+        // A `def` span covers only its header; its body is a separate block.
+        if let StmtKind::Def(function) = &statement.kind {
+            if let Some(found) = statement_containing(&function.body, offset) {
+                return Some(found);
+            }
+        }
         if !(statement.span.start <= offset && offset < statement.span.end) {
             continue;
         }
@@ -408,7 +422,7 @@ fn statement_containing(body: &[Stmt], offset: usize) -> Option<&Stmt> {
 }
 
 /// Finds the call expression whose span starts at `start`.
-fn find_call(program: &Program, start: usize) -> Option<&Expr> {
+pub(crate) fn find_call(program: &Program, start: usize) -> Option<&Expr> {
     fn in_expr(expr: &Expr, start: usize) -> Option<&Expr> {
         if expr.span.start == start && matches!(expr.kind, ExprKind::Call { .. }) {
             return Some(expr);
@@ -613,7 +627,7 @@ fn collect_expr(expr: &Expr, names: &mut HashSet<String>) {
 
 /// Appends `argument` before the closing parenthesis of `call`, preserving the
 /// list layout for single-line and multiline calls.
-fn append_argument(
+pub(crate) fn append_argument(
     program: &str,
     call: &Expr,
     args: &[crate::ast::Argument],
@@ -674,19 +688,17 @@ fn append_argument(
     }
 }
 
-/// Appends `argument` to a single-line definition header.
-fn append_to_definition(program: &str, header: Span, argument: &str) -> Option<Replacement> {
-    let text = program.get(header.start..header.end)?;
-    let close = text.rfind(')')?;
-    if text[..close].trim_end().ends_with(',') {
-        Some(Replacement::insert(
-            header.start + close,
-            format!(" {argument}"),
-        ))
+/// Rewrites a `def` header (single- or multi-line) into canonical form with
+/// `argument` appended to the parameter list.
+fn rewrite_definition(header: &str, argument: &str) -> Option<String> {
+    let formatted = crate::printer::format_signature(header);
+    let close = formatted.rfind(')')?;
+    let separator = if formatted[..close].trim_end().ends_with(',') {
+        " "
     } else {
-        Some(Replacement::insert(
-            header.start + close,
-            format!(", {argument}"),
-        ))
-    }
+        ", "
+    };
+    let mut rewritten = formatted;
+    rewritten.insert_str(close, &format!("{separator}{argument}"));
+    Some(crate::printer::format_signature(&rewritten))
 }

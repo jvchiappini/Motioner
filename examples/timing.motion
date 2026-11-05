@@ -8,8 +8,7 @@
 # Motion blur is on for the whole composition (shutter 180, 8 samples); the
 # slow beats barely blur, the fast square in beat 3 streaks.
 
-comp(name="Timing", width=960, height=540, fps=60, duration=9.0,
-     background="#0B0F16", motion_blur=True, shutter=180, samples=8)
+comp(name="Timing", width=960, height=540, fps=60, duration=9, background="#0B0F16", motion_blur=True, shutter=180, samples=8)
 
 MUTED = "#A9B4C4"
 ACCENT = "#FF5A6E"
@@ -20,12 +19,11 @@ COOL = "#6AD1E3"
 
 beat1 = group()
 beat1.id("timing_beat1")
-beat1.key("opacity", 0.0, 1.0)
-beat1.key("opacity", 2.4, 1.0)
-beat1.key("opacity", 2.6, 0.0)
+beat1.key("opacity", 0, 1)
+beat1.key("opacity", 2.4, 1)
+beat1.key("opacity", 2.6, 0)
 
-eases = ["linear", "bezier", "hold", "elastic_out", "bounce_out", "expo_in_out",
-         "sine_in_out"]
+eases = ["linear", "bezier", "hold", "elastic_out", "bounce_out", "expo_in_out", "sine_in_out"]
 colors = [MUTED, ACCENT, GOLD, COOL, "#B388EB", "#7AE582", "#FFB86C", "#E07A5F"]
 
 for index in range(7):
@@ -54,10 +52,10 @@ beat1.add(title1)
 
 beat2 = group()
 beat2.id("timing_beat2")
-beat2.key("opacity", 2.8, 0.0)
-beat2.key("opacity", 3.0, 1.0)
-beat2.key("opacity", 5.4, 1.0)
-beat2.key("opacity", 5.6, 0.0)
+beat2.key("opacity", 2.8, 0)
+beat2.key("opacity", 3, 1)
+beat2.key("opacity", 5.4, 1)
+beat2.key("opacity", 5.6, 0)
 
 bars = []
 for index in range(8):
@@ -71,11 +69,10 @@ stagger(bars, "height", [(20, 130)], 3.1, 0.08, 0.6, ease="back_out")
 
 badge = circle(radius=20, fill=GOLD)
 badge.pos = (480, 458)
-badge.wiggle("pos.x", 7, 3.0, 26, 3.1, 5.4)
+badge.wiggle("pos.x", 7, 3, 26, 3.1, 5.4)
 beat2.add(badge)
 
-caption2 = text("stagger(8 bars) + wiggle(badge)", size=22, color=MUTED,
-                align="center")
+caption2 = text("stagger(8 bars) + wiggle(badge)", size=22, color=MUTED, align="center")
 caption2.pos = (480, 500)
 beat2.add(caption2)
 
@@ -83,10 +80,10 @@ beat2.add(caption2)
 
 beat3 = group()
 beat3.id("timing_beat3")
-beat3.key("opacity", 5.8, 0.0)
-beat3.key("opacity", 6.0, 1.0)
-beat3.key("opacity", 8.8, 1.0)
-beat3.key("opacity", 9.0, 0.0)
+beat3.key("opacity", 5.8, 0)
+beat3.key("opacity", 6, 1)
+beat3.key("opacity", 8.8, 1)
+beat3.key("opacity", 9, 0)
 
 # A static reference: identical with motion blur on or off.
 reference = rect(120, 120, radius=12, fill="#1B2433")
@@ -108,7 +105,6 @@ fast.key("pos.x", 6.55, 130, ease="linear")
 fast.key("pos.x", 6.75, 830)
 beat3.add(fast)
 
-caption3 = text("motion_blur=True - shutter 180 - 8 samples", size=22,
-                color=MUTED, align="center")
+caption3 = text("motion_blur=True - shutter 180 - 8 samples", size=22, color=MUTED, align="center")
 caption3.pos = (480, 470)
 beat3.add(caption3)

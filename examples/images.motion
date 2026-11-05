@@ -11,8 +11,7 @@
 # a few KB each).  The badge is 256 px drawn at 160 px, so it goes through
 # the mip chain.
 
-comp(name="Images", width=640, height=360, fps=60, duration=4.0,
-     background="#0B0F16")
+comp(name="Images", width=640, height=360, fps=60, duration=4, background="#0B0F16")
 
 CARD = "#151C27"
 MUTED = "#A9B4C4"
@@ -21,23 +20,21 @@ MUTED = "#A9B4C4"
 
 beat1 = group()
 beat1.id("beat1")
-beat1.key("opacity", 0.0, 1.0)
-beat1.key("opacity", 1.9, 1.0)
-beat1.key("opacity", 2.1, 0.0)
+beat1.key("opacity", 0, 1)
+beat1.key("opacity", 1.9, 1)
+beat1.key("opacity", 2.1, 0)
 
 for index in range(3):
     x = 120 + index * 200
     card = rect(176, 128, radius=10, fill=CARD)
     card.pos = (x, 160)
     fit_name = ["contain", "cover", "fill"][index]
-    picture = image("examples/assets/stripes.png", width=160, height=112,
-                    fit=fit_name)
+    picture = image("examples/assets/stripes.png", width=160, height=112, fit=fit_name)
     picture.pos = (x, 160)
     beat1.add(card, picture)
 
 for index in range(3):
-    label = text(["contain", "cover", "fill"][index], size=15, color=MUTED,
-                 align="center")
+    label = text(["contain", "cover", "fill"][index], size=15, color=MUTED, align="center")
     label.pos = (120 + index * 200, 244)
     beat1.add(label)
 
@@ -45,17 +42,13 @@ for index in range(3):
 
 beat2 = group()
 beat2.id("beat2")
-beat2.key("opacity", 0.0, 0.0)
-beat2.key("opacity", 1.9, 0.0)
-beat2.key("opacity", 2.1, 1.0)
+beat2.key("opacity", 0, 0)
+beat2.key("opacity", 1.9, 0)
+beat2.key("opacity", 2.1, 1)
 
 backdrop = rect(560, 240, radius=16)
 backdrop.pos = (320, 170)
-backdrop.fill = linear_gradient(
-    start=(-280, 0),
-    end=(280, 0),
-    stops=[(0.0, "#6A8AA8"), (0.5, "#7AA6B8"), (1.0, "#9A6AA8")],
-)
+backdrop.fill = linear_gradient(start= (-280, 0), end= (280, 0), stops= [(0, "#6A8AA8"), (0.5, "#7AA6B8"), (1, "#9A6AA8")])
 beat2.add(backdrop)
 
 badge_group = group()
@@ -63,21 +56,18 @@ badge_group.id("badge_group")
 badge_group.pos = (320, 170)
 badge_group.opacity = 0.5
 badge_group.blend = "multiply"
-badge_group.effect("drop_shadow", color="#000000CC", offset=(14, 16), blur=12,
-                   opacity=0.8)
-badge = image("examples/assets/alpha_badge.png", width=160, height=160,
-              fit="contain")
+badge_group.effect("drop_shadow", color="#000000CC", offset= (14, 16), blur=12, opacity=0.8)
+badge = image("examples/assets/alpha_badge.png", width=160, height=160, fit="contain")
 badge_group.add(badge)
 beat2.add(badge_group)
 
 mask = rect(220, 260, fill="#FFFFFF")
 mask.id("badge_mask")
 mask.pos = (210, 170)
-mask.key("pos.x", 2.0, 210)
+mask.key("pos.x", 2, 210)
 mask.key("pos.x", 3.8, 430, ease="cubic_in_out")
 badge_group.mask(mask, mode="alpha")
 
-caption = text("alpha image - drop shadow - moving mask - multiply", size=15,
-               color=MUTED, align="center")
+caption = text("alpha image - drop shadow - moving mask - multiply", size=15, color=MUTED, align="center")
 caption.pos = (320, 322)
 beat2.add(caption)

@@ -27,6 +27,11 @@ pub enum Strategy {
     CallPromotion,
     /// The call result is bound and assigned after the call.
     CallResult,
+    /// A structural edit: add, delete, duplicate, rename, reorder, parent or
+    /// key maintenance written as code (prompt 12 phase 5).
+    StructuralEdit,
+    /// One loop instance is skipped with `if <guard>: continue`.
+    StructuralLoopContinue,
     /// Several single-change edits combined into one bake write.
     Combined,
 }
@@ -43,6 +48,8 @@ impl Strategy {
             Self::CallArgument => "call-argument",
             Self::CallPromotion => "call-promotion",
             Self::CallResult => "call-result",
+            Self::StructuralEdit => "structural-edit",
+            Self::StructuralLoopContinue => "structural-loop-continue",
             Self::Combined => "combined",
         }
     }

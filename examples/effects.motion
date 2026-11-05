@@ -5,7 +5,7 @@
 # blob), and the right disc carries a cyan glow.  Each effect applies to the
 # whole node: the blurred group is one offscreen layer, not two blurred discs.
 
-comp(name="Effects", width=960, height=540, fps=60, duration=2.0)
+comp(name="Effects", width=960, height=540, fps=60, duration=2)
 
 bg = rect(960, 540, fill="#0E1116")
 bg.pos = (480, 270)
@@ -13,7 +13,7 @@ bg.pos = (480, 270)
 # Left: a card with a soft, offset shadow.
 shadow_card = group()
 shadow_card.pos = (230, 250)
-shadow_card.effect("drop_shadow", color="#000000B3", offset=(10, 12), blur=10, opacity=0.7)
+shadow_card.effect("drop_shadow", color="#000000B3", offset= (10, 12), blur=10, opacity=0.7)
 card = rect(170, 140, radius=18, fill="#E0E7F0")
 shadow_card.add(card)
 dot = circle(28, fill="#FF6B4D")
@@ -37,14 +37,14 @@ glow_dot = circle(44, fill="#0A1418")
 glow_group.add(glow_dot)
 
 # One effect per beat: the three goldens isolate each one.
-shadow_card.key("drop_shadow.opacity", 0.0, 0.7)
-shadow_card.key("drop_shadow.opacity", 0.5, 0.0)
-blur_group.key("blur.radius", 0.0, 0.0)
-blur_group.key("blur.radius", 0.5, 9.0)
-blur_group.key("blur.radius", 1.0, 0.0)
-glow_group.key("glow.intensity", 0.0, 0.0)
-glow_group.key("glow.intensity", 0.5, 0.0)
-glow_group.key("glow.intensity", 1.0, 0.9)
+shadow_card.key("drop_shadow.opacity", 0, 0.7)
+shadow_card.key("drop_shadow.opacity", 0.5, 0)
+blur_group.key("blur.radius", 0, 0)
+blur_group.key("blur.radius", 0.5, 9)
+blur_group.key("blur.radius", 1, 0)
+glow_group.key("glow.intensity", 0, 0)
+glow_group.key("glow.intensity", 0.5, 0)
+glow_group.key("glow.intensity", 1, 0.9)
 
 title = text("Layer effects", size=30, color="#F2F5FA", align="center")
 title.pos = (480, 70)

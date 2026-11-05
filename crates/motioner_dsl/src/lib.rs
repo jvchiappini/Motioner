@@ -39,6 +39,12 @@ mod token;
 mod value;
 mod write_text;
 
+// Prompt 12 phase 5-7 modules. They are declared here once so the phase
+// subagents never edit this file concurrently.
+pub mod lint;
+pub mod printer;
+pub mod structural;
+
 pub use bake::{bake, BakeOutcome};
 pub use code_edit::{CodeEdit, CodeEditError, Replacement, Strategy};
 pub use diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
@@ -55,7 +61,9 @@ pub use origins::{
     ValueOrigins, ValueSource,
 };
 pub use parser::{parse, MAX_EXPR_DEPTH};
-pub use plan::{plan, plan_with_scope, verify, Plan, Scope};
+pub use plan::{
+    plan, plan_with_scope, plan_with_scope_and_metrics, verify, verify_with_metrics, Plan, Scope,
+};
 pub use token::{Keyword, Op, Token, TokenKind};
 
 use motioner_core::{Document, NodeId, OverrideSet};

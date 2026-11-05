@@ -315,7 +315,7 @@ impl PreviewApp {
                 moved: false,
                 ..
             }) => {
-                self.editor.end_gesture();
+                self.finish_gesture();
                 self.begin_edit(target);
             }
             Some(Drag::Marquee { start, current }) => {
@@ -353,7 +353,7 @@ impl PreviewApp {
                 | Drag::GraphHandle { .. }
                 | Drag::Clip(_),
             ) => {
-                self.editor.end_gesture();
+                self.finish_gesture();
             }
             Some(Drag::Splitter { .. } | Drag::Pan { .. } | Drag::GraphPan { .. }) | None => {}
         }
@@ -361,6 +361,13 @@ impl PreviewApp {
         self.guides.clear();
         self.marquee = None;
         self.editor.session_mut().flush_overrides(Instant::now());
+    }
+
+    /// Closes the edit gesture; a write-through failure becomes a toast.
+    fn finish_gesture(&mut self) {
+        if let Err(error) = self.editor.end_gesture() {
+            self.toast = Some((error.message, Instant::now()));
+        }
     }
 
     pub(super) fn select_in_marquee(&mut self, layout: &Layout, rect: Rect) {

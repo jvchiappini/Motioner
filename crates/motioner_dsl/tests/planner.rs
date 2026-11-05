@@ -234,7 +234,7 @@ for i in range(2):
 }
 
 #[test]
-fn unsupported_commands_fall_back_with_a_reason() {
+fn editor_state_commands_fall_back_with_a_reason() {
     let source = r#"comp(name="P", duration=1.0)
 c = circle(40)
 "#;
@@ -243,14 +243,14 @@ c = circle(40)
         source,
         &execution.origins,
         &execution.document,
-        &EditCommand::SetName {
+        &EditCommand::SetLocked {
             id: node_id(&execution, 0),
-            name: "Title".to_owned(),
+            locked: true,
         },
     );
     assert!(
         plan.reason()
-            .is_some_and(|reason| reason.contains("does not handle")),
+            .is_some_and(|reason| reason.contains("editor.motion")),
         "{plan:?}"
     );
 }

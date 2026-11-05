@@ -71,8 +71,11 @@ pub use command::{
 pub use control::{
     default_endpoint_file, send as send_control, ControlServer, Endpoint, Pending, Request,
 };
-pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack};
-pub use editor::{channel_has_key, channel_name, Editor, Effect, Outcome, ViewState, CHANNELS};
+pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack, UndoState};
+pub use editor::{
+    channel_has_key, channel_name, CodeStrategy, CommitSummary, EditMode, Editor, Effect, Outcome,
+    ViewState, CHANNELS,
+};
 pub use file_watch::FileWatch;
 pub use gizmo::{Corner, Guide, Handle};
 pub use host::{ProjectHost, RecoveryInfo, VideoFrameState};
@@ -86,6 +89,7 @@ pub use labels::{content_label, transform_label};
 pub use layout::{
     Hit, Layout, LeftTab, MenuAction, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton,
 };
+pub use motioner_dsl::structural::{LayerKind, StructuralCommand};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use properties::PropertySet;
 pub use session::{

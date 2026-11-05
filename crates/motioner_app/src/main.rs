@@ -59,7 +59,9 @@ Usage:
   motioner info    <project|file.motion> [--json]
   motioner bake    <project|file.motion> [--id ID]...
   motioner query   <project|file.motion> [--frame N] [--node ID]
-  motioner edit    <project|file.motion> [--frame N] [--dry-run] <command>...
+  motioner edit    <project|file.motion> [--frame N] [--dry-run] [--overrides] <command>...
+  motioner fmt     <project|file.motion> [--check]
+  motioner lint    <project|file.motion>
   motioner ctl     [--endpoint FILE] <request>...
   motioner preview <project|file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--window-size WxH] [--ui-scale F] [--select ROW]
@@ -89,10 +91,15 @@ atomically. Nodes created inside loops or functions cannot be baked and are
 reported; their overrides stay in the overrides file.
 
 Agents (docs/agents.md): `query` prints the scene at a frame as JSON. `edit`
-runs commands on the overrides file through the editor's command layer, all
-or nothing, and prints what changed (`--dry-run` writes nothing). `preview
---control` opens a local control endpoint; `ctl` sends it commands and the
-queries state(), query(node=None) and screenshot(path).";
+runs commands through the editor's command layer, all or nothing, and prints
+what changed. By default every edit is written into the program as MDF code
+(write-through, D-0036) and the result includes the strategies and the code
+diff; `--overrides` keeps the D-0022 behaviour of writing
+<name>.overrides.motion, and `--dry-run` writes nothing. `fmt` rewrites a
+program in the canonical style (`--check` only reports) and `lint` prints
+advisory diagnostics. `preview --control` opens a local control endpoint;
+`ctl` sends it commands and the queries state(), query(node=None) and
+screenshot(path).";
 
 /// Parsed command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -113,8 +120,12 @@ enum Command {
     Preview(PreviewArgs),
     /// Print the scene as JSON.
     Query(agent::QueryArgs),
-    /// Run commands on the overrides file.
+    /// Run commands on the program (write-through) or the overrides file.
     Edit(agent::EditArgs),
+    /// Format a program in the canonical MDF style.
+    Fmt(agent::FmtArgs),
+    /// Print advisory lint diagnostics.
+    Lint(agent::LintArgs),
     /// Drive a running editor.
     Ctl(agent::CtlArgs),
     /// Print usage.
@@ -328,6 +339,8 @@ fn run(args: &[OsString]) -> Result<bool, Failure> {
         Command::Preview(args) => run_preview(&args).map(|()| true),
         Command::Query(args) => Ok(status(agent::run_query(&args))),
         Command::Edit(args) => Ok(status(agent::run_edit(&args))),
+        Command::Fmt(args) => Ok(status(agent::run_fmt(&args))),
+        Command::Lint(args) => Ok(status(agent::run_lint(&args))),
         Command::Ctl(args) => Ok(status(agent::run_ctl(&args))),
         Command::Desktop(args) => run_desktop(&args).map(|()| true),
         Command::Import(args) => run_import(&args).map(|()| true),
@@ -357,6 +370,8 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "preview" => parse_preview(rest),
         "query" => parse_query(rest),
         "edit" => parse_edit(rest),
+        "fmt" => parse_fmt(rest),
+        "lint" => parse_lint(rest),
         "ctl" => parse_ctl(rest),
         other
             if !other.starts_with('-')
@@ -768,9 +783,15 @@ fn parse_query(args: &[OsString]) -> Result<Command> {
     }))
 }
 
-/// Parses `edit <file> [--frame N] [--dry-run] <command>...`.
+/// Parses `edit <file> [--frame N] [--dry-run] [--overrides] <command>...`.
 fn parse_edit(args: &[OsString]) -> Result<Command> {
-    let parsed = parse_flags("edit", args, true, &["--frame"], &["--dry-run"])?;
+    let parsed = parse_flags(
+        "edit",
+        args,
+        true,
+        &["--frame"],
+        &["--dry-run", "--overrides"],
+    )?;
     let input = parsed
         .input
         .clone()
@@ -782,7 +803,37 @@ fn parse_edit(args: &[OsString]) -> Result<Command> {
         input,
         frame: parsed.frame()?,
         dry_run: parsed.switches.contains(&"--dry-run"),
+        overrides: parsed.switches.contains(&"--overrides"),
         commands: parsed.rest,
+    }))
+}
+
+/// Parses `fmt <file|project> [--check]`.
+fn parse_fmt(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("fmt", args, true, &[], &["--check"])?;
+    if !parsed.rest.is_empty() {
+        bail!("fmt takes one file or project");
+    }
+    Ok(Command::Fmt(agent::FmtArgs {
+        input: parsed
+            .input
+            .clone()
+            .ok_or_else(|| anyhow!("fmt needs a file or project"))?,
+        check: parsed.switches.contains(&"--check"),
+    }))
+}
+
+/// Parses `lint <file|project>`.
+fn parse_lint(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("lint", args, true, &[], &[])?;
+    if !parsed.rest.is_empty() {
+        bail!("lint takes one file or project");
+    }
+    Ok(Command::Lint(agent::LintArgs {
+        input: parsed
+            .input
+            .clone()
+            .ok_or_else(|| anyhow!("lint needs a file or project"))?,
     }))
 }
 
@@ -1917,9 +1968,42 @@ mod tests {
                 input: PathBuf::from("a.motion"),
                 frame: Some(9),
                 dry_run: true,
+                overrides: false,
                 commands: vec!["seek(3)".to_owned(), "visible(\"x\", false)".to_owned()],
             })
         );
+        assert_eq!(
+            parse(&args(&[
+                "edit",
+                "a.motion",
+                "--overrides",
+                "edit(\"x\", \"opacity\", 0.5)"
+            ]))
+            .unwrap(),
+            Command::Edit(agent::EditArgs {
+                input: PathBuf::from("a.motion"),
+                frame: None,
+                dry_run: false,
+                overrides: true,
+                commands: vec!["edit(\"x\", \"opacity\", 0.5)".to_owned()],
+            })
+        );
+        assert_eq!(
+            parse(&args(&["fmt", "a.motion", "--check"])).unwrap(),
+            Command::Fmt(agent::FmtArgs {
+                input: PathBuf::from("a.motion"),
+                check: true,
+            })
+        );
+        assert_eq!(
+            parse(&args(&["lint", "demo.motioner"])).unwrap(),
+            Command::Lint(agent::LintArgs {
+                input: PathBuf::from("demo.motioner"),
+            })
+        );
+        assert!(parse(&args(&["fmt"])).is_err());
+        assert!(parse(&args(&["lint"])).is_err());
+        assert!(parse(&args(&["fmt", "a.motion", "b.motion"])).is_err());
         assert_eq!(
             parse(&args(&["ctl", "--endpoint", "e.txt", "state()", "seek(1)"])).unwrap(),
             Command::Ctl(agent::CtlArgs {
