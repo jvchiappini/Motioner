@@ -1,9 +1,108 @@
 ---
-actualizado: 2026-11-04
+actualizado: 2026-11-05
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
+
+## Prompt 12 status (2026-11-05, phases 0.5-7 in the working tree)
+
+**Origins v2, audio loop fix, the code planner, loop/call/structural
+specialisation, write-through sink, printer and lint.** Phases 0.5-1 are
+committed at `9f6a1c8`, phase 2 at `57e6b7c`, phase 3 at `af1115d` (docs
+`7a3fe52`), phase 4 at `559affb` (docs `ca11667`). Phases 5-7 plus the
+integration are the working tree for review; **no commit in this session**.
+
+### Phase 5 (T-DSL-0012, in progress)
+
+- `motioner_dsl::structural` exposes `LayerKind` (rect, circle, text, image,
+  audio, video, path, group), `StructuralCommand` (add/delete/duplicate/
+  rename/reorder/reparent/place asset) and `plan_structural`.
+- Key add/move/remove/ease and stopwatch are `EditCommand` variants handled by
+  `plan`; they reuse the loop/call guards (a guarded key write, `in` merges,
+  call-site parameter promotion). Deleting one loop instance writes
+  `if i == 3: continue` as the first body statement when that iteration builds
+  only that node; shared statements fall back with a reason.
+- `Editor::execute_structural` is the sink: one exact code edit, one atomic
+  program write, one undo entry; an added layer is selected.
+- Tests: `crates/motioner_dsl/tests/structural.rs` (34 cases) plus the
+  existing planner suites.
+- **Pending**: the window/CLI `Command` table still does not expose
+  add/delete/duplicate/reorder/reparent as gestures; the planner and sink are
+  ready. Duplicate/reorder/parent fall back outside their safe layouts
+  (loops, functions, non-contiguous blocks, no z-order API).
+
+### Phase 6 (editor and CLI)
+
+- `PreviewSession` keeps the compiled `origins`/`bindings`, writes the program
+  atomically (`apply_program`, `edit_program`, `write_program_now`) and keeps
+  the media resolvers and text metrics.
+- `Editor` defaults to `EditMode::Code`: each command is planned with
+  `motioner_dsl::plan_with_scope_and_metrics`; a whole gesture becomes one
+  program write and one undo entry. `UndoState` stores source + overrides, so
+  undo restores exact bytes. Any fallback keeps the D-0022 override sink and
+  records the reason in `CommitSummary`.
+- Command-line: `motioner edit` writes code by default; `--overrides` keeps
+  D-0022, `--dry-run` prints the code/override diff and strategies. New
+  `motioner fmt <file|project> [--check]` and `motioner lint <file|project>`.
+- Tests: write-through SetValue/SetKey/SetVisible, fallback, one-gesture
+  write/undo, exact-byte undo, code/overrides parity, CLI fmt/lint.
+
+### Phase 7 (fmt and lint)
+
+- `motioner_dsl::printer` is source based (comments are kept; the lexer drops
+  them): 4 spaces, one statement per line, canonical spacing/quotes/numbers,
+  at most one blank line inside blocks and two around top-level `def`, trailing
+  newline, CRLF preserved. `format`, `format_check`, `format_snippet`,
+  `format_signature`.
+- `motioner_dsl::lint` reports unbound inline constructors, empty/dead guards,
+  duplicate property assignments, `_` guards, unused parameters and repeated
+  magic numbers as advisory warnings with spans.
+- Every `examples/*.motion` file and
+  `examples/demo.motioner/compositions/main.motion` is formatted and
+  lint-clean; all goldens are unchanged.
+- Formatting changed provenance byte-offset keys: hello's title is now
+  `@281` (was `@288`), the loop dots `@569/iN` (was `@586/iN`) and the first
+  spinner group `@780/c1127` (was `@845/c1172`). Tests and command examples
+  were updated to the formatted identities.
+
+### Integration fixes (this session)
+
+- Every planner-inserted statement goes through `printer::format_snippet`
+  (`plan::insert_assignment`, `loop_guard::write_statement`,
+  `call_site::insert_after`, structural snippets).
+- Parameter promotion rewrites a multiline `def` header through
+  `printer::format_signature` instead of falling back; a comment inside the
+  header still falls back.
+- `verify` ignores resolver-owned media fields (`ImageContent.asset`,
+  `VideoContent.asset`) and has `verify_with_metrics`; the planner has
+  `plan_with_scope_and_metrics`, so programs that call `text_width` or contain
+  images verify exactly with the session's metrics/resolvers.
+- Commit latency on `showcase_pro.motion` (release, 30 runs):
+  **median 11.21 ms, p90 12.73 ms** (budget 50 ms), via
+  `crates/motioner_app/examples/commit_bench.rs`.
+
+### Bench and gate (2026-11-05)
+
+- Interpreter baseline at `559affb` (detached worktree, same host):
+  **1.234 / 1.187 ms** (two back-to-back runs). Current:
+  **1.197 / 1.358 / 1.220 / 1.203 / 1.208 / 1.182 ms**; median of medians
+  **1.2055 ms** vs baseline **1.2105 ms** (-0.4 %, within the +7 % budget).
+  `interpreter.rs`, `origins.rs`, `scene.rs` and `value.rs` are unchanged from
+  `559affb`.
+- Gate green: `cargo fmt -- --check`, clippy pedantic `-D warnings`,
+  `cargo test --workspace -j 2`, rustdoc `-D warnings`, boundaries, machete,
+  `pctl validate`, `doc-check-refs`.
+- Disk free on C: ~6 GB (above the 5 GB stop line).
+
+### Control bookkeeping
+
+- `pctl reindex-force` removed the duplicate backlog entries T-0001
+  (origins v2 = T-DSL-0007) and T-0002 (audio loop = T-APP-0006).
+- T-DSL-0012 is in_progress: the phase 5 planner and sink are done; the
+  window/CLI structural command variants are the remaining wiring.
+- Next: expose the structural gestures in the `Command` table (phase 6 UI
+  polish), then phases 8-10 (traces, corpus/tool schema, docs/measurements).
 
 ## Prompt 12 status (2026-11-04, phases 0.5-4 done)
 
