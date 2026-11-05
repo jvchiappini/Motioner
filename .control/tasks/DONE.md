@@ -21,6 +21,7 @@
 - **T-CORE-0001** — Animatable content properties (width, height, radius, fill, stroke, size, color) `[alta]` (actualizado 2026-11-01)
 - **T-DSL-0007** — Origins v2: creation, binding, loop and call context for write-through `[alta]` (actualizado 2026-11-04)
 - **T-DSL-0008** — CodeEdit, planner skeleton and bake on the planner `[alta]` (actualizado 2026-11-04)
+- **T-DSL-0009** — Loop specialisation: guarded writes for loop-created nodes `[alta]` (actualizado 2026-11-04)
 - **T-IO-0001** — Project folder v1: model, I/O and CLI (prompt 11 phase 1) `[alta]` (actualizado 2026-11-03)
 - **T-IO-0002** — Autosave, backups and crash recovery (prompt 11 phase 4) `[alta]` (actualizado 2026-11-04)
 - **T-PERF-0003** — Phase 11 review fixes: radial gradient alpha, Showcase Pro art pass and engine batch reuse `[alta]` (actualizado 2026-11-03)

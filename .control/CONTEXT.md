@@ -5,11 +5,45 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
-## Prompt 12 status (2026-11-04, phases 0.5-2 done)
+## Prompt 12 status (2026-11-04, phases 0.5-3 done)
 
-**Origins v2, audio loop fix and the code planner.** Phase 1 is committed at
-`9f6a1c8`; phase 2 is the working tree for review. Gate green (fmt, clippy
-pedantic, workspace tests, rustdoc, boundaries, machete, `pctl validate`).
+**Origins v2, audio loop fix, the code planner and loop specialisation.**
+Phases 0.5-1 are committed at `9f6a1c8`, phase 2 at `57e6b7c`; phase 3 is the
+working tree for review. Gate green (fmt, clippy pedantic, workspace tests,
+rustdoc, boundaries, machete, `pctl validate`, `doc-check-refs`).
+
+### Phase 3 (T-DSL-0009)
+
+- `motioner_dsl::loop_guard` implements D-0036 section 2.2: a guard built from
+  the loop stack (`if i == 3:`, nested with `and`), inserted in the innermost
+  loop body after the node's last write with the file's indentation and line
+  endings. An existing guard for the same node is extended, repeated values
+  merge into `if i in (1, 3):` (sorted), and a guard that becomes equal to the
+  shared value is removed. `_` loop variables are renamed; repeated or
+  non-literal values rewrite the loop to `for i, x in enumerate(xs):`; inline
+  nodes get a readable binding (`circle_2 = circle(10)`).
+- `plan` order is now: redundant-guard removal, private literal, loop guard,
+  local assignment, fallback. `plan_with_scope(..., Scope::This | Scope::All)`
+  is the "this one / all" API (`This` default); `All` edits the shared literal
+  and verifies every instance made by the same loop call. Guard merges apply to
+  a single-loop guard; different nested instances append a second exact guard.
+- Language: membership `in` / `not in` on lists, tuples, ranges and strings,
+  `enumerate(value, start=0)`, and tuple unpacking in `for`
+  (`for i, name in enumerate(names):`). `spec/mdf-v0.md` and `docs/agents.md`
+  updated; tests `tests/loops_language.rs`, `tests/planner_loops.rs`.
+- `ValueOrigins` keeps every write in program order (lookups still take the
+  latest). This lets the planner find the unguarded value after a guard and
+  removes the per-write `retain`, so the interpreter got slightly faster.
+  Verification ignores display names (presentation only, D-0044); a generated
+  binding legitimately renames nodes.
+- Instance delete (`if i == 3: continue`) and key removal/move guards wait for
+  the phase 5 structural commands and fall back with a reason today.
+- **Interpreter budget:** reproducible bench
+  `crates/motioner_dsl/examples/interpreter_bench.rs` (20 warm-up + 200 runs,
+  median and p90, `showcase_pro.motion`). Baseline `9f6a1c8` median **1.451 ms**,
+  current **1.271 ms** (-12 %); p90 1.825 -> 1.630 ms; nodes 84, origins
+  647 -> 649. The budget (median no more than 7 % above baseline) is met.
+  Disk stayed above 8 GB (8.24 GB free after the release build).
 
 ### Phase 2 (T-DSL-0008)
 
@@ -60,8 +94,8 @@ pedantic, workspace tests, rustdoc, boundaries, machete, `pctl validate`).
 - **Interpreter cost** on `showcase_pro.motion` (release, 84 nodes, 647
   origins, same host): 0.80 ms/run before, ~1.50 ms/run after (interpreter
   only); the absolute cost is small next to a 16 ms render frame.
-- Next: Phase 2 (code edit model + planner skeleton). Do not start it without
-  the user's go-ahead.
+- Next: Phase 4 (call-site specialisation). Do not start it without the user's
+  go-ahead.
 
 ## Prompt 11 status (2026-11-04, phases 0-7 done)
 
@@ -366,20 +400,14 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-Prompt 11 phase 7 (T-PERF-0004/T-RENDER-0016, session
-`S-2026-11-04-003`):
+Prompt 12 phase 3 (T-DSL-0009, session `S-2026-11-04-006`):
 
-- **7a**: baseline release 112 dropped/5 s at 1080p60. `FrameStream` +
-  worker + lookahead 24 + bounded LRU; steady-state 0 dropped/5 s, 59-60 UI
-  fps, 179-366 MB working set, 736-739 MB private, 42 MB video cache. Silent mixes
-  use the wall clock; `Project::open` cached by mtime. Headless decode-ahead
-  regression added.
-- **7b**: `examples/demo.motioner/` with lavfi image/video/music; goldens
-  `demo_f090/f330`; video-frame-selection assertions; mixer sample-exact
-  golden; `out/demo.mp4` (6 s H.264 + AAC) and `out/demo_wave.png`; docs
-  (`spec/mdf-v0.md`, `docs/projects.md`, `docs/agents.md`, `README.md`);
-  demo preview 59-60 fps; backlog T-NLE-0002, T-AUDIO-0003, T-PUB-0001.
-- Gate green: fmt, clippy pedantic `-D warnings` (`-j 1`), workspace tests
-  (`-j 1`), rustdoc `-D warnings`, boundaries, machete, `pctl validate`.
-- C: free ~15.5 GB after deleting `target/debug/deps/*.pdb`.
-- Reviewer: commit the working tree (no engine pin bump).
+- Loop specialisation: guards, `in` merges, dead-guard removal, `_` rename,
+  `enumerate` rewrite, inline bindings, `Scope::This | Scope::All`.
+- Language: `in`/`not in`, `enumerate`, tuple unpacking in `for`.
+- `ValueOrigins` keeps every write; verification ignores display names.
+- Bench: baseline 1.451 ms, current 1.271 ms (median, 200 runs).
+- Gate green; no commit. Disk 8.24 GB free.
+
+Prompt 11 phase 7 details remain under its status section above
+(`S-2026-11-04-003`).

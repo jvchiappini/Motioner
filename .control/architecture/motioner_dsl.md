@@ -34,15 +34,23 @@ document, plus value origins and bake. The language is the project format
   loop stack (span, variable, iterable, index, literal value, body) and the
   call stack (call site, definition, parameters, returns-the-node), and whether
   the expression is a literal, a parameter, a loop variable or computed:
-  `crates/motioner_dsl/src/origins.rs:1-518`.
+  `crates/motioner_dsl/src/origins.rs:1-515`.
 - `CodeEdit` — ordered, non-overlapping byte-range replacements with apply,
   invert (byte-exact undo), compose, provenance re-keying and override
   re-keying: `crates/motioner_dsl/src/code_edit.rs:132-365`.
 - `plan` — resolves one core `EditCommand` into a `CodeEdit` or a
-  `Fallback(reason)`: private literal, then local assignment next to the
-  node's last write. `verify` re-runs the program (with optional overrides)
-  and compares the document by position; bake, the editor and tests share it
-  (D-0036): `crates/motioner_dsl/src/plan.rs:62-140`.
+  `Fallback(reason)`: private literal, loop guard, local assignment next to the
+  node's last write. `plan_with_scope(..., Scope::This | Scope::All)` exposes
+  the "this one / all" choice for loop instances. `verify` re-runs the program
+  (with optional overrides) and compares the document by position; bake, the
+  editor and tests share it (D-0036): `crates/motioner_dsl/src/plan.rs:62-140`.
+- `loop_guard` — D-0036 section 2.2: builds `if i == 3:` from the loop stack
+  (nested guards joined with `and`), inserts it in the innermost loop body
+  after the node's last write, extends an existing guard, merges repeated
+  iterations into `if i in (1, 3):`, removes dead guards, renames `_`, rewrites
+  repeated/non-literal loops to `enumerate`, and binds inline nodes. `Scope::All`
+  edits the shared literal instead and verifies every instance:
+  `crates/motioner_dsl/src/loop_guard.rs`.
 - `bake` — batch write-through: each override goes through `plan`; refusals
   fall back to the generated block (D-0022) and verification uses the same
   function: `crates/motioner_dsl/src/bake.rs:68-220`.
