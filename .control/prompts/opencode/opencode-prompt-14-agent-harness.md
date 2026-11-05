@@ -3,7 +3,9 @@
 You are the orchestrator of a very long, multi-phase job in the Motioner
 repository at `C:\Users\jvchi\CARPETAS\Motioner` (branch
 `feat/m1-foundations`). Run this prompt **after**
-`opencode-prompt-13-motion-std-and-agent-tools.md`.
+`opencode-prompt-13-motion-std-and-agent-tools.md` **and**
+`opencode-prompt-15-guimaker-design-system.md` (the agent panel is built on
+GUIMaker, never on the old hand-placed rect API).
 
 **Contracts — read them first:** `D-0012` (providers, keys in the Windows
 Credential Manager, budgets, human approval), `D-0041` (harness, workflow,
