@@ -5,12 +5,49 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
-## Prompt 12 status (2026-11-04, phases 0.5-3 done)
+## Prompt 12 status (2026-11-04, phases 0.5-4 done)
 
-**Origins v2, audio loop fix, the code planner and loop specialisation.**
-Phases 0.5-1 are committed at `9f6a1c8`, phase 2 at `57e6b7c`; phase 3 is the
-working tree for review. Gate green (fmt, clippy pedantic, workspace tests,
-rustdoc, boundaries, machete, `pctl validate`, `doc-check-refs`).
+**Origins v2, audio loop fix, the code planner, loop and call-site
+specialisation.** Phases 0.5-1 are committed at `9f6a1c8`, phase 2 at
+`57e6b7c`, phase 3 at `af1115d` (docs `7a3fe52`); phase 4 is the working tree
+for review. Gate green (fmt, clippy pedantic, workspace tests, rustdoc,
+boundaries, machete, `pctl validate`, `doc-check-refs`).
+
+### Phase 4 (T-DSL-0010)
+
+- `motioner_dsl::call_site` implements D-0036 section 2.3 from the origin of
+  the edited write: a `Parameter` expression is passed (or edited) at the call
+  site; a call marked `returns_node` binds the result if needed and assigns
+  after the node's last write in the caller block; otherwise the old literal is
+  promoted to a keyword parameter whose default is its old text and only this
+  call passes the new value. Promotion edits the definition once, so every
+  other call site keeps its value; the re-run proves it.
+- `plan` order is now: redundant-guard removal, private literal, loop guard,
+  call site, local assignment, fallback. New `Strategy` names:
+  `call-argument`, `call-promotion`, `call-result`.
+- Loop + function: `loop_guard` now selects the caller binding inside the loop
+  body, seeds the insertion after the call statement (binding an unbound call)
+  and keeps the normal guard/merge/removal. This covers nodes created in a
+  function called from a loop and values written by a function inside a loop.
+- MDF gains default parameter values (`def badge(x, fill="#ffffff")`): parser
+  rejects a required parameter after a default, `bind` takes the required
+  count, missing arguments are evaluated at the call in the caller scope, and
+  `ParameterOrigin.default` records the span. `spec/mdf-v0.md` section 5 and
+  the grammar are updated.
+- Refusals with a reason: more than one enclosing call (nested), a call result
+  in the middle of another expression, a reassigned caller binding, a computed
+  value that is not a parameter, and a multiline function parameter list
+  (phase 7 fmt). `tests/planner_calls.rs` has 18 cases;
+  `tests/default_parameters.rs` has 4.
+- Bake now writes call-site overrides as code (the old spinner fallback test
+  became `an_in_place_edit_and_a_call_override_both_become_code`).
+- **Interpreter budget:** baseline `af1115d` median **1.207 / 1.221 ms**,
+  current **1.161 / 1.234 ms** across two back-to-back pairs (worst +1.1 %);
+  p90 1.692/1.700 -> 1.635/1.527 ms; nodes 84, origins 649. The budget
+  (median no more than 7 % above baseline) is met. Call frames keep a parallel
+  defaults vector only when the function has defaults, and functions without
+  defaults take the old locals path.
+- Disk after cleaning debug `.pdb`/incremental: 12.4 GB free.
 
 ### Phase 3 (T-DSL-0009)
 
@@ -94,8 +131,11 @@ rustdoc, boundaries, machete, `pctl validate`, `doc-check-refs`).
 - **Interpreter cost** on `showcase_pro.motion` (release, 84 nodes, 647
   origins, same host): 0.80 ms/run before, ~1.50 ms/run after (interpreter
   only); the absolute cost is small next to a 16 ms render frame.
-- Next: Phase 4 (call-site specialisation). Do not start it without the user's
-  go-ahead.
+- Next: Phase 5 (structural edits, `T-DSL-0012`). It must close the phase 3-4
+  deferrals: deleting one loop instance as `if i == 3: continue` (first
+  statement of the body when that iteration creates only that node) and key
+  move/remove with the same loop/call guard used by values. Do not start it
+  without the user's go-ahead.
 
 ## Prompt 11 status (2026-11-04, phases 0-7 done)
 
@@ -400,14 +440,23 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 
 ## Last relevant session
 
-Prompt 12 phase 3 (T-DSL-0009, session `S-2026-11-04-006`):
+Prompt 12 phase 4 (T-DSL-0010, session `S-2026-11-04-007`):
+
+- Call-site specialisation: parameter pass/edit, returned-node binding +
+  assignment, literal promotion to a defaulted keyword parameter.
+- Loop + function: bind the result and guard after the call; values written by
+  a function inside a loop use the same guard.
+- MDF default parameters (parser, interpreter, origins, spec).
+- Bench: baseline `af1115d` 1.207/1.221 ms, current 1.161/1.234 ms.
+- Gate green; no commit. Disk 12.4 GB after cleanup.
+
+Prompt 12 phase 3 (T-DSL-0009, `S-2026-11-04-006`):
 
 - Loop specialisation: guards, `in` merges, dead-guard removal, `_` rename,
   `enumerate` rewrite, inline bindings, `Scope::This | Scope::All`.
 - Language: `in`/`not in`, `enumerate`, tuple unpacking in `for`.
 - `ValueOrigins` keeps every write; verification ignores display names.
 - Bench: baseline 1.451 ms, current 1.271 ms (median, 200 runs).
-- Gate green; no commit. Disk 8.24 GB free.
 
 Prompt 11 phase 7 details remain under its status section above
 (`S-2026-11-04-003`).

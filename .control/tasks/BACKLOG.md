@@ -7,6 +7,7 @@
 - **T-ARCH-0007** — Run UI toolkit spike for dock, virtualized list and bezier editor `[alta]` (actualizado 2026-10-31)
 - **T-AUDIO-0001** — Audio engine and stereo mixer (decode, tracks, gain/pan/fades, export) `[alta]` (actualizado 2026-11-03)
 - **T-AUDIO-0003** — Audio effects: EQ, compressor and reverb with a mixer panel `[alta]` (actualizado 2026-11-04)
+- **T-DSL-0012** — Structural edits as code (prompt 12 phase 5) `[alta]` (actualizado 2026-11-04)
 - **T-FORMAT-0001** — Specify project format v0 `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0002** — Implement project load and save round-trip `[alta]` (actualizado 2026-10-31)
 - **T-NLE-0001** — NLE video: import, cut, trim, arrange and export with audio `[alta]` (actualizado 2026-11-03)
