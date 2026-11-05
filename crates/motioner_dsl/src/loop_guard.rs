@@ -33,7 +33,7 @@ use motioner_core::{
 use crate::ast::{Program, Stmt, StmtKind};
 use crate::code_edit::{CodeEdit, Replacement, Strategy};
 use crate::origins::{
-    IterationValue, LoopOrigin, NodeOrigin, OriginKind, ValueOrigin, ValueOrigins,
+    BindingOrigin, IterationValue, LoopOrigin, NodeOrigin, OriginKind, ValueOrigin, ValueOrigins,
 };
 use crate::plan::{Action, Resolved};
 use crate::write_text::{key_replacement, set_replacement, set_value_text};
@@ -54,20 +54,11 @@ pub(crate) fn plan_loop(
     if origin.site.loops.is_empty() {
         return Ok(None);
     }
-    if !origin.site.calls.is_empty() {
-        return Err(
-            "the node is created in a function; call-site specialisation comes later".to_owned(),
-        );
-    }
     let loops = &origin.site.loops;
     let write = value_origin(resolved, origins, node);
+    let has_calls =
+        !origin.site.calls.is_empty() || write.is_some_and(|write| !write.site.calls.is_empty());
     if let Some(write) = write {
-        if !write.site.calls.is_empty() {
-            return Err(
-                "the value is written in a function; call-site specialisation comes later"
-                    .to_owned(),
-            );
-        }
         if write.site.loops.is_empty() {
             return Err(
                 "the value is written after the loop, so a guard inside it cannot override it"
@@ -103,22 +94,39 @@ pub(crate) fn plan_loop(
     let mut used = program_names(program);
     let (condition, mut replacements) = guard_condition(program, origins, loops, &mut used)?;
 
-    let (binding, binding_edit) = match binding_name(origins, origin) {
-        Some(name) if name != "_" => (name.to_owned(), None),
-        _ => inline_binding(
-            program,
-            &program_ast,
-            origin.creation.start,
-            node,
-            &mut used,
-        )?,
+    let (binding, binding_edit) = if has_calls {
+        match caller_binding(origin, innermost.body) {
+            Some(binding) if origins.name(binding.name) != "_" => {
+                (origins.name(binding.name).to_owned(), None)
+            }
+            Some(_) => return Err("the call result binds to '_'; use a readable name".to_owned()),
+            None => {
+                inline_call_binding(program, body, call_offset(origin, write)?, node, &mut used)?
+            }
+        }
+    } else {
+        match binding_name(origins, origin) {
+            Some(name) if name != "_" => (name.to_owned(), None),
+            _ => inline_binding(
+                program,
+                &program_ast,
+                origin.creation.start,
+                node,
+                &mut used,
+            )?,
+        }
     };
     if let Some(edit) = binding_edit {
         replacements.push(edit);
     }
 
     let statement = write_statement(resolved, property, &rhs, &binding, rate);
-    let Some(write_span) = last_write_span(origins, node, origin.statement.start, body) else {
+    let seed = if has_calls {
+        call_statement_span(body, origin, write).map_or(origin.statement.start, |span| span.start)
+    } else {
+        origin.statement.start
+    };
+    let Some(write_span) = last_write_span(origins, node, seed, body) else {
         return Err("the node's last write could not be located".to_owned());
     };
     let after = write_span.start;
@@ -263,7 +271,7 @@ pub(crate) fn value_text(resolved: &Resolved) -> Result<String, String> {
     Ok(set_value_text(&resolved.entry.property, value))
 }
 
-fn write_statement(
+pub(crate) fn write_statement(
     resolved: &Resolved,
     property: &str,
     rhs: &str,
@@ -340,7 +348,7 @@ fn has_constructor_statement(body: &[Stmt], creation_start: usize) -> bool {
 }
 
 /// A readable, unused binding name from the node's kind or display name.
-fn fresh_node_name(program: &str, node: NodeId, used: &mut HashSet<String>) -> String {
+pub(crate) fn fresh_node_name(program: &str, node: NodeId, used: &mut HashSet<String>) -> String {
     let document = crate::run(program, &crate::Limits::default()).ok();
     let base = document
         .as_ref()
@@ -398,7 +406,7 @@ fn fresh(base: &str, used: &mut HashSet<String>) -> String {
 }
 
 /// Every name used by the program, so generated names never shadow one.
-fn program_names(program: &str) -> HashSet<String> {
+pub(crate) fn program_names(program: &str) -> HashSet<String> {
     match crate::tokenize(program) {
         Ok(tokens) => tokens
             .into_iter()
@@ -727,6 +735,75 @@ pub(crate) fn siblings_have_value(
         }
     }
     found
+}
+
+/// The variable bound to the call result inside the loop body.
+fn caller_binding(origin: &NodeOrigin, body: crate::Span) -> Option<&BindingOrigin> {
+    origin.bindings.iter().find(|binding| {
+        !binding.reassigned_later
+            && binding.statement.start >= body.start
+            && binding.statement.end <= body.end
+    })
+}
+
+/// The call site that produced or last wrote the node inside the loop.
+fn call_offset(origin: &NodeOrigin, write: Option<&ValueOrigin>) -> Result<usize, String> {
+    if let Some(call) = write.and_then(|write| write.site.calls.last()) {
+        return Ok(call.call_site.start);
+    }
+    origin
+        .site
+        .calls
+        .last()
+        .map(|call| call.call_site.start)
+        .ok_or_else(|| "the call site could not be located".to_owned())
+}
+
+/// The body statement that contains the latest call of the node, if any.
+fn call_statement_span(
+    body: &[Stmt],
+    origin: &NodeOrigin,
+    write: Option<&ValueOrigin>,
+) -> Option<crate::Span> {
+    let mut best = None;
+    for call in origin
+        .site
+        .calls
+        .iter()
+        .chain(write.into_iter().flat_map(|write| write.site.calls.iter()))
+    {
+        if let Some(span) = containing_span(body, call.call_site.start) {
+            if best.is_none_or(|current: crate::Span| span.end > current.end) {
+                best = Some(span);
+            }
+        }
+    }
+    best
+}
+
+/// Adds a binding for an unbound call statement inside the loop body.
+fn inline_call_binding(
+    program: &str,
+    body: &[Stmt],
+    call_start: usize,
+    node: NodeId,
+    used: &mut HashSet<String>,
+) -> Result<(String, Option<Replacement>), String> {
+    let statement = body
+        .iter()
+        .find(|statement| statement.span.start <= call_start && call_start < statement.span.end)
+        .ok_or_else(|| "the call statement could not be located in the loop".to_owned())?;
+    let StmtKind::Expr(expr) = &statement.kind else {
+        return Err("assign the call result to a variable before editing it".to_owned());
+    };
+    if expr.span.start != call_start {
+        return Err("the call result is not bound; assign it to a variable first".to_owned());
+    }
+    let name = fresh_node_name(program, node, used);
+    Ok((
+        name.clone(),
+        Some(Replacement::insert(call_start, format!("{name} = "))),
+    ))
 }
 
 /// The top-level statement of the innermost loop that last writes `node`.

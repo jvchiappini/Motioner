@@ -21,6 +21,12 @@ pub enum Strategy {
     LoopGuard,
     /// A literal shared by every iteration is edited for every instance.
     LoopSharedValue,
+    /// A parameter is passed (or edited) at the edited call site.
+    CallArgument,
+    /// A literal is promoted to a keyword parameter of the function.
+    CallPromotion,
+    /// The call result is bound and assigned after the call.
+    CallResult,
     /// Several single-change edits combined into one bake write.
     Combined,
 }
@@ -34,6 +40,9 @@ impl Strategy {
             Self::LocalAssignment => "local-assignment",
             Self::LoopGuard => "loop-guard",
             Self::LoopSharedValue => "loop-shared-value",
+            Self::CallArgument => "call-argument",
+            Self::CallPromotion => "call-promotion",
+            Self::CallResult => "call-result",
             Self::Combined => "combined",
         }
     }

@@ -465,9 +465,15 @@ for i in range(5):
 Repeated iterations merge into `if i in (1, 3):`; an existing guard is
 extended; `for _` is renamed and a repeated non-literal value is rewritten to
 `for i, x in enumerate(xs):`. A guard that becomes equal to the shared value
-again is removed. Everything else keeps the older behaviour: bound nodes get
-`var.property = value` statements after the generated-block marker, and
-unbound function calls keep their overrides with a refusal reason.
+again is removed. A value that lives in a user function specialises the call:
+a parameter is passed (or edited) at the call site, a returned node gets the
+call result bound and an assignment after the call, and any other literal
+becomes a keyword parameter whose default is the old text (`def badge(x,
+fill="#ffffff")`). A function called from a loop binds the result and adds the
+guard after the call. Nested calls and calls used in the middle of an
+expression keep their overrides with a refusal reason. Everything else keeps
+the older behaviour: bound nodes get `var.property = value` statements after
+the generated-block marker.
 
 In-place edits shift the byte-offset keys of later nodes; bake re-keys every
 override that stays in the same atomic write (D-0025, D-0027). The result is

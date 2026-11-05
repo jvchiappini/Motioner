@@ -7,8 +7,8 @@
 use std::rc::Rc;
 
 use crate::ast::{
-    Argument, AssignOp, BinaryOp, CompareOp, Expr, ExprKind, FunctionDef, LogicalOp, Program, Stmt,
-    StmtKind, Target, UnaryOp,
+    Argument, AssignOp, BinaryOp, CompareOp, Expr, ExprKind, FunctionDef, LogicalOp, Param,
+    Program, Stmt, StmtKind, Target, UnaryOp,
 };
 use crate::diagnostic::{Diagnostic, ErrorCategory, Span};
 use crate::lexer::tokenize;
@@ -322,13 +322,26 @@ impl Parser {
         let start = self.advance().span;
         let (name, _) = self.expect_name("a function name")?;
         self.expect_op(Op::LParen, "'('")?;
-        let mut params: Vec<Rc<str>> = Vec::new();
+        let mut params: Vec<Param> = Vec::new();
+        let mut seen_default = false;
         while !self.check_op(Op::RParen) {
-            let (param, span) = self.expect_name("a parameter name")?;
-            if params.contains(&param) {
-                return Err(parse_error(span, format!("duplicate parameter '{param}'")));
+            let (name, span) = self.expect_name("a parameter name")?;
+            if params.iter().any(|param| param.name == name) {
+                return Err(parse_error(span, format!("duplicate parameter '{name}'")));
             }
-            params.push(param);
+            let default = if self.eat_op(Op::Assign) {
+                Some(self.expression()?.expr)
+            } else {
+                None
+            };
+            if default.is_none() && seen_default {
+                return Err(parse_error(
+                    span,
+                    format!("non-default parameter '{name}' follows a default parameter"),
+                ));
+            }
+            seen_default |= default.is_some();
+            params.push(Param { name, default });
             if !self.eat_op(Op::Comma) {
                 break;
             }

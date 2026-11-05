@@ -168,6 +168,7 @@ struct CallFrame {
     call_span: Span,
     definition: Span,
     parameters: Vec<(Rc<str>, NameId)>,
+    defaults: Vec<Option<Span>>,
     locals: HashMap<Rc<str>, Value>,
 }
 
@@ -275,9 +276,10 @@ impl Interpreter<'_> {
                 parameters: frame
                     .parameters
                     .iter()
-                    .map(|(_, id)| ParameterOrigin {
+                    .enumerate()
+                    .map(|(index, (_, id))| ParameterOrigin {
                         name: *id,
-                        default: None,
+                        default: frame.defaults.get(index).copied().flatten(),
                     })
                     .collect(),
                 returns_node: false,
@@ -873,25 +875,55 @@ impl Interpreter<'_> {
                 ),
             ));
         }
-        let names: Vec<&str> = function.params.iter().map(|p| &**p).collect();
-        let bound = bind(&function.name, &names, names.len(), args)
-            .map_err(|e| self.host_error(span, e))?;
-        let locals = function
+        let names: Vec<&str> = function.params.iter().map(|p| &*p.name).collect();
+        let required = function
             .params
             .iter()
-            .cloned()
-            .zip(
-                bound
-                    .into_values()
-                    .into_iter()
-                    .map(|v| v.unwrap_or(Value::None)),
-            )
-            .collect();
+            .take_while(|param| param.default.is_none())
+            .count();
+        let bound =
+            bind(&function.name, &names, required, args).map_err(|e| self.host_error(span, e))?;
+        let has_defaults = function.params.iter().any(|param| param.default.is_some());
+        let locals: HashMap<Rc<str>, Value> = if has_defaults {
+            let mut locals = HashMap::with_capacity(function.params.len());
+            for (param, value) in function.params.iter().zip(bound.into_values()) {
+                let value = match value {
+                    Some(value) => value,
+                    None => match &param.default {
+                        Some(default) => self.eval(default)?,
+                        None => Value::None,
+                    },
+                };
+                locals.insert(param.name.clone(), value);
+            }
+            locals
+        } else {
+            function
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .zip(
+                    bound
+                        .into_values()
+                        .into_iter()
+                        .map(|value| value.unwrap_or(Value::None)),
+                )
+                .collect()
+        };
         let function_id = self.scene.intern_name(&function.name);
+        let defaults = if has_defaults {
+            function
+                .params
+                .iter()
+                .map(|param| param.default.as_ref().map(|default| default.span))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let parameters: Vec<(Rc<str>, NameId)> = function
             .params
             .iter()
-            .map(|name| (Rc::clone(name), self.scene.intern_name(name)))
+            .map(|param| (Rc::clone(&param.name), self.scene.intern_name(&param.name)))
             .collect();
         self.frames.push(CallFrame {
             function: function.name.clone(),
@@ -899,6 +931,7 @@ impl Interpreter<'_> {
             call_span: span,
             definition: function.span,
             parameters,
+            defaults,
             locals,
         });
         self.site_dirty = true;

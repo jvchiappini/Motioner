@@ -72,7 +72,10 @@ there is no separate integer division rule: `/` always produces a float,
 - Indexed assignment: `list[index] = expression`, `dict[key] = expression`.
   A list may never contain itself, directly or indirectly; such an
   assignment is rejected with a value error.
-- `def name(params):` followed by an indented block.
+- `def name(params):` followed by an indented block. A parameter may have a
+  default (`def badge(x, fill="#ffffff"):`); parameters after the first
+  default must have defaults too. A missing argument uses its default, and
+  the default expression is evaluated at each call in the caller's scope.
 - `return expression` or `return`.
 - `if condition:` / `elif` / `else`.
 - `for name in iterable:` over lists, ranges, strings and dicts (keys in
@@ -431,7 +434,7 @@ reject `key`/`override_key`.
 ### 9.3 Bake
 
 `motioner bake <file.motion> [--id ID]...` folds overrides into the program in
-three ways (D-0027, D-0036):
+four ways (D-0027, D-0036):
 
 1. **In place** when the overridden value came from a private plain literal:
    a constructor argument, a `node.property = literal` assignment, or the
@@ -449,11 +452,18 @@ three ways (D-0027, D-0036):
    rewritten to `for i, x in enumerate(xs):`, and an inline node gets a
    readable binding. A guard that becomes equal to the shared value again is
    removed.
-3. **Generated block** for everything else reachable from a top-level
+3. **Call site** when the value lives in a user function: a value that is
+   already a parameter is passed (or edited) as a keyword argument; a function
+   that returns the node gets the call result bound when needed and an
+   assignment after the call; otherwise the literal becomes a keyword
+   parameter with its old text as default and only this call passes the new
+   value. A function called from a loop binds the result and adds the loop
+   guard after the call. Other call sites keep rendering identically.
+4. **Generated block** for everything else reachable from a top-level
    variable binding: statements appended after
    `# --- baked by motioner (do not edit above this line by hand) ---`, then
-   the overrides are removed. Unbound function calls with shared or computed
-   values are refused with a message and keep their overrides.
+   the overrides are removed. Unbound nested calls and calls in the middle of
+   an expression are refused with a message and keep their overrides.
 
 In-place edits change the program length, so every provenance key after them
 is re-keyed by the exact edit offsets in the same write (D-0025). Bake is
@@ -566,7 +576,8 @@ break_stmt     = "break" ;
 continue_stmt  = "continue" ;
 pass_stmt      = "pass" ;
 arguments      = [ expression { "," expression } ] ;
-params         = NAME { "," NAME } ;
+params         = param { "," param } ;
+param          = NAME [ "=" expression ] ;
 list           = "[" [ expression { "," expression } ] "]" ;
 tuple          = "(" expression "," [ expression { "," expression } ] ")" ;
 dict           = "{" [ expression ":" expression { "," expression ":" expression } ] "}" ;

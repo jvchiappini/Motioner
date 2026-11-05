@@ -101,13 +101,22 @@ pub enum Target {
     },
 }
 
+/// A parameter of a user-defined function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    /// Parameter name.
+    pub name: Rc<str>,
+    /// Default expression, when the parameter is optional.
+    pub default: Option<Expr>,
+}
+
 /// A user-defined function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     /// Function name.
     pub name: Rc<str>,
-    /// Parameter names, all required.
-    pub params: Vec<Rc<str>>,
+    /// Parameters in definition order; optional ones come last.
+    pub params: Vec<Param>,
     /// Function body.
     pub body: Vec<Stmt>,
     /// Span of the `def` header.

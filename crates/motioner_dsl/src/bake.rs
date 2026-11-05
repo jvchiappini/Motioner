@@ -857,15 +857,15 @@ mod tests {
     }
 
     #[test]
-    fn shifting_an_in_place_edit_rekeys_the_remaining_overrides() {
+    fn an_in_place_edit_and_a_call_override_both_become_code() {
         let compiled = compiled();
         let title_id = title(&compiled);
-        // A node made inside `spinner()` has no top-level binding, so its
-        // override must stay in the file after the title's in-place edit.
+        // A node returned by a function is now reachable through its call
+        // result (prompt 12 phase 4), so its override also becomes code.
         let spinner = compiled.document.roots()[6];
         let spinner_id = id_of(&compiled, spinner);
-        // The title's size grows by one byte; every later key shifts, and the
-        // spinner's override must follow it.
+        // The title's size grows by one byte; every later key shifts, and any
+        // remaining override must follow it.
         let set = overrides(&[
             (
                 &title_id,
@@ -888,16 +888,23 @@ mod tests {
             &[],
         );
         assert!(baked.program.contains("size=1000"), "{}", baked.program);
+        assert!(
+            baked.program.contains(" = spinner(240, 220, 96, 1.0)"),
+            "the call result is bound: {}",
+            baked.program
+        );
+        assert!(
+            baked.program.contains(".pos = (1, 2)"),
+            "the spinner override became code: {}",
+            baked.program
+        );
         let remaining = baked.overrides.to_mdf(rate());
         assert!(
-            remaining.contains("override(\"@") && remaining.contains("\"pos\""),
-            "the spinner's override stays, re-keyed: {remaining}"
+            baked.overrides.is_empty(),
+            "no override remains: {remaining}"
         );
-        let left = baked.overrides.len();
-        assert!(left >= 1);
         let actual =
-            crate::run_with_overrides(&baked.program, Some(&remaining), &crate::Limits::default())
-                .unwrap();
+            crate::run_with_overrides(&baked.program, None, &crate::Limits::default()).unwrap();
         assert_eq!(
             crate::plan::semantics(&actual.document),
             crate::plan::semantics(&before)

@@ -157,6 +157,17 @@ pub fn plan_with_scope(
         Err(error) => reason = error,
     }
 
+    match crate::call_site::plan_call(program, origins, &resolved, node, rate) {
+        Ok(Some(edit)) => {
+            if verify_edit(program, &edit, &expected) {
+                return Plan::Code(edit);
+            }
+            "the call-site edit did not reproduce the document".clone_into(&mut reason);
+        }
+        Ok(None) => {}
+        Err(error) => reason = error,
+    }
+
     match local_assignment(program, origins, &resolved, node, rate) {
         Ok(Some(edit)) => {
             if verify_edit(program, &edit, &expected) {
@@ -480,6 +491,11 @@ fn local_assignment(
             "the node is created in a function; call-site specialisation comes later".to_owned(),
         );
     }
+    if value_origin(resolved, origins, node).is_some_and(|write| !write.site.calls.is_empty()) {
+        return Err(
+            "the value is written inside a function; the call-site edit was not exact".to_owned(),
+        );
+    }
     let Some(binding) = binding_for(origin) else {
         return Err("the node is not bound to a variable, or the binding is reassigned".to_owned());
     };
@@ -739,6 +755,10 @@ fn local_assignment_reason(resolved: &Resolved, origins: &ValueOrigins, node: No
         "the node is created in a loop; loop specialisation comes later".to_owned()
     } else if !origin.site.calls.is_empty() {
         "the node is created in a function; call-site specialisation comes later".to_owned()
+    } else if value_origin(resolved, origins, node)
+        .is_some_and(|write| !write.site.calls.is_empty())
+    {
+        "the value is written inside a function; the call-site edit was not exact".to_owned()
     } else if origin.bindings.is_empty()
         || origin
             .bindings
@@ -759,7 +779,7 @@ fn local_assignment_reason(resolved: &Resolved, origins: &ValueOrigins, node: No
     }
 }
 
-fn value_origin<'a>(
+pub(crate) fn value_origin<'a>(
     resolved: &Resolved,
     origins: &'a ValueOrigins,
     node: NodeId,

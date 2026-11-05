@@ -21,6 +21,7 @@
 pub mod ast;
 mod bake;
 mod builtins;
+mod call_site;
 mod code_edit;
 mod diagnostic;
 mod host;
