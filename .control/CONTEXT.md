@@ -1,561 +1,191 @@
 ---
-actualizado: 2026-11-05
+actualizado: 2026-11-06
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
-## Prompt 12 status (2026-11-05, phases 0.5-7 in the working tree)
+## Prompt 12 status (final, 2026-11-06)
 
-**Origins v2, audio loop fix, the code planner, loop/call/structural
-specialisation, write-through sink, printer and lint.** Phases 0.5-1 are
-committed at `9f6a1c8`, phase 2 at `57e6b7c`, phase 3 at `af1115d` (docs
-`7a3fe52`), phase 4 at `559affb` (docs `ca11667`). Phases 5-7 plus the
-integration are the working tree for review; **no commit in this session**.
+**Write-through is finished (prompt 12b, phases B1-B6).** The UI, `motioner
+edit`, the live control endpoint and the future agent all write MDF code
+through one planner and one sink. The overrides file is the fallback, with a
+visible list and one-click conversion. Traces, the corpus filter and the tool
+schema are in place. **No commit in this session** (the reviewer commits).
 
-### Phase 5 (T-DSL-0012, in progress)
+### B1 — Structural gestures in the command layer
 
-- `motioner_dsl::structural` exposes `LayerKind` (rect, circle, text, image,
-  audio, video, path, group), `StructuralCommand` (add/delete/duplicate/
-  rename/reorder/reparent/place asset) and `plan_structural`.
-- Key add/move/remove/ease and stopwatch are `EditCommand` variants handled by
-  `plan`; they reuse the loop/call guards (a guarded key write, `in` merges,
-  call-site parameter promotion). Deleting one loop instance writes
-  `if i == 3: continue` as the first body statement when that iteration builds
-  only that node; shared statements fall back with a reason.
-- `Editor::execute_structural` is the sink: one exact code edit, one atomic
-  program write, one undo entry; an added layer is selected.
-- Tests: `crates/motioner_dsl/tests/structural.rs` (34 cases) plus the
-  existing planner suites.
-- **Pending**: the window/CLI `Command` table still does not expose
-  add/delete/duplicate/reorder/reparent as gestures; the planner and sink are
-  ready. Duplicate/reorder/parent fall back outside their safe layouts
-  (loops, functions, non-contiguous blocks, no z-order API).
+- `Command` gained `add_layer`, `delete_layer`, `duplicate_layer`,
+  `reorder_layer`, `reparent_layer`, `group_layers`, `ungroup_layer`
+  (`crates/motioner_ui/src/command/`). Each parses, prints and round-trips.
+- `motioner_dsl::structural` gained `Group`/`Ungroup`, planned as one combined
+  edit; `plan_structural_with_metrics` threads text metrics through every
+  verification (programs calling `text_width` no longer fall back).
+- `CodeEdit::compose` fixed for insertions (offset map sign and boundary
+  coverage); regression test `composition_after_an_insertion_maps_offsets_back`.
+- Editor sink: one write, one undo entry, undo restores exact bytes; adding a
+  layer/asset selects it. In overrides mode structural gestures are refused
+  with the typed `refused` error.
+- Window: Add Layer menu (rect, circle, text, path, group), Delete/Ctrl+D/
+  Ctrl+G/Ctrl+Shift+G/Ctrl+Down/Ctrl+Up, outline drag (pure model in
+  `crates/motioner_ui/src/arrange.rs`), asset drag onto the canvas or outline.
+- Tests: 19-case corpus, editor structural tests, CLI structural tests,
+  arrange unit tests. T-DSL-0012 closed.
 
-### Phase 6 (editor and CLI)
+### B2 — Fallback visibility, code panel, live diff, edit mode
 
-- `PreviewSession` keeps the compiled `origins`/`bindings`, writes the program
-  atomically (`apply_program`, `edit_program`, `write_program_now`) and keeps
-  the media resolvers and text metrics.
-- `Editor` defaults to `EditMode::Code`: each command is planned with
-  `motioner_dsl::plan_with_scope_and_metrics`; a whole gesture becomes one
-  program write and one undo entry. `UndoState` stores source + overrides, so
-  undo restores exact bytes. Any fallback keeps the D-0022 override sink and
-  records the reason in `CommitSummary`.
-- Command-line: `motioner edit` writes code by default; `--overrides` keeps
-  D-0022, `--dry-run` prints the code/override diff and strategies. New
-  `motioner fmt <file|project> [--check]` and `motioner lint <file|project>`.
-- Tests: write-through SetValue/SetKey/SetVisible, fallback, one-gesture
-  write/undo, exact-byte undo, code/overrides parity, CLI fmt/lint.
+- Status chip "N edits as overrides" (top bar) opens the list
+  (`panels::overrides`, model in `overrides_panel.rs`); each row shows the
+  command and the last known reason; Convert re-plans one entry through the
+  write-through sink in one undo entry; Convert all uses `bake`.
+- Open banner offers to convert a non-empty `<name>.overrides.motion`.
+- Read-only code panel (View menu / Ctrl+B, `show_code(on)`), line numbers and
+  the exact ranges of the applied `CodeEdit` (deletions marked); model in
+  `code_panel.rs`, drawing in `panels::code`.
+- `motioner edit --dry-run` and the live control reply share
+  `motioner_ui::unified_diff`; an editing request replies with
+  `{summary, code, strategies, overrides_kept, fallback_reasons, path, diff}`.
+- `editor.motion` stores `edit_mode` (code by default) and `traces`; read on
+  open, written atomically on change; `--code`/`--overrides` override it for
+  one CLI run.
+- Watcher: an external change during a gesture wins; the gesture is dropped,
+  the program re-runs and the selection is kept by identity (test
+  `an_external_change_discards_a_pending_gesture_and_keeps_the_selection`).
 
-### Phase 7 (fmt and lint)
+### B3 — Planner corpus and property test
 
-- `motioner_dsl::printer` is source based (comments are kept; the lexer drops
-  them): 4 spaces, one statement per line, canonical spacing/quotes/numbers,
-  at most one blank line inside blocks and two around top-level `def`, trailing
-  newline, CRLF preserved. `format`, `format_check`, `format_snippet`,
-  `format_signature`.
-- `motioner_dsl::lint` reports unbound inline constructors, empty/dead guards,
-  duplicate property assignments, `_` guards, unused parameters and repeated
-  magic numbers as advisory warnings with spans.
-- Every `examples/*.motion` file and
-  `examples/demo.motioner/compositions/main.motion` is formatted and
-  lint-clean; all goldens are unchanged.
-- Formatting changed provenance byte-offset keys: hello's title is now
-  `@281` (was `@288`), the loop dots `@569/iN` (was `@586/iN`) and the first
-  spinner group `@780/c1127` (was `@845/c1172`). Tests and command examples
-  were updated to the formatted identities.
+- `crates/motioner_dsl/tests/write_through/<case>/` with 19 cases
+  (`before.motion`, `command.txt`, `after.motion`, `strategy.txt`), driven by
+  `crates/motioner_ui/tests/write_through.rs`. Covers private literal, local
+  assignment, loop guard/key, nested loops, call argument/promotion/result,
+  structural add/delete/duplicate/rename/group/loop-continue, two refusals,
+  CRLF and comments. Regenerate intentionally with `UPDATE_CORPUS=1`.
+- Seeded property test over nine examples: re-runs without warnings, code and
+  overrides sinks agree, undo restores the original bytes, the result is
+  canonical and lint did not grow (0.65 s debug).
+- `examples/effects, gradients, images, masks, showcase, showcase_pro` were not
+  canonical (phase 7 missed them); they are formatted now. Goldens unchanged.
 
-### Integration fixes (this session)
+### B4 — Edit traces
 
-- Every planner-inserted statement goes through `printer::format_snippet`
-  (`plan::insert_assignment`, `loop_guard::write_statement`,
-  `call_site::insert_after`, structural snippets).
-- Parameter promotion rewrites a multiline `def` header through
-  `printer::format_signature` instead of falling back; a comment inside the
-  header still falls back.
-- `verify` ignores resolver-owned media fields (`ImageContent.asset`,
-  `VideoContent.asset`) and has `verify_with_metrics`; the planner has
-  `plan_with_scope_and_metrics`, so programs that call `text_width` or contain
-  images verify exactly with the session's metrics/resolvers.
-- Commit latency on `showcase_pro.motion` (release, 30 runs):
-  **median 11.21 ms, p90 12.73 ms** (budget 50 ms), via
-  `crates/motioner_app/examples/commit_bench.rs`.
+- `motioner_io::traces`: schema v1, hand-written JSONL writer/parser, one file
+  per day under `<project>/traces/`, reserved `conversation`/`tool_calls`.
+- Recording: debug on by default, release only when the project sets
+  `traces=True`, `MOTIONER_TRACES=1` always wins. Window, `motioner edit` and
+  the control endpoint record; writes happen after the transaction commits.
+- `motioner trace export` (dedupe by before+command, replay filter, `--strategy`,
+  `--since`) and `motioner trace replay`; committed fixture
+  `crates/motioner_app/tests/fixtures/traces.jsonl` runs in CI.
+- `docs/traces.md`.
 
-### Bench and gate (2026-11-05)
+### B5 — Corpus tooling and tool schema
 
-- Interpreter baseline at `559affb` (detached worktree, same host):
-  **1.234 / 1.187 ms** (two back-to-back runs). Current:
-  **1.197 / 1.358 / 1.220 / 1.203 / 1.208 / 1.182 ms**; median of medians
-  **1.2055 ms** vs baseline **1.2105 ms** (-0.4 %, within the +7 % budget).
-  `interpreter.rs`, `origins.rs`, `scene.rs` and `value.rs` are unchanged from
-  `559affb`.
-- Gate green: `cargo fmt -- --check`, clippy pedantic `-D warnings`,
-  `cargo test --workspace -j 2`, rustdoc `-D warnings`, boundaries, machete,
-  `pctl validate`, `doc-check-refs`.
-- Disk free on C: ~6 GB (above the 5 GB stop line).
+- `motioner corpus check <dir> [--frames N]`: parse, run without warnings,
+  fmt/lint, headless stills, reject only when every still is blank, render
+  frame 0 twice for determinism, AST feature detector, `manifest.json` with
+  timings/layers/reasons. Exit non-zero only for tool errors.
+- `<name>.prompt.md` seed briefs for all 12 examples.
+- `motioner tools --schema` generated from `CommandKind::ALL` plus
+  `read_program`, `apply_code_edit`, `run`, `query`, `render_still`; a test
+  fails when a command is missing. One descriptor list for prompt 13.
+- `docs/corpus.md`.
 
-### Control bookkeeping
+### B6 — Docs, measurements, ADR, report
 
-- `pctl reindex-force` removed the duplicate backlog entries T-0001
-  (origins v2 = T-DSL-0007) and T-0002 (audio loop = T-APP-0006).
-- T-DSL-0012 is in_progress: the phase 5 planner and sink are done; the
-  window/CLI structural command variants are the remaining wiring.
-- Next: expose the structural gestures in the `Command` table (phase 6 UI
-  polish), then phases 8-10 (traces, corpus/tool schema, docs/measurements).
+- Docs: `docs/write-through.md`, `docs/traces.md`, `docs/corpus.md`,
+  `docs/agents.md`, `README.md`; ADR addendum in `D-0036.md`.
+- Measurements (release, RTX 4050, host under a concurrent GUIMaker build):
+  interpreter **1.298 ms** median / 1.665 ms p90 on `showcase_pro` (3 runs
+  1.298/1.389/1.296; baseline 1.2105, +7.2 %, but `interpreter.rs`,
+  `origins.rs`, `scene.rs` and `value.rs` are byte-identical to `559affb`, so
+  the delta is host contention; phase 5-7 measured 1.2055, -0.4 %). Commit
+  (plan+apply+write+re-run+verify) **median 11.72 ms, p90 13.37 ms** (budget
+  50 ms). Corpus check: 5 programs × 3 stills in **5.65 s** whole run
+  (0.61-2.17 s per file, includes GPU init).
+- Gate green: fmt, clippy pedantic `-D warnings`, workspace tests (58 test
+  binaries), rustdoc `-D warnings`, boundaries, machete, `pctl validate`,
+  `doc-check-refs`. The debug build had to run with
+  `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` because this host's
+  pagefile is exhausted by a concurrent job (error 1455/STATUS 0x c0000409
+  when linking test binaries with debug info); tests themselves are identical.
+- Screenshots: `out/ui/p12b-01-add-layer.png`,
+  `p12b-02-outline-reparent.png`, `p12b-03-overrides-chip.png`,
+  `p12b-04-code-panel.png`, `p12b-05-bake-banner.png`.
+- Report (Spanish): `out/reports/PHASE-12B-REPORT.md`.
 
-## Prompt 12 status (2026-11-04, phases 0.5-4 done)
+### Write-through essentials (unchanged)
 
-**Origins v2, audio loop fix, the code planner, loop and call-site
-specialisation.** Phases 0.5-1 are committed at `9f6a1c8`, phase 2 at
-`57e6b7c`, phase 3 at `af1115d` (docs `7a3fe52`); phase 4 is the working tree
-for review. Gate green (fmt, clippy pedantic, workspace tests, rustdoc,
-boundaries, machete, `pctl validate`, `doc-check-refs`).
+Strategy ladder: private literal → loop guard (`if i == 3:`, merges into
+`in (1, 3)`, enumerate rewrite) → call site (argument, returned-node binding,
+parameter promotion with default) → local assignment → fallback override with
+a reason. Every code edit is verified by re-running; undo stores source +
+overrides. `motioner_dsl` owns planner/printer/lint (strings only); writes are
+in `motioner_ui`/`motioner_app`.
 
-### Phase 4 (T-DSL-0010)
-
-- `motioner_dsl::call_site` implements D-0036 section 2.3 from the origin of
-  the edited write: a `Parameter` expression is passed (or edited) at the call
-  site; a call marked `returns_node` binds the result if needed and assigns
-  after the node's last write in the caller block; otherwise the old literal is
-  promoted to a keyword parameter whose default is its old text and only this
-  call passes the new value. Promotion edits the definition once, so every
-  other call site keeps its value; the re-run proves it.
-- `plan` order is now: redundant-guard removal, private literal, loop guard,
-  call site, local assignment, fallback. New `Strategy` names:
-  `call-argument`, `call-promotion`, `call-result`.
-- Loop + function: `loop_guard` now selects the caller binding inside the loop
-  body, seeds the insertion after the call statement (binding an unbound call)
-  and keeps the normal guard/merge/removal. This covers nodes created in a
-  function called from a loop and values written by a function inside a loop.
-- MDF gains default parameter values (`def badge(x, fill="#ffffff")`): parser
-  rejects a required parameter after a default, `bind` takes the required
-  count, missing arguments are evaluated at the call in the caller scope, and
-  `ParameterOrigin.default` records the span. `spec/mdf-v0.md` section 5 and
-  the grammar are updated.
-- Refusals with a reason: more than one enclosing call (nested), a call result
-  in the middle of another expression, a reassigned caller binding, a computed
-  value that is not a parameter, and a multiline function parameter list
-  (phase 7 fmt). `tests/planner_calls.rs` has 18 cases;
-  `tests/default_parameters.rs` has 4.
-- Bake now writes call-site overrides as code (the old spinner fallback test
-  became `an_in_place_edit_and_a_call_override_both_become_code`).
-- **Interpreter budget:** baseline `af1115d` median **1.207 / 1.221 ms**,
-  current **1.161 / 1.234 ms** across two back-to-back pairs (worst +1.1 %);
-  p90 1.692/1.700 -> 1.635/1.527 ms; nodes 84, origins 649. The budget
-  (median no more than 7 % above baseline) is met. Call frames keep a parallel
-  defaults vector only when the function has defaults, and functions without
-  defaults take the old locals path.
-- Disk after cleaning debug `.pdb`/incremental: 12.4 GB free.
-
-### Phase 3 (T-DSL-0009)
-
-- `motioner_dsl::loop_guard` implements D-0036 section 2.2: a guard built from
-  the loop stack (`if i == 3:`, nested with `and`), inserted in the innermost
-  loop body after the node's last write with the file's indentation and line
-  endings. An existing guard for the same node is extended, repeated values
-  merge into `if i in (1, 3):` (sorted), and a guard that becomes equal to the
-  shared value is removed. `_` loop variables are renamed; repeated or
-  non-literal values rewrite the loop to `for i, x in enumerate(xs):`; inline
-  nodes get a readable binding (`circle_2 = circle(10)`).
-- `plan` order is now: redundant-guard removal, private literal, loop guard,
-  local assignment, fallback. `plan_with_scope(..., Scope::This | Scope::All)`
-  is the "this one / all" API (`This` default); `All` edits the shared literal
-  and verifies every instance made by the same loop call. Guard merges apply to
-  a single-loop guard; different nested instances append a second exact guard.
-- Language: membership `in` / `not in` on lists, tuples, ranges and strings,
-  `enumerate(value, start=0)`, and tuple unpacking in `for`
-  (`for i, name in enumerate(names):`). `spec/mdf-v0.md` and `docs/agents.md`
-  updated; tests `tests/loops_language.rs`, `tests/planner_loops.rs`.
-- `ValueOrigins` keeps every write in program order (lookups still take the
-  latest). This lets the planner find the unguarded value after a guard and
-  removes the per-write `retain`, so the interpreter got slightly faster.
-  Verification ignores display names (presentation only, D-0044); a generated
-  binding legitimately renames nodes.
-- Instance delete (`if i == 3: continue`) and key removal/move guards wait for
-  the phase 5 structural commands and fall back with a reason today.
-- **Interpreter budget:** reproducible bench
-  `crates/motioner_dsl/examples/interpreter_bench.rs` (20 warm-up + 200 runs,
-  median and p90, `showcase_pro.motion`). Baseline `9f6a1c8` median **1.451 ms**,
-  current **1.271 ms** (-12 %); p90 1.825 -> 1.630 ms; nodes 84, origins
-  647 -> 649. The budget (median no more than 7 % above baseline) is met.
-  Disk stayed above 8 GB (8.24 GB free after the release build).
-
-### Phase 2 (T-DSL-0008)
-
-- `motioner_dsl::CodeEdit`: ordered non-overlapping byte replacements with
-  `apply`, `invert` (byte-exact undo), `compose`, `rekey_identity`,
-  `rekey_overrides` and `combine`, with typed errors. D-0027 offset
-  arithmetic now lives here.
-- `motioner_dsl::plan(program, origins, document, &EditCommand)` returns
-  `Plan::Code(CodeEdit)` or `Plan::Fallback(reason)`. Strategies: private
-  literal (moved from bake) and local assignment after the node's last write,
-  editing an existing assignment instead of adding a second one. Loops,
-  functions and structural commands fall back with a reason for phases 3-5.
-- `verify(program, overrides, expected)` is the one re-run/position check used
-  by the planner and bake.
-- `EditCommand` / `KeyRef` / `MoveKey` moved to `motioner_core` so the planner
-  consumes the same resolved command the editor applies; `motioner_ui` still
-  re-exports them. `value_text` is public.
-- `bake` now offers every override to `plan`; refusals still append the D-0022
-  generated block. Shared snippet formatting lives in `write_text.rs`.
-- Tests: `code_edit` unit tests, `tests/planner.rs` (private literal, computed
-  and shared values, existing assignment, CRLF/indentation, loops, keys,
-  unsupported commands) and the existing bake suite.
-- **Interpreter budget:** phase 2 changed neither `interpreter.rs` nor
-  `origins.rs` (`git diff 9f6a1c8` empty). Host measurements under Defender
-  load ranged 1.6-2.5 ms/run on `showcase_pro.motion`, so the absolute number
-  is not comparable; the phase adds no interpreter work. Disk stayed above
-  8 GB (8.3 GB free), so no cleanup was needed.
-
-- **Phase 0.5 (T-APP-0006).** `AudioOutput::ended` reports a consumed range;
-  `ProjectHost::audio_ended` exposes it. `Transport::follow_audio`
-  (`crates/motioner_ui/src/transport.rs`) wraps a looping transport to frame 0
-  and returns the loop start; `App::restart_audio`
-  (`crates/motioner_ui/src/app/mod.rs`) re-mixes and restarts the cpal stream
-  there. The first sample after the wrap is sample-exact (same integer sample
-  offset arithmetic as playback). A non-looping stream stops at the end.
-  Headless regressions:
-  `a_finished_audio_stream_restarts_looping_playback_at_the_first_frame` and
-  `audio_out::tests::the_cursor_reports_the_end_only_after_the_last_frame`.
-- **Phase 1 (T-DSL-0007).** `motioner_dsl::origins` v2: every node creation and
-  value/key origin records statement, block (span + indentation), binding and
-  reassignment, loop stack (span, variable, iterable span, index, literal
-  value, body span/indent), call stack (call site, definition, parameters and
-  defaults, whether the invocation returned the node) and expression class
-  (literal / parameter / loop variable / computed). Names are interned as
-  `NameId`; loop/call context is shared through `Arc`. `for`/`if` parser spans
-  now cover the whole construct. Tests:
-  `crates/motioner_dsl/tests/origins_v2.rs`.
-- **Interpreter cost** on `showcase_pro.motion` (release, 84 nodes, 647
-  origins, same host): 0.80 ms/run before, ~1.50 ms/run after (interpreter
-  only); the absolute cost is small next to a 16 ms render frame.
-- Next: Phase 5 (structural edits, `T-DSL-0012`). It must close the phase 3-4
-  deferrals: deleting one loop instance as `if i == 3: continue` (first
-  statement of the body when that iteration creates only that node) and key
-  move/remove with the same loop/call guard used by values. Do not start it
-  without the user's go-ahead.
-
-## Prompt 11 status (2026-11-04, phases 0-7 done)
-
-**All phases complete**: 0-4.5, 5 (audio), 5.5 (review fixes), 6 (video)
-and **7 (video performance, demo/goldens/docs/release)**. Gate green (fmt,
-clippy pedantic, tests, rustdoc, boundaries, machete, pctl validate). No
-commit; the working tree is for review.
-
-### Phase 7 (T-PERF-0004, T-RENDER-0016)
-
-- **7a video performance.** The preview no longer decodes on the UI thread.
-  `motioner_io::video` gained `decode_frames` (batch) and `FrameStream`
-  (long-lived sequential decode, `-threads 1` for the worker).
-  `motioner_app::video_cache` owns a worker thread, a mutex LRU and a
-  lookahead of 24 frames; it keeps one stream open while the playhead moves
-  forward and returns `Ready`/`Pending`/`Unavailable`. The canvas keeps the
-  previous texture while a frame is pending. `AudioOutput::position` returns
-  `None` for a silent mix, so video-only compositions use the wall clock.
-  The per-frame `Project::open` is cached by manifest mtime.
-  Release, 1600x900, `out/p11-video/proxy.motioner` (1080p60 source):
-  baseline **112 dropped in ~5 s**; after **0 dropped in the measured 5 s
-  window**, **59-61 UI fps**, **179-366 MB working set** (the SO trims it),
-  **736-739 MB private**, **42 MB video cache**, eval 0.29-0.36 ms. Demo
-  (1280x720, generated audio): **59-62 UI fps**, 42 MB cache; its playhead
-  follows the audio device, which on this automation host runs below real
-  time (the video-only test above uses the wall clock and is clean).
-  Regression:
-  `motioner_io/tests/video_decode_ahead.rs` (30-frame batch and persistent
-  stream inside a budget).
-- **7b demo.** `examples/demo.motioner/` is a real project with a
-  `gradients` background PNG, an all-intra `testsrc2` 720p60 clip and an
-  `aevalsrc` 48 kHz stereo music loop, a title/subtitle sequence, music and a
-  fade-out. Goldens `demo_f090.png`/`demo_f330.png` are pinned by
-  `motioner_render/tests/golden_demo.rs`, which also asserts the exact video
-  source frame. `motioner_io/tests/demo_mixer.rs` pins the first 4096 mixed
-  samples. `out/demo.mp4` is 6.000 s H.264 720p60 + 48 kHz stereo AAC
-  (3,232,661 bytes); `out/demo_wave.png` shows the fade-out; `volumedetect`
-  mean -21.5 dB, max -13.0 dB. Docs: `spec/mdf-v0.md` 7.7,
-  `docs/projects.md`, `docs/agents.md`, `README.md`. Backlog: T-NLE-0002
-  (transitions), T-AUDIO-0003 (audio effects), T-PUB-0001 (installer and
-  file association). No engine pin bump was needed.
-
-### Earlier prompt 11 phases
-
-- Phase 5.5 (T-UI-0013): `motioner_ui::properties::PropertySet` is the one
-  kind-to-property-set table; audio shows Source/Start/In/Out/Gain/Pan/Fade
-  in/out/Mute/Solo and not transform/blend/effects/mask; expanded rows are
-  Gain/Pan/fades; `channels::resolve`/`resolve_edit` return
-  `UnknownProperty` for visual commands on audio; `Icon::ALL/has_glyph`
-  covers mute/solo/filter/shadow/blur/glow; assets shows `A-N` with a
-  tooltip and keeps the name at 180 px; effect rows use icons; the waveform
-  uses a peak mip chain and a mirrored envelope with empty silence.
-  Captures: `p11-06b-timeline-waveform`, `p11-06c-assets-narrow`,
-  `p11-06d/e/f-waveform-zoom-*`, `p11-06h-effects-icons`.
-- Phase 6 (T-RENDER-0015): `VideoContent`/`VideoAsset`/`VideoResolver`,
-  `video()` MDF, `Document::resolve_videos`, exact frame selection,
-  `ItemShape::Image` per node with `ImageKey::tagged`; `motioner_io::video`
-  (ffprobe/decode/proxy); `ImageData.revision` and in-place updates with a
-  size fallback; `motioner_app::video_cache` (LRU 192 MB/48 frames); all-intra
-  640 proxy in `cache/<hash>.proxy.mp4` with `.proxy.done` and a background
-  job; UI video inspector, thumbnails, trim/Alt-slip and proxy/memory
-  readouts; video audio through the mixer and AAC mux. Flow F-0003.
-  Captures: `p11-07-timeline-thumbs`, `p11-07-video-inspector`,
-  `p11-07-trim-slip`, `p11-07-proxy-progress`, `p11-07-1080p60-playing`.
-  Debug baseline: 198 MB working set, 769 MB private, 59 UI fps, 120 dropped
-  in ~5 s, ~42 MB video cache; `out/p11-video/render.mp4` 3.000 s video +
-  3.000 s AAC.
-- D-0047: `time` in `motioner_io` for local relative ages; the age is pure
-  with an injected `now` and the tooltip uses the local offset.
-- D-0048: `cpal` only in `motioner_app`; `audio_out` owns the stream and the
-  sample cursor; the transport follows `ProjectHost::audio_position`.
-- Audio: `AudioContent`/`NodeContent::Audio`; MDF
-  `audio(source, in_point, out_point, gain, start, pan, fade_in, fade_out)`
-  with keyable `gain`/`pan`; `motioner_io::audio` (48 kHz stereo decode to
-  `cache/<hash>.pcm`, pure sample-exact `mix_document`, WAV, AAC mux with
-  `-shortest` and `--no-audio`); timeline waveform, Gain/Pan rows and
-  trim/move through `Edit`; captures `p11-06-timeline-waveform.png`,
-  `p11-06-audio-layer.png`; render `out/p11-audio/demo.mp4` (3.000 s video,
-  3.000 s audio).
-- Phase 4.5: `app::drop` routes OS drops (import + place on the canvas);
-  window/panel highlight; assets toolbar with list/grid/clean icons and a
-  compact geometry (no truncation at 180 px); recents relative with a local
-  tooltip. Capture: `out/ui/p11-02-assets.png`.
-- D-0045 "Project folder v1": `<name>.motioner/` with `project.motion` (MDF),
-  `compositions/`, `assets/<sha256>.<ext>`, `cache/`, `backups/`, `traces/`,
-  `editor.motion`; stable registry key; MDF resolves by key or original name;
-  app state in `%APPDATA%\Motioner\app.motion`; atomic writes and explicit
-  migrations.
-- D-0046: `rfd` only in `motioner_app` (folder picker), behind `ProjectHost`.
-- `motioner_io::project` (manifest, `EditorState`, `AppState`, validation,
-  `clean_temp`) and `motioner_io::assets` (`ProjectImages`, import/dedupe/
-  rename/remove, sources).
-- CLI: `new`, `import <project> <file>...`, `backup <project>`, `migrate`,
-  `info`; every command accepts a folder/manifest/composition.
-- Start screen + File menu + `ProjectHost` (`motioner_app::host::Host`);
-  `Editor::blank`/`replace_session`; commands `new_project`, `open_project`,
-  `close_project`, `save`, `save_as`.
-- **Layers/Assets** panel with a virtualised list/grid, import (menu, `+`,
-  double click/drag), ffmpeg conversion to `cache/`, audio peaks, CLEAN and
-  place; **0 alloc/frame** (`out/ui/p11-05-alloc.png`).
-- Autosave: 300 ms overrides; `motioner_io::backups` (snapshot every 120 s,
-  20/200 MB, prune) and `cache/session.lock` with a heartbeat; recovery banner
-  with Restore/Dismiss.
-- New asset commands: `import_asset`, `remove_asset`, `rename_asset`,
-  `place_asset`, `remove_unused_assets`, `restore_backup`,
-  `dismiss_recovery`; documented in `docs/agents.md`.
-- Captures: `p11-01-start`, `p11-02-assets`, `p11-03-placed`, `p11-04-recovery`,
-  `p11-05-alloc` in `out/ui/`.
-
-## What this project is, in practice
+## Project essentials
 
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the custom
-FerrousEngine (wgpu). Program-first MDF (Python-like DSL) builds the
-composition. Scope and decisions: REF-0001..0004, D-0010..D-0048.
+FerrousEngine (wgpu), branch `feat/m1-foundations`. Program-first MDF (Python-
+like DSL) builds the composition; scope and decisions are REF-0001..0004 and
+D-0010..D-0048. Code is written by opencode with DeepSeek V4.1 Flash; Claude
+is architect/auditor; the user speaks Spanish.
 
-## Working model
-
-- Code is usually written by opencode with DeepSeek V4.1 Flash; Claude is
-  architect and auditor. Conversation with the user is in Spanish.
-- Prompts live in `.control/prompts/{opencode,claude}/`. Work only inside
-  Motioner, FerrousEngine and GUIMaker.
-- The user wants LONG multi-phase prompts and a visible result (PNG/MP4).
-- **FerrousEngine is a general-purpose engine, not a Motioner backend.** A
-  missing render capability is built in the clone as a public engine feature
-  with rustdoc, `crates/<crate>/docs/`, an `mkdocs.yml` entry and engine
-  tests; Motioner only consumes it. The user commits the clone and bumps the
-  pin.
-
-## Current state (branch feat/m1-foundations)
-
-- `motioner render|still|info|bake|preview|query|edit|ctl|new|import|backup|
-  migrate`.
-- The editor EDITS through overrides (D-0022); the program only changes with
-  `bake`.
-- **Agent control (D-0024)**: one `Command` enum, MDF call syntax,
-  `motioner_ui::command`, executed only by the window-free `Editor`.
-  `motioner query` (JSON scene), `motioner edit` (all-or-nothing,
-  `--dry-run`), `preview --control` + `motioner ctl`. Docs: `docs/agents.md`.
-- **Canvas view (D-0026)**: `ViewState.zoom/pan/fit_zoom`;
-  `viewport::Viewport` is the one window to composition mapping.
-- **Orphans (D-0025)**: `Editor::orphan_suggestions()` ranks live nodes.
-- **Hybrid bake (D-0027)**: value origins + in-place literal edits + re-key +
-  verify.
-- **Professional motion model (D-0028)**: content fields are animatable
-  channels; colour interpolation is linear-light sRGB. `NodeContent::channel`
-  is the one field table.
-- **Vector paths (D-0029)**, **gradients (D-0030)**, **blend modes (D-0031)**,
-  **layer effects (D-0032)**, **masks (D-0033)**.
-- **Typography (D-0034)**: Inter 400/600/700 in `assets/fonts/`; `FontSet`;
-  `TextMetrics` in core + `CpuTextMetrics` in render; `text_width`/
-  `text_bounds`; `node.animate_chars(...)`; the inspector Text section.
-- **Images (D-0035)**: `image(source, width=None, height=None, fit=...)` with
-  `contain|cover|fill`; PNG decoded by `motioner_io::ImageStore` (palette,
-  grey and 16-bit expanded to RGBA8; gAMA/iCCP ignored); SHA-256 content keys;
-  `Document::resolve_images` fills key/natural size; the plan carries key,
-  destination rect and `uv_rect`; the renderer registers mipmapped textures on
-  first use and reuses them by key; missing files fail `still`/`render` with
-  `UnresolvedImage` and draw a placeholder in the preview.
-  `examples/images.motion` and two goldens.
-- **Timing (D-0037)**: `Ease` keeps `Copy + Eq + Hash`; `BezierEase` quantises
-  the four control values to 1e-6 as `i32`; new presets `hold`,
-  `elastic_out`, `bounce_out`, `expo_in_out`, `sine_in_out`; `bezier(...)` is
-  parsed in MDF, overrides and commands; the solver is 8 Newton-Raphson steps
-  then 64 bisection steps; `comp(..., motion_blur=True, shutter=180,
-  samples=8)`; `Evaluator::evaluate_fractional`; `render_frame` averages
-  sub-frames through the engine accumulation API; `stagger` and `wiggle` emit
-  ordinary keys (SplitMix64 for `wiggle`).
-- **Engine accumulation (D-0038)**: `Accumulation2d` in `ferrous_2d`, mirrored
-  on `Renderer`, `Pure2dHarness` and `RenderContext`; `Rgba16Float`,
-  premultiplied linear, weighted add, normalised resolve.
-- **Editor quality of life (D-0044)**: `Node::name` + binding-derived defaults
-  (`motioner_dsl::default_name`), `name` override, bake and `query`;
-  `filter_layers`/collapse/`solo`/`shy`/`show_shy` (preview only);
-  `graph_open`/`graph_view`/`move_key_value` and editable bezier fields;
-  virtualised timeline rows + cached `OutlineRow::visible_runs`; optional
-  `alloc-count` feature; live motion-blur preview (`app/blur.rs`) through
-  `FrameRenderer::render_preview_frame`, 4 samples playing / full paused.
-- Keyframes per axis; animated vectors are always keyed per axis (`pos.x`).
-- In-app screenshots: `preview --screenshot <png>` and `ctl screenshot(...)`;
-  `scripts/ui_shot.ps1 [-Commands ...] [-Select ROW]`.
-- **GPU tests**: `motioner_testkit::gpu::lock()` serializes them; the normal
-  `cargo test --workspace` gate is green without `--test-threads=1`.
-
-## Phase 12 release numbers (reference machine)
-
-- Release build once: `cargo build --release -p motioner_app -j 2` with
-  `CARGO_INCREMENTAL=0`, 5m56s.
-- `showcase.motion`: 720 frames in 8.079 s, **7.778 ms/frame**
-  render+readback, 3.065 ms/frame encode.
-- `showcase_pro.motion`: 1440 frames in 26.621 s, **16.499 ms/frame**
-  render+readback (8-sample motion blur), 1.763 ms/frame encode.
-- Preview (release + `alloc-count`, 1600x900, Pro reel playing): **59 UI fps**,
-  eval 0.03 ms, **0 chrome allocations/frame**, canvas at a 39 % fit.
-  Captures: `out/ui/p12-01-alloc.png`, `out/ui/p12-02-fps-1600.png`.
-- Report (Spanish): `out/reports/PHASE-12-REPORT.md`.
-
-## Goldens
-
-- `hello_f120.png` (byte-identical), `blend_f30.png`,
-  `gradients_f30/f105.png`, effect/mask/path/animatable stills.
-- Typography (D-0034): `typography_tracking_f30.png`,
-  `typography_lines_f150.png`, `typography_chars_f260.png`.
-- Images (D-0035): `images_fit_f030.png`, `images_composite_f150.png`.
-- Timing (D-0037): `timing_eases_f030.png`, `timing_motion_blur_f400.png`.
-- Showcase Pro (Phase 11): `showcase_pro_f180/f330/f600/f810/f1086/f1320.png`
-  (1920x1080) pinned by `motioner_render/tests/golden_showcase_pro.rs`.
-- Demo (prompt 11 phase 7): `demo_f090.png`, `demo_f330.png` (1280x720)
-  pinned by `motioner_render/tests/golden_demo.rs`; the same test asserts the
-  exact video source frame. `motioner_io/tests/demo_mixer.rs` pins the first
-  4096 mixed samples of the demo.
-- `hello_f120.png` stays byte-identical after Phases 10-11:
-  SHA-256 `C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`.
+- CLI: `render`, `still`, `info`, `bake`, `preview --control`, `ctl`, `new`,
+  `import`, `backup`, `migrate`, `query`, `edit [--overrides|--code]
+  [--dry-run]`, `fmt [--check]`, `lint`, `trace export|replay`, `corpus check`,
+  `tools --schema`.
+- Editor: projects (`<name>.motioner/`), assets registry, timeline with
+  waveforms/thumbnails, graph editor, effects/masks/gradients/blend modes,
+  typography (Inter), images, video proxy/cache, audio mixer, autosave/backup/
+  recovery, write-through gestures, overrides list, code panel, traces.
+- Keys: Space, arrows, Delete (layer when no key selected), Ctrl+D duplicate,
+  Ctrl+G/Ctrl+Shift+G group/ungroup, Ctrl+Up/Down reorder, Ctrl+B code panel,
+  Ctrl+E edit mode, Ctrl+T traces.
 
 ## Gotchas
 
-- **PowerShell**: double-quoted strings and here-strings expand backticks and
-  `$`, so never pass Python code containing `` ` ``, `\"` or `${...}` through
-  `python -c @"..."@`; write a `.py` script with the editor tool instead.
-  Native args drop unescaped `"`, which breaks `ctl select("@288")` and
-  `scroll("inspector", n)`; use `--select ROW` and a taller window instead.
-  Escape inner quotes as `\"` when passing `screenshot("out.png")`.
-- `scripts/ui_shot.ps1` escapes quotes but the outer PowerShell invocation may
-  still strip them; prefer `-Select`.
-- 8 GB RAM: cargo needs `-j 2`; clippy all-targets may need `-j 1` when the
-  machine is busy. `CARGO_INCREMENTAL=0`.
-- Disk: keep C: above 5 GB. `target/debug/deps/*.pdb` can be deleted to free
-  ~11 GB; `cargo clean` after a phase is the last resort. The linker fails
-  with LNK1318 at 0 bytes free.
-- `core.autocrlf=true`: working copies CRLF; engine files edited with Python
-  `newline=''` keep their EOL. rustfmt may turn a CRLF file into LF; restore
-  it with a `\n` to `\r\n` pass. Motioner files are LF (`.gitattributes
-  eol=lf`).
-- Clippy pedantic: `too_many_lines`, `too_many_arguments`, `option_option`,
-  `float_cmp`, `implicit_clone`, `doc_markdown`, `must_use`,
-  `match_same_arms`, `single_match_else`, `cast_lossless` and
-  `arc_with_non_send_sync` are easy hits.
-- Inspector order: Composite -> Effects -> Mask -> Transform -> Text ->
-  Animators -> Image -> Audio.
-- `cpal` 0.18 uses `u32` sample rates (`min_sample_rate()` /
-  `with_sample_rate` take `u32`, not `SampleRate`); tests never open a device,
-  only `mix_document` and the WAV/mux path. A silent mix now returns
-  `position() == None` so the transport uses the wall clock. The output stream
-  asks for a 1024-frame fixed period and falls back to the device default.
-- `time` may fail to read a local offset on unusual hosts; the tooltip falls
-  back to UTC, which is still a full date.
-- `motioner_ui` must NOT depend on `motioner_io` (boundary check). The image
-  loader enters the UI as `Rc<dyn motioner_core::ImageResolver>` through
-  `PreviewOptions.image_resolver`; the app creates `CachedImages`.
-- The demo playhead follows the audio device. On this automation host the
-  device clock runs slower than wall time, so a 6 s demo can take longer than
-  6 s to reach the end; UI fps and steady-state dropped frames are unaffected.
-  Looping with audio restarts the stream at the loop start (prompt 12 phase
-  0.5); see `Transport::follow_audio` and `App::restart_audio`.
+- **Host memory**: another job builds GUIMaker/FerrousEngine in parallel.
+  Pagefile commit can be exhausted; rustc fails with `E0786`/“paging file too
+  small” (1455) or `STATUS_STACK_BUFFER_OVERRUN`. Free space: deleting
+  `target/debug/**/*.pdb` frees ~9 GB and lets the pagefile grow; running the
+  gate with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` avoids the
+  largest link allocations. Check C: before phases; stop below 5 GB.
+- PowerShell 5.1 drops unescaped `"` in native args; use `\"` in `-Commands`,
+  `--select ROW` instead of `ctl select("@id")`. `ui_shot.ps1` is occasionally
+  flaky about the control endpoint; starting `preview` with `Start-Process`
+  and sending `ctl` manually is reliable.
+- Editing `examples/*.motion` via `ctl` writes the real file; use copies under
+  `out/ui/` for screenshots and remove them.
+- `cargo fmt` normalises LF; files written by PowerShell need a
+  `-replace "`r`n","`n"` pass (`.gitattributes eol=lf`).
+- Clippy pedantic hits: `too_many_lines`, `too_many_arguments`,
+  `assigning_clones`, `single_match_else`, `write_with_newline`,
+  `enum_variant_names`, `cast_precision_loss`, `items_after_statements`.
+- GPU tests serialize through `motioner_testkit::gpu::lock()`; the first
+  parallel run after a build can fail on device memory.
 
-## FerrousEngine state
+## Engine
 
-- Pin `7e95367` on `feat/pure2d-text-and-readback`: temporal accumulation
-  (`Accumulation2d`) and level-zero texture upload.
-- Pinned clone commit `6a30e7d` (Phase 10 review): `GuiBatch::line`/`polyline`
-  with `LINE_BIT (1 << 9, shader 0x200)`, anti-aliased segments;
-  `Renderer::update_sprite_texture` with in-place `queue.write_texture` for
-  same-size frames.
-- Clone commit `e482b3c` (Phase 12): `GuiBatch` recycle (`FramePacket::remove`,
-  `FrameBuilder::take_ui_batch`, `Renderer::take_recycled_ui_batch`) so
-  Motioner's chrome reads 0 allocations/frame.
-- Pinned clone commit `cab7035` (in Motioner history at `fc41083`):
-  `FileDropEvent`/`FileDropKind`, `FerrousApp::on_file_drop`; the runner
-  queues `HoveredFile`/`HoveredFileCancelled`/`DroppedFile` and delivers them
-  in the frame's `AppContext`; docs in `ferrous-app-trait.md` and the README,
-  test `ferrous_engine/tests/file_drop.rs`.
-- **No engine pin bump is needed for prompt 11 phase 7.** The features used by
-  the preview worker (`update_sprite_texture`, file drops, accumulation,
-  line/polyline, `GuiBatch` recycle) are already in the pinned clone and
-  documented/tested there.
-- **Flaky GPU tests**: the first parallel run after a build can fail with
-  `wgpu error: Validation Error` / `create_buffer ... 'Particles Storage
-  Buffer' ... Not enough memory left` or FXC out-of-memory. It is device
-  contention; `tests/common/mod.rs` has a process-wide `gpu::lock`.
+Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone `6a30e7d` (line/
+polyline, in-place texture update), `e482b3c` (GuiBatch recycle), `cab7035`
+(file drops). **No pin bump in this session.** Never edit `engine/ferrous`.
+
+## Goldens
+
+`hello_f120.png` byte-identical (SHA-256
+`C2173BADD7F23933461473C5D682E40FC9FC1DCBD4EBBE10A1C7C1C7DE5CF15C`);
+`showcase_pro_f180/f330/f600/f810/f1086/f1320.png`; `demo_f090/f330.png`; plus
+blend/gradients/effect/mask/path/typography/images/timing stills. Formatting
+the six examples in B3 did not change any golden.
 
 ## Reference machine
 
 Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
+Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
-## Editor UI
+## Last session
 
-- Chrome is an immediate painter on the engine `GuiBatch`; tokens in
-  `theme.rs` are the only colour literals.
-- One key-marker language (`widgets::key_marker`).
-- Mask rows: Source cycles through `Document::can_mask` candidates, Mode is
-  Alpha/Luma, Invert is Off/On/Clear.
-- Text rows: Family/Weight cycle tiles, Tracking/Line height numeric with
-  stopwatches, and the content field shows `\n` for line breaks.
-- Animators section: one row per animator with a Del tile, plus Fade/Rise/
-  Colour add tiles (`text_anim_add`/`text_anim_remove`).
-- Image section: Source (text), Natural size (read only), Width/Height with
-  stopwatches, Fit cycle. Image layers use a picture icon.
-- Video section: Source, Natural size, Width/Height, Fit, Speed, In/Out,
-  Start, Gain; timeline thumbnails, trim and Alt-drag slip; proxy progress and
-  video cache size in the status bar.
-- Audio section: Source/Start/In/Out/Gain/Pan/Fade in/out/Mute/Solo; expanded
-  rows are Gain/Pan/fades.
-
-## Last relevant session
-
-Prompt 12 phase 4 (T-DSL-0010, session `S-2026-11-04-007`):
-
-- Call-site specialisation: parameter pass/edit, returned-node binding +
-  assignment, literal promotion to a defaulted keyword parameter.
-- Loop + function: bind the result and guard after the call; values written by
-  a function inside a loop use the same guard.
-- MDF default parameters (parser, interpreter, origins, spec).
-- Bench: baseline `af1115d` 1.207/1.221 ms, current 1.161/1.234 ms.
-- Gate green; no commit. Disk 12.4 GB after cleanup.
-
-Prompt 12 phase 3 (T-DSL-0009, `S-2026-11-04-006`):
-
-- Loop specialisation: guards, `in` merges, dead-guard removal, `_` rename,
-  `enumerate` rewrite, inline bindings, `Scope::This | Scope::All`.
-- Language: `in`/`not in`, `enumerate`, tuple unpacking in `for`.
-- `ValueOrigins` keeps every write; verification ignores display names.
-- Bench: baseline 1.451 ms, current 1.271 ms (median, 200 runs).
-
-Prompt 11 phase 7 details remain under its status section above
-(`S-2026-11-04-003`).
+`S-2026-11-06-001` (prompt 12b, B1-B6): structural command layer + UI, overrides
+chip/list/convert, code panel, unified diff, edit mode, traces, corpus check,
+tool schema, docs and measurements. Gate green; no commit. T-APP-0007..0010 and
+T-DSL-0013 done; T-APP-0011 (this report) done; T-AI-0001/T-AI-0002 backlog.

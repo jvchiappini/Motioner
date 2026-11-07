@@ -16,6 +16,8 @@
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0014** — 3D layers: glTF, cameras, lights, per-object shading (unlit, PBR, path traced) composited with 2D `[alta]` (actualizado 2026-11-04)
 - **T-RENDER-0017** — Finishing effects and colour: grading, LUT, grain, vignette, chromatic aberration, adjustment layers `[alta]` (actualizado 2026-11-04)
+- **T-AI-0001** — In-app agent panel: conversation, provider routing, tool runtime and traces `[media]` (actualizado 2026-11-06)
+- **T-AI-0002** — Motioner code-model training pipeline: generation, corpus filter, distillation and evaluation `[media]` (actualizado 2026-11-06)
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)
 - **T-PHYS-0001** — GPU particles and rigid-body physics (post-1.0 spike) `[media]` (actualizado 2026-11-03)
