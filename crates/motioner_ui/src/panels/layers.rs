@@ -18,6 +18,7 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let count = (!v.outline.is_empty()).then_some(v.layer_count);
     crate::panels::assets::tabs(p, v, count);
     filter_field(p, v);
+    add_button(p, v);
     p.vline(
         panel.rect.right() - p.m.hairline(),
         panel.rect.y,
@@ -107,6 +108,55 @@ fn filter_field(p: &mut Painter<'_>, v: &View<'_>) {
         Align::Left,
         &style,
     );
+}
+
+/// The Add Layer button in the panel header.
+fn add_button(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let rect = v.layout.add_button();
+    p.fill_rounded(
+        rect,
+        if v.add_menu_open { t.control } else { t.raised },
+        p.m.px(size::RADIUS_SM),
+    );
+    let style = p.style(type_scale::BODY, t.text_body).medium();
+    p.text_in("+", rect, Align::Center, &style);
+}
+
+/// The Add Layer dropdown, drawn above the editor.
+pub fn draw_add_menu(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let items = v.layout.add_menu_items();
+    let first = items[0];
+    let last = items[items.len() - 1];
+    let panel = Rect::new(
+        first.x,
+        first.y - p.m.px(4.0),
+        first.w,
+        last.bottom() - first.y + p.m.px(8.0),
+    );
+    p.shadow(
+        panel,
+        p.m.px(6.0),
+        p.m.px(16.0),
+        p.m.px(4.0),
+        [0.0, 0.0, 0.0, 0.6],
+    );
+    p.fill_rounded(panel, t.panel, p.m.px(6.0));
+    p.stroke_rounded(panel, t.hairline, p.m.px(6.0), p.m.px(1.0));
+    let body = p.style(type_scale::BODY, t.text);
+    for (index, rect) in items.into_iter().enumerate() {
+        if v.add_menu_hover == Some(index) {
+            p.fill_rounded(rect, t.row_hover, p.m.px(4.0));
+        }
+        let label = crate::AddKind::ALL[index].label();
+        p.text_in(
+            label,
+            Rect::new(rect.x + p.m.px(10.0), rect.y, rect.w - p.m.px(20.0), rect.h),
+            Align::Left,
+            &body,
+        );
+    }
 }
 
 /// One outline row: highlight, guides, chevron, kind icon, name, detail and

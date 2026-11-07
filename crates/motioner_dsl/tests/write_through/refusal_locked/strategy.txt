@@ -1,0 +1,1 @@
+fallback: 'locked' is editor state, not program code; the editor stores it in editor.motion (D-0036 section 3)

@@ -31,6 +31,7 @@ fn plan_and_apply(
     let Plan::Code(edit) = plan else {
         panic!("expected a code plan, got {plan:?}");
     };
+    #[allow(clippy::let_and_return)] // keep the panic branch next to the match
     let strategy = edit.strategy();
     (edit.apply(source).unwrap(), strategy)
 }
@@ -927,4 +928,79 @@ fn a_comment_and_the_file_line_endings_survive_structural_edits() {
     );
     assert!(after.contains("# keep me\r\n"), "{after:?}");
     assert!(after.contains("dot = circle(5)\r\n"), "{after:?}");
+}
+
+#[test]
+fn group_wraps_the_selection_in_one_edit() {
+    let execution = compiled(BASIC);
+    let ids = vec![node_id(&execution, 0), node_id(&execution, 1)];
+    let change = StructuralCommand::Group {
+        ids: ids.clone(),
+        name: Some("pair".to_owned()),
+    };
+    let (after, strategy) = plan_and_apply(BASIC, &execution, &change);
+    assert_eq!(strategy, Strategy::StructuralEdit);
+    assert!(after.contains("group"), "{after}");
+    let grouped = compiled(&after);
+    assert_eq!(grouped.document.len(), 3, "{after}");
+    let group = grouped
+        .document
+        .nodes()
+        .find(|node| node.name() == Some("pair"))
+        .expect("the group keeps its readable name");
+    for id in &ids {
+        let node = grouped
+            .document
+            .find(id)
+            .expect("the original layer survives");
+        assert_eq!(
+            grouped
+                .document
+                .node(node)
+                .and_then(motioner_core::Node::parent),
+            Some(group.id()),
+            "{after}"
+        );
+    }
+}
+
+#[test]
+fn ungroup_returns_children_and_deletes_the_group() {
+    let execution = compiled(BASIC);
+    let ids = vec![node_id(&execution, 0), node_id(&execution, 1)];
+    let change = StructuralCommand::Group {
+        ids,
+        name: Some("pair".to_owned()),
+    };
+    let (grouped, _) = plan_and_apply(BASIC, &execution, &change);
+    let group_execution = compiled(&grouped);
+    let group = group_execution
+        .document
+        .nodes()
+        .find(|node| node.name() == Some("pair"))
+        .expect("a group");
+    let ungroup = StructuralCommand::Ungroup {
+        id: group.identity().as_str().to_owned(),
+    };
+    let (after, strategy) = plan_and_apply(&grouped, &group_execution, &ungroup);
+    assert_eq!(strategy, Strategy::StructuralEdit);
+    let result = compiled(&after);
+    assert_eq!(result.document.len(), 2, "{after}");
+    assert!(
+        result.document.nodes().all(|node| node.parent().is_none()),
+        "{after}"
+    );
+}
+
+#[test]
+fn grouping_in_a_loop_falls_back() {
+    let source = "comp(name=\"P\", duration=1.0)\nfor i in range(2):\n    c = circle(10 + i)\n";
+    let execution = compiled(source);
+    let id = node_id(&execution, 0);
+    let change = StructuralCommand::Group {
+        ids: vec![id],
+        name: None,
+    };
+    let plan = plan_structural(source, &execution.origins, &execution.document, &change);
+    assert!(matches!(plan, Plan::Fallback(_)), "{plan:?}");
 }

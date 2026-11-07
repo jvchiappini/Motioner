@@ -13,7 +13,7 @@ bg.pos = (480, 270)
 # Left: a card with a soft, offset shadow.
 shadow_card = group()
 shadow_card.pos = (230, 250)
-shadow_card.effect("drop_shadow", color="#000000B3", offset= (10, 12), blur=10, opacity=0.7)
+shadow_card.effect("drop_shadow", color="#000000B3", offset=(10, 12), blur=10, opacity=0.7)
 card = rect(170, 140, radius=18, fill="#E0E7F0")
 shadow_card.add(card)
 dot = circle(28, fill="#FF6B4D")

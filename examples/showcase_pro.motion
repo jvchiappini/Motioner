@@ -68,7 +68,7 @@ def scene(t_in, t_out):
 
 
 def add_capsule(parent, colour, height, alpha):
-    capsule = rect(1560, height, radius=height / 2, fill=linear_gradient(start= (-780, 0), end= (780, 0), stops= [(0, "#00000000"), (0.5, colour + alpha), (1, "#00000000")]))
+    capsule = rect(1560, height, radius=height / 2, fill=linear_gradient(start=(-780, 0), end=(780, 0), stops=[(0, "#00000000"), (0.5, colour + alpha), (1, "#00000000")]))
     parent.add(capsule)
 
 
@@ -82,7 +82,7 @@ def label(content, size, color, x, y):
 
 # The gradient's middle stop is an animatable colour channel: the whole room
 # changes temperature three times over the piece.
-bg = rect(1920, 1080, fill=linear_gradient(start= (0, -540), end= (0, 540), stops= [(0, "#05070D"), (0.45, "#0D1530"), (1, "#05070D")]))
+bg = rect(1920, 1080, fill=linear_gradient(start=(0, -540), end=(0, 540), stops=[(0, "#05070D"), (0.45, "#0D1530"), (1, "#05070D")]))
 bg.pos = (960, 540)
 bg.key("fill_stop1_color", 0, "#0D1530")
 bg.key("fill_stop1_color", 6, "#2A1150", ease=bezier(0.45, 0, 0.25, 1))
@@ -94,7 +94,7 @@ bg.key("fill_stop1_color", 24, "#0D1530", ease=bezier(0.45, 0, 0.25, 1))
 # they support the brand and colour scenes, step back behind the glass and
 # disappear for the mask scene, instead of tinting every frame.
 for i in range(3):
-    orb = circle(260, fill=radial_gradient(center= (0, 0), radius=260, stops= [(0, PALETTE[i] + "20"), (0.5, PALETTE[(i + 3) % 7] + "08"), (1, "#00000000")]))
+    orb = circle(260, fill=radial_gradient(center=(0, 0), radius=260, stops=[(0, PALETTE[i] + "20"), (0.5, PALETTE[(i + 3) % 7] + "08"), (1, "#00000000")]))
     orb.blend = "add"
     x0 = 220 + i * 740
     y0 = 200 + (i % 2) * 600
@@ -218,7 +218,7 @@ for i in range(7):
 stagger(bars, "height", [(250, 430)], 4.35, 0.07, 0.7, ease="back_out")
 stagger(bars, "radius", [(18, 40)], 4.35, 0.07, 0.7, ease="back_out")
 
-sheen = circle(170, fill=radial_gradient(center= (0, 0), radius=170, stops= [(0, "#FFFFFFCC"), (0.5, VIOLET + "66"), (1, "#00000000")]))
+sheen = circle(170, fill=radial_gradient(center=(0, 0), radius=170, stops=[(0, "#FFFFFFCC"), (0.5, VIOLET + "66"), (1, "#00000000")]))
 sheen.pos = (-430, 30)
 sheen.key("pos.x", 4.8, -430)
 sheen.key("pos.x", 7.2, 430, ease="sine_in_out")
@@ -241,7 +241,7 @@ s3.add(heading3)
 # The hero card carries a cover-fit image with a rounded alpha mask.
 hero = group()
 hero.pos = (0, 40)
-hero.effect("drop_shadow", color="#000000CC", offset= (16, 28), blur=28, opacity=0.75)
+hero.effect("drop_shadow", color="#000000CC", offset=(16, 28), blur=28, opacity=0.75)
 hero_body = rect(620, 430, radius=34, fill="#FFFFFF12", stroke="#FFFFFF38", stroke_width=2)
 hero.add(hero_body)
 photo = image("examples/assets/stripes.png", width=600, height=410, fit="cover")
@@ -258,10 +258,10 @@ hero.key("pos.y", 9.2, 40, ease="cubic_out")
 for i in range(2):
     side = group()
     side.pos = (-560 + i * 1120, 40)
-    side.effect("drop_shadow", color="#000000B3", offset= (10, 18), blur=20, opacity=0.65)
+    side.effect("drop_shadow", color="#000000B3", offset=(10, 18), blur=20, opacity=0.65)
     slab = rect(380, 300, radius=26, fill="#FFFFFF0E", stroke="#FFFFFF2E", stroke_width=2)
     side.add(slab)
-    dot = circle(34, fill= [BLUE, MINT][i])
+    dot = circle(34, fill=[BLUE, MINT][i])
     dot.pos = (0, -70)
     side.add(dot)
     name = label(["COMPOSITE", "MATTE"][i], 30, INK, 0, 20)
@@ -278,7 +278,7 @@ s4 = scene(12, 15.7)
 plate = group()
 plate.pos = (0, -40)
 plate.id("pro_plate")
-plate_grad = rect(1280, 300, radius=30, fill=linear_gradient(start= (-640, 0), end= (640, 0), stops= [(0, "#5A7CFF"), (0.5, "#33F2E6"), (1, "#8A5AFF")]))
+plate_grad = rect(1280, 300, radius=30, fill=linear_gradient(start=(-640, 0), end=(640, 0), stops=[(0, "#5A7CFF"), (0.5, "#33F2E6"), (1, "#8A5AFF")]))
 plate.add(plate_grad)
 # Cap-height optical centring: the text origin is the baseline, so the ink box
 # from `text_bounds` tells us how far to push the baseline down to centre the

@@ -25,14 +25,18 @@
     clippy::cast_sign_loss
 )]
 
+mod add;
 mod alloc;
 mod app;
+mod arrange;
 mod assets;
 mod bounds;
 mod capture;
 mod clipboard;
+mod code_panel;
 mod command;
 mod control;
+mod diff;
 mod edit;
 mod editor;
 mod file_watch;
@@ -46,6 +50,7 @@ mod json;
 mod labels;
 mod layout;
 mod outline;
+mod overrides_panel;
 mod paint;
 mod panels;
 mod properties;
@@ -61,9 +66,12 @@ mod viewport;
 mod widgets;
 mod window;
 
+pub use add::AddKind;
+pub use arrange::{drop_command, DropPlacement};
 pub use assets::{format_size, AssetKindUi, AssetSummary, AssetView, AssetsModel, VideoThumb};
 pub use bounds::{hit_node, hit_node_where, node_bounds, Bounds, MeasureText};
 pub use capture::{CaptureResult, PngWriter, DELIVERY_FRAMES};
+pub use code_panel::{CodeLine, CodePanel};
 pub use command::{
     parse_calls, parse_commands, Call, Command, CommandError, CommandKind, ErrorKind, KeySpec,
     Panel, Time,
@@ -71,6 +79,7 @@ pub use command::{
 pub use control::{
     default_endpoint_file, send as send_control, ControlServer, Endpoint, Pending, Request,
 };
+pub use diff::unified as unified_diff;
 pub use edit::{apply as apply_edit, EditCommand, KeyRef, MoveKey, UndoStack, UndoState};
 pub use editor::{
     channel_has_key, channel_name, CodeStrategy, CommitSummary, EditMode, Editor, Effect, Outcome,
@@ -78,7 +87,7 @@ pub use editor::{
 };
 pub use file_watch::FileWatch;
 pub use gizmo::{Corner, Guide, Handle};
-pub use host::{ProjectHost, RecoveryInfo, VideoFrameState};
+pub use host::{ProjectHost, RecoveryInfo, TraceInput, VideoFrameState};
 pub use input::{command_for, Modifiers, Toggles};
 pub use inspect::{
     hex, inspect_comp, inspect_node, kind_label, Axis, Channel, Editing, Field, FieldTarget,
@@ -91,6 +100,7 @@ pub use layout::{
 };
 pub use motioner_dsl::structural::{LayerKind, StructuralCommand};
 pub use outline::{outline_rows, NodeKind, OutlineRow};
+pub use overrides_panel::{command_text as override_command_text, OverrideRow};
 pub use properties::PropertySet;
 pub use session::{
     overrides_path, write_atomic, DiagnosticInfo, PreviewSession, SessionError, WRITE_DEBOUNCE,

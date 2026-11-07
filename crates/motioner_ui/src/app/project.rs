@@ -12,7 +12,7 @@ use ferrous_engine::{AppContext, KeyCode, MouseButton};
 
 use super::PreviewApp;
 use crate::command::Command;
-use crate::editor::Editor;
+use crate::editor::{EditMode, Editor};
 use crate::layout::MenuAction;
 use crate::start::{NewProjectRequest, StartAction, StartLayout, StartMode, StartScreen};
 use crate::{FileWatch, PreviewSession};
@@ -28,9 +28,9 @@ impl PreviewApp {
         let path = self.editor.session().path();
         let name = crate::project_display_name(path);
         if self.editor.session().is_dirty() {
-            format!("• {name} — Motioner")
+            format!("â€¢ {name} â€” Motioner")
         } else {
-            format!("{name} — Motioner")
+            format!("{name} â€” Motioner")
         }
     }
 
@@ -81,6 +81,13 @@ impl PreviewApp {
             return;
         }
         self.editor.set_font_families(families);
+        self.editor.set_edit_mode(if host.edit_mode(&composition) {
+            EditMode::Overrides
+        } else {
+            EditMode::Code
+        });
+        // Offer the one-time conversion when the file already has overrides.
+        self.bake_offer = !self.editor.session().overrides().is_empty();
         self.fonts = Some(fonts);
         self.watch = FileWatch::new(&composition);
         self.program_writes = self.editor.session().program_writes();
@@ -100,6 +107,74 @@ impl PreviewApp {
         self.last_snapshot = Instant::now();
         self.refresh_assets();
         self.retitle();
+    }
+
+    /// Records one committed edit as a local trace when the project allows it.
+    ///
+    /// Called after the undo entry is pushed, so the write never delays the
+    /// commit; a failed trace write becomes a status message, never an error.
+    pub(crate) fn record_trace(&mut self, command: &str) {
+        let Some(host) = self.host() else {
+            return;
+        };
+        let path = self.editor.session().path().to_path_buf();
+        if path.as_os_str().is_empty() || !host.traces_enabled(&path) {
+            return;
+        }
+        let Some((before, after)) = self.editor.last_program_change() else {
+            return;
+        };
+        let Some(report) = self.editor.last_commit() else {
+            return;
+        };
+        let strategy = if report.code {
+            report
+                .strategies
+                .iter()
+                .map(|strategy| strategy.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            "fallback".to_owned()
+        };
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("program.motion")
+            .to_owned();
+        let diff = self.editor.last_diff();
+        let frame = self.editor.frame();
+        let selection = self.editor.selected_identity();
+        let result = {
+            let trace = crate::TraceInput {
+                file: &file,
+                before,
+                after,
+                command,
+                strategy: &strategy,
+                diff: &diff,
+                frame,
+                selection: selection.as_deref(),
+            };
+            host.record_trace(&path, &trace)
+        };
+        if let Err(message) = result {
+            self.report(&message);
+        }
+    }
+
+    /// Persists the project's edit-mode setting through the host.
+    pub(crate) fn save_edit_mode(&mut self, overrides: bool) {
+        let path = self.editor.session().path().to_path_buf();
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        if let Err(message) = host.set_edit_mode(&path, overrides) {
+            self.report(&message);
+        }
     }
 
     /// Closes the project and shows the start screen.
@@ -591,9 +666,66 @@ impl PreviewApp {
         let (mx, my) = ctx.input.mouse_pos_f32();
         if layout.file_button.contains(mx, my) {
             self.menu_open = !self.menu_open;
+            self.add_menu_open = false;
+            self.view_menu_open = false;
             return true;
         }
+        if layout.view_button.contains(mx, my) {
+            self.view_menu_open = !self.view_menu_open;
+            self.menu_open = false;
+            self.add_menu_open = false;
+            return true;
+        }
+        if layout.add_button().contains(mx, my) {
+            self.add_menu_open = !self.add_menu_open;
+            self.menu_open = false;
+            self.view_menu_open = false;
+            return true;
+        }
+        if self.view_menu_open {
+            if let Some(action) = layout.view_menu_hit(mx, my) {
+                self.dispatch_view(action);
+                return true;
+            }
+        }
+        if self.add_menu_open {
+            if let Some(index) = layout.add_menu_hit(mx, my) {
+                self.add_menu_open = false;
+                if let Some(kind) = crate::AddKind::at(index) {
+                    let after = self
+                        .editor
+                        .selected()
+                        .map(|node| self.editor.node_identity(node));
+                    let command = kind.command(after);
+                    self.run(&command);
+                }
+                return true;
+            }
+        }
+        if self.overrides_chip_clicked(layout, mx, my) {
+            return true;
+        }
+        if self.overrides_open && self.overrides_clicked(layout, mx, my) {
+            return true;
+        }
+        if self.code_open && layout.code_close().contains(mx, my) {
+            self.code_open = false;
+            return true;
+        }
+        if self.bake_offer {
+            if layout.bake_convert().contains(mx, my) {
+                self.bake_offer = false;
+                self.run(&Command::Bake(Vec::new()));
+                return true;
+            }
+            if layout.bake_dismiss().contains(mx, my) {
+                self.bake_offer = false;
+                return true;
+            }
+        }
         if !self.menu_open {
+            self.add_menu_open = false;
+            self.view_menu_open = false;
             return false;
         }
         if let Some(action) = layout.menu_hit(mx, my) {
@@ -602,5 +734,96 @@ impl PreviewApp {
         }
         self.menu_open = false;
         false
+    }
+
+    /// Handles the View menu.
+    pub(crate) fn dispatch_view(&mut self, action: crate::layout::ViewAction) {
+        self.view_menu_open = false;
+        match action {
+            crate::layout::ViewAction::Code => self.code_open = !self.code_open,
+            crate::layout::ViewAction::EditMode => {
+                let overrides = self.editor.edit_mode() != EditMode::Overrides;
+                self.run(&Command::SetEditMode { overrides });
+            }
+            crate::layout::ViewAction::Traces => {
+                let path = self.editor.session().path().to_path_buf();
+                if path.as_os_str().is_empty() {
+                    return;
+                }
+                let Some(host) = self.host() else {
+                    return;
+                };
+                let on = !host.traces_setting(&path);
+                if let Err(message) = host.set_traces(&path, on) {
+                    self.report(&message);
+                }
+            }
+        }
+    }
+
+    /// The overrides chip toggles the pending list.
+    fn overrides_chip_clicked(&mut self, layout: &crate::Layout, mx: f32, my: f32) -> bool {
+        if self.editor.session().overrides().is_empty() || !layout.overrides_chip.contains(mx, my) {
+            return false;
+        }
+        self.overrides_open = !self.overrides_open;
+        true
+    }
+
+    /// Clicks inside the pending-overrides list.
+    fn overrides_clicked(&mut self, layout: &crate::Layout, mx: f32, my: f32) -> bool {
+        let list = layout.overrides_list();
+        if !list.contains(mx, my) {
+            self.overrides_open = false;
+            return false;
+        }
+        if layout.overrides_close().contains(mx, my) {
+            self.overrides_open = false;
+            return true;
+        }
+        if layout.overrides_convert_all().contains(mx, my) {
+            let ids: Vec<String> = self
+                .editor
+                .session()
+                .overrides()
+                .entries()
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect();
+            let mut ids = ids;
+            ids.sort();
+            ids.dedup();
+            self.run(&Command::Bake(ids));
+            self.overrides_open = !self.editor.session().overrides().is_empty();
+            return true;
+        }
+        let rows = self.editor.override_rows();
+        for (index, _row) in rows.iter().enumerate() {
+            if layout
+                .overrides_convert(layout.overrides_row(index))
+                .contains(mx, my)
+            {
+                let entry = self
+                    .editor
+                    .session()
+                    .overrides()
+                    .entries()
+                    .get(index)
+                    .cloned();
+                if let Some(entry) = entry {
+                    match self.editor.convert_override(&entry) {
+                        Ok(Ok(())) => {
+                            let command =
+                                format!("convert_override({:?}, {:?})", entry.id, entry.property);
+                            self.record_trace(&command);
+                        }
+                        Ok(Err(reason)) => self.report(&reason),
+                        Err(error) => self.report(&error.message),
+                    }
+                }
+                return true;
+            }
+        }
+        true
     }
 }

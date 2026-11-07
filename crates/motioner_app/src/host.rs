@@ -378,6 +378,70 @@ impl ProjectHost for Host {
         Ok(())
     }
 
+    fn edit_mode(&self, composition: &Path) -> bool {
+        let Ok(project) = Project::open(composition) else {
+            return false;
+        };
+        motioner_io::EditorState::load(project.root()).is_ok_and(|state| state.overrides_mode)
+    }
+
+    fn set_edit_mode(&self, composition: &Path, overrides: bool) -> Result<(), String> {
+        let project = Project::open(composition).map_err(|error| error.to_string())?;
+        let mut state =
+            motioner_io::EditorState::load(project.root()).map_err(|error| error.to_string())?;
+        state.overrides_mode = overrides;
+        state
+            .save(project.root())
+            .map_err(|error| error.to_string())
+    }
+
+    fn traces_enabled(&self, composition: &Path) -> bool {
+        if std::env::var("MOTIONER_TRACES").is_ok_and(|value| value == "1") {
+            return true;
+        }
+        let setting = traces_setting_raw(composition);
+        if cfg!(debug_assertions) {
+            setting.unwrap_or(true)
+        } else {
+            setting.unwrap_or(false)
+        }
+    }
+
+    fn traces_setting(&self, composition: &Path) -> bool {
+        traces_setting_raw(composition).unwrap_or(false)
+    }
+
+    fn set_traces(&self, composition: &Path, on: bool) -> Result<(), String> {
+        let project = Project::open(composition).map_err(|error| error.to_string())?;
+        let mut state =
+            motioner_io::EditorState::load(project.root()).map_err(|error| error.to_string())?;
+        state.traces = Some(on);
+        state
+            .save(project.root())
+            .map_err(|error| error.to_string())
+    }
+
+    fn record_trace(
+        &self,
+        composition: &Path,
+        trace: &motioner_ui::TraceInput<'_>,
+    ) -> Result<(), String> {
+        let project = Project::open(composition).map_err(|error| error.to_string())?;
+        let mut record = motioner_io::TraceRecord::new(
+            trace.before,
+            trace.after,
+            trace.command,
+            trace.strategy,
+            trace.diff,
+        );
+        trace.file.clone_into(&mut record.file);
+        record.frame = trace.frame;
+        record.selection = trace.selection.map(str::to_owned);
+        motioner_io::append_trace(project.root(), &record)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
     fn place_asset(
         &self,
         composition: &Path,
@@ -808,4 +872,11 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The project's stored trace setting, before the debug/release default.
+fn traces_setting_raw(composition: &Path) -> Option<bool> {
+    let project = Project::open(composition).ok()?;
+    let state = motioner_io::EditorState::load(project.root()).ok()?;
+    state.traces
 }

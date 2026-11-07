@@ -127,6 +127,11 @@ motioner bake    examples/hello.motion
 motioner preview examples/hello.motion [--control]
 motioner query   examples/hello.motion --frame 48
 motioner edit    examples/hello.motion 'seek(120)' 'edit("@288", "pos.y", 520)'
+motioner fmt     examples/hello.motion [--check]
+motioner lint    examples/hello.motion
+motioner tools   --schema
+motioner corpus  check out/generated
+motioner trace   export examples/demo.motioner --out out/corpus.jsonl
 motioner ctl     'select("@288")' 'screenshot("out/shot.png")'
 ```
 
@@ -176,15 +181,23 @@ draggable bezier handles. The status bar shows evaluation time, UI fps,
 dropped frames and, when built with `--features alloc-count`, the chrome's
 per-frame allocations (0 in the steady state).
 
-Edits do not touch the program: they are written 300 ms after the last change to
-`<name>.overrides.motion` (`override`, `override_key`, `override_unkey`,
-`override_visible` and `override_locked` statements, D-0022). `motioner bake
-<file> [--id ID]...` folds an override into the program in place when its
-value came from a private plain literal; other overrides of nodes bound to a
-top-level variable go to one generated block at the end, and loop-created
-nodes without a binding keep their overrides with a refusal reason (D-0027).
-Bake re-keys the overrides that stay when an in-place edit shifts byte offsets.
-Orphans are listed with ranked re-binding suggestions (D-0025).
+**The editor writes code.** Every gesture is planned into an exact MDF code
+edit (a private literal, a loop guard, a call-site parameter, a local
+assignment or a structural statement), written atomically, verified by
+re-running the program and recorded as one undo step (D-0036). The overrides
+file is only the fallback: when no exact code edit exists the change stays
+there with a reason, and the overrides list offers to convert it. The old
+`motioner bake` still folds legacy overrides in; orphans are listed with
+ranked re-binding suggestions (D-0025). The strategy ladder, with before/after
+examples and the remaining fallbacks, is in
+[`docs/write-through.md`](docs/write-through.md).
+
+`editor.motion` stores the project's edit mode (`code` by default), the local
+trace switch and editor-only state. `MOTIONER_TRACES=1` records every commit
+as a JSONL trace under `<project>/traces/`; `motioner trace export` turns them
+into a clean, replayable corpus ([`docs/traces.md`](docs/traces.md)).
+`motioner corpus check` filters generated programs and writes a manifest
+([`docs/corpus.md`](docs/corpus.md)).
 
 Shortcuts: Space play/pause (release, when it did not drag), Left/Right step
 (Shift: 10), Up/Down select layer, Home/End, L loop, G safe areas, R reload, K
@@ -200,10 +213,13 @@ Motioner is AI-first: everything a person can do in the editor is a typed
 command, and the window turns its clicks and shortcuts into the same
 commands (D-0024). `motioner query` prints the scene at a frame as JSON,
 `motioner edit` runs commands such as `key("@288", "opacity", 1.5, 0.5,
-ease="quad_out")` on the overrides file (all or nothing), and `motioner
+ease="quad_out")` and writes them into the program as MDF (all or nothing;
+`--overrides` keeps D-0022 and `--code` forces code), `motioner tools --schema`
+prints the tool list generated from the same command table, and `motioner
 preview --control` + `motioner ctl` drive a running editor, including
-`state()`, `query()` and `screenshot(path)`. The full command list, the JSON
-formats and an end-to-end example are in [`docs/agents.md`](docs/agents.md).
+`state()`, `query()`, `screenshot(path)` and the code diff of each edit. The
+full command list, the JSON formats and an end-to-end example are in
+[`docs/agents.md`](docs/agents.md).
 
 ## Project control
 

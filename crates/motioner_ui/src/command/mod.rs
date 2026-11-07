@@ -25,6 +25,7 @@
 use std::fmt;
 
 use motioner_core::{CharOrder, CharProperty, Ease, EffectKind, Frame, FrameRate, OverrideValue};
+use motioner_dsl::structural::LayerKind;
 
 /// A point in time: seconds (as in the overrides file) or an exact frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,14 +118,14 @@ pub enum Command {
     GoToEnd,
     /// Turn looping on or off (L toggles it).
     Loop(bool),
-    /// Jump to the previous key of a channel (◀ on a property row).
+    /// Jump to the previous key of a channel (â—€ on a property row).
     PrevKey {
         /// Node identity.
         id: String,
         /// Channel.
         property: String,
     },
-    /// Jump to the next key of a channel (▶ on a property row).
+    /// Jump to the next key of a channel (â–¶ on a property row).
     NextKey {
         /// Node identity.
         id: String,
@@ -283,7 +284,7 @@ pub enum Command {
         /// Channel.
         property: String,
     },
-    /// Add or remove the channel's key at the playhead (◆ button).
+    /// Add or remove the channel's key at the playhead (â—† button).
     ToggleKey {
         /// Node identity.
         id: String,
@@ -317,6 +318,51 @@ pub enum Command {
         /// Display name.
         name: String,
     },
+    /// Insert a new layer, after `after` (or at the end of the composition).
+    AddLayer {
+        /// The layer kind and its constructor data.
+        kind: LayerKind,
+        /// Selected node identity; `None` appends to the composition.
+        after: Option<String>,
+        /// Optional readable binding/display name.
+        name: Option<String>,
+    },
+    /// Delete a layer and the statements that only build it.
+    DeleteLayer {
+        /// Node identity.
+        id: String,
+    },
+    /// Copy the statements that build a layer under a fresh binding.
+    DuplicateLayer {
+        /// Node identity.
+        id: String,
+    },
+    /// Move a layer to another position among its siblings.
+    ReorderLayer {
+        /// Node identity.
+        id: String,
+        /// Zero-based destination position.
+        to: usize,
+    },
+    /// Move a layer into a group (`Some`) or back to the top level (`None`).
+    ReparentLayer {
+        /// Node identity.
+        id: String,
+        /// Group identity, or `None` to unparent.
+        parent: Option<String>,
+    },
+    /// Wrap the selected layers in a new group in one undo step.
+    GroupLayers {
+        /// Node identities, in document order.
+        ids: Vec<String>,
+        /// Optional readable group name.
+        name: Option<String>,
+    },
+    /// Dissolve a group, returning its children to its parent.
+    UngroupLayer {
+        /// Node identity of the group.
+        id: String,
+    },
     /// Move every override of one identity to another (after giving the node
     /// an explicit `.id()` in the program).
     AssignId {
@@ -325,7 +371,7 @@ pub enum Command {
         /// New identity.
         to: String,
     },
-    /// Delete an orphaned override (× in the orphans list).
+    /// Delete an orphaned override (Ã— in the orphans list).
     DeleteOrphan {
         /// The orphan's identity.
         id: String,
@@ -454,6 +500,22 @@ pub enum Command {
         /// New value.
         value: OverrideValue,
     },
+    /// Show or hide the read-only code panel (View menu).
+    ShowCode {
+        /// Whether the panel is shown.
+        on: bool,
+    },
+    /// Show or hide the pending-overrides list (the status chip).
+    ShowOverrides {
+        /// Whether the list is shown.
+        on: bool,
+    },
+    /// Choose where committed edits are written for the whole project: code
+    /// (the default, D-0036) or overrides (the D-0022 fallback).
+    SetEditMode {
+        /// `true` keeps every edit as an override entry.
+        overrides: bool,
+    },
     /// Undo the last edit (Ctrl+Z).
     Undo,
     /// Redo (Ctrl+Shift+Z, Ctrl+Y).
@@ -574,6 +636,13 @@ pub enum CommandKind {
     Visible,
     Lock,
     Rename,
+    AddLayer,
+    DeleteLayer,
+    DuplicateLayer,
+    ReorderLayer,
+    ReparentLayer,
+    GroupLayers,
+    UngroupLayer,
     AssignId,
     DeleteOrphan,
     EffectAdd,
@@ -591,6 +660,9 @@ pub enum CommandKind {
     GraphClose,
     GraphView,
     MoveKeyValue,
+    ShowCode,
+    ShowOverrides,
+    SetEditMode,
     Undo,
     Redo,
     Bake,
@@ -610,7 +682,7 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 87] = [
         Self::Play,
         Self::Pause,
         Self::TogglePlay,
@@ -656,6 +728,13 @@ impl CommandKind {
         Self::Visible,
         Self::Lock,
         Self::Rename,
+        Self::AddLayer,
+        Self::DeleteLayer,
+        Self::DuplicateLayer,
+        Self::ReorderLayer,
+        Self::ReparentLayer,
+        Self::GroupLayers,
+        Self::UngroupLayer,
         Self::AssignId,
         Self::DeleteOrphan,
         Self::EffectAdd,
@@ -673,6 +752,9 @@ impl CommandKind {
         Self::GraphClose,
         Self::GraphView,
         Self::MoveKeyValue,
+        Self::ShowCode,
+        Self::ShowOverrides,
+        Self::SetEditMode,
         Self::Undo,
         Self::Redo,
         Self::Bake,
@@ -739,6 +821,13 @@ impl CommandKind {
             Self::Visible => "visible",
             Self::Lock => "lock",
             Self::Rename => "rename",
+            Self::AddLayer => "add_layer",
+            Self::DeleteLayer => "delete_layer",
+            Self::DuplicateLayer => "duplicate_layer",
+            Self::ReorderLayer => "reorder_layer",
+            Self::ReparentLayer => "reparent_layer",
+            Self::GroupLayers => "group_layers",
+            Self::UngroupLayer => "ungroup_layer",
             Self::AssignId => "assign_id",
             Self::DeleteOrphan => "delete_orphan",
             Self::EffectAdd => "effect_add",
@@ -756,6 +845,9 @@ impl CommandKind {
             Self::GraphClose => "graph_close",
             Self::GraphView => "graph_view",
             Self::MoveKeyValue => "move_key_value",
+            Self::ShowCode => "show_code",
+            Self::ShowOverrides => "show_overrides",
+            Self::SetEditMode => "set_edit_mode",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::Bake => "bake",
@@ -829,6 +921,15 @@ impl CommandKind {
             Self::Visible => "visible(id, on)",
             Self::Lock => "lock(id, on)",
             Self::Rename => "rename(id, name)",
+            Self::AddLayer => {
+                "add_layer(\"rect\"|\"circle\"|\"text\"|\"image\"|\"audio\"|\"video\"|\"path\"|\"group\", after=None, name=None, ...)"
+            }
+            Self::DeleteLayer => "delete_layer(id)",
+            Self::DuplicateLayer => "duplicate_layer(id)",
+            Self::ReorderLayer => "reorder_layer(id, to)",
+            Self::ReparentLayer => "reparent_layer(id, parent=None)",
+            Self::GroupLayers => "group_layers([id, ...], name=None)",
+            Self::UngroupLayer => "ungroup_layer(id)",
             Self::AssignId => "assign_id(from, to)",
             Self::DeleteOrphan => "delete_orphan(id, property, time=None)",
             Self::EffectAdd => "effect_add(id, kind)",
@@ -848,6 +949,9 @@ impl CommandKind {
             Self::GraphClose => "graph_close()",
             Self::GraphView => "graph_view(zoom, pan_x=0, pan_y=0, zoom_y=None)",
             Self::MoveKeyValue => "move_key_value(id, property, from_time, to_time, value)",
+            Self::ShowCode => "show_code(on)",
+            Self::ShowOverrides => "show_overrides(on)",
+            Self::SetEditMode => "set_edit_mode(\"code\"|\"overrides\")",
             Self::Undo => "undo()",
             Self::Redo => "redo()",
             Self::Bake => "bake(id, ...)",
@@ -886,6 +990,13 @@ impl CommandKind {
                 | Self::Visible
                 | Self::Lock
                 | Self::Rename
+                | Self::AddLayer
+                | Self::DeleteLayer
+                | Self::DuplicateLayer
+                | Self::ReorderLayer
+                | Self::ReparentLayer
+                | Self::GroupLayers
+                | Self::UngroupLayer
                 | Self::AssignId
                 | Self::DeleteOrphan
                 | Self::EffectAdd
@@ -901,6 +1012,39 @@ impl CommandKind {
 }
 
 impl Command {
+    /// The structural gesture this command stands for, when it is one.
+    ///
+    /// Structural commands change the layers themselves, so they have no
+    /// override equivalent: the editor writes them as code or refuses them in
+    /// overrides mode (D-0036 section 3).
+    #[must_use]
+    pub fn structural(&self) -> Option<motioner_dsl::structural::StructuralCommand> {
+        use motioner_dsl::structural::StructuralCommand;
+        Some(match self {
+            Self::AddLayer { kind, after, name } => StructuralCommand::AddLayer {
+                kind: kind.clone(),
+                after: after.clone(),
+                name: name.clone(),
+            },
+            Self::DeleteLayer { id } => StructuralCommand::Delete { id: id.clone() },
+            Self::DuplicateLayer { id } => StructuralCommand::Duplicate { id: id.clone() },
+            Self::ReorderLayer { id, to } => StructuralCommand::Reorder {
+                id: id.clone(),
+                to: *to,
+            },
+            Self::ReparentLayer { id, parent } => StructuralCommand::Reparent {
+                id: id.clone(),
+                parent: parent.clone(),
+            },
+            Self::GroupLayers { ids, name } => StructuralCommand::Group {
+                ids: ids.clone(),
+                name: name.clone(),
+            },
+            Self::UngroupLayer { id } => StructuralCommand::Ungroup { id: id.clone() },
+            _ => return None,
+        })
+    }
+
     /// The variant of this command.
     #[must_use]
     pub const fn kind(&self) -> CommandKind {
@@ -950,6 +1094,13 @@ impl Command {
             Self::Visible { .. } => CommandKind::Visible,
             Self::Lock { .. } => CommandKind::Lock,
             Self::Rename { .. } => CommandKind::Rename,
+            Self::AddLayer { .. } => CommandKind::AddLayer,
+            Self::DeleteLayer { .. } => CommandKind::DeleteLayer,
+            Self::DuplicateLayer { .. } => CommandKind::DuplicateLayer,
+            Self::ReorderLayer { .. } => CommandKind::ReorderLayer,
+            Self::ReparentLayer { .. } => CommandKind::ReparentLayer,
+            Self::GroupLayers { .. } => CommandKind::GroupLayers,
+            Self::UngroupLayer { .. } => CommandKind::UngroupLayer,
             Self::AssignId { .. } => CommandKind::AssignId,
             Self::DeleteOrphan { .. } => CommandKind::DeleteOrphan,
             Self::EffectAdd { .. } => CommandKind::EffectAdd,
@@ -967,6 +1118,9 @@ impl Command {
             Self::GraphClose => CommandKind::GraphClose,
             Self::GraphView { .. } => CommandKind::GraphView,
             Self::MoveKeyValue { .. } => CommandKind::MoveKeyValue,
+            Self::ShowCode { .. } => CommandKind::ShowCode,
+            Self::ShowOverrides { .. } => CommandKind::ShowOverrides,
+            Self::SetEditMode { .. } => CommandKind::SetEditMode,
             Self::Undo => CommandKind::Undo,
             Self::Redo => CommandKind::Redo,
             Self::Bake(_) => CommandKind::Bake,

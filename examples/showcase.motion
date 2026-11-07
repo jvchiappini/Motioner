@@ -271,7 +271,7 @@ orbit.pos = (0, -60)
 orbit.key("rotation", 9.6, 0)
 orbit.key("rotation", 12, 260, ease="cubic_out")
 for i in range(3):
-    moon = circle(radius=12, fill= [CORAL, AMBER, MINT][i])
+    moon = circle(radius=12, fill=[CORAL, AMBER, MINT][i])
     angle = radians(i * 120)
     moon.pos = (cos(angle) * 150, sin(angle) * 150)
     pop_in(moon, 10 + i * 0.1, 0.4)
@@ -299,7 +299,7 @@ wipe.key("pos", 2.88, (-1800, 540))
 wipe.key("pos", 3.88, (3700, 540))
 
 for i in range(3):
-    panel = rect(700, 1700, fill= [BLUE, VIOLET, CORAL][i])
+    panel = rect(700, 1700, fill=[BLUE, VIOLET, CORAL][i])
     panel.rotation = 14
     start = 2.7 + i * 0.06
     panel.key("pos", 0, (-1200, 540))

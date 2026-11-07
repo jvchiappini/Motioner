@@ -35,6 +35,17 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let file_style = p.style(type_scale::CAPTION, t.text_body);
     p.text_in("File", file, Align::Center, &file_style);
 
+    // View menu button, right of File.
+    let view = v.layout.view_button;
+    let state = v.interaction(Hit::ViewMenu);
+    let view_fill = if v.view_menu_open || state.hovered {
+        t.row_hover
+    } else {
+        t.raised
+    };
+    p.fill_rounded(view, view_fill, p.m.px(4.0));
+    p.text_in("View", view, Align::Center, &file_style);
+
     // App mark: an accent tile with a play glyph.
     let mark_side = p.m.px(20.0);
     let mark = Rect::new(
@@ -91,6 +102,7 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
         comp_pills(p, v, document, dot_x);
     }
     right_side(p, v);
+    super::overrides::draw_chip(p, v);
 }
 
 /// Size, rate and length pills, centred on the canvas column but never
@@ -226,5 +238,47 @@ pub fn draw_menu(p: &mut Painter<'_>, v: &View<'_>) {
                 t.hairline,
             );
         }
+    }
+}
+
+/// Draws the View dropdown above the editor.
+pub fn draw_view_menu(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let items = v.layout.view_menu_items();
+    let first = items[0].1;
+    let last = items[items.len() - 1].1;
+    let panel = Rect::new(
+        first.x,
+        first.y - p.m.px(4.0),
+        first.w,
+        last.bottom() - first.y + p.m.px(8.0),
+    );
+    p.shadow(
+        panel,
+        p.m.px(6.0),
+        p.m.px(16.0),
+        p.m.px(4.0),
+        [0.0, 0.0, 0.0, 0.6],
+    );
+    p.fill_rounded(panel, t.panel, p.m.px(6.0));
+    p.stroke_rounded(panel, t.hairline, p.m.px(6.0), p.m.px(1.0));
+    let body = p.style(type_scale::BODY, t.text);
+    let key_style = p.style(type_scale::CAPTION, t.text_muted);
+    for (action, rect) in items {
+        if v.view_menu_hover == Some(action) {
+            p.fill_rounded(rect, t.row_hover, p.m.px(4.0));
+        }
+        p.text_in(
+            action.label(),
+            Rect::new(rect.x + p.m.px(10.0), rect.y, rect.w - p.m.px(20.0), rect.h),
+            Align::Left,
+            &body,
+        );
+        p.text_in(
+            action.shortcut(),
+            Rect::new(rect.x, rect.y, rect.w - p.m.px(10.0), rect.h),
+            Align::Right,
+            &key_style,
+        );
     }
 }

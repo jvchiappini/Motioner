@@ -187,6 +187,21 @@ pub enum Effect {
     RestoreBackup,
     /// Dismiss the recovery offer.
     DismissRecovery,
+    /// Show or hide the code panel.
+    ShowCode {
+        /// Whether the panel is shown.
+        on: bool,
+    },
+    /// Show or hide the pending-overrides list.
+    ShowOverrides {
+        /// Whether the list is shown.
+        on: bool,
+    },
+    /// The project's edit-mode setting changed; persist it in `editor.motion`.
+    EditModeChanged {
+        /// `true` when edits are kept as overrides.
+        overrides: bool,
+    },
 }
 
 /// The result of a command that ran.
@@ -248,6 +263,11 @@ pub struct Editor {
     edit_mode: EditMode,
     /// What the last commit did, for the CLI and the fallback chip.
     last_commit: Option<CommitSummary>,
+    /// The program before and after the last commit (for the code diff and
+    /// the code panel).
+    last_code: Option<(String, String)>,
+    /// The exact edit the last commit applied (for the code-panel highlight).
+    last_edit: Option<CodeEdit>,
     /// A transient note, for example that disk won over a pending gesture.
     notice: Option<String>,
     view: ViewState,
@@ -287,6 +307,8 @@ impl Editor {
             gesture: None,
             edit_mode: EditMode::Code,
             last_commit: None,
+            last_code: None,
+            last_edit: None,
             notice: None,
             view: ViewState {
                 safe_area: false,
@@ -619,6 +641,178 @@ impl Editor {
         self.notice.as_deref()
     }
 
+    /// The program with the lines the last gesture wrote marked.
+    ///
+    /// The ranges come from the applied [`CodeEdit`], not from re-diffing the
+    /// text, so the panel can never disagree with what was written.
+    #[must_use]
+    pub fn code_panel(&self) -> crate::CodePanel {
+        crate::CodePanel::build(self.session.source(), self.last_edit.as_ref())
+    }
+
+    /// One row per pending override, with the last commit's reasons.
+    #[must_use]
+    pub fn override_rows(&self) -> Vec<crate::OverrideRow> {
+        let reasons = self
+            .last_commit
+            .as_ref()
+            .map_or_else(Vec::new, |report| report.reasons.clone());
+        crate::overrides_panel::rows(self.session.overrides(), &reasons)
+    }
+
+    /// The unified diff of the last commit, or an empty string when the
+    /// program did not change.
+    #[must_use]
+    pub fn last_diff(&self) -> String {
+        let Some((before, after)) = &self.last_code else {
+            return String::new();
+        };
+        let path = self
+            .session
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("program.motion");
+        crate::unified_diff(before, after, path)
+    }
+
+    /// The JSON result of a committed command: the strategy per command, the
+    /// overrides kept with their reasons and the code diff.
+    ///
+    /// `None` when the command did not edit anything.
+    #[must_use]
+    pub fn commit_json(&self, outcome: &Outcome) -> Option<String> {
+        let report = self.last_commit.as_ref()?;
+        let mut j = crate::Json::new();
+        j.begin_object();
+        j.key("summary").string(&outcome.summary);
+        j.key("code").boolean(report.code);
+        j.key("strategies").begin_array();
+        for strategy in &report.strategies {
+            j.string(strategy.name());
+        }
+        j.end_array();
+        j.key("overrides_kept")
+            .int(i64::try_from(report.overrides).unwrap_or(i64::MAX));
+        j.key("fallback_reasons").begin_array();
+        for reason in &report.reasons {
+            j.string(reason);
+        }
+        j.end_array();
+        j.key("path").string(
+            self.session
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("program.motion"),
+        );
+        j.key("diff").string(&self.last_diff());
+        j.end_object();
+        Some(j.finish())
+    }
+
+    /// Converts one override entry into code through the write-through sink.
+    ///
+    /// On success the program is written once, the override is removed in the
+    /// same undo entry and `Ok(Ok(()))` is returned. When no exact code edit
+    /// exists the override stays untouched and `Ok(Err(reason))` carries the
+    /// planner's explanation. `Err` is a hard failure (no document, I/O).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NoDocument`] when nothing is loaded and
+    /// [`ErrorKind::BadValue`] when the written program does not compile.
+    pub fn convert_override(
+        &mut self,
+        entry: &OverrideEntry,
+    ) -> Result<Result<(), String>, CommandError> {
+        let document = self.require_document()?.clone();
+        let origins = self.session.origins().cloned().ok_or_else(|| {
+            CommandError::new(ErrorKind::NoDocument, "the program has no recorded origins")
+        })?;
+        let Some(command) = Self::command_for_override(entry) else {
+            return Ok(Err(format!(
+                "{:?} is editor state; it cannot become program code",
+                entry.action
+            )));
+        };
+        let source = self.session.source().to_owned();
+        let before = self.session.overrides().clone();
+        let written = self.try_write_through(
+            std::slice::from_ref(&command),
+            &document,
+            &before,
+            &source,
+            &origins,
+        )?;
+        if written {
+            self.undo.record(UndoState {
+                source: source.clone(),
+                overrides: before,
+            });
+            self.refresh_models();
+            return Ok(Ok(()));
+        }
+        let reason = self
+            .last_commit
+            .as_ref()
+            .and_then(|report| report.reasons.first().cloned())
+            .unwrap_or_else(|| "no exact code edit".to_owned());
+        Ok(Err(reason))
+    }
+
+    /// The [`EditCommand`] one override entry stands for.
+    fn command_for_override(entry: &OverrideEntry) -> Option<EditCommand> {
+        match &entry.action {
+            OverrideAction::Set(value) => Some(EditCommand::SetValue {
+                id: entry.id.clone(),
+                property: entry.property.clone(),
+                value: value.clone(),
+            }),
+            OverrideAction::Key { frame, value, ease } => {
+                let (base, axis) = split_property(&entry.property);
+                Some(EditCommand::SetKey {
+                    id: entry.id.clone(),
+                    property: base.to_owned(),
+                    axis,
+                    frame: *frame,
+                    value: value.clone(),
+                    ease: *ease,
+                })
+            }
+            OverrideAction::Visible(visible) => Some(EditCommand::SetVisible {
+                id: entry.id.clone(),
+                visible: *visible,
+            }),
+            OverrideAction::Unkey { frame } => {
+                let (base, axis) = split_property(&entry.property);
+                Some(EditCommand::RemoveKey {
+                    id: entry.id.clone(),
+                    property: base.to_owned(),
+                    axis,
+                    frame: *frame,
+                })
+            }
+            OverrideAction::Locked(_) => None,
+        }
+    }
+
+    /// The identity of the selected layer, when one is selected.
+    #[must_use]
+    pub fn selected_identity(&self) -> Option<String> {
+        self.selected
+            .and_then(|node| self.document()?.node(node))
+            .map(|node| node.identity().as_str().to_owned())
+    }
+
+    /// The program before and after the last committed edit.
+    #[must_use]
+    pub fn last_program_change(&self) -> Option<(&str, &str)> {
+        self.last_code
+            .as_ref()
+            .map(|(before, after)| (before.as_str(), after.as_str()))
+    }
+
     /// The identity of `node`.
     #[must_use]
     pub fn node_identity(&self, node: NodeId) -> String {
@@ -915,6 +1109,8 @@ impl Editor {
     pub fn execute(&mut self, command: &Command, now: Duration) -> Result<Outcome, CommandError> {
         // Each command reports its own commit; a view command reports nothing.
         self.last_commit = None;
+        self.last_code = None;
+        self.last_edit = None;
         match command {
             Command::Play
             | Command::Pause
@@ -945,6 +1141,37 @@ impl Editor {
                 summary: "closing".to_owned(),
                 effect: Effect::Quit,
             }),
+            Command::ShowCode { on } => Ok(Outcome {
+                summary: if *on {
+                    "code panel shown"
+                } else {
+                    "code panel hidden"
+                }
+                .to_owned(),
+                effect: Effect::ShowCode { on: *on },
+            }),
+            Command::ShowOverrides { on } => Ok(Outcome {
+                summary: if *on {
+                    "overrides shown"
+                } else {
+                    "overrides hidden"
+                }
+                .to_owned(),
+                effect: Effect::ShowOverrides { on: *on },
+            }),
+            Command::SetEditMode { overrides } => {
+                self.edit_mode = if *overrides {
+                    EditMode::Overrides
+                } else {
+                    EditMode::Code
+                };
+                Ok(Outcome {
+                    summary: format!("edits go to {}", self.edit_mode.name()),
+                    effect: Effect::EditModeChanged {
+                        overrides: *overrides,
+                    },
+                })
+            }
             Command::Undo => self.undo_redo(true),
             Command::Redo => self.undo_redo(false),
             Command::Bake(ids) => self.bake(ids),
@@ -1025,6 +1252,18 @@ impl Editor {
                     background: "#000000".to_owned(),
                 }),
             }),
+            Command::AddLayer { .. }
+            | Command::DeleteLayer { .. }
+            | Command::DuplicateLayer { .. }
+            | Command::ReorderLayer { .. }
+            | Command::ReparentLayer { .. }
+            | Command::GroupLayers { .. }
+            | Command::UngroupLayer { .. } => {
+                let structural = command.structural().ok_or_else(|| {
+                    CommandError::new(ErrorKind::BadArgument, "not a structural command")
+                })?;
+                self.execute_structural(&structural)
+            }
             _ if command.kind().edits() => self.execute_edit(command),
             _ => self.execute_view(command),
         }
@@ -1269,6 +1508,8 @@ impl Editor {
         {
             return Err(self.compile_error());
         }
+        self.last_code = Some((source.to_owned(), new_source));
+        self.last_edit = Some(combined);
         self.last_commit = Some(CommitSummary::code(strategies));
         Ok(true)
     }
@@ -1312,13 +1553,24 @@ impl Editor {
         &mut self,
         command: &motioner_dsl::structural::StructuralCommand,
     ) -> Result<Outcome, CommandError> {
+        if self.edit_mode == EditMode::Overrides {
+            return Err(CommandError::new(
+                ErrorKind::Refused,
+                "structural gestures change the layers themselves, which overrides cannot \
+                 express; switch the project to code mode to add, delete or reparent layers",
+            ));
+        }
         let document = self.require_document()?.clone();
         let origins = self.session.origins().cloned().ok_or_else(|| {
             CommandError::new(ErrorKind::NoDocument, "the program has no recorded origins")
         })?;
         let source = self.session.source().to_owned();
-        let edit = match motioner_dsl::structural::plan_structural(
-            &source, &origins, &document, command,
+        let edit = match motioner_dsl::structural::plan_structural_with_metrics(
+            &source,
+            &origins,
+            &document,
+            command,
+            self.session.text_metrics(),
         ) {
             Plan::Code(edit) => edit,
             Plan::Fallback(reason) => return Err(CommandError::new(ErrorKind::Refused, reason)),
@@ -1338,6 +1590,8 @@ impl Editor {
         {
             return Err(self.compile_error());
         }
+        self.last_code = Some((source.clone(), new_source));
+        self.last_edit = Some(edit.clone());
         // Adding a layer selects it, so the next gesture targets the new
         // layer (the layers panel and the inspector both follow the
         // selection).

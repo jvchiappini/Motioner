@@ -48,7 +48,7 @@ beat2.key("opacity", 2.1, 1)
 
 backdrop = rect(560, 240, radius=16)
 backdrop.pos = (320, 170)
-backdrop.fill = linear_gradient(start= (-280, 0), end= (280, 0), stops= [(0, "#6A8AA8"), (0.5, "#7AA6B8"), (1, "#9A6AA8")])
+backdrop.fill = linear_gradient(start=(-280, 0), end=(280, 0), stops=[(0, "#6A8AA8"), (0.5, "#7AA6B8"), (1, "#9A6AA8")])
 beat2.add(backdrop)
 
 badge_group = group()
@@ -56,7 +56,7 @@ badge_group.id("badge_group")
 badge_group.pos = (320, 170)
 badge_group.opacity = 0.5
 badge_group.blend = "multiply"
-badge_group.effect("drop_shadow", color="#000000CC", offset= (14, 16), blur=12, opacity=0.8)
+badge_group.effect("drop_shadow", color="#000000CC", offset=(14, 16), blur=12, opacity=0.8)
 badge = image("examples/assets/alpha_badge.png", width=160, height=160, fit="contain")
 badge_group.add(badge)
 beat2.add(badge_group)

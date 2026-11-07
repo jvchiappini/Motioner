@@ -137,6 +137,25 @@ impl CommandKind {
                 id: id(),
                 name: "Big \"title\"".to_owned(),
             },
+            Self::AddLayer => Command::AddLayer {
+                kind: motioner_dsl::structural::LayerKind::Circle { radius: 40.0 },
+                after: Some(id()),
+                name: Some("dot".to_owned()),
+            },
+            Self::DeleteLayer => Command::DeleteLayer { id: id() },
+            Self::DuplicateLayer => Command::DuplicateLayer { id: id() },
+            Self::ReorderLayer => Command::ReorderLayer { id: id(), to: 2 },
+            Self::ReparentLayer => Command::ReparentLayer {
+                id: id(),
+                parent: Some("card".to_owned()),
+            },
+            Self::GroupLayers => Command::GroupLayers {
+                ids: vec![id(), "card".to_owned()],
+                name: Some("pair".to_owned()),
+            },
+            Self::UngroupLayer => Command::UngroupLayer {
+                id: "pair".to_owned(),
+            },
             Self::AssignId => Command::AssignId {
                 from: "@281".to_owned(),
                 to: id(),
@@ -200,6 +219,9 @@ impl CommandKind {
                 to: Time::Frame(60),
                 value: OverrideValue::Number(0.75),
             },
+            Self::ShowCode => Command::ShowCode { on: true },
+            Self::ShowOverrides => Command::ShowOverrides { on: false },
+            Self::SetEditMode => Command::SetEditMode { overrides: true },
             Self::Undo => Command::Undo,
             Self::Redo => Command::Redo,
             Self::Bake => Command::Bake(vec![id(), "card".to_owned()]),

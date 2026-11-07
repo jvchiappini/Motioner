@@ -34,6 +34,27 @@ pub enum VideoFrameState {
     Unavailable,
 }
 
+/// The facts of one committed edit, before the host hashes and stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceInput<'a> {
+    /// Project-relative program file.
+    pub file: &'a str,
+    /// Program before the edit.
+    pub before: &'a str,
+    /// Program after the edit.
+    pub after: &'a str,
+    /// The command in its D-0024 text form.
+    pub command: &'a str,
+    /// Planner strategy (`private-literal`, `fallback`, ...).
+    pub strategy: &'a str,
+    /// Unified diff.
+    pub diff: &'a str,
+    /// Playhead frame.
+    pub frame: i64,
+    /// Selected node identity.
+    pub selection: Option<&'a str>,
+}
+
 /// Project-level services for the window.
 pub trait ProjectHost {
     /// Recent projects, most recent first.
@@ -131,6 +152,61 @@ pub trait ProjectHost {
         frame: Option<i64>,
         pos: Option<(f64, f64)>,
     ) -> Result<(), String>;
+
+    /// Whether the project keeps edits as overrides (`editor.motion`).
+    ///
+    /// The default is code mode, so a project without the key, or a loose
+    /// program, reads as code (D-0036).
+    fn edit_mode(&self, composition: &Path) -> bool {
+        let _ = composition;
+        false
+    }
+
+    /// Persists the project's edit-mode setting atomically.
+    ///
+    /// # Errors
+    ///
+    /// A human-readable I/O message.
+    fn set_edit_mode(&self, composition: &Path, overrides: bool) -> Result<(), String> {
+        let _ = (composition, overrides);
+        Ok(())
+    }
+
+    /// Whether local edit traces are recorded for this project.
+    ///
+    /// On in debug builds unless the project turned them off, on in release
+    /// only when the project turned them on, and always on with
+    /// `MOTIONER_TRACES=1`. Nothing is ever uploaded.
+    fn traces_enabled(&self, composition: &Path) -> bool {
+        let _ = composition;
+        false
+    }
+
+    /// The project's stored trace setting (independent of the environment).
+    fn traces_setting(&self, composition: &Path) -> bool {
+        let _ = composition;
+        false
+    }
+
+    /// Persists the project's trace setting atomically.
+    ///
+    /// # Errors
+    ///
+    /// A human-readable I/O message.
+    fn set_traces(&self, composition: &Path, on: bool) -> Result<(), String> {
+        let _ = (composition, on);
+        Ok(())
+    }
+
+    /// Appends one trace record under `<project>/traces/`.
+    ///
+    /// # Errors
+    ///
+    /// A human-readable I/O message.
+    fn record_trace(&self, composition: &Path, trace: &TraceInput<'_>) -> Result<(), String> {
+        let _ = (composition, trace);
+        Ok(())
+    }
 
     /// Keys that no composition references.
     ///

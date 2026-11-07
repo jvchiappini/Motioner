@@ -103,6 +103,7 @@ pub fn plan_with_scope(
 /// must be re-run with the same metrics, otherwise the exact strategy would be
 /// rejected as a mismatch.
 #[must_use]
+#[allow(clippy::too_many_lines)] // the strategy ladder reads best as one sequence
 pub fn plan_with_scope_and_metrics(
     program: &str,
     origins: &ValueOrigins,
@@ -111,7 +112,9 @@ pub fn plan_with_scope_and_metrics(
     scope: Scope,
     metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
-    if let Some(plan) = crate::structural::plan_edit_command(program, origins, document, change) {
+    if let Some(plan) =
+        crate::structural::plan_edit_command(program, origins, document, change, metrics)
+    {
         return plan;
     }
     let rate = document.composition().frame_rate();

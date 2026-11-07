@@ -4,6 +4,7 @@
 use std::fmt;
 
 use motioner_core::{format_number, quote, OverrideValue};
+use motioner_dsl::structural::LayerKind;
 
 use super::{Command, Time};
 
@@ -53,7 +54,9 @@ impl Command {
             | Self::Snap(on)
             | Self::OnlyAnimated(on)
             | Self::MotionBlurPreview { on }
-            | Self::ShowShy(on) => vec![bool_text(*on)],
+            | Self::ShowShy(on)
+            | Self::ShowCode { on }
+            | Self::ShowOverrides { on } => vec![bool_text(*on)],
             Self::Zoom(factor) => vec![format_number(*factor)],
             Self::ZoomBy { steps, x, y } => {
                 let mut args = vec![steps.to_string()];
@@ -182,6 +185,36 @@ impl Command {
                 vec![quote(id), bool_text(*on)]
             }
             Self::Rename { id, name } => vec![quote(id), quote(name)],
+            Self::AddLayer { kind, after, name } => {
+                let mut args = layer_kind_text(kind);
+                if let Some(after) = after {
+                    args.push(format!("after={}", quote(after)));
+                }
+                if let Some(name) = name {
+                    args.push(format!("name={}", quote(name)));
+                }
+                args
+            }
+            Self::DeleteLayer { id } | Self::DuplicateLayer { id } | Self::UngroupLayer { id } => {
+                vec![quote(id)]
+            }
+            Self::ReorderLayer { id, to } => vec![quote(id), to.to_string()],
+            Self::ReparentLayer { id, parent } => {
+                let mut args = vec![quote(id)];
+                args.push(match parent {
+                    Some(parent) => format!("parent={}", quote(parent)),
+                    None => "parent=None".to_owned(),
+                });
+                args
+            }
+            Self::GroupLayers { ids, name } => {
+                let list: Vec<String> = ids.iter().map(|id| quote(id)).collect();
+                let mut args = vec![format!("[{}]", list.join(", "))];
+                if let Some(name) = name {
+                    args.push(format!("name={}", quote(name)));
+                }
+                args
+            }
             Self::AssignId { from, to } => vec![quote(from), quote(to)],
             Self::DeleteOrphan { id, property, time } => {
                 let mut args = vec![quote(id), quote(property)];
@@ -221,6 +254,9 @@ impl Command {
                 to.to_text(),
                 value_text(value),
             ],
+            Self::SetEditMode { overrides } => {
+                vec![quote(if *overrides { "overrides" } else { "code" })]
+            }
             Self::Bake(ids) => ids.iter().map(|id| quote(id)).collect(),
             Self::SaveAs { path } | Self::OpenProject { path } | Self::ImportAsset { path } => {
                 vec![quote(path)]
@@ -273,5 +309,40 @@ fn value_text(value: &OverrideValue) -> String {
         OverrideValue::Number(n) => format_number(*n),
         OverrideValue::Vec2(v) => format!("({}, {})", format_number(v.x), format_number(v.y)),
         OverrideValue::Text(text) => quote(text),
+    }
+}
+
+/// The `kind` argument and its constructor data, in canonical order.
+fn layer_kind_text(kind: &LayerKind) -> Vec<String> {
+    match kind {
+        LayerKind::Rect { width, height } => vec![
+            quote("rect"),
+            format!("width={}", format_number(*width)),
+            format!("height={}", format_number(*height)),
+        ],
+        LayerKind::Circle { radius } => {
+            vec![
+                quote("circle"),
+                format!("radius={}", format_number(*radius)),
+            ]
+        }
+        LayerKind::Text { content } => vec![quote("text"), format!("content={}", quote(content))],
+        LayerKind::Image { source } => {
+            vec![quote("image"), format!("source={}", quote(source))]
+        }
+        LayerKind::Audio { source } => {
+            vec![quote("audio"), format!("source={}", quote(source))]
+        }
+        LayerKind::Video { source } => {
+            vec![quote("video"), format!("source={}", quote(source))]
+        }
+        LayerKind::Path { points } => {
+            let list: Vec<String> = points
+                .iter()
+                .map(|(x, y)| format!("({}, {})", format_number(*x), format_number(*y)))
+                .collect();
+            vec![quote("path"), format!("points=[{}]", list.join(", "))]
+        }
+        LayerKind::Group => vec![quote("group")],
     }
 }

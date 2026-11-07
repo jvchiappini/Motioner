@@ -1027,3 +1027,191 @@ fn structural_rename_removes_and_moves_keys_as_code() {
     assert!(moved.contains("title.key(\"opacity\", 1.2, 1"), "{moved}");
     assert!(moving.session().overrides().is_empty());
 }
+
+#[test]
+fn structural_gestures_from_the_command_layer_write_code() {
+    // Add a layer after the selected one.
+    let (mut editor, dir) = hello_editor_code("structural_cmd_add");
+    let original = std::fs::read_to_string(dir.0.join("hello.motion")).unwrap();
+    run(
+        &mut editor,
+        "add_layer(\"circle\", radius=10, after=\"@281\", name=\"dot\")",
+    );
+    let written = editor.session().source().to_owned();
+    assert!(written.contains("= circle(10)"), "{written}");
+    assert!(
+        written.contains("dot_2 = circle(10)"),
+        "a fresh readable binding avoids the loop's `dot`: {written}"
+    );
+    assert!(editor.session().overrides().is_empty());
+    assert!(editor.last_commit().is_some_and(|report| report.code));
+    assert_eq!(editor.history(), (1, 0));
+    run(&mut editor, "undo()");
+    assert_eq!(
+        std::fs::read_to_string(dir.0.join("hello.motion")).unwrap(),
+        original,
+        "undo restores the exact bytes"
+    );
+}
+
+#[test]
+fn duplicate_reorder_reparent_group_and_ungroup_write_code() {
+    // Duplicate copies the creation statements under a fresh binding.
+    let (mut editor, _dir) = hello_editor_code("structural_cmd_duplicate");
+    run(&mut editor, "duplicate_layer(\"@281\")");
+    let duplicated = editor.session().source().to_owned();
+    assert_eq!(
+        duplicated.matches("= text(\"Motioner\"").count(),
+        2,
+        "{duplicated}"
+    );
+    assert!(editor.last_commit().is_some_and(|report| report.code));
+
+    // Reorder moves the statements of a top-level layer. `hello` has loops and
+    // function calls between its layers, which reordering cannot express, so
+    // this case uses a program whose layers are plain top-level statements.
+    let dir = std::env::temp_dir().join(format!("motioner_editor_reorder_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("order.motion");
+    std::fs::write(
+        &path,
+        "comp(name=\"P\", duration=1.0)\na = circle(10)\nb = circle(20)\nc = circle(30)\n",
+    )
+    .unwrap();
+    let mut editor = Editor::open(&path).unwrap();
+    editor.set_edit_mode(EditMode::Code);
+    let a_id = editor
+        .session()
+        .document()
+        .unwrap()
+        .nodes()
+        .next()
+        .unwrap()
+        .identity()
+        .as_str()
+        .to_owned();
+    run(&mut editor, &format!("reorder_layer({a_id:?}, 2)"));
+    let reordered = editor.session().source().to_owned();
+    let a = reordered.find("a = circle(10)").unwrap();
+    let c = reordered.find("c = circle(30)").unwrap();
+    assert!(a > c, "the layer moved after its siblings: {reordered}");
+    assert!(editor.last_commit().is_some_and(|report| report.code));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Group the title and a new circle, then ungroup them.
+    let (mut editor, _dir) = hello_editor_code("structural_cmd_group");
+    run(&mut editor, "group_layers([\"@281\"], name=\"pair\")");
+    let grouped = editor.session().source().to_owned();
+    assert!(grouped.contains("pair = group()"), "{grouped}");
+    assert!(grouped.contains("pair.add(title)"), "{grouped}");
+    assert!(editor.last_commit().is_some_and(|report| report.code));
+    let group = editor
+        .session()
+        .document()
+        .unwrap()
+        .nodes()
+        .find(|node| node.name() == Some("pair"))
+        .map(|node| node.identity().as_str().to_owned())
+        .expect("the group layer");
+    run(&mut editor, &format!("ungroup_layer({group:?})"));
+    let ungrouped = editor.session().source().to_owned();
+    assert!(!ungrouped.contains("pair = group()"), "{ungrouped}");
+    assert!(!ungrouped.contains("pair.add("), "{ungrouped}");
+    assert!(editor.last_commit().is_some_and(|report| report.code));
+
+    // Reparent into an existing empty group.
+    let (mut editor, _dir) = hello_editor_code("structural_cmd_reparent");
+    run(&mut editor, "add_layer(\"group\", name=\"holder\")");
+    let holder = editor
+        .session()
+        .document()
+        .unwrap()
+        .nodes()
+        .last()
+        .map(|node| node.identity().as_str().to_owned())
+        .expect("the holder group was appended");
+    run(
+        &mut editor,
+        &format!("reparent_layer(\"@281\", parent={holder:?})"),
+    );
+    let reparented = editor.session().source().to_owned();
+    assert_eq!(reparented.matches(".add(title)").count(), 1, "{reparented}");
+    run(&mut editor, "reparent_layer(\"@281\", parent=None)");
+    assert!(
+        !editor.session().source().contains(".add(title)"),
+        "unparenting removes the add() call: {}",
+        editor.session().source()
+    );
+}
+
+#[test]
+fn structural_commands_refuse_in_overrides_mode() {
+    let (mut editor, _dir) = hello_editor("structural_overrides_refusal");
+    for text in [
+        "add_layer(\"circle\", radius=10)",
+        "delete_layer(\"@281\")",
+        "duplicate_layer(\"@281\")",
+        "reorder_layer(\"@281\", 1)",
+        "reparent_layer(\"@281\", parent=None)",
+        "group_layers([\"@281\"])",
+        "ungroup_layer(\"@281\")",
+    ] {
+        assert_eq!(error(&mut editor, text), ErrorKind::Refused, "{text}");
+    }
+}
+
+#[test]
+fn converting_an_override_writes_code_and_removes_it() {
+    let (mut editor, dir) = hello_editor("convert_override");
+    run(&mut editor, "edit(\"@281\", \"rotation\", 15)");
+    assert_eq!(editor.session().overrides().entries().len(), 1);
+    let entry = editor.session().overrides().entries()[0].clone();
+    match editor.convert_override(&entry) {
+        Ok(Ok(())) => {}
+        other => panic!("expected a code conversion, got {other:?}"),
+    }
+    let written = std::fs::read_to_string(dir.0.join("hello.motion")).unwrap();
+    assert!(written.contains("title.rotation = 15"), "{written}");
+    assert!(editor.session().overrides().is_empty());
+    assert!(editor.last_commit().is_some_and(|report| report.code));
+    // Undo restores the program and the override in one step.
+    run(&mut editor, "undo()");
+    assert_eq!(
+        std::fs::read_to_string(dir.0.join("hello.motion")).unwrap(),
+        HELLO
+    );
+    assert_eq!(editor.session().overrides().entries().len(), 1);
+    // A locked override is editor state and cannot become code.
+    let locked = motioner_core::OverrideEntry::new(
+        TITLE.to_owned(),
+        motioner_core::LOCKED.to_owned(),
+        OverrideAction::Locked(true),
+    );
+    assert!(matches!(editor.convert_override(&locked), Ok(Err(_))));
+}
+
+#[test]
+fn an_external_change_discards_a_pending_gesture_and_keeps_the_selection() {
+    let (mut editor, dir) = hello_editor_code("watcher_conflict");
+    run(&mut editor, "select(\"@281\")");
+    editor.begin_gesture();
+    run(&mut editor, "edit(\"@281\", \"rotation\", 30)");
+    assert!(editor.in_gesture());
+    let changed = format!("{HELLO}\n# external edit\n");
+    std::fs::write(dir.0.join("hello.motion"), &changed).unwrap();
+    assert!(editor.reload(Duration::ZERO));
+    assert!(!editor.in_gesture(), "the pending gesture is dropped");
+    assert!(
+        editor
+            .notice()
+            .is_some_and(|note| note.contains("discarded")),
+        "the user is told what was discarded"
+    );
+    assert_eq!(editor.session().source(), changed);
+    assert_eq!(
+        editor.selected().map(|node| editor.node_identity(node)),
+        Some(TITLE.to_owned()),
+        "the selection is kept by identity"
+    );
+}

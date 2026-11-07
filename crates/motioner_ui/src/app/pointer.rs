@@ -89,6 +89,17 @@ pub(super) enum Drag {
     },
     /// Moving or trimming an audio clip.
     Clip(ClipDrag),
+    /// Dragging an outline row to reorder or reparent it.
+    LayerRow {
+        /// Outline index of the dragged row.
+        row: usize,
+        /// Pointer at the press.
+        start: (f32, f32),
+        /// Latest pointer position.
+        current: (f32, f32),
+        /// Whether the pointer travelled past the click slop.
+        moved: bool,
+    },
 }
 
 /// Which part of an audio clip a drag grabbed.

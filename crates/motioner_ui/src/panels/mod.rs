@@ -9,8 +9,10 @@
 
 pub mod assets;
 pub mod canvas;
+pub mod code;
 pub mod inspector;
 pub mod layers;
+pub mod overrides;
 pub mod status;
 pub mod timeline;
 pub mod top_bar;
@@ -51,6 +53,7 @@ pub struct TooltipRequest {
 
 /// Everything the panels need to draw one frame.
 #[allow(clippy::struct_excessive_bools)] // independent UI flags, not a state machine
+#[allow(clippy::struct_field_names)] // view_menu_* and code_* read best with the panel name
 #[derive(Debug)]
 pub struct View<'a> {
     /// Window layout.
@@ -163,6 +166,24 @@ pub struct View<'a> {
     pub menu_open: bool,
     /// The File-menu item under the pointer.
     pub menu_hover: Option<crate::MenuAction>,
+    /// Whether the View menu is open.
+    pub view_menu_open: bool,
+    /// The View-menu item under the pointer.
+    pub view_menu_hover: Option<crate::layout::ViewAction>,
+    /// Whether the Add Layer menu is open.
+    pub add_menu_open: bool,
+    /// The Add Layer menu row under the pointer.
+    pub add_menu_hover: Option<usize>,
+    /// Pending overrides, one row each.
+    pub override_rows: &'a [crate::OverrideRow],
+    /// Whether the pending-overrides list is open.
+    pub overrides_open: bool,
+    /// The read-only code panel (lines and last-edit highlight).
+    pub code_panel: &'a crate::CodePanel,
+    /// Whether the code panel is open.
+    pub code_open: bool,
+    /// Whether the one-time convert-on-open banner is shown.
+    pub bake_offer: bool,
     /// A backup offered after a crash.
     pub recovery: Option<&'a crate::RecoveryInfo>,
 }

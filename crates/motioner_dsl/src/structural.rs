@@ -190,6 +190,23 @@ pub enum StructuralCommand {
         /// Optional position in composition pixels.
         pos: Option<(f64, f64)>,
     },
+    /// Wraps several layers in a new group in one edit.
+    ///
+    /// The group is created after the last selected layer and every selected
+    /// layer is moved into it. Planned as one combined code edit so the whole
+    /// gesture is one program write and one undo entry.
+    Group {
+        /// Node identities to put in the group, in document order.
+        ids: Vec<String>,
+        /// Optional readable group name.
+        name: Option<String>,
+    },
+    /// Dissolves a group: its direct children return to the group's parent and
+    /// the empty group is deleted, in one edit.
+    Ungroup {
+        /// Node identity of the group.
+        id: String,
+    },
 }
 
 /// Plans `command` against `program`.
@@ -205,6 +222,44 @@ pub fn plan_structural(
     document: &Document,
     command: &StructuralCommand,
 ) -> Plan {
+    plan_structural_with_metrics(
+        program,
+        origins,
+        document,
+        command,
+        &motioner_core::NoTextMetrics,
+    )
+}
+
+/// [`plan_structural`] with the text metrics the document was produced with.
+///
+/// Verification re-runs the program, so a program that calls `text_width` must
+/// be re-run with the same metrics or the exact edit would be rejected.
+#[must_use]
+pub fn plan_structural_with_metrics(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    command: &StructuralCommand,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
+    match command {
+        StructuralCommand::Group { ids, name } => {
+            plan_group(program, origins, document, ids, name.as_deref(), metrics)
+        }
+        StructuralCommand::Ungroup { id } => plan_ungroup(program, origins, document, id, metrics),
+        other => plan_one(program, origins, document, other, metrics),
+    }
+}
+
+/// One structural command that is not itself a sequence.
+fn plan_one(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    command: &StructuralCommand,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
     match command {
         StructuralCommand::AddLayer { kind, after, name } => plan_add_layer(
             program,
@@ -213,23 +268,248 @@ pub fn plan_structural(
             kind,
             after.as_deref(),
             name.as_deref(),
+            metrics,
         ),
-        StructuralCommand::Delete { id } => plan_delete(program, origins, document, id),
-        StructuralCommand::Duplicate { id } => plan_duplicate(program, origins, document, id),
-        StructuralCommand::Rename { id, name } => {
-            plan_rename_structural(program, origins, document, id, name)
+        StructuralCommand::Delete { id } => plan_delete(program, origins, document, id, metrics),
+        StructuralCommand::Duplicate { id } => {
+            plan_duplicate(program, origins, document, id, metrics)
         }
-        StructuralCommand::Reorder { id, to } => plan_reorder(program, origins, document, id, *to),
+        StructuralCommand::Rename { id, name } => {
+            plan_rename_structural(program, origins, document, id, name, metrics)
+        }
+        StructuralCommand::Reorder { id, to } => {
+            plan_reorder(program, origins, document, id, *to, metrics)
+        }
         StructuralCommand::Reparent { id, parent } => {
-            plan_reparent(program, origins, document, id, parent.as_deref())
+            plan_reparent(program, origins, document, id, parent.as_deref(), metrics)
         }
         StructuralCommand::PlaceAsset {
             kind,
             source,
             frame,
             pos,
-        } => plan_place_asset(program, origins, document, kind, source, *frame, *pos),
+        } => plan_place_asset(
+            program, origins, document, kind, source, *frame, *pos, metrics,
+        ),
+        StructuralCommand::Group { .. } | StructuralCommand::Ungroup { .. } => {
+            Plan::Fallback("a group command is planned as a sequence".to_owned())
+        }
     }
+}
+
+/// The state after applying one exact code edit: the program text, the run it
+/// produces and the origins of that run.
+struct Step {
+    program: String,
+    document: Document,
+    origins: ValueOrigins,
+}
+
+impl Step {
+    fn new(program: String) -> Option<Self> {
+        let compiled = crate::run_with_overrides(&program, None, &crate::Limits::default()).ok()?;
+        compiled.warnings.is_empty().then_some(Self {
+            program,
+            document: compiled.document,
+            origins: compiled.origins,
+        })
+    }
+}
+
+fn plan_group(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    ids: &[String],
+    name: Option<&str>,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
+    if ids.is_empty() {
+        return Plan::Fallback("select at least one layer to group".to_owned());
+    }
+    // The group is created after the last selected layer in document order.
+    let mut selected = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(node) = document.find(id) else {
+            return Plan::Fallback(format!("no layer has the identity {id:?}"));
+        };
+        selected.push(node);
+    }
+    let last = document
+        .nodes()
+        .filter(|node| selected.contains(&node.id()))
+        .last()
+        .map(motioner_core::Node::id);
+    let Some(last) = last else {
+        return Plan::Fallback("select at least one layer to group".to_owned());
+    };
+    let last_id = document
+        .node(last)
+        .map(|node| node.identity().as_str().to_owned())
+        .unwrap_or_default();
+    let add = plan_add_layer(
+        program,
+        origins,
+        document,
+        &LayerKind::Group,
+        Some(&last_id),
+        name,
+        metrics,
+    );
+    let Plan::Code(add_edit) = add else {
+        return add;
+    };
+    let Some(step) = apply_step(program, &add_edit) else {
+        return Plan::Fallback("adding the group did not compile".to_owned());
+    };
+    let Some(group) = step
+        .document
+        .nodes()
+        .find(|node| document.find(node.identity().as_str()).is_none())
+        .map(motioner_core::Node::id)
+    else {
+        return Plan::Fallback("the new group layer was not produced".to_owned());
+    };
+    let group_id = step
+        .document
+        .node(group)
+        .map(|node| node.identity().as_str().to_owned())
+        .unwrap_or_default();
+    chain(
+        step,
+        add_edit,
+        ids.iter().map(|id| StructuralCommand::Reparent {
+            id: id.clone(),
+            parent: Some(group_id.clone()),
+        }),
+        metrics,
+    )
+}
+
+fn plan_ungroup(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    id: &str,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
+    let Some(node) = document.find(id) else {
+        return Plan::Fallback(format!("no layer has the identity {id:?}"));
+    };
+    if !matches!(
+        document.node(node).map(motioner_core::Node::content),
+        Some(NodeContent::Group)
+    ) {
+        return Plan::Fallback(format!("{id:?} is not a group"));
+    }
+    let children: Vec<String> = document
+        .nodes()
+        .filter(|child| child.parent() == Some(node))
+        .map(|child| child.identity().as_str().to_owned())
+        .collect();
+    let mut first: Option<CodeEdit> = None;
+    let mut step = Step {
+        program: program.to_owned(),
+        document: document.clone(),
+        origins: origins.clone(),
+    };
+    for child in &children {
+        let command = StructuralCommand::Reparent {
+            id: child.clone(),
+            parent: None,
+        };
+        let plan = plan_one(
+            &step.program,
+            &step.origins,
+            &step.document,
+            &command,
+            metrics,
+        );
+        let Plan::Code(edit) = plan else {
+            return plan;
+        };
+        let Some(next) = apply_step(&step.program, &edit) else {
+            return Plan::Fallback("removing a child from the group did not compile".to_owned());
+        };
+        first = Some(match first {
+            None => edit,
+            Some(previous) => match previous.compose(&edit) {
+                Ok(combined) => combined,
+                Err(error) => return Plan::Fallback(error.to_string()),
+            },
+        });
+        step = next;
+    }
+    let delete = plan_one(
+        &step.program,
+        &step.origins,
+        &step.document,
+        &StructuralCommand::Delete { id: id.to_owned() },
+        metrics,
+    );
+    let Plan::Code(delete_edit) = delete else {
+        return delete;
+    };
+    match first {
+        None => Plan::Code(delete_edit),
+        Some(previous) => match previous.compose(&delete_edit) {
+            Ok(combined) => Plan::Code(combined),
+            Err(error) => Plan::Fallback(error.to_string()),
+        },
+    }
+}
+
+/// Applies `commands` in order after `first`, composing them into one edit.
+fn chain(
+    mut step: Step,
+    first: CodeEdit,
+    commands: impl IntoIterator<Item = StructuralCommand>,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
+    let mut combined = first;
+    for command in commands {
+        let plan = plan_one(
+            &step.program,
+            &step.origins,
+            &step.document,
+            &command,
+            metrics,
+        );
+        let Plan::Code(edit) = plan else {
+            return plan;
+        };
+        let Some(next) = apply_step(&step.program, &edit) else {
+            return Plan::Fallback(format!(
+                "the edit for {} did not compile",
+                command_name(&command)
+            ));
+        };
+        combined = match combined.compose(&edit) {
+            Ok(combined) => combined,
+            Err(error) => return Plan::Fallback(error.to_string()),
+        };
+        step = next;
+    }
+    Plan::Code(combined)
+}
+
+fn command_name(command: &StructuralCommand) -> &'static str {
+    match command {
+        StructuralCommand::AddLayer { .. } => "add layer",
+        StructuralCommand::Delete { .. } => "delete",
+        StructuralCommand::Duplicate { .. } => "duplicate",
+        StructuralCommand::Rename { .. } => "rename",
+        StructuralCommand::Reorder { .. } => "reorder",
+        StructuralCommand::Reparent { .. } => "reparent",
+        StructuralCommand::PlaceAsset { .. } => "place asset",
+        StructuralCommand::Group { .. } => "group",
+        StructuralCommand::Ungroup { .. } => "ungroup",
+    }
+}
+
+fn apply_step(program: &str, edit: &CodeEdit) -> Option<Step> {
+    let after = edit.apply(program).ok()?;
+    Step::new(after)
 }
 
 /// Dispatches the key and layer [`EditCommand`] variants that phase 5 turns
@@ -240,6 +520,7 @@ pub(crate) fn plan_edit_command(
     origins: &ValueOrigins,
     document: &Document,
     change: &EditCommand,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Option<Plan> {
     let plan = match change {
         EditCommand::RemoveKey {
@@ -247,8 +528,10 @@ pub(crate) fn plan_edit_command(
             property,
             axis,
             frame,
-        } => plan_remove_key(program, origins, document, id, property, *axis, *frame),
-        EditCommand::MoveKeys(moves) => plan_move_keys(program, origins, document, moves),
+        } => plan_remove_key(
+            program, origins, document, id, property, *axis, *frame, metrics,
+        ),
+        EditCommand::MoveKeys(moves) => plan_move_keys(program, origins, document, moves, metrics),
         EditCommand::ToggleStopwatch {
             id,
             property,
@@ -266,9 +549,10 @@ pub(crate) fn plan_edit_command(
             *frame,
             value,
             existing_keys,
+            metrics,
         ),
         EditCommand::SetName { id, name } => {
-            plan_rename_structural(program, origins, document, id, name)
+            plan_rename_structural(program, origins, document, id, name, metrics)
         }
         EditCommand::SetLocked { .. } => Plan::Fallback(
             "'locked' is editor state, not program code; the editor stores it in editor.motion \
@@ -289,6 +573,7 @@ fn plan_add_layer(
     kind: &LayerKind,
     after: Option<&str>,
     name: Option<&str>,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     let (insert_at, indent) = match after {
         Some(id) => {
@@ -323,7 +608,7 @@ fn plan_add_layer(
         .iter()
         .filter(|origin| origin.creation.start < offset)
         .count();
-    if verify_added(program, &edit, document, expected_index, kind) {
+    if verify_added(program, &edit, document, expected_index, kind, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("the inserted constructor did not produce the expected layer".to_owned())
@@ -339,6 +624,7 @@ fn plan_place_asset(
     source: &str,
     frame: Option<i64>,
     pos: Option<(f64, f64)>,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     if !kind.is_asset() {
         return Plan::Fallback(
@@ -374,7 +660,14 @@ fn plan_place_asset(
         return Plan::Fallback("the insert range is not representable".to_owned());
     };
     let expected_index = document.len();
-    if verify_added(program, &edit, document, expected_index, &asset_kind) {
+    if verify_added(
+        program,
+        &edit,
+        document,
+        expected_index,
+        &asset_kind,
+        metrics,
+    ) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("the placed asset statement did not produce the expected layer".to_owned())
@@ -437,7 +730,13 @@ fn insertion_after_node(
 
 // ---- delete --------------------------------------------------------------
 
-fn plan_delete(program: &str, origins: &ValueOrigins, document: &Document, id: &str) -> Plan {
+fn plan_delete(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    id: &str,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
     let Some(node) = document.find(id) else {
         return Plan::Fallback(format!("no layer has the identity {id:?}"));
     };
@@ -445,7 +744,7 @@ fn plan_delete(program: &str, origins: &ValueOrigins, document: &Document, id: &
         return Plan::Fallback("the layer has no recorded creation site".to_owned());
     };
     if !origin.site.loops.is_empty() {
-        return plan_delete_loop_instance(program, origins, document, node, origin);
+        return plan_delete_loop_instance(program, origins, document, node, origin, metrics);
     }
     if !origin.site.calls.is_empty() {
         return Plan::Fallback(
@@ -478,7 +777,7 @@ fn plan_delete(program: &str, origins: &ValueOrigins, document: &Document, id: &
     ) else {
         return Plan::Fallback("the deletion ranges overlap".to_owned());
     };
-    if verify_deleted(program, &edit, document, node) {
+    if verify_deleted(program, &edit, document, node, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback(
@@ -493,6 +792,7 @@ fn plan_delete_loop_instance(
     document: &Document,
     node: NodeId,
     origin: &NodeOrigin,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     if !origin.site.calls.is_empty() {
         return Plan::Fallback(
@@ -558,7 +858,7 @@ fn plan_delete_loop_instance(
     ) else {
         return Plan::Fallback("the loop guard ranges overlap".to_owned());
     };
-    if verify_deleted(program, &edit, document, node) {
+    if verify_deleted(program, &edit, document, node, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("the loop-instance guard did not produce the expected document".to_owned())
@@ -567,7 +867,13 @@ fn plan_delete_loop_instance(
 
 // ---- duplicate -----------------------------------------------------------
 
-fn plan_duplicate(program: &str, origins: &ValueOrigins, document: &Document, id: &str) -> Plan {
+fn plan_duplicate(
+    program: &str,
+    origins: &ValueOrigins,
+    document: &Document,
+    id: &str,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Plan {
     let Some(node) = document.find(id) else {
         return Plan::Fallback(format!("no layer has the identity {id:?}"));
     };
@@ -662,7 +968,7 @@ fn plan_duplicate(program: &str, origins: &ValueOrigins, document: &Document, id
         .nodes()
         .position(|candidate| candidate.id() == node)
         .map_or(document.len(), |index| index + 1);
-    if verify_duplicated(program, &edit, document, node, index) {
+    if verify_duplicated(program, &edit, document, node, index, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("the duplicated statements did not produce the expected layer".to_owned())
@@ -678,6 +984,7 @@ pub(crate) fn plan_rename_structural(
     document: &Document,
     id: &str,
     name: &str,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     let Some(node) = document.find(id) else {
         return Plan::Fallback(format!("no layer has the identity {id:?}"));
@@ -755,13 +1062,14 @@ pub(crate) fn plan_rename_structural(
     ) else {
         return Plan::Fallback("the rename ranges overlap".to_owned());
     };
-    let Some(after) = run_checked_after(program, &edit) else {
+    let Some(after) = run_checked_after(program, &edit, metrics) else {
         return Plan::Fallback("the renamed program did not run cleanly".to_owned());
     };
-    if !plan::verify(
+    if !plan::verify_with_metrics(
         &apply_edit(program, &edit).unwrap_or_default(),
         None,
         document,
+        metrics,
     ) {
         return Plan::Fallback("the rename changed the rendered document".to_owned());
     }
@@ -823,6 +1131,7 @@ fn plan_reorder(
     document: &Document,
     id: &str,
     to: usize,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     let Some(node) = document.find(id) else {
         return Plan::Fallback(format!("no layer has the identity {id:?}"));
@@ -924,7 +1233,7 @@ fn plan_reorder(
         .unwrap_or(0);
     let removed = expected.remove(index);
     expected.insert(to.min(expected.len()), removed);
-    if let Some(after) = run_checked_after(program, &edit) {
+    if let Some(after) = run_checked_after(program, &edit, metrics) {
         let actual: Vec<Shape> = after.nodes().map(shape).collect();
         if actual == expected {
             return Plan::Code(edit);
@@ -941,6 +1250,7 @@ fn plan_reparent(
     document: &Document,
     id: &str,
     parent: Option<&str>,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     let Some(node) = document.find(id) else {
         return Plan::Fallback(format!("no layer has the identity {id:?}"));
@@ -1028,7 +1338,7 @@ fn plan_reparent(
             .nodes()
             .position(|candidate| candidate.id() == parent)
     });
-    if let Some(after) = run_checked_after(program, &edit) {
+    if let Some(after) = run_checked_after(program, &edit, metrics) {
         let actual_parent = after
             .nodes()
             .nth(child_index)
@@ -1054,6 +1364,7 @@ fn plan_stopwatch(
     frame: Frame,
     value: &OverrideValue,
     existing_keys: &[Frame],
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     if existing_keys.is_empty() {
         let command = EditCommand::SetKey {
@@ -1064,7 +1375,14 @@ fn plan_stopwatch(
             value: value.clone(),
             ease: Ease::Linear,
         };
-        return plan::plan_with_scope(program, origins, document, &command, Scope::This);
+        return plan::plan_with_scope_and_metrics(
+            program,
+            origins,
+            document,
+            &command,
+            Scope::This,
+            metrics,
+        );
     }
     plan_stopwatch_off(
         program,
@@ -1075,6 +1393,7 @@ fn plan_stopwatch(
         axis,
         value,
         existing_keys,
+        metrics,
     )
 }
 
@@ -1088,6 +1407,7 @@ fn plan_stopwatch_off(
     axis: Option<Axis>,
     value: &OverrideValue,
     existing_keys: &[Frame],
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     let property = property_name(property, axis);
     let Some(node) = document.find(id) else {
@@ -1172,13 +1492,14 @@ fn plan_stopwatch_off(
     ) else {
         return Plan::Fallback("the stopwatch ranges overlap".to_owned());
     };
-    if verify_edit_expected(program, &edit, &expected) {
+    if verify_edit_expected(program, &edit, &expected, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("stopping the stopwatch did not produce the expected document".to_owned())
     }
 }
 
+#[allow(clippy::too_many_arguments)] // the command has this many facts by design
 fn plan_remove_key(
     program: &str,
     origins: &ValueOrigins,
@@ -1187,6 +1508,7 @@ fn plan_remove_key(
     property: &str,
     axis: Option<Axis>,
     frame: Frame,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     let property = property_name(property, axis);
     let Some(node) = document.find(id) else {
@@ -1246,7 +1568,7 @@ fn plan_remove_key(
     ) else {
         return Plan::Fallback("the removal ranges overlap".to_owned());
     };
-    if verify_edit_expected(program, &edit, &expected) {
+    if verify_edit_expected(program, &edit, &expected, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("removing the key did not produce the expected document".to_owned())
@@ -1259,6 +1581,7 @@ fn plan_move_keys(
     origins: &ValueOrigins,
     document: &Document,
     moves: &[motioner_core::MoveKey],
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> Plan {
     if moves.is_empty() {
         return Plan::Fallback("there are no keys to move".to_owned());
@@ -1327,7 +1650,7 @@ fn plan_move_keys(
     let Some(edit) = combine(parts, "moved keys") else {
         return Plan::Fallback("the key move ranges overlap".to_owned());
     };
-    if verify_edit_expected(program, &edit, &expected) {
+    if verify_edit_expected(program, &edit, &expected, metrics) {
         Plan::Code(edit)
     } else {
         Plan::Fallback("moving the keys did not produce the expected document".to_owned())
@@ -1522,17 +1845,28 @@ fn apply_edit(program: &str, edit: &CodeEdit) -> Result<String, String> {
     edit.apply(program).map_err(|error| error.to_string())
 }
 
-fn run_checked_after(program: &str, edit: &CodeEdit) -> Option<Document> {
+fn run_checked_after(
+    program: &str,
+    edit: &CodeEdit,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Option<Document> {
     let after = apply_edit(program, edit).ok()?;
-    let compiled = crate::run_with_overrides(&after, None, &crate::Limits::default()).ok()?;
+    let compiled =
+        crate::run_with_overrides_and_metrics(&after, None, &crate::Limits::default(), metrics)
+            .ok()?;
     compiled.warnings.is_empty().then_some(compiled.document)
 }
 
-fn verify_edit_expected(program: &str, edit: &CodeEdit, expected: &Document) -> bool {
+fn verify_edit_expected(
+    program: &str,
+    edit: &CodeEdit,
+    expected: &Document,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> bool {
     let Ok(after) = edit.apply(program) else {
         return false;
     };
-    plan::verify(&after, None, expected)
+    plan::verify_with_metrics(&after, None, expected, metrics)
 }
 
 fn verify_added(
@@ -1541,8 +1875,9 @@ fn verify_added(
     document: &Document,
     expected_index: usize,
     kind: &LayerKind,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> bool {
-    let Some(after) = run_checked_after(program, edit) else {
+    let Some(after) = run_checked_after(program, edit, metrics) else {
         return false;
     };
     if after.len() != document.len() + 1 {
@@ -1564,8 +1899,14 @@ fn verify_added(
     before == actual
 }
 
-fn verify_deleted(program: &str, edit: &CodeEdit, document: &Document, node: NodeId) -> bool {
-    let Some(after) = run_checked_after(program, edit) else {
+fn verify_deleted(
+    program: &str,
+    edit: &CodeEdit,
+    document: &Document,
+    node: NodeId,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> bool {
+    let Some(after) = run_checked_after(program, edit, metrics) else {
         return false;
     };
     if after.len() + 1 != document.len() {
@@ -1591,8 +1932,9 @@ fn verify_duplicated(
     document: &Document,
     node: NodeId,
     expected_index: usize,
+    metrics: &dyn motioner_core::TextMetrics,
 ) -> bool {
-    let Some(after) = run_checked_after(program, edit) else {
+    let Some(after) = run_checked_after(program, edit, metrics) else {
         return false;
     };
     if after.len() != document.len() + 1 {

@@ -112,6 +112,14 @@ impl PreviewApp {
             Hit::LayerRow(row) | Hit::Track(row) => {
                 if let Some(id) = self.row_id(row) {
                     self.run(&Command::Select(id));
+                    if matches!(hit, Hit::LayerRow(_)) {
+                        self.pointer.drag = Some(Drag::LayerRow {
+                            row,
+                            start: at,
+                            current: at,
+                            moved: false,
+                        });
+                    }
                     if double && matches!(hit, Hit::LayerRow(_)) {
                         self.begin_edit(FieldTarget::Name);
                     }
@@ -302,7 +310,22 @@ impl PreviewApp {
                 }
             }
             Hit::Transport(button) => self.press_transport(button),
-            Hit::OrphanRow(_) | Hit::Inspector | Hit::Scrub | Hit::FileMenu => {}
+            Hit::OrphanRow(_)
+            | Hit::Inspector
+            | Hit::Scrub
+            | Hit::FileMenu
+            | Hit::ViewMenu
+            | Hit::ViewMenuItem(_)
+            | Hit::AddMenu
+            | Hit::AddMenuItem(_)
+            | Hit::OverridesChip
+            | Hit::OverridesRow(_)
+            | Hit::OverridesConvert(_)
+            | Hit::OverridesConvertAll
+            | Hit::OverridesClose
+            | Hit::CodeClose
+            | Hit::BakeConvert
+            | Hit::BakeDismiss => {}
         }
     }
 

@@ -279,7 +279,9 @@ impl CodeEdit {
                 });
             }
             for existing in &self.replacements {
-                let covered = start <= existing.start && existing.end <= end;
+                // A pure insertion (start == end) sits at a boundary: it never
+                // replaces generated text, it is added next to it.
+                let covered = start < end && start <= existing.start && existing.end <= end;
                 let touches = start < existing.end && existing.start < end;
                 if touches && !covered {
                     return Err(CodeEditError::NotComposable {
@@ -287,7 +289,9 @@ impl CodeEdit {
                     });
                 }
             }
-            replacements.retain(|existing| !(start <= existing.start && existing.end <= end));
+            if start < end {
+                replacements.retain(|existing| !(start <= existing.start && existing.end <= end));
+            }
             replacements.push(Replacement::new(start, end, replacement.text.clone()));
         }
         let strategy = if self.strategy == next.strategy {
@@ -400,7 +404,7 @@ fn map_offset(position: usize, replacements: &[Replacement]) -> Result<usize, Co
         let start = shift_signed(replacement.start, delta);
         let end = start + replacement.text.len();
         if position < start {
-            return Ok(shift_unsigned(position, delta));
+            return Ok(shift_unsigned(position, -delta));
         }
         if position == start {
             return Ok(replacement.start);
@@ -413,7 +417,7 @@ fn map_offset(position: usize, replacements: &[Replacement]) -> Result<usize, Co
         }
         delta += replacement.text.len().cast_signed() - replacement.len().cast_signed();
     }
-    Ok(shift_unsigned(position, delta))
+    Ok(shift_unsigned(position, -delta))
 }
 
 fn shift_signed(offset: usize, delta: isize) -> usize {
@@ -486,6 +490,28 @@ mod tests {
             second.apply(&middle).unwrap()
         );
         assert!(composed.apply(BEFORE).unwrap().contains("circle(120)"));
+    }
+
+    #[test]
+    fn composition_after_an_insertion_maps_offsets_back() {
+        let first = CodeEdit::new(
+            vec![Replacement::insert(BEFORE.len(), "extra = 1\n")],
+            "append a statement",
+            Strategy::StructuralEdit,
+        )
+        .unwrap();
+        let middle = first.apply(BEFORE).unwrap();
+        let second = CodeEdit::new(
+            vec![Replacement::insert(middle.len(), "tail = 2\n")],
+            "append another statement",
+            Strategy::StructuralEdit,
+        )
+        .unwrap();
+        let composed = first.compose(&second).unwrap();
+        assert_eq!(
+            composed.apply(BEFORE).unwrap(),
+            second.apply(&middle).unwrap()
+        );
     }
 
     #[test]

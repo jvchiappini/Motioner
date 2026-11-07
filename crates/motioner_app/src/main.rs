@@ -22,7 +22,10 @@
 
 mod agent;
 mod audio_out;
+mod corpus;
 mod host;
+mod tools;
+mod trace;
 mod video_cache;
 
 use std::ffi::OsString;
@@ -59,10 +62,14 @@ Usage:
   motioner info    <project|file.motion> [--json]
   motioner bake    <project|file.motion> [--id ID]...
   motioner query   <project|file.motion> [--frame N] [--node ID]
-  motioner edit    <project|file.motion> [--frame N] [--dry-run] [--overrides] <command>...
+  motioner edit    <project|file.motion> [--frame N] [--dry-run] [--overrides|--code] <command>...
   motioner fmt     <project|file.motion> [--check]
   motioner lint    <project|file.motion>
   motioner ctl     [--endpoint FILE] <request>...
+  motioner trace   export <project|dir> --out <file.jsonl> [--strategy S] [--since T]
+  motioner trace   replay <file.jsonl>
+  motioner corpus  check <dir> [--frames N]
+  motioner tools   --schema
   motioner preview <project|file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--window-size WxH] [--ui-scale F] [--select ROW]
                    [--screenshot <file.png>] [--control] [--control-file FILE]
@@ -128,6 +135,12 @@ enum Command {
     Lint(agent::LintArgs),
     /// Drive a running editor.
     Ctl(agent::CtlArgs),
+    /// Export or replay local edit traces.
+    Trace(trace::TraceCommand),
+    /// Validate a directory of generated programs.
+    Corpus(corpus::CheckArgs),
+    /// Print the agent tool schema.
+    Tools,
     /// Print usage.
     Help,
     /// Open the start screen with no project.
@@ -342,6 +355,18 @@ fn run(args: &[OsString]) -> Result<bool, Failure> {
         Command::Fmt(args) => Ok(status(agent::run_fmt(&args))),
         Command::Lint(args) => Ok(status(agent::run_lint(&args))),
         Command::Ctl(args) => Ok(status(agent::run_ctl(&args))),
+        Command::Trace(args) => {
+            args.run();
+            Ok(true)
+        }
+        Command::Corpus(args) => match corpus::run(&args) {
+            Ok(()) => Ok(true),
+            Err(message) => Err(Failure::Error(anyhow!(message))),
+        },
+        Command::Tools => {
+            println!("{}", tools::schema());
+            Ok(true)
+        }
         Command::Desktop(args) => run_desktop(&args).map(|()| true),
         Command::Import(args) => run_import(&args).map(|()| true),
         Command::Backup(args) => run_backup(&args).map(|()| true),
@@ -373,6 +398,9 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "fmt" => parse_fmt(rest),
         "lint" => parse_lint(rest),
         "ctl" => parse_ctl(rest),
+        "trace" => parse_trace(rest),
+        "corpus" => parse_corpus(rest),
+        "tools" => parse_tools(rest),
         other
             if !other.starts_with('-')
                 && (other.ends_with(".motion")
@@ -790,7 +818,7 @@ fn parse_edit(args: &[OsString]) -> Result<Command> {
         args,
         true,
         &["--frame"],
-        &["--dry-run", "--overrides"],
+        &["--dry-run", "--overrides", "--code"],
     )?;
     let input = parsed
         .input
@@ -804,6 +832,7 @@ fn parse_edit(args: &[OsString]) -> Result<Command> {
         frame: parsed.frame()?,
         dry_run: parsed.switches.contains(&"--dry-run"),
         overrides: parsed.switches.contains(&"--overrides"),
+        code: parsed.switches.contains(&"--code"),
         commands: parsed.rest,
     }))
 }
@@ -847,6 +876,95 @@ fn parse_ctl(args: &[OsString]) -> Result<Command> {
         endpoint: parsed.value("--endpoint").map(PathBuf::from),
         requests: parsed.rest,
     }))
+}
+
+/// Parses `corpus check <dir> [--frames N]`.
+fn parse_corpus(args: &[OsString]) -> Result<Command> {
+    let Some(subcommand) = args.first().and_then(|value| value.to_str()) else {
+        bail!("corpus needs a subcommand: check");
+    };
+    if subcommand != "check" {
+        bail!("unknown corpus subcommand '{subcommand}' (check)");
+    }
+    let parsed = parse_flags("corpus check", &args[1..], true, &["--frames"], &[])?;
+    if !parsed.rest.is_empty() {
+        bail!("corpus check takes one directory");
+    }
+    let frames = parsed
+        .value("--frames")
+        .map(str::parse::<usize>)
+        .transpose()
+        .context("invalid --frames")?
+        .unwrap_or(3);
+    Ok(Command::Corpus(corpus::CheckArgs {
+        input: parsed
+            .input
+            .ok_or_else(|| anyhow!("corpus check needs a directory"))?,
+        frames,
+    }))
+}
+
+/// Parses `tools --schema`.
+fn parse_tools(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("tools", args, false, &[], &["--schema"])?;
+    if !parsed.rest.is_empty() || !parsed.switches.contains(&"--schema") {
+        bail!("tools needs --schema");
+    }
+    Ok(Command::Tools)
+}
+
+/// Parses `trace export|replay`.
+fn parse_trace(args: &[OsString]) -> Result<Command> {
+    let Some(subcommand) = args.first().and_then(|value| value.to_str()) else {
+        bail!("trace needs a subcommand: export or replay");
+    };
+    let rest = &args[1..];
+    match subcommand {
+        "export" => {
+            let parsed = parse_flags(
+                "trace export",
+                rest,
+                true,
+                &["--out", "--strategy", "--since"],
+                &[],
+            )?;
+            if !parsed.rest.is_empty() {
+                bail!("trace export takes one project or traces directory");
+            }
+            let out = parsed
+                .value("--out")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("trace export needs --out <file.jsonl>"))?;
+            let strategy = parsed.value("--strategy").map(str::to_owned);
+            let since = parsed.value("--since").map(str::to_owned);
+            let input = parsed
+                .input
+                .clone()
+                .ok_or_else(|| anyhow!("trace export needs a project or traces directory"))?;
+            Ok(Command::Trace(trace::TraceCommand::Export(
+                trace::ExportArgs {
+                    input,
+                    out,
+                    strategy,
+                    since,
+                },
+            )))
+        }
+        "replay" => {
+            let parsed = parse_flags("trace replay", rest, true, &[], &[])?;
+            if !parsed.rest.is_empty() {
+                bail!("trace replay takes one JSONL file");
+            }
+            Ok(Command::Trace(trace::TraceCommand::Replay(
+                trace::ReplayArgs {
+                    input: parsed
+                        .input
+                        .ok_or_else(|| anyhow!("trace replay needs a JSONL file"))?,
+                },
+            )))
+        }
+        other => bail!("unknown trace subcommand '{other}' (export or replay)"),
+    }
 }
 
 /// Parses `bake <file> [--id ID]...`.
@@ -1969,6 +2087,7 @@ mod tests {
                 frame: Some(9),
                 dry_run: true,
                 overrides: false,
+                code: false,
                 commands: vec!["seek(3)".to_owned(), "visible(\"x\", false)".to_owned()],
             })
         );
@@ -1985,6 +2104,7 @@ mod tests {
                 frame: None,
                 dry_run: false,
                 overrides: true,
+                code: false,
                 commands: vec!["edit(\"x\", \"opacity\", 0.5)".to_owned()],
             })
         );

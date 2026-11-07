@@ -746,6 +746,16 @@ pub struct EditorState {
     pub expanded: Vec<String>,
     /// Inspector scroll offset in logical pixels.
     pub inspector_scroll: u32,
+    /// Whether committed edits stay as overrides (`edit_mode = "overrides"`).
+    ///
+    /// Old projects without the key read as code (D-0036).
+    pub overrides_mode: bool,
+    /// Whether local edit traces are recorded (`traces = True`).
+    ///
+    /// `None` when the project predates the key: debug builds then read it as
+    /// on, release builds as off. `MOTIONER_TRACES=1` always wins. Nothing is
+    /// uploaded (D-0036 section 6).
+    pub traces: Option<bool>,
 }
 
 impl EditorState {
@@ -764,9 +774,24 @@ impl EditorState {
             .map(|id| quote(id))
             .collect::<Vec<_>>()
             .join(", ");
+        let edit_mode = if self.overrides_mode {
+            "overrides"
+        } else {
+            "code"
+        };
+        let traces = match self.traces {
+            Some(true) => ", traces=True".to_owned(),
+            Some(false) => ", traces=False".to_owned(),
+            None => String::new(),
+        };
         format!(
-            "editor(last_frame={}, locked=[{}], expanded=[{}], inspector_scroll={})\n",
-            self.last_frame, locked, expanded, self.inspector_scroll
+            "editor(last_frame={}, locked=[{}], expanded=[{}], inspector_scroll={}, \
+             edit_mode={}{traces})\n",
+            self.last_frame,
+            locked,
+            expanded,
+            self.inspector_scroll,
+            quote(edit_mode)
         )
     }
 
@@ -806,6 +831,13 @@ impl EditorState {
                         }
                         ("expanded", ExprKind::List(items)) => {
                             state.expanded = string_list(items);
+                        }
+                        ("edit_mode", ExprKind::Str(text)) => {
+                            state.overrides_mode = text.as_ref() == "overrides";
+                        }
+                        ("traces", ExprKind::Bool(value)) => state.traces = Some(*value),
+                        ("traces", ExprKind::Name(name)) => {
+                            state.traces = Some(name.as_ref() == "True");
                         }
                         _ => {}
                     }
@@ -1606,9 +1638,15 @@ mod tests {
             locked: vec!["a".to_owned(), "b".to_owned()],
             expanded: vec!["c".to_owned()],
             inspector_scroll: 42,
+            overrides_mode: true,
+            traces: Some(false),
         };
         let text = state.to_mdf();
+        assert!(text.contains("edit_mode=\"overrides\""), "{text}");
+        assert!(text.contains("traces=False"), "{text}");
         assert_eq!(EditorState::parse(&text), state);
+        // A project without the key reads as code.
+        assert!(!EditorState::parse("editor(last_frame=1)\n").overrides_mode);
     }
 
     #[test]

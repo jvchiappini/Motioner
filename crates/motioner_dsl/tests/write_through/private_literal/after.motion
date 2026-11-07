@@ -1,0 +1,2 @@
+comp(name="P", duration=1.0)
+title = text("Hi", color="#ff0000")

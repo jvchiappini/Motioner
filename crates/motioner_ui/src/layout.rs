@@ -12,7 +12,7 @@
 //! +-----------+------------------------------------------+-----------+
 //! | layers    | canvas (pasteboard + composition)        | inspector |
 //! +-----------+------------------------------------------+-----------+
-//! | timecode        |<  <   (>)   >  >|   loop          fps · frames |
+//! | timecode        |<  <   (>)   >  >|   loop          fps Â· frames |
 //! | names column    | ruler                                          |
 //! |                 | tracks                                         |
 //! +------------------------------------------------------------------+
@@ -291,10 +291,10 @@ impl MenuAction {
     pub const fn label(self) -> &'static str {
         match self {
             Self::New => "New project",
-            Self::Open => "Open project…",
+            Self::Open => "Open projectâ€¦",
             Self::Save => "Save",
-            Self::SaveAs => "Save a copy…",
-            Self::Import => "Import asset…",
+            Self::SaveAs => "Save a copyâ€¦",
+            Self::Import => "Import assetâ€¦",
             Self::Reveal => "Reveal in Explorer",
             Self::Close => "Close project",
         }
@@ -309,6 +309,42 @@ impl MenuAction {
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::Import | Self::Reveal | Self::Close => None,
+        }
+    }
+}
+
+/// One item of the editor's View menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewAction {
+    /// Show or hide the read-only code panel.
+    Code,
+    /// Switch the project's edit mode between code and overrides.
+    EditMode,
+    /// Record local edit traces in this project (never uploaded).
+    Traces,
+}
+
+impl ViewAction {
+    /// Every item, in menu order.
+    pub const ALL: [Self; 3] = [Self::Code, Self::EditMode, Self::Traces];
+
+    /// The menu label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Code => "Code panel",
+            Self::EditMode => "Edit mode: code / overrides",
+            Self::Traces => "Edit traces (local only)",
+        }
+    }
+
+    /// The keyboard shortcut text.
+    #[must_use]
+    pub const fn shortcut(self) -> &'static str {
+        match self {
+            Self::Code => "Ctrl+B",
+            Self::EditMode => "Ctrl+E",
+            Self::Traces => "Ctrl+T",
         }
     }
 }
@@ -372,6 +408,30 @@ pub enum Hit {
     ZoomPill,
     /// The File menu button.
     FileMenu,
+    /// The View menu button.
+    ViewMenu,
+    /// One item of the View menu.
+    ViewMenuItem(usize),
+    /// The Add Layer button in the layers-panel header.
+    AddMenu,
+    /// One row of the Add Layer menu.
+    AddMenuItem(usize),
+    /// The "N edits as overrides" chip in the top bar.
+    OverridesChip,
+    /// One row of the pending-overrides list.
+    OverridesRow(usize),
+    /// The "Convert" action of one pending-overrides row.
+    OverridesConvert(usize),
+    /// The "Convert all" action of the pending-overrides list.
+    OverridesConvertAll,
+    /// Close the pending-overrides list.
+    OverridesClose,
+    /// Close the code panel.
+    CodeClose,
+    /// Convert the overrides offered by the open banner.
+    BakeConvert,
+    /// Dismiss the open banner without converting.
+    BakeDismiss,
     /// Restore the offered backup.
     RecoverRestore,
     /// Dismiss the recovery offer.
@@ -501,6 +561,10 @@ pub struct Layout {
     pub zoom_pill: Rect,
     /// The File menu button in the top bar.
     pub file_button: Rect,
+    /// The View menu button, right of the File button.
+    pub view_button: Rect,
+    /// The "N edits as overrides" chip in the top bar (empty when hidden).
+    pub overrides_chip: Rect,
     /// "Restore" in the recovery strip.
     pub recovery_restore: Rect,
     /// "Dismiss" in the recovery strip.
@@ -512,7 +576,7 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// Computes the layout for a window of `width` × `height` physical pixels.
+    /// Computes the layout for a window of `width` Ã— `height` physical pixels.
     ///
     /// Panels keep their requested sizes when they fit and shrink otherwise,
     /// so the canvas keeps at least the minimum canvas size (160 px, scaled) in both
@@ -586,6 +650,18 @@ impl Layout {
             m.px(46.0),
             m.px(20.0),
         );
+        let view_button = Rect::new(
+            file_button.right() + m.px(size::GRID),
+            file_button.y,
+            m.px(48.0),
+            file_button.h,
+        );
+        let overrides_chip = Rect::new(
+            snap_toggle.x - m.px(154.0) - m.px(size::PAD),
+            file_button.y,
+            m.px(154.0),
+            file_button.h,
+        );
         let recovery_dismiss = Rect::new(
             status_bar.right() - m.px(size::PAD) - m.px(64.0),
             (status_bar.center_y() - m.px(8.0)).round(),
@@ -629,6 +705,8 @@ impl Layout {
             snap_toggle,
             zoom_pill,
             file_button,
+            view_button,
+            overrides_chip,
             recovery_restore,
             recovery_dismiss,
             splitters,
@@ -777,6 +855,41 @@ impl Layout {
         )
     }
 
+    /// The Add Layer button, left of the "show shy layers" switch.
+    #[must_use]
+    pub fn add_button(&self) -> Rect {
+        let shy = self.shy_toggle();
+        Rect::new(
+            shy.x - self.metrics.px(size::GRID) - shy.w,
+            shy.y,
+            shy.w,
+            shy.h,
+        )
+    }
+
+    /// The rows of the Add Layer menu, below its button.
+    #[must_use]
+    pub fn add_menu_items(&self) -> [Rect; crate::AddKind::ALL.len()] {
+        let button = self.add_button();
+        let width = self.metrics.px(148.0);
+        let height = self.metrics.px(26.0);
+        let mut items = [Rect::default(); crate::AddKind::ALL.len()];
+        for (index, item) in items.iter_mut().enumerate() {
+            #[allow(clippy::cast_precision_loss)] // menu row count is tiny
+            let y = button.bottom() + self.metrics.px(4.0) + index as f32 * height;
+            *item = Rect::new(button.x, y, width, height);
+        }
+        items
+    }
+
+    /// The Add Layer menu row under `(x, y)`, if any.
+    #[must_use]
+    pub fn add_menu_hit(&self, x: f32, y: f32) -> Option<usize> {
+        self.add_menu_items()
+            .iter()
+            .position(|rect| rect.contains(x, y))
+    }
+
     /// The header rectangle of the orphans section, below `rows` rows.
     #[must_use]
     pub fn orphans_header(&self, rows: usize, scroll: f32) -> Rect {
@@ -877,6 +990,160 @@ impl Layout {
             .into_iter()
             .find(|(_, rect)| rect.contains(x, y))
             .map(|(action, _)| action)
+    }
+
+    /// The View-menu items, laid out below its button.
+    #[must_use]
+    pub fn view_menu_items(&self) -> [(ViewAction, Rect); ViewAction::ALL.len()] {
+        let item_h = self.metrics.px(26.0);
+        let width = self.metrics.px(208.0);
+        let x = self.view_button.x;
+        let y = self.view_button.bottom() + self.metrics.px(size::GRID);
+        let mut items = [(ViewAction::Code, Rect::default()); ViewAction::ALL.len()];
+        for (index, action) in ViewAction::ALL.into_iter().enumerate() {
+            items[index] = (
+                action,
+                Rect::new(x, y + index as f32 * item_h, width, item_h),
+            );
+        }
+        items
+    }
+
+    /// The View-menu item under `(x, y)`.
+    #[must_use]
+    pub fn view_menu_hit(&self, x: f32, y: f32) -> Option<ViewAction> {
+        self.view_menu_items()
+            .into_iter()
+            .find(|(_, rect)| rect.contains(x, y))
+            .map(|(action, _)| action)
+    }
+
+    /// The floating pending-overrides list, centred over the canvas.
+    #[must_use]
+    pub fn overrides_list(&self) -> Rect {
+        let width = self.canvas.w.min(self.metrics.px(560.0)).max(0.0);
+        let height = (self.canvas.h * 0.7).max(self.metrics.px(140.0));
+        Rect::new(
+            (self.canvas.center_x() - width * 0.5).round(),
+            (self.canvas.y + self.metrics.px(size::PAD)).round(),
+            width,
+            height.min(self.canvas.h),
+        )
+    }
+
+    /// One row of the pending-overrides list.
+    #[must_use]
+    pub fn overrides_row(&self, index: usize) -> Rect {
+        let list = self.overrides_list();
+        let top = list.y + self.metrics.px(38.0);
+        let height = self.metrics.px(30.0);
+        Rect::new(
+            list.x + self.metrics.px(size::PAD),
+            top + index as f32 * height,
+            (list.w - self.metrics.px(size::PAD * 2.0)).max(0.0),
+            height,
+        )
+    }
+
+    /// The "Convert" button inside an overrides row.
+    #[must_use]
+    pub fn overrides_convert(&self, row: Rect) -> Rect {
+        let width = self.metrics.px(76.0);
+        Rect::new(
+            row.right() - width - self.metrics.px(size::PAD),
+            row.y + self.metrics.px(3.0),
+            width,
+            row.h - self.metrics.px(6.0),
+        )
+    }
+
+    /// The "Convert all" button of the overrides list.
+    #[must_use]
+    pub fn overrides_convert_all(&self) -> Rect {
+        let list = self.overrides_list();
+        let width = self.metrics.px(100.0);
+        Rect::new(
+            list.right() - width - self.metrics.px(size::PAD),
+            list.y + self.metrics.px(6.0),
+            width,
+            self.metrics.px(24.0),
+        )
+    }
+
+    /// The close button of the overrides list.
+    #[must_use]
+    pub fn overrides_close(&self) -> Rect {
+        let all = self.overrides_convert_all();
+        let side = self.metrics.px(24.0);
+        Rect::new(
+            all.x - side - self.metrics.px(size::GRID),
+            all.y,
+            side,
+            side,
+        )
+    }
+
+    /// The floating code panel, on the right of the canvas.
+    #[must_use]
+    pub fn code_panel(&self) -> Rect {
+        let width = (self.canvas.w * 0.42).clamp(240.0, 560.0);
+        Rect::new(
+            (self.canvas.right() - width - self.metrics.px(size::PAD)).round(),
+            (self.canvas.y + self.metrics.px(size::PAD)).round(),
+            width.max(0.0),
+            (self.canvas.h - self.metrics.px(size::PAD * 2.0)).max(0.0),
+        )
+    }
+
+    /// The code panel's close button.
+    #[must_use]
+    pub fn code_close(&self) -> Rect {
+        let panel = self.code_panel();
+        let side = self.metrics.px(20.0);
+        Rect::new(
+            panel.right() - side - self.metrics.px(size::PAD),
+            panel.y + self.metrics.px(size::GRID),
+            side,
+            side,
+        )
+    }
+
+    /// The one-time "convert overrides" banner over the canvas.
+    #[must_use]
+    pub fn bake_banner(&self) -> Rect {
+        let width = (self.canvas.w * 0.8).min(self.metrics.px(720.0));
+        Rect::new(
+            (self.canvas.center_x() - width * 0.5).round(),
+            (self.canvas.y + self.metrics.px(size::PAD)).round(),
+            width.max(0.0),
+            self.metrics.px(44.0),
+        )
+    }
+
+    /// The banner's "Convert" button.
+    #[must_use]
+    pub fn bake_convert(&self) -> Rect {
+        let banner = self.bake_banner();
+        let width = self.metrics.px(96.0);
+        Rect::new(
+            banner.right() - width - self.metrics.px(size::PAD * 2.0),
+            banner.y + self.metrics.px(10.0),
+            width,
+            banner.h - self.metrics.px(20.0),
+        )
+    }
+
+    /// The banner's "Dismiss" button.
+    #[must_use]
+    pub fn bake_dismiss(&self) -> Rect {
+        let convert = self.bake_convert();
+        let width = self.metrics.px(72.0);
+        Rect::new(
+            convert.x - width - self.metrics.px(size::GRID),
+            convert.y,
+            width,
+            convert.h,
+        )
     }
 
     /// The element under `(x, y)`, given how many outline rows exist and how

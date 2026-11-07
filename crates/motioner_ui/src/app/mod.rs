@@ -152,6 +152,20 @@ pub(crate) struct PreviewApp {
     start_pressed: Option<crate::StartAction>,
     /// Whether the File menu is open.
     menu_open: bool,
+    /// Whether the Add Layer menu is open.
+    add_menu_open: bool,
+    /// The Add Layer menu row under the pointer.
+    add_menu_hover: Option<usize>,
+    /// Whether the View menu is open.
+    view_menu_open: bool,
+    /// The View-menu item under the pointer.
+    view_menu_hover: Option<crate::layout::ViewAction>,
+    /// Whether the pending-overrides list is open.
+    overrides_open: bool,
+    /// Whether the read-only code panel is open.
+    code_open: bool,
+    /// The one-time offer to convert existing overrides to code on open.
+    bake_offer: bool,
     /// Native window title of the last frame.
     last_title: String,
     /// Whether the title changed and must be pushed to the window.
@@ -267,6 +281,13 @@ impl PreviewApp {
             start_hover: None,
             start_pressed: None,
             menu_open: false,
+            add_menu_open: false,
+            add_menu_hover: None,
+            view_menu_open: false,
+            view_menu_hover: None,
+            overrides_open: false,
+            code_open: false,
+            bake_offer: false,
             last_title: title,
             title_dirty,
             toast: None,
@@ -300,6 +321,11 @@ impl PreviewApp {
     fn run(&mut self, command: &Command) -> bool {
         match self.editor.execute(command, self.clock) {
             Ok(outcome) => {
+                self.record_trace(&command.to_text());
+                if matches!(command, Command::Bake(_)) {
+                    // "N baked, M left" and any refusal reason.
+                    self.toast = Some((outcome.summary.clone(), Instant::now()));
+                }
                 self.apply_effect(outcome.effect);
                 true
             }
@@ -327,6 +353,9 @@ impl PreviewApp {
             Effect::RemoveUnusedAssets => self.remove_unused_assets(),
             Effect::RestoreBackup => self.restore_backup(),
             Effect::DismissRecovery => self.recovery = None,
+            Effect::EditModeChanged { overrides } => self.save_edit_mode(overrides),
+            Effect::ShowCode { on } => self.code_open = on,
+            Effect::ShowOverrides { on } => self.overrides_open = on,
         }
     }
 
@@ -440,6 +469,7 @@ impl PreviewApp {
 
     // ---- keyboard ----------------------------------------------------------
 
+    #[allow(clippy::too_many_lines)] // every keyboard gesture, one readable table
     fn handle_keys(&mut self, ctx: &AppContext<'_>) {
         if self.editing.is_some() {
             self.space_down = false;
@@ -487,6 +517,55 @@ impl PreviewApp {
                 self.dispatch_menu(crate::MenuAction::Open);
                 return;
             }
+            if ctx.input.just_pressed(KeyCode::KeyD) {
+                if let Some(id) = self.selected_identity() {
+                    self.run(&Command::DuplicateLayer { id });
+                }
+                return;
+            }
+            if ctx.input.just_pressed(KeyCode::KeyB) {
+                self.code_open = !self.code_open;
+                return;
+            }
+            if ctx.input.just_pressed(KeyCode::KeyE) {
+                self.dispatch_view(crate::layout::ViewAction::EditMode);
+                return;
+            }
+            if ctx.input.just_pressed(KeyCode::KeyG) {
+                if let Some(id) = self.selected_identity() {
+                    let command = if modifiers.shift {
+                        Command::UngroupLayer { id }
+                    } else {
+                        Command::GroupLayers {
+                            ids: vec![id],
+                            name: None,
+                        }
+                    };
+                    self.run(&command);
+                }
+                return;
+            }
+            // Ctrl+Down / Ctrl+Up move the selected top-level layer forward or
+            // backward (the engine has no bracket key codes).
+            if ctx.input.just_pressed(KeyCode::ArrowDown)
+                || ctx.input.just_pressed(KeyCode::ArrowUp)
+            {
+                let delta = if ctx.input.just_pressed(KeyCode::ArrowDown) {
+                    1
+                } else {
+                    -1
+                };
+                self.reorder_selected(delta);
+                return;
+            }
+        }
+        // Delete removes the selected layer when no key is selected (the
+        // timeline keeps Delete for keys).
+        if ctx.input.just_pressed(KeyCode::Delete) && self.editor.selected_keys().is_empty() {
+            if let Some(id) = self.selected_identity() {
+                self.run(&Command::DeleteLayer { id });
+                return;
+            }
         }
         let toggles = Toggles {
             looping: self.editor.transport().looping(),
@@ -501,6 +580,46 @@ impl PreviewApp {
                 }
             }
         }
+    }
+
+    /// The identity of the selected layer, when one is selected.
+    fn selected_identity(&self) -> Option<String> {
+        self.editor
+            .selected()
+            .map(|node| self.editor.node_identity(node))
+    }
+
+    /// Moves the selected top-level layer by `delta` sibling positions
+    /// (Ctrl+] / Ctrl+[).
+    fn reorder_selected(&mut self, delta: i64) {
+        let Some(row) = self.editor.selected_row() else {
+            return;
+        };
+        let outline = self.editor.outline();
+        if outline.get(row).map(|row| row.depth) != Some(0) {
+            return;
+        }
+        let roots: Vec<&str> = outline
+            .iter()
+            .filter(|row| row.depth == 0)
+            .map(|row| row.identity.as_str())
+            .collect();
+        let Some(id) = self.selected_identity() else {
+            return;
+        };
+        let Some(current) = roots.iter().position(|identity| *identity == id) else {
+            return;
+        };
+        let last = roots.len().saturating_sub(1);
+        let to = if delta < 0 {
+            current.saturating_sub(1)
+        } else {
+            (current + 1).min(last)
+        };
+        if to == current {
+            return;
+        }
+        self.run(&Command::ReorderLayer { id, to });
     }
 
     fn handle_edit_keys(&mut self, ctx: &AppContext<'_>) {
@@ -556,7 +675,14 @@ impl PreviewApp {
                     let result = self.editor.execute(&command, self.clock);
                     match result {
                         Ok(outcome) => {
-                            pending.reply_ok_summary(&outcome.summary);
+                            // An edit reports its diff and strategies as the
+                            // same JSON `motioner edit --dry-run` prints; a
+                            // view command keeps the short summary.
+                            match self.editor.commit_json(&outcome) {
+                                Some(json) => pending.reply_ok_json(&json),
+                                None => pending.reply_ok_summary(&outcome.summary),
+                            }
+                            self.record_trace(&command.to_text());
                             self.apply_effect(outcome.effect);
                         }
                         Err(error) => pending.reply_error(&error),
@@ -1090,6 +1216,19 @@ impl PreviewApp {
         } else {
             None
         };
+        let add_menu_hover = if self.add_menu_open {
+            layout.add_menu_hit(mouse_x, mouse_y)
+        } else {
+            None
+        };
+        self.add_menu_hover = add_menu_hover;
+        self.view_menu_hover = if self.view_menu_open {
+            layout.view_menu_hit(mouse_x, mouse_y)
+        } else {
+            None
+        };
+        let override_rows = self.editor.override_rows();
+        let code_panel = self.editor.code_panel();
         let editor = &self.editor;
         let transport = editor.transport();
         let mut view = View {
@@ -1151,6 +1290,15 @@ impl PreviewApp {
             retime_delta: self.pointer.retime_delta(),
             menu_open: self.menu_open,
             menu_hover,
+            view_menu_open: self.view_menu_open,
+            view_menu_hover: self.view_menu_hover,
+            add_menu_open: self.add_menu_open,
+            add_menu_hover,
+            override_rows: &override_rows,
+            overrides_open: self.overrides_open,
+            code_panel: &code_panel,
+            code_open: self.code_open,
+            bake_offer: self.bake_offer,
             left_tab: self.left_tab,
             assets: &self.assets,
             recovery: self.recovery.as_ref(),
@@ -1183,6 +1331,26 @@ impl PreviewApp {
         if self.menu_open {
             p.layer();
             panels::top_bar::draw_menu(&mut p, &view);
+        }
+        if self.view_menu_open {
+            p.layer();
+            panels::top_bar::draw_view_menu(&mut p, &view);
+        }
+        if self.add_menu_open {
+            p.layer();
+            panels::layers::draw_add_menu(&mut p, &view);
+        }
+        if view.bake_offer {
+            p.layer();
+            panels::overrides::draw_banner(&mut p, &view);
+        }
+        if view.code_open {
+            p.layer();
+            panels::code::draw(&mut p, &view);
+        }
+        if view.overrides_open {
+            p.layer();
+            panels::overrides::draw(&mut p, &view);
         }
         if let Some(request) = view.tooltip {
             p.layer();

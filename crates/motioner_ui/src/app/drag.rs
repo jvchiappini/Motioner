@@ -189,6 +189,17 @@ impl PreviewApp {
                     }
                 }
             }
+            Drag::LayerRow {
+                start,
+                current,
+                moved,
+                ..
+            } => {
+                if (at.0 - start.0).abs() > CLICK_SLOP || (at.1 - start.1).abs() > CLICK_SLOP {
+                    *moved = true;
+                }
+                *current = at;
+            }
             Drag::Marquee { current, .. } => *current = at,
             Drag::Pan { last } => {
                 if let Some(view) =
@@ -327,6 +338,23 @@ impl PreviewApp {
                     self.select_in_marquee(layout, span(start, current));
                 }
             }
+            Some(Drag::LayerRow {
+                row,
+                current,
+                moved,
+                ..
+            }) => {
+                if moved {
+                    if let Some(target) = self.outline_drop_target(layout, hover, current.1) {
+                        let (index, placement) = target;
+                        if let Some(command) =
+                            crate::drop_command(self.editor.outline(), row, index, placement)
+                        {
+                            self.run(&command);
+                        }
+                    }
+                }
+            }
             Some(Drag::Scrub) => self.editor.transport_mut().end_scrub(),
             Some(Drag::Asset { key, last, moved }) => {
                 if moved && layout.canvas.contains(last.0, last.1) {
@@ -343,6 +371,14 @@ impl PreviewApp {
                             y: Some(point.y),
                         });
                     }
+                } else if moved && layout.layers.body.contains(last.0, last.1) {
+                    // Dropping on the outline appends the asset layer.
+                    self.run(&Command::PlaceAsset {
+                        key,
+                        frame: None,
+                        x: None,
+                        y: None,
+                    });
                 }
             }
             Some(
@@ -361,6 +397,26 @@ impl PreviewApp {
         self.guides.clear();
         self.marquee = None;
         self.editor.session_mut().flush_overrides(Instant::now());
+    }
+
+    /// The outline row and placement under a released drag, when the pointer
+    /// ended on a row.
+    fn outline_drop_target(
+        &self,
+        layout: &Layout,
+        hover: Option<Hit>,
+        y: f32,
+    ) -> Option<(usize, crate::DropPlacement)> {
+        let Hit::LayerRow(index) = hover? else {
+            return None;
+        };
+        let position = self
+            .editor
+            .visible_outline()
+            .iter()
+            .position(|row| *row == index)?;
+        let rect = layout.layer_row(position, self.scroll_px(PanelId::Layers));
+        Some((index, crate::DropPlacement::at(y, rect.y, rect.h)))
     }
 
     /// Closes the edit gesture; a write-through failure becomes a toast.

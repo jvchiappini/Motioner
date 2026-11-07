@@ -4,6 +4,7 @@ use std::fmt;
 
 use motioner_core::{CharOrder, CharProperty, Ease, EffectKind, MaskMode, OverrideValue, Vec2};
 use motioner_dsl::ast::{Argument, Expr, ExprKind, StmtKind, UnaryOp};
+use motioner_dsl::structural::LayerKind;
 
 use super::{Command, CommandError, CommandKind, ErrorKind, KeySpec, Panel, Time};
 
@@ -210,6 +211,37 @@ impl Command {
                 id: a.string("id")?,
                 name: a.string("name")?,
             },
+            CommandKind::AddLayer => {
+                let kind = layer_kind(&mut a)?;
+                Self::AddLayer {
+                    kind,
+                    after: a.optional_string("after")?,
+                    name: a.optional_string("name")?,
+                }
+            }
+            CommandKind::DeleteLayer => Self::DeleteLayer {
+                id: a.string("id")?,
+            },
+            CommandKind::DuplicateLayer => Self::DuplicateLayer {
+                id: a.string("id")?,
+            },
+            CommandKind::ReorderLayer => Self::ReorderLayer {
+                id: a.string("id")?,
+                to: usize::try_from(a.int("to")?).map_err(|_| {
+                    CommandError::new(ErrorKind::BadArgument, "'to' must be zero or above")
+                })?,
+            },
+            CommandKind::ReparentLayer => Self::ReparentLayer {
+                id: a.string("id")?,
+                parent: a.optional_string("parent")?,
+            },
+            CommandKind::GroupLayers => Self::GroupLayers {
+                ids: a.string_list("ids")?,
+                name: a.optional_string("name")?,
+            },
+            CommandKind::UngroupLayer => Self::UngroupLayer {
+                id: a.string("id")?,
+            },
             CommandKind::AssignId => Self::AssignId {
                 from: a.string("from")?,
                 to: a.string("to")?,
@@ -219,6 +251,24 @@ impl Command {
                 property: a.string("property")?,
                 time: a.optional_time("time")?,
             },
+            CommandKind::ShowCode => Self::ShowCode {
+                on: a.boolean("on")?,
+            },
+            CommandKind::ShowOverrides => Self::ShowOverrides {
+                on: a.boolean("on")?,
+            },
+            CommandKind::SetEditMode => {
+                let mode = a.string("mode")?;
+                match mode.as_str() {
+                    "code" => Self::SetEditMode { overrides: false },
+                    "overrides" => Self::SetEditMode { overrides: true },
+                    other => {
+                        return Err(a.error(format!(
+                            "unknown edit mode {other:?}; use \"code\" or \"overrides\""
+                        )))
+                    }
+                }
+            }
             CommandKind::Undo => Self::Undo,
             CommandKind::Redo => Self::Redo,
             CommandKind::EffectAdd => Self::EffectAdd {
@@ -369,6 +419,42 @@ fn mask_mode(name: &str) -> Result<MaskMode, CommandError> {
             ErrorKind::BadArgument,
             format!("unknown mask mode {name:?}; expected alpha or luma"),
         )
+    })
+}
+
+/// Types an `add_layer(kind, ...)` call into a [`LayerKind`].
+fn layer_kind(a: &mut Args) -> Result<LayerKind, CommandError> {
+    let name = a.string("kind")?;
+    Ok(match name.as_str() {
+        "rect" => LayerKind::Rect {
+            width: a.number("width")?,
+            height: a.number("height")?,
+        },
+        "circle" => LayerKind::Circle {
+            radius: a.number("radius")?,
+        },
+        "text" => LayerKind::Text {
+            content: a.string("content")?,
+        },
+        "image" => LayerKind::Image {
+            source: a.string("source")?,
+        },
+        "audio" => LayerKind::Audio {
+            source: a.string("source")?,
+        },
+        "video" => LayerKind::Video {
+            source: a.string("source")?,
+        },
+        "path" => LayerKind::Path {
+            points: a.points("points")?,
+        },
+        "group" => LayerKind::Group,
+        other => {
+            return Err(a.error(format!(
+                "unknown layer kind {other:?}; use rect, circle, text, image, audio, video, path \
+                 or group"
+            )))
+        }
     })
 }
 
@@ -641,6 +727,44 @@ impl Args {
             });
         }
         Ok(keys)
+    }
+
+    /// A list of strings (`[id, ...]`).
+    pub(crate) fn string_list(&mut self, name: &str) -> Result<Vec<String>, CommandError> {
+        let expr = self.required(name)?;
+        let ExprKind::List(items) = expr.kind else {
+            return Err(self.error(format!("'{name}' must be a list of strings")));
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            match item.kind {
+                ExprKind::Str(text) => out.push(text.to_string()),
+                _ => return Err(self.error(format!("'{name}' must be a list of strings"))),
+            }
+        }
+        Ok(out)
+    }
+
+    /// A list of `(x, y)` pairs.
+    fn points(&mut self, name: &str) -> Result<Vec<(f64, f64)>, CommandError> {
+        let expr = self.required(name)?;
+        let ExprKind::List(items) = expr.kind else {
+            return Err(self.error(format!("'{name}' must be a list of (x, y) pairs")));
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let ExprKind::Tuple(parts) = item.kind else {
+                return Err(self.error(format!("'{name}' must be a list of (x, y) pairs")));
+            };
+            let [x, y] = parts.as_slice() else {
+                return Err(self.error(format!("'{name}' must be a list of (x, y) pairs")));
+            };
+            let (Some(x), Some(y)) = (number_of(x), number_of(y)) else {
+                return Err(self.error(format!("'{name}' pairs must hold two numbers")));
+            };
+            out.push((x, y));
+        }
+        Ok(out)
     }
 
     fn rest_strings(&mut self) -> Result<Vec<String>, CommandError> {

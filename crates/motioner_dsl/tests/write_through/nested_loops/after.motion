@@ -1,0 +1,7 @@
+comp(name="P", duration=1.0)
+for row in range(2):
+    for col in range(3):
+        c = circle(8)
+        c.pos = (100 + col * 20, 100 + row * 20)
+        if row == 1 and col == 1:
+            c.fill = "#00ff00"

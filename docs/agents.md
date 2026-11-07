@@ -10,17 +10,27 @@ There are two ways in:
 | You want to | Use | Window? |
 |---|---|---|
 | Read the scene | `motioner query <file>` | no |
-| Change it (writes `<name>.overrides.motion`) | `motioner edit <file> <command>...` | no |
-| Fold edits into the program | `motioner bake <file>` | no |
+| Change it (writes the program as MDF code) | `motioner edit <file> <command>...` | no |
+| Keep the D-0022 overrides instead | `motioner edit --overrides <file> <command>...` | no |
+| Fold old overrides into the program | `motioner bake <file>` | no |
+| See the commands agents can call | `motioner tools --schema` | no |
+| Filter generated programs | `motioner corpus check <dir>` | no |
+| Export or replay local edit traces | `motioner trace export|replay` | no |
 | Drive a running editor and see it | `motioner preview <file> --control` + `motioner ctl <request>...` | yes |
 
 Every one of them prints **one JSON object per line** on stdout.
 
 ## Files and identities
 
-- The program is `<name>.motion` (MDF, `spec/mdf-v0.md`). Edits never touch
-  it: they go to `<name>.overrides.motion` next to it (D-0022). Only `bake`
-  rewrites the program.
+- The program is `<name>.motion` (MDF, `spec/mdf-v0.md`). **Edits write the
+  program** as ordinary MDF code (write-through, D-0036): the editor inserts a
+  guard, a parameter, an assignment or a structural statement exactly where a
+  careful person would have written it. When no exact code edit exists the
+  change stays in `<name>.overrides.motion` (D-0022) with a reason; `bake`
+  still folds old overrides in. `docs/write-through.md` shows the ladder.
+- `editor.motion` stores the project's edit mode (`code` by default, or
+  `overrides`), the trace switch and the editor-only state (`locked`,
+  expansion). `--overrides` and `--code` override the mode for one CLI run.
 - Nodes are named by **identity**: an explicit `.id("title")` from the
   program, or a provenance key such as `@288` or `@586/i2` (third iteration of
   a loop). Get them from `query`: `nodes[].id`. Provenance keys change when
@@ -157,6 +167,7 @@ The playhead (`seek`) matters for `edit`, `stopwatch`, `toggle_key` and
 | `pan(dx, dy)` | move the view by composition pixels; middle drag or Space+drag |
 | `panel_size("layers"\|"inspector"\|"timeline", size)` | drag a splitter (logical px) |
 | `scroll("layers"\|"inspector"\|"timeline", offset)` | mouse wheel (logical px) |
+| `show_code(on)`, `show_overrides(on)` | open/close the read-only code panel and the pending-overrides list |
 | `copy_id()` | the Copy button next to the identity |
 | `reload()` | R |
 | `quit()` | Escape |
@@ -255,6 +266,14 @@ command layer as the buttons.
 | `text_anim_remove(id, index)` | the Del tile of an animator row |
 | `undo()`, `redo()` | Ctrl+Z, Ctrl+Y |
 | `bake(id, ...)` | fold overrides into the program (all ids when none) |
+| `add_layer("rect"\|"circle"\|"text"\|"image"\|"audio"\|"video"\|"path"\|"group", after=None, name=None, ...)` | the Add Layer menu; the constructor data (`width`, `height`, `radius`, `content`, `source`, `points`) follows the kind |
+| `delete_layer(id)` | Delete on a layer with no key selected |
+| `duplicate_layer(id)` | Ctrl+D |
+| `reorder_layer(id, to)` | Ctrl+Down / Ctrl+Up, or drag in the outline |
+| `reparent_layer(id, parent=None)` | drag into a group (or `None` to unparent) |
+| `group_layers([id, ...], name=None)` | Ctrl+G |
+| `ungroup_layer(id)` | Ctrl+Shift+G |
+| `set_edit_mode("code"\|"overrides")` | the View menu's edit-mode row; stored in `editor.motion` |
 
 Eases: `linear`, `quad_in`, `quad_out`, `quad_in_out`, `cubic_in`,
 `cubic_out`, `cubic_in_out`, `back_in`, `back_out`, `hold`, `elastic_out`,
@@ -390,13 +409,26 @@ window runs). It is **all or nothing**: if one fails, nothing is written.
 {"ok":true,
  "results":[{"command":"edit(\"@288\", \"pos.x\", 900)","result":"edit(\"@288\", \"pos.x\", 900)"}],
  "removed":[],
- "added":["override_key(\"@288\", \"pos.x\", 0.8, 900, ease=\"cubic_out\")"],
- "written":"out/hello.overrides.motion"}
+ "added":[],
+ "strategies":["private-literal"],
+ "overrides_kept":0,
+ "fallback_reasons":[],
+ "diff":"--- a/hello.motion\n+++ b/hello.motion\n@@ -7,1 +7,1 @@\n-title.pos = (960, 520)\n+title.pos = (960, 900)\n",
+ "written":"examples/hello.motion"}
 ```
 
-`--dry-run` writes nothing, sets `"written":null` and adds the full
-`"overrides"` text. Undo history only lives for one invocation (`undo()`
-inside the same call works).
+By default the program is rewritten and `strategies` names what the planner
+did (`private-literal`, `loop-guard`, `call-promotion`, `structural-edit`,
+...). A change that cannot become code keeps an override: `overrides_kept` and
+`fallback_reasons` say why. `--dry-run` writes nothing, sets
+`"written":null` and adds the same `diff` without touching either file.
+`--overrides` keeps the old D-0022 behaviour; `--code` forces write-through
+for a project whose `editor.motion` prefers overrides.
+
+Structural commands (add, delete, duplicate, reorder, parent, group, ungroup)
+have no override equivalent. In overrides mode they fail with the typed
+`refused` error instead of half-applying. Undo history only lives for one
+invocation (`undo()` inside the same call works).
 
 ## Live control: `preview --control` and `ctl`
 
@@ -423,8 +455,11 @@ Requests are any command above plus three queries:
 | `query(node=None)` | the same JSON as `motioner query`, live |
 | `screenshot(path)` | writes the window to a PNG: `{"path","width","height"}` |
 
-Edits through `ctl` are the person's edits: the same undo entries, the same
-overrides file (saved after a short debounce, `"dirty":true` until then).
+Edits through `ctl` are the person's edits: the same undo entries and the same
+write-through sink. An editing request replies with the object
+`motioner edit` prints (`summary`, `code`, `strategies`, `overrides_kept`,
+`fallback_reasons`, `path`, `diff`) inside `"result"`; a view command keeps the
+short string summary.
 
 ## Errors
 
@@ -507,3 +542,30 @@ motioner render hello.motion --out out/hello.mp4
 From PowerShell 5.1, escape the double quotes inside arguments to native
 programs (`'select(\"@288\")'`); `scripts/ui_shot.ps1 -Commands` does it for
 you.
+
+## Tool schema
+
+`motioner tools --schema` prints one JSON document with every command above
+(name, signature, coarse parameter types and an example) plus the code tools
+`read_program`, `apply_code_edit`, `run`, `query` and `render_still`. It is
+generated from the command table and a test fails when a command is missing,
+so the in-app agent, external agents and the training data share one list.
+
+## Edit traces
+
+Every committed edit can be recorded as one JSONL line under
+`<project>/traces/` (D-0036 section 6): the program before and after, the
+command, the strategy and the diff. Recording is on in debug builds, off for
+release users unless the project turns it on (`traces=True` in
+`editor.motion`, View menu) and always on with `MOTIONER_TRACES=1`. Nothing is
+uploaded. `motioner trace export` writes a deduplicated, replayable corpus and
+`motioner trace replay` proves each record. The full schema is in
+`docs/traces.md`.
+
+## Corpus check
+
+`motioner corpus check <dir>` filters generated programs (`docs/corpus.md`):
+parse, run without warnings, format and lint, render stills, reject blank or
+near-blank frames, prove determinism and write `manifest.json` with features,
+layer counts, timings and reasons. Seed pairs live next to the examples as
+`<name>.prompt.md`.

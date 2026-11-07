@@ -33,6 +33,9 @@ pub struct EditArgs {
     pub dry_run: bool,
     /// Keep the D-0022 behaviour: every edit becomes an override entry.
     pub overrides: bool,
+    /// Force write-through for this run even when the project prefers
+    /// overrides (`--code`).
+    pub code: bool,
     /// Commands in their text form, run in order.
     pub commands: Vec<String>,
 }
@@ -86,6 +89,15 @@ fn open(input: &Path, frame: Option<i64>) -> Result<Editor, CommandError> {
         .session_mut()
         .set_image_resolver(std::rc::Rc::new(images));
     let _ = editor.session_mut().reload();
+    if let Some(project) = &target.project {
+        let overrides =
+            motioner_io::EditorState::load(project.root()).is_ok_and(|state| state.overrides_mode);
+        editor.set_edit_mode(if overrides {
+            EditMode::Overrides
+        } else {
+            EditMode::Code
+        });
+    }
     if let Some(frame) = frame {
         editor.execute(&Command::Seek(frame), Duration::ZERO)?;
     }
@@ -135,11 +147,17 @@ pub fn run_edit(args: &EditArgs) -> Status {
             return Status::Failed;
         }
     };
-    editor.set_edit_mode(if args.overrides {
-        EditMode::Overrides
-    } else {
-        EditMode::Code
-    });
+    let trace_project = crate::resolve_input(&args.input)
+        .ok()
+        .and_then(|target| target.project);
+    let mut traces = Vec::new();
+    // A flag overrides the project setting for this run only; without one the
+    // mode read from `editor.motion` (code by default) applies.
+    if args.overrides {
+        editor.set_edit_mode(EditMode::Overrides);
+    } else if args.code {
+        editor.set_edit_mode(EditMode::Code);
+    }
     // Buffer every write so the whole command list is all-or-nothing: a later
     // failure must not leave earlier commands written (D-0024).
     editor.session_mut().set_write_enabled(false);
@@ -175,6 +193,17 @@ pub fn run_edit(args: &EditArgs) -> Status {
                         overrides_kept += report.overrides;
                         fallback_reasons.extend(report.reasons.iter().cloned());
                     }
+                    if !args.dry_run {
+                        if let Some(project) = &trace_project {
+                            if crate::trace::enabled(project) {
+                                if let Some(record) =
+                                    crate::trace::build(&editor, &command.to_text())
+                                {
+                                    traces.push(record);
+                                }
+                            }
+                        }
+                    }
                     results.push((command.to_text(), outcome.summary));
                 }
                 Err(error) => {
@@ -200,6 +229,13 @@ pub fn run_edit(args: &EditArgs) -> Status {
     } else {
         Some(editor.session().overrides_path().display().to_string())
     };
+    // Traces go in only after the whole transaction was written, so a failed
+    // command never leaves a record of an edit that did not happen.
+    if let Some(project) = &trace_project {
+        for record in &traces {
+            let _ = motioner_io::append_trace(project.root(), record);
+        }
+    }
     let lines = |text: &Option<String>| -> Vec<String> {
         text.as_deref()
             .unwrap_or("")
@@ -209,7 +245,13 @@ pub fn run_edit(args: &EditArgs) -> Status {
             .collect()
     };
     let (old, new) = (lines(&before), lines(&after));
-    let (code_removed, code_added) = diff_lines(&before_source, &after_source);
+    let path = editor
+        .session()
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("program.motion");
+    let diff = motioner_ui::unified_diff(&before_source, &after_source, path);
     let mut j = Json::new();
     j.begin_object();
     j.key("ok").boolean(true);
@@ -243,18 +285,7 @@ pub fn run_edit(args: &EditArgs) -> Status {
         j.string(reason);
     }
     j.end_array();
-    j.key("code").begin_object();
-    j.key("removed").begin_array();
-    for line in &code_removed {
-        j.string(line);
-    }
-    j.end_array();
-    j.key("added").begin_array();
-    for line in &code_added {
-        j.string(line);
-    }
-    j.end_array();
-    j.end_object();
+    j.key("diff").string(&diff);
     j.key("written").opt_string(written.as_deref());
     if args.dry_run {
         j.key("overrides").opt_string(after.as_deref());
@@ -263,25 +294,6 @@ pub fn run_edit(args: &EditArgs) -> Status {
     j.end_object();
     println!("{}", j.finish());
     Status::Ok
-}
-
-/// The lines added and removed between two texts (set difference, preserving
-/// order). Used for the `edit` code diff and adequate for the local changes a
-/// gesture makes.
-fn diff_lines(before: &str, after: &str) -> (Vec<String>, Vec<String>) {
-    let old: Vec<&str> = before.lines().collect();
-    let new: Vec<&str> = after.lines().collect();
-    let removed = old
-        .iter()
-        .filter(|line| !new.contains(line))
-        .map(|line| (*line).to_owned())
-        .collect();
-    let added = new
-        .iter()
-        .filter(|line| !old.contains(line))
-        .map(|line| (*line).to_owned())
-        .collect();
-    (removed, added)
 }
 
 /// Resolves an input (program, project folder or manifest) to its composition.
@@ -498,6 +510,7 @@ mod tests {
             frame: None,
             dry_run: false,
             overrides: false,
+            code: false,
             commands: vec!["edit(\"@281\", \"color\", \"#00FF88\")".to_owned()],
         };
         assert!(matches!(run_edit(&args), Status::Ok));
@@ -510,6 +523,37 @@ mod tests {
     }
 
     #[test]
+    fn structural_commands_write_code_and_refuse_overrides() {
+        let (dir, path) = temp_program("structural_cli");
+        let args = EditArgs {
+            input: path.clone(),
+            frame: None,
+            dry_run: false,
+            overrides: false,
+            code: false,
+            commands: vec!["add_layer(\"circle\", radius=10)".to_owned()],
+        };
+        assert!(matches!(run_edit(&args), Status::Ok));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("= circle(10)"), "{written}");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, path) = temp_program("structural_cli_overrides");
+        let before = std::fs::read_to_string(&path).unwrap();
+        let args = EditArgs {
+            input: path.clone(),
+            frame: None,
+            dry_run: false,
+            overrides: true,
+            code: false,
+            commands: vec!["add_layer(\"circle\", radius=10)".to_owned()],
+        };
+        assert!(matches!(run_edit(&args), Status::Failed));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn edit_overrides_flag_keeps_the_program_untouched() {
         let (dir, path) = temp_program("overrides");
         let before = std::fs::read_to_string(&path).unwrap();
@@ -518,6 +562,7 @@ mod tests {
             frame: None,
             dry_run: false,
             overrides: true,
+            code: false,
             commands: vec!["edit(\"@281\", \"color\", \"#00FF88\")".to_owned()],
         };
         assert!(matches!(run_edit(&args), Status::Ok));

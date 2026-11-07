@@ -33,7 +33,7 @@ headline.mask(wipe, mode="alpha")
 # --- Beat B: inverted luma cut-out ----------------------------------------
 card = rect(440, 210, radius=14)
 card.pos = (480, 400)
-card.fill = linear_gradient(start= (-220, 0), end= (220, 0), stops= [(0, "#5A7CFF"), (0.5, "#33F2E6"), (1, "#8A5AFF")])
+card.fill = linear_gradient(start=(-220, 0), end=(220, 0), stops=[(0, "#5A7CFF"), (0.5, "#33F2E6"), (1, "#8A5AFF")])
 card.id("card")
 
 spot = circle(110, fill="#808080")

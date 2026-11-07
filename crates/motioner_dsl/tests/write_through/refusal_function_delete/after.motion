@@ -1,0 +1,7 @@
+comp(name="P", duration=1.0)
+def badge(x):
+    c = circle(10)
+    c.pos = (x, 100)
+    return c
+
+badge(100)
