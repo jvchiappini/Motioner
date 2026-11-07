@@ -19,7 +19,7 @@
 use std::time::Instant;
 
 use motioner_core::{TextBounds, TextMeasurement, TextMetrics, TextRequest};
-use motioner_dsl::{execute_detailed_with_metrics, parse, Limits};
+use motioner_dsl::{execute_detailed_with_metrics, parse, parse_with_prelude, Limits};
 
 const WARMUP_RUNS: usize = 20;
 const MEASURED_RUNS: usize = 200;
@@ -53,7 +53,15 @@ fn main() {
     let label = std::env::var("BENCH_LABEL").unwrap_or_else(|_| "current".to_owned());
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("cannot read {path}: {error}"));
-    let program = parse(&source).unwrap_or_else(|error| panic!("cannot parse {path}: {error}"));
+    let prelude = std::env::var("BENCH_PRELUDE").is_ok_and(|value| value != "0");
+    let parse_start = Instant::now();
+    let program = if prelude {
+        parse_with_prelude(&source)
+    } else {
+        parse(&source)
+    }
+    .unwrap_or_else(|error| panic!("cannot parse {path}: {error}"));
+    let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
     let limits = Limits::default();
 
     for _ in 0..WARMUP_RUNS {
@@ -77,7 +85,7 @@ fn main() {
 
     samples.sort_by(f64::total_cmp);
     println!(
-        "{label}: median {:.3} ms, p90 {:.3} ms (warm-up {WARMUP_RUNS}, runs {MEASURED_RUNS}, nodes {nodes}, origins {origins}, {path})",
+        "{label}: median {:.3} ms, p90 {:.3} ms (parse {parse_ms:.3} ms, prelude {prelude}, warm-up {WARMUP_RUNS}, runs {MEASURED_RUNS}, nodes {nodes}, origins {origins}, {path})",
         percentile(&samples, 50),
         percentile(&samples, 90)
     );

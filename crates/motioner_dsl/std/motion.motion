@@ -1,0 +1,253 @@
+# Motioner standard library — motion presets (D-0039 section 5).
+#
+# Every preset emits ordinary keys. Durations are measured in beats; `at` is
+# absolute seconds (`beat(n)` returns seconds). Defaults come from the active
+# theme's motion tokens and are tuned by the visual review recorded in the
+# D-0039 addendum.
+
+def _enter_distance(distance, fallback):
+    if distance == None:
+        return fallback
+    return distance
+
+
+def _enter_ease(ease):
+    if ease == None:
+        return token("enter")
+    return ease
+
+
+def _exit_ease(ease):
+    if ease == None:
+        return token("exit")
+    return ease
+
+
+# Fade, rise, drop, slide, pop and zoom: the core entrance presets.
+def enter(node, kind="rise", at=0.0, duration=4.0, ease=None, distance=None, side="left"):
+    d = beat(duration)
+    e = _enter_ease(ease)
+    if kind == "fade":
+        node.key("opacity", at, 0.0)
+        node.key("opacity", at + d, 1.0, ease=e)
+    elif kind == "rise":
+        p = node.pos
+        dy = _enter_distance(distance, 56.0)
+        node.key("opacity", at, 0.0)
+        node.key("pos.x", at, p[0])
+        node.key("pos.y", at, p[1] + dy)
+        node.key("pos.x", at + d, p[0], ease=e)
+        node.key("pos.y", at + d, p[1], ease=e)
+        node.key("opacity", at + d, 1.0, ease=e)
+    elif kind == "drop":
+        p = node.pos
+        dy = _enter_distance(distance, 72.0)
+        node.key("opacity", at, 0.0)
+        node.key("pos.x", at, p[0])
+        node.key("pos.y", at, p[1] - dy)
+        node.key("pos.x", at + d, p[0], ease=e)
+        node.key("pos.y", at + d, p[1], ease=e)
+        node.key("opacity", at + d, 1.0, ease=e)
+    elif kind == "slide":
+        p = node.pos
+        dx = _enter_distance(distance, 180.0)
+        start = p[0] - dx
+        if side == "right":
+            start = p[0] + dx
+        elif side == "top":
+            start = p[0]
+            node.key("pos.y", at, p[1] - dx)
+            node.key("pos.y", at + d, p[1], ease=e)
+        elif side == "bottom":
+            start = p[0]
+            node.key("pos.y", at, p[1] + dx)
+            node.key("pos.y", at + d, p[1], ease=e)
+        node.key("pos.x", at, start)
+        node.key("pos.x", at + d, p[0], ease=e)
+        node.key("opacity", at, 0.0)
+        node.key("opacity", at + min(d, 0.4), 1.0)
+    elif kind == "pop":
+        s = node.scale
+        node.key("opacity", at, 0.0)
+        node.key("scale.x", at, s[0] * 0.72)
+        node.key("scale.y", at, s[1] * 0.72)
+        node.key("scale.x", at + d, s[0], ease="back_out")
+        node.key("scale.y", at + d, s[1], ease="back_out")
+        node.key("opacity", at + min(d, 0.35), 1.0)
+    elif kind == "zoom":
+        s = node.scale
+        node.key("opacity", at, 0.0)
+        node.key("scale.x", at, s[0] * 1.18)
+        node.key("scale.y", at, s[1] * 1.18)
+        node.key("scale.x", at + d, s[0], ease=e)
+        node.key("scale.y", at + d, s[1], ease=e)
+        node.key("opacity", at + min(d, 0.35), 1.0)
+    elif kind == "blur":
+        node.effect("blur", radius=22.0)
+        node.key("opacity", at, 0.0)
+        node.key("blur.radius", at, 22.0)
+        node.key("opacity", at + d, 1.0, ease=e)
+        node.key("blur.radius", at + d, 0.0, ease=e)
+    elif kind == "wipe":
+        s = node.scale
+        node.key("scale.x", at, 0.0)
+        node.key("scale.x", at + d, s[0], ease=e)
+    elif kind == "draw":
+        node.key("trim_end", at, 0.0)
+        node.key("trim_end", at + d, 1.0, ease=e)
+    elif kind == "spin":
+        node.key("opacity", at, 0.0)
+        node.key("rotation", at, node.rotation - 24.0)
+        node.key("rotation", at + d, node.rotation, ease=e)
+        node.key("opacity", at + min(d, 0.35), 1.0)
+    return node
+
+
+def exit(node, kind="fade", at=0.0, duration=4.0, ease=None, distance=None, side="left"):
+    d = beat(duration)
+    e = _exit_ease(ease)
+    if kind == "fade":
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    elif kind == "rise":
+        p = node.pos
+        dy = _enter_distance(distance, 56.0)
+        node.key("pos.x", at, p[0])
+        node.key("pos.y", at, p[1])
+        node.key("pos.x", at + d, p[0], ease=e)
+        node.key("pos.y", at + d, p[1] - dy, ease=e)
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    elif kind == "drop":
+        p = node.pos
+        dy = _enter_distance(distance, 72.0)
+        node.key("pos.x", at, p[0])
+        node.key("pos.y", at, p[1])
+        node.key("pos.x", at + d, p[0], ease=e)
+        node.key("pos.y", at + d, p[1] + dy, ease=e)
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    elif kind == "slide":
+        p = node.pos
+        dx = _enter_distance(distance, 180.0)
+        end = p[0] - dx
+        if side == "right":
+            end = p[0] + dx
+        node.key("pos.x", at, p[0])
+        node.key("pos.x", at + d, end, ease=e)
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    elif kind == "pop":
+        s = node.scale
+        node.key("scale.x", at, s[0])
+        node.key("scale.y", at, s[1])
+        node.key("scale.x", at + d, s[0] * 0.8, ease=e)
+        node.key("scale.y", at + d, s[1] * 0.8, ease=e)
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    elif kind == "zoom":
+        s = node.scale
+        node.key("scale.x", at, s[0])
+        node.key("scale.y", at, s[1])
+        node.key("scale.x", at + d, s[0] * 1.2, ease=e)
+        node.key("scale.y", at + d, s[1] * 1.2, ease=e)
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    elif kind == "blur":
+        node.effect("blur", radius=0.0)
+        node.key("opacity", at, 1.0)
+        node.key("blur.radius", at, 0.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+        node.key("blur.radius", at + d, 22.0, ease=e)
+    elif kind == "spin":
+        node.key("rotation", at, node.rotation)
+        node.key("rotation", at + d, node.rotation + 24.0, ease=e)
+        node.key("opacity", at, 1.0)
+        node.key("opacity", at + d, 0.0, ease=e)
+    return node
+
+
+def emphasis(node, kind="pulse", at=0.0, duration=2.0, amount=0.12):
+    d = beat(duration)
+    e = token("emphasis")
+    if kind == "pulse":
+        s = node.scale
+        node.key("scale.x", at, s[0])
+        node.key("scale.y", at, s[1])
+        node.key("scale.x", at + d * 0.5, s[0] * (1.0 + amount), ease=e)
+        node.key("scale.y", at + d * 0.5, s[1] * (1.0 + amount), ease=e)
+        node.key("scale.x", at + d, s[0], ease=e)
+        node.key("scale.y", at + d, s[1], ease=e)
+    elif kind == "bounce":
+        p = node.pos
+        node.key("pos.y", at, p[1])
+        node.key("pos.y", at + d * 0.5, p[1] - 46.0, ease="bounce_out")
+        node.key("pos.y", at + d, p[1], ease="bounce_out")
+    elif kind == "shake":
+        p = node.pos
+        step = d / 6.0
+        node.key("pos.x", at, p[0])
+        node.key("pos.x", at + step, p[0] - 14.0)
+        node.key("pos.x", at + step * 2.0, p[0] + 12.0)
+        node.key("pos.x", at + step * 3.0, p[0] - 9.0)
+        node.key("pos.x", at + step * 4.0, p[0] + 6.0)
+        node.key("pos.x", at + step * 5.0, p[0] - 3.0)
+        node.key("pos.x", at + d, p[0])
+    elif kind == "wiggle":
+        node.wiggle("rotation", 7, 2.0, 3.0, at, at + d)
+    elif kind == "glow":
+        node.effect("glow", color=token("accent"), radius=28.0)
+        node.key("glow.intensity", at, 0.0)
+        node.key("glow.intensity", at + d * 0.4, 1.0, ease=e)
+        node.key("glow.intensity", at + d, 0.0, ease=e)
+    return node
+
+
+def move_to(node, pos, at=0.0, duration=4.0, ease=None):
+    d = beat(duration)
+    e = ease or token("move")
+    p = node.pos
+    node.key("pos.x", at, p[0])
+    node.key("pos.y", at, p[1])
+    node.key("pos.x", at + d, pos[0], ease=e)
+    node.key("pos.y", at + d, pos[1], ease=e)
+    return node
+
+
+# Per-character reveal over the D-0034 text animators. `by` selects the
+# grouping the renderer supports (char); word and line use the same animator
+# with a proportionally larger stagger.
+def reveal(node, kind="fade", at=0.0, duration=3.0, by="char", stagger=None):
+    d = beat(duration)
+    step = stagger
+    if step == None:
+        step = d * 0.08
+        if by == "word":
+            step = d * 0.22
+        elif by == "line":
+            step = d * 0.4
+    if kind == "rise":
+        node.animate_chars("opacity", 0.0, 1.0, at, step, d, token("enter"), "forward")
+        node.animate_chars("offset", (0.0, 28.0), (0.0, 0.0), at, step, d, token("enter"), "forward")
+    elif kind == "mask_up":
+        node.animate_chars("offset", (0.0, 18.0), (0.0, 0.0), at, step, d, token("enter"), "forward")
+        node.animate_chars("opacity", 0.0, 1.0, at, step, d, token("enter"), "forward")
+    else:
+        node.animate_chars("opacity", 0.0, 1.0, at, step, d, token("enter"), "forward")
+    return node
+
+
+def enter_all(nodes, kind="rise", at=0.0, stagger=0.6, duration=4.0):
+    step = beat(stagger)
+    index = 0
+    for node in nodes:
+        enter(node, kind, at + step * index, duration)
+        index = index + 1
+
+
+def exit_all(nodes, kind="fade", at=0.0, stagger=0.6, duration=3.0):
+    step = beat(stagger)
+    index = 0
+    for node in nodes:
+        exit(node, kind, at + step * index, duration)
+        index = index + 1

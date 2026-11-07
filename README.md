@@ -21,6 +21,18 @@ edits private literals in place and falls back to a generated block for the
 rest (D-0027). FerrousEngine is vendored as a pinned submodule; GUIMaker is
 not.
 
+## Standard library
+
+Programs can start from design tokens instead of coordinates: `theme("dark")`
+and `use_theme`, relative `place`/`row`/`grid` layout, `beat`/`bar` timing,
+`scene` storyboard blocks, motion presets (`enter`, `exit`, `emphasis`,
+`reveal`) and reviewed components (`card`, `lower_third`, `button`,
+`bar_chart`, `background`). The library is an implicit prelude written in MDF,
+compiles to ordinary nodes and keys, and is read-only for write-through.
+Theme boards and preset GIFs are in `docs/std/` and `out/std/`; the guide is
+[docs/std.md](docs/std.md) and the language reference is
+[spec/mdf-v0.md](spec/mdf-v0.md).
+
 ## Showcase
 
 `examples/showcase_pro.motion` is the 24 s, 1920x1080, 60 fps demo reel:

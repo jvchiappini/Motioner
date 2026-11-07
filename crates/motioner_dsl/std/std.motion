@@ -1,0 +1,37 @@
+# Motioner standard library — core helpers (D-0039).
+#
+# This file is an implicit prelude: its names are available without `use`.
+# A user definition shadows a prelude name and `motioner lint` warns.
+# Everything here compiles to ordinary nodes and keys.
+
+# The MDF / std version the program was written against.
+def std_version():
+    return 1
+
+
+# A theme by name; `use_theme(t)` makes it the program default.
+def std_theme(name):
+    return theme(name)
+
+
+# The active theme's token as a number, colour string or ease name.
+def std_token(name):
+    return token(name)
+
+
+# Milliseconds at the current tempo are not useful; beats are.
+def beats(count):
+    return beat(count)
+
+
+def bars(count):
+    return bar(count)
+
+
+def clamp01(value):
+    return clamp(value, 0.0, 1.0)
+
+
+# A scene-local time turned into an absolute one.
+def at(scene_node, offset):
+    return scene_node.t(offset)

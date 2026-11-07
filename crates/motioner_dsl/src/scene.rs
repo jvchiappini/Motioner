@@ -26,7 +26,10 @@ use crate::origins::{
     BindingOrigin, BlockOrigin, EaseOrigin, Literal, NameId, NodeOrigin, OriginKind, OriginSite,
     ValueOrigin, ValueOrigins, ValueSource,
 };
+use crate::theme::{self, Theme};
 use crate::value::{Builtin, NodeMethod, Value};
+use motioner_core::{TextBounds, TextMetrics, TextRequest};
+use std::collections::HashMap;
 
 /// NTSC-style frame rates written as decimals, mapped to exact rationals.
 const NTSC_RATES: [(f64, u32); 3] = [(23.976, 24_000), (29.97, 30_000), (59.94, 60_000)];
@@ -89,14 +92,36 @@ pub(crate) struct Scene {
     document: Option<Document>,
     max_nodes: usize,
     origins: ValueOrigins,
+    /// The active design-token set (D-0039).
+    theme: &'static Theme,
+    /// The tempo in beats per minute (`beat()`/`bar()`).
+    tempo: f64,
+    /// Whether `comp(tempo=...)` pinned the tempo before a theme changed it.
+    tempo_explicit: bool,
+    /// Scene windows by group, for `scene.t(offset)`.
+    scenes: HashMap<NodeId, SceneWindow>,
+}
+
+/// The absolute window of a `scene(...)` group, in seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SceneWindow {
+    /// Absolute start time in seconds.
+    pub start: f64,
+    /// Absolute end time in seconds.
+    pub end: f64,
 }
 
 impl Scene {
     pub fn new(max_nodes: usize) -> Self {
+        let theme = theme::default_theme();
         Self {
             document: None,
             max_nodes,
             origins: ValueOrigins::new(),
+            theme,
+            tempo: theme.tempo,
+            tempo_explicit: false,
+            scenes: HashMap::new(),
         }
     }
 
@@ -146,14 +171,28 @@ impl Scene {
     }
 
     /// Calls a scene constructor builtin.
+    #[allow(clippy::too_many_lines)] // one arm per builtin, kept as one dispatch table
     pub fn call(
         &mut self,
         builtin: Builtin,
         args: CallArgs,
         site: &CreationSite,
+        metrics: &dyn TextMetrics,
     ) -> HostResult<Value> {
         match builtin {
             Builtin::Comp => self.comp(args),
+            Builtin::Theme => Self::theme(args),
+            Builtin::UseTheme => self.use_theme(args),
+            Builtin::Token => self.token(args),
+            Builtin::Beat => self.beat(args, false),
+            Builtin::Bar => self.beat(args, true),
+            Builtin::Scene => self.scene(args, site),
+            Builtin::Row => self.axis_layout(args, metrics, Axis2::Row),
+            Builtin::Column => self.axis_layout(args, metrics, Axis2::Column),
+            Builtin::Grid => self.grid_layout(args, metrics),
+            Builtin::Stack => self.stack_layout(args, metrics),
+            Builtin::CompSize => self.comp_size(args),
+            Builtin::Stagger => self.stagger(args, site),
             Builtin::Group => {
                 bind("group", &[], 0, args)?;
                 self.create(NodeContent::Group, site)
@@ -168,11 +207,12 @@ impl Scene {
                     "stroke_width",
                 ];
                 let bound = bind("rect", &params, 2, args)?;
-                let paint = paint(&bound, 3)?;
+                let paint =
+                    self.paint_args(&bound, 3, Some(PaintInput::Color(Color::WHITE)), None, 0.0)?;
                 let content = NodeContent::rect(
                     bound.number(0)?,
                     bound.number(1)?,
-                    bound.number_or(2, 0.0)?,
+                    self.number_arg(bound.get(2), 0.0)?,
                     paint.paint,
                 );
                 let node = self.create(content, site)?;
@@ -203,8 +243,9 @@ impl Scene {
             Builtin::Circle => {
                 let params = ["radius", "fill", "stroke", "stroke_width"];
                 let bound = bind("circle", &params, 1, args)?;
-                let paint = paint(&bound, 1)?;
-                let content = NodeContent::circle(bound.number(0)?, paint.paint);
+                let paint =
+                    self.paint_args(&bound, 1, Some(PaintInput::Color(Color::WHITE)), None, 0.0)?;
+                let content = NodeContent::circle(self.number_arg(bound.get(0), 0.0)?, paint.paint);
                 let node = self.create(content, site)?;
                 if let Value::Node(id) = node {
                     self.apply_gradients(id, paint)?;
@@ -232,7 +273,6 @@ impl Scene {
             Builtin::Image => self.image(args, site),
             Builtin::Audio => self.audio(args, site),
             Builtin::Video => self.video(args, site),
-            Builtin::Stagger => self.stagger(args, site),
             Builtin::Path => self.path(args, site),
             Builtin::Polygon => self.polygon(args, site),
             Builtin::Star => self.star(args, site),
@@ -258,6 +298,8 @@ impl Scene {
             "motion_blur",
             "shutter",
             "samples",
+            "theme",
+            "tempo",
         ];
         let bound = bind("comp", &params, 1, args)?;
         let max_side = i64::from(MAX_CANVAS_SIZE);
@@ -286,6 +328,9 @@ impl Scene {
         let samples = bound.integer_in(8, 8, 1, 64)?;
         let samples = u32::try_from(samples)
             .map_err(|_| HostError::value_error("comp(): 'samples' is out of range"))?;
+        // Theme and tempo come first so a background token resolves against
+        // the theme this composition asks for, not the previous one.
+        self.apply_comp_design(&bound)?;
         let composition = Composition::new(
             bound.string_or(0, "")?.as_ref(),
             side(1, 1920)?,
@@ -294,7 +339,16 @@ impl Scene {
             frame_rate
                 .seconds_to_frame(duration)
                 .map_err(|error| core_error(&error))?,
-            bound.color_or(5, Color::BLACK)?,
+            match bound.get(5) {
+                None => Color::BLACK,
+                Some(Value::Str(text)) => self.resolve_color(text)?,
+                Some(other) => {
+                    return Err(HostError::type_error(format!(
+                        "comp(): 'background' must be a colour or a colour token, got {}",
+                        other.type_name()
+                    )))
+                }
+            },
         )
         .and_then(|composition| composition.with_motion_blur(motion_blur, shutter, samples))
         .map_err(|error| core_error(&error))?;
@@ -302,6 +356,788 @@ impl Scene {
         Ok(Value::None)
     }
 
+    /// Applies `comp(theme=..., tempo=...)` before the composition is built.
+    fn apply_comp_design(&mut self, bound: &Bound<'_>) -> HostResult<()> {
+        if let Some(name) = bound.get(9) {
+            let Value::Str(name) = name else {
+                return Err(HostError::type_error(
+                    "comp(): 'theme' must be a theme name string",
+                ));
+            };
+            let theme = theme::by_name(name).ok_or_else(|| {
+                HostError::value_error(format!(
+                    "comp(): unknown theme {name:?}; use one of {}",
+                    theme::names().collect::<Vec<_>>().join(", ")
+                ))
+            })?;
+            theme
+                .validate_contrast()
+                .map_err(|error| HostError::value_error(format!("comp(): {error}")))?;
+            self.theme = theme;
+            if !self.tempo_explicit {
+                self.tempo = theme.tempo;
+            }
+        }
+        if let Some(value) = bound.get(10) {
+            let tempo = match value {
+                Value::Number(value) => *value,
+                other => {
+                    return Err(HostError::type_error(format!(
+                        "comp(): 'tempo' must be a number, got {}",
+                        other.type_name()
+                    )))
+                }
+            };
+            if !(tempo.is_finite() && tempo > 0.0) {
+                return Err(HostError::value_error(
+                    "comp(): 'tempo' must be a positive number of beats per minute",
+                ));
+            }
+            self.tempo = tempo;
+            self.tempo_explicit = true;
+        }
+        Ok(())
+    }
+
+    /// `theme(name)`: a curated token set, validated for WCAG AA.
+    fn theme(args: CallArgs) -> HostResult<Value> {
+        let bound = bind("theme", &["name"], 1, args)?;
+        let name = bound.string_or(0, "")?;
+        let theme = theme::by_name(&name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "theme(): unknown theme {name:?}; use one of {}",
+                theme::names().collect::<Vec<_>>().join(", ")
+            ))
+        })?;
+        theme
+            .validate_contrast()
+            .map_err(|error| HostError::value_error(format!("theme(): {error}")))?;
+        Ok(Value::Theme(Rc::new(theme.clone())))
+    }
+
+    /// `use_theme(t)`: makes `t` the default for constructors and setters.
+    fn use_theme(&mut self, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("use_theme", &["theme"], 1, args)?;
+        let Some(Value::Theme(theme)) = bound.get(0) else {
+            let got = bound.get(0).map_or("nothing", Value::type_name);
+            return Err(HostError::type_error(format!(
+                "use_theme(): 'theme' must come from theme(name), got {got}"
+            )));
+        };
+        theme
+            .validate_contrast()
+            .map_err(|error| HostError::value_error(format!("use_theme(): {error}")))?;
+        // The prelude/theme owns a `'static` table; keep the active pointer.
+        self.theme = theme::by_name(theme.name).unwrap_or(self.theme);
+        if !self.tempo_explicit {
+            self.tempo = self.theme.tempo;
+        }
+        Ok(Value::None)
+    }
+
+    /// `token(name)`: a design token as a value.
+    fn token(&self, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("token", &["name"], 1, args)?;
+        let name = bound.string_or(0, "")?;
+        if let Some(color) = self.theme.color(&name) {
+            return Ok(Value::Str(Rc::from(color.to_hex())));
+        }
+        let height = self.composition_height()?;
+        if let Some(size) = self.theme.size(&name, height) {
+            return Ok(Value::Number(size));
+        }
+        if let Some(space) = self.theme.space(&name, height) {
+            return Ok(Value::Number(space));
+        }
+        if let Some(radius) = self.theme.radius(&name, height) {
+            return Ok(Value::Number(radius));
+        }
+        if let Some(ease) = self.theme.ease(&name) {
+            return Ok(Value::Str(Rc::from(ease.mdf_value())));
+        }
+        if let Some(font) = self.theme.font(name.strip_prefix("font:").unwrap_or("")) {
+            return Ok(Value::Str(Rc::from(font)));
+        }
+        if let Some(weight) = match &*name {
+            "weight_display" => Some(self.theme.display_weight),
+            "weight_heading" => Some(self.theme.heading_weight),
+            "weight_body" => Some(self.theme.body_weight),
+            "weight_label" => Some(self.theme.label_weight),
+            _ => None,
+        } {
+            return Ok(Value::Number(f64::from(weight)));
+        }
+        if &*name == "tempo" {
+            return Ok(Value::Number(self.tempo));
+        }
+        Err(HostError::value_error(format!(
+            "token(): unknown token {name:?}; colour tokens are {}, sizes are {}, spacing is {}, \
+             radii are {} and motion tokens are {}",
+            [
+                "bg", "surface", "text", "muted", "accent", "accent_2", "success", "warning",
+                "danger"
+            ]
+            .join(", "),
+            ["display", "h1", "h2", "h3", "body", "caption", "label"].join(", "),
+            ["xs", "s", "m", "l", "xl"].join(", "),
+            ["s", "m", "l"].join(", "),
+            ["enter", "exit", "move", "emphasis"].join(", ")
+        )))
+    }
+
+    /// `beat(n)` / `bar(n)`: beats or four-beat bars as seconds.
+    fn beat(&self, args: CallArgs, bar: bool) -> HostResult<Value> {
+        let function = if bar { "bar" } else { "beat" };
+        let bound = bind(function, &["count"], 1, args)?;
+        let count = bound.number(0)?;
+        if !count.is_finite() {
+            return Err(HostError::value_error(format!(
+                "{function}(): 'count' must be finite"
+            )));
+        }
+        let beats = if bar { count * 4.0 } else { count };
+        Ok(Value::Number(beats * 60.0 / self.tempo))
+    }
+
+    /// `comp_size()`: the composition as `(width, height)`.
+    fn comp_size(&self, args: CallArgs) -> HostResult<Value> {
+        bind("comp_size", &[], 0, args)?;
+        let composition = self.document()?.composition();
+        Ok(Value::tuple(vec![
+            Value::Number(f64::from(composition.width())),
+            Value::Number(f64::from(composition.height())),
+        ]))
+    }
+
+    fn composition_height(&self) -> HostResult<f64> {
+        Ok(f64::from(self.document()?.composition().height()))
+    }
+
+    fn composition_size(&self) -> HostResult<(f64, f64)> {
+        let composition = self.document()?.composition();
+        Ok((
+            f64::from(composition.width()),
+            f64::from(composition.height()),
+        ))
+    }
+
+    /// `scene(name, start, length)`: a group visible only inside its window.
+    ///
+    /// Visibility is compiled to opacity hold keys (the document has no keyed
+    /// visibility), so the group is an ordinary node and every other tool
+    /// keeps working. `scene.t(x)` turns a scene-local time into an absolute
+    /// one.
+    fn scene(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
+        let bound = bind("scene", &["name", "start", "length"], 3, args)?;
+        let name = bound.string_or(0, "")?;
+        let start = bound.number(1)?;
+        let length = bound.number(2)?;
+        if !(start.is_finite() && length.is_finite() && length > 0.0) {
+            return Err(HostError::value_error(
+                "scene(): 'start' must be finite and 'length' must be positive",
+            ));
+        }
+        let group = self.create(NodeContent::Group, site)?;
+        let Value::Node(id) = group else {
+            return Ok(group);
+        };
+        self.document_mut()?
+            .set_name(id, &name)
+            .map_err(|error| core_error(&error))?;
+        let end = start + length;
+        let write = WriteSite {
+            statement: site.statement,
+            block: site.block,
+            site: Arc::clone(&site.site),
+        };
+        let span = site.creation;
+        self.key_value(
+            id,
+            "opacity",
+            0.0,
+            Value::Number(0.0),
+            Ease::Linear,
+            span,
+            &write,
+        )?;
+        self.key_value(
+            id,
+            "opacity",
+            start,
+            Value::Number(1.0),
+            Ease::Hold,
+            span,
+            &write,
+        )?;
+        self.key_value(
+            id,
+            "opacity",
+            end,
+            Value::Number(0.0),
+            Ease::Hold,
+            span,
+            &write,
+        )?;
+        self.scenes.insert(id, SceneWindow { start, end });
+        Ok(Value::Node(id))
+    }
+
+    /// `row(nodes, gap="m", align="center")` and its column twin.
+    fn axis_layout(
+        &mut self,
+        args: CallArgs,
+        metrics: &dyn TextMetrics,
+        axis: Axis2,
+    ) -> HostResult<Value> {
+        let function = if axis == Axis2::Row { "row" } else { "column" };
+        let bound = bind(function, &["nodes", "gap", "align"], 1, args)?;
+        let nodes = list_items(bound.get(0), "layout(): 'nodes' must be a list")?;
+        let gap = self.length_arg(bound.get(1), "m")?;
+        let align = bound.string_or(2, "center")?;
+        let mut entries = Vec::with_capacity(nodes.len());
+        for node in &nodes {
+            let Value::Node(id) = node else {
+                return Err(HostError::type_error(format!(
+                    "{function}(): 'nodes' must contain only nodes"
+                )));
+            };
+            entries.push((*id, self.measure_node(*id, metrics)?));
+        }
+        let (width, height) = self.composition_size()?;
+        let count = entries.len();
+        #[allow(clippy::cast_precision_loss)]
+        let gaps = gap * (count.saturating_sub(1)) as f64;
+        let main: f64 = entries
+            .iter()
+            .map(|(_, bounds)| {
+                if axis == Axis2::Row {
+                    bounds.width()
+                } else {
+                    bounds.height()
+                }
+            })
+            .sum::<f64>()
+            + gaps;
+        let cross = entries
+            .iter()
+            .map(|(_, bounds)| {
+                if axis == Axis2::Row {
+                    bounds.height()
+                } else {
+                    bounds.width()
+                }
+            })
+            .fold(0.0_f64, f64::max);
+        let mut cursor = if axis == Axis2::Row {
+            width * 0.5 - main * 0.5
+        } else {
+            height * 0.5 - main * 0.5
+        };
+        for (id, box_bounds) in &entries {
+            let (target_x, target_y) = if axis == Axis2::Row {
+                (
+                    cursor + box_bounds.width() * 0.5,
+                    align_cross(
+                        &align,
+                        height * 0.5 - cross * 0.5,
+                        height * 0.5 + cross * 0.5,
+                        box_bounds.height(),
+                    ),
+                )
+            } else {
+                (
+                    align_cross(
+                        &align,
+                        width * 0.5 - cross * 0.5,
+                        width * 0.5 + cross * 0.5,
+                        box_bounds.width(),
+                    ),
+                    cursor + box_bounds.height() * 0.5,
+                )
+            };
+            self.set_box_center(*id, box_bounds, target_x, target_y)?;
+            if axis == Axis2::Row {
+                cursor += box_bounds.width() + gap;
+            } else {
+                cursor += box_bounds.height() + gap;
+            }
+        }
+        Ok(Value::None)
+    }
+
+    /// `grid(nodes, cols, gap="m")`.
+    #[allow(clippy::cast_precision_loss)] // a grid dimension is far below 2^53
+    fn grid_layout(&mut self, args: CallArgs, metrics: &dyn TextMetrics) -> HostResult<Value> {
+        let bound = bind("grid", &["nodes", "cols", "gap"], 2, args)?;
+        let nodes = list_items(bound.get(0), "grid(): 'nodes' must be a list")?;
+        let cols = bound.integer_in(1, 2, 1, 1000)?;
+        let cols = usize::try_from(cols).unwrap_or(usize::MAX);
+        let gap = self.length_arg(bound.get(2), "m")?;
+        let mut entries = Vec::with_capacity(nodes.len());
+        for node in &nodes {
+            let Value::Node(id) = node else {
+                return Err(HostError::type_error(
+                    "grid(): 'nodes' must contain only nodes",
+                ));
+            };
+            entries.push((*id, self.measure_node(*id, metrics)?));
+        }
+        let (width, height) = self.composition_size()?;
+        let row_count = entries.len().div_ceil(cols);
+        let mut column_widths = vec![0.0_f64; cols];
+        let mut row_heights = vec![0.0_f64; row_count];
+        for (index, (_, box_bounds)) in entries.iter().enumerate() {
+            let column = index % cols;
+            let row = index / cols;
+            column_widths[column] = column_widths[column].max(box_bounds.width());
+            row_heights[row] = row_heights[row].max(box_bounds.height());
+        }
+        let total_width: f64 =
+            column_widths.iter().sum::<f64>() + gap * (cols.saturating_sub(1) as f64);
+        let total_height: f64 =
+            row_heights.iter().sum::<f64>() + gap * (row_count.saturating_sub(1) as f64);
+        let left = width * 0.5 - total_width * 0.5;
+        let top = height * 0.5 - total_height * 0.5;
+        let mut column_x = Vec::with_capacity(cols);
+        let mut x = left;
+        for column_width in &column_widths {
+            column_x.push(x + column_width * 0.5);
+            x += column_width + gap;
+        }
+        let mut row_y = Vec::with_capacity(row_count);
+        let mut y = top;
+        for row_height in &row_heights {
+            row_y.push(y + row_height * 0.5);
+            y += row_height + gap;
+        }
+        for (index, (id, box_bounds)) in entries.iter().enumerate() {
+            let column = index % cols;
+            let row = index / cols;
+            self.set_box_center(*id, box_bounds, column_x[column], row_y[row])?;
+        }
+        Ok(Value::None)
+    }
+
+    /// `stack(nodes)`: every node centred on the composition.
+    fn stack_layout(&mut self, args: CallArgs, metrics: &dyn TextMetrics) -> HostResult<Value> {
+        let bound = bind("stack", &["nodes"], 1, args)?;
+        let nodes = list_items(bound.get(0), "stack(): 'nodes' must be a list")?;
+        let (width, height) = self.composition_size()?;
+        for node in &nodes {
+            let Value::Node(id) = node else {
+                return Err(HostError::type_error(
+                    "stack(): 'nodes' must contain only nodes",
+                ));
+            };
+            let box_bounds = self.measure_node(*id, metrics)?;
+            self.set_box_center(*id, &box_bounds, width * 0.5, height * 0.5)?;
+        }
+        Ok(Value::None)
+    }
+
+    /// Places the measured box's centre at a composition point.
+    fn set_box_center(
+        &mut self,
+        id: NodeId,
+        box_bounds: &TextBounds,
+        target_x: f64,
+        target_y: f64,
+    ) -> HostResult<()> {
+        let node = self
+            .document()?
+            .node(id)
+            .ok_or_else(|| HostError::value_error(format!("unknown node {id}")))?;
+        let anchor = node.transform().anchor.value();
+        let center_x = (box_bounds.left + box_bounds.right) * 0.5;
+        let center_y = (box_bounds.top + box_bounds.bottom) * 0.5;
+        self.document_mut()?
+            .set_property(
+                id,
+                Property::Position,
+                PropertyValue::Vec2(Vec2::new(
+                    target_x - center_x + anchor.x,
+                    target_y - center_y + anchor.y,
+                )),
+            )
+            .map_err(|error| core_error(&error))
+    }
+
+    /// Measures a node's local box, recursing into groups.
+    pub(crate) fn measure_node(
+        &self,
+        id: NodeId,
+        metrics: &dyn TextMetrics,
+    ) -> HostResult<TextBounds> {
+        let document = self.document()?;
+        let node = document
+            .node(id)
+            .ok_or_else(|| HostError::value_error(format!("unknown node {id}")))?;
+        match node.content() {
+            NodeContent::Text(text) => {
+                let request = TextRequest {
+                    text: &text.text,
+                    size: text.size.value(),
+                    font: &text.font,
+                    weight: text.weight,
+                    tracking: text.tracking.value(),
+                    line_height: text.line_height.value(),
+                    align: text.align,
+                };
+                let measurement = metrics.measure(&request).ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "bounds(): no metrics for {:?} at weight {} (font files are not loaded \
+                         in this run)",
+                        text.font, text.weight
+                    ))
+                })?;
+                Ok(measurement.ink)
+            }
+            NodeContent::Rect { width, height, .. } => Ok(TextBounds {
+                left: -width.value() * 0.5,
+                top: -height.value() * 0.5,
+                right: width.value() * 0.5,
+                bottom: height.value() * 0.5,
+            }),
+            NodeContent::Circle { radius, .. } => Ok(TextBounds {
+                left: -radius.value(),
+                top: -radius.value(),
+                right: radius.value(),
+                bottom: radius.value(),
+            }),
+            NodeContent::Path { geometry, .. } => {
+                let [left, top, right, bottom] =
+                    geometry.local_bounds().unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                Ok(TextBounds {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                })
+            }
+            NodeContent::Image(image) => {
+                let width = image.width.value();
+                let height = image.height.value();
+                Ok(TextBounds {
+                    left: -width * 0.5,
+                    top: -height * 0.5,
+                    right: width * 0.5,
+                    bottom: height * 0.5,
+                })
+            }
+            NodeContent::Group => {
+                let mut union = TextBounds {
+                    left: f64::INFINITY,
+                    top: f64::INFINITY,
+                    right: f64::NEG_INFINITY,
+                    bottom: f64::NEG_INFINITY,
+                };
+                for child in node.children() {
+                    let child_node = document
+                        .node(*child)
+                        .ok_or_else(|| HostError::value_error(format!("unknown node {child}")))?;
+                    let local = self.measure_node(*child, metrics)?;
+                    let position = child_node.transform().position.value();
+                    let anchor = child_node.transform().anchor.value();
+                    union.left = union.left.min(local.left + position.x - anchor.x);
+                    union.top = union.top.min(local.top + position.y - anchor.y);
+                    union.right = union.right.max(local.right + position.x - anchor.x);
+                    union.bottom = union.bottom.max(local.bottom + position.y - anchor.y);
+                }
+                if union.left.is_finite() {
+                    Ok(union)
+                } else {
+                    Ok(TextBounds::empty())
+                }
+            }
+            NodeContent::Audio(_) | NodeContent::Video(_) => Ok(TextBounds::empty()),
+        }
+    }
+
+    /// `node.bounds()`: the measured composition-space box.
+    fn bounds_of(&self, id: NodeId, metrics: &dyn TextMetrics) -> HostResult<TextBounds> {
+        let document = self.document()?;
+        let mut bounds = self.measure_node(id, metrics)?;
+        let mut current = document
+            .node(id)
+            .ok_or_else(|| HostError::value_error(format!("unknown node {id}")))?;
+        loop {
+            let position = current.transform().position.value();
+            let anchor = current.transform().anchor.value();
+            bounds.left += position.x - anchor.x;
+            bounds.right += position.x - anchor.x;
+            bounds.top += position.y - anchor.y;
+            bounds.bottom += position.y - anchor.y;
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            current = document
+                .node(parent)
+                .ok_or_else(|| HostError::value_error(format!("unknown node {parent}")))?;
+        }
+        Ok(bounds)
+    }
+
+    /// `node.place(anchor="center", x=None, y=None, margin=None)`.
+    fn place(
+        &mut self,
+        id: NodeId,
+        args: CallArgs,
+        metrics: &dyn TextMetrics,
+    ) -> HostResult<Value> {
+        let bound = bind("place", &["anchor", "x", "y", "margin"], 0, args)?;
+        let anchor_name = bound.string_or(0, "center")?;
+        let box_bounds = self.measure_node(id, metrics)?;
+        let (width, height) = self.composition_size()?;
+        let is_text = self
+            .document()?
+            .node(id)
+            .is_some_and(|node| matches!(node.content(), NodeContent::Text(_)));
+        let default_margin = if is_text {
+            width.min(height) * 0.1
+        } else {
+            0.0
+        };
+        let margin = match bound.get(3) {
+            None => default_margin,
+            Some(Value::Number(value)) => *value,
+            Some(Value::Str(token)) => self.theme.space(token, height).ok_or_else(|| {
+                HostError::value_error(format!(
+                    "place(): unknown spacing token {token:?}; nearest is {:?}",
+                    theme::spacing_token_suggestion(token)
+                ))
+            })?,
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "place(): 'margin' must be a number or a spacing token, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let fraction = |index: usize, default: f64| -> HostResult<f64> {
+            match bound.get(index) {
+                None => Ok(default),
+                Some(Value::Number(value)) => Ok(*value),
+                Some(other) => Err(HostError::type_error(format!(
+                    "place(): '{}' must be a fraction of the composition, got {}",
+                    if index == 1 { "x" } else { "y" },
+                    other.type_name()
+                ))),
+            }
+        };
+        let (ax, ay, bx, by) = anchor_point(&anchor_name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "place(): unknown anchor {anchor_name:?}; use center, top, bottom, left, right or \
+                 a corner"
+            ))
+        })?;
+        let default_x = if ax < 0.5 {
+            margin / width
+        } else if ax > 0.5 {
+            1.0 - margin / width
+        } else {
+            0.5
+        };
+        let default_y = if ay < 0.5 {
+            margin / height
+        } else if ay > 0.5 {
+            1.0 - margin / height
+        } else {
+            0.5
+        };
+        let x = fraction(1, default_x)? * width;
+        let y = fraction(2, default_y)? * height;
+        let local_x = box_bounds.left + (box_bounds.right - box_bounds.left) * bx;
+        let local_y = box_bounds.top + (box_bounds.bottom - box_bounds.top) * by;
+        let anchor = self
+            .document()?
+            .node(id)
+            .ok_or_else(|| HostError::value_error(format!("unknown node {id}")))?
+            .transform()
+            .anchor
+            .value();
+        self.document_mut()?
+            .set_property(
+                id,
+                Property::Position,
+                PropertyValue::Vec2(Vec2::new(x - local_x + anchor.x, y - local_y + anchor.y)),
+            )
+            .map_err(|error| core_error(&error))?;
+        Ok(Value::Node(id))
+    }
+
+    /// Resolves a paint argument: `#rrggbb`, a colour token, a gradient or
+    /// `None`.
+    fn paint_arg(
+        &self,
+        value: Option<&Value>,
+        default: Option<PaintInput>,
+    ) -> HostResult<Option<PaintInput>> {
+        match value {
+            None => Ok(default),
+            Some(Value::None) => Ok(None),
+            Some(Value::Gradient(gradient)) => Ok(Some(PaintInput::Gradient(Rc::clone(gradient)))),
+            Some(Value::Str(text)) => {
+                let color = self.resolve_color(text)?;
+                Ok(Some(PaintInput::Color(color)))
+            }
+            Some(other) => Err(HostError::type_error(format!(
+                "expected a colour, a colour token, a gradient or None, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    /// Resolves `#rrggbb[aa]` or a theme colour token.
+    fn resolve_color(&self, text: &str) -> HostResult<Color> {
+        if text.starts_with('#') {
+            return Color::parse_hex(text)
+                .map_err(|error| HostError::value_error(error.to_string()));
+        }
+        self.theme.color(text).ok_or_else(|| {
+            HostError::value_error(format!(
+                "unknown colour token {text:?}; nearest is {:?} (or write \"#RRGGBB\")",
+                theme::color_token_suggestion(text)
+            ))
+        })
+    }
+
+    /// A number that also accepts a type-scale, spacing or radius token.
+    fn number_arg(&self, value: Option<&Value>, default: f64) -> HostResult<f64> {
+        let height = self.composition_height()?;
+        match value {
+            None => Ok(default),
+            Some(Value::Number(value)) => Ok(*value),
+            Some(Value::Str(token)) => self
+                .theme
+                .size(token, height)
+                .or_else(|| self.theme.space(token, height))
+                .or_else(|| self.theme.radius(token, height))
+                .ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "unknown size/spacing token {token:?}; nearest is {:?}",
+                        theme::size_token_suggestion(token)
+                    ))
+                }),
+            Some(other) => Err(HostError::type_error(format!(
+                "expected a number or a size token, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    /// A font family or a `display`/`body`/`font:*` token.
+    fn font_arg(&self, value: Option<&Value>, default: &str) -> HostResult<String> {
+        match value {
+            None => Ok(default.to_owned()),
+            Some(Value::Str(text)) => {
+                let name = text.strip_prefix("font:").unwrap_or(text);
+                if let Some(font) = self.theme.font(name) {
+                    Ok(font.to_owned())
+                } else {
+                    Ok(text.to_string())
+                }
+            }
+            Some(other) => Err(HostError::type_error(format!(
+                "expected a font family string, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    /// Reads optional fill/stroke/stroke-width tokens starting at `first`.
+    fn paint_args(
+        &self,
+        bound: &Bound<'_>,
+        first: usize,
+        fill_default: Option<PaintInput>,
+        stroke_default: Option<PaintInput>,
+        width_default: f64,
+    ) -> HostResult<PaintArgs> {
+        let fill = self.paint_arg(bound.get(first), fill_default)?;
+        let stroke = self.paint_arg(bound.get(first + 1), stroke_default)?;
+        let stroke_width = self.number_arg(bound.get(first + 2), width_default)?;
+        let (fill, fill_gradient) = split_paint(fill);
+        let (stroke_color, stroke_gradient) = split_paint(stroke);
+        let stroke = stroke_color
+            .filter(|_| stroke_width != 0.0)
+            .map(|color| Stroke {
+                color,
+                width: stroke_width,
+            });
+        Ok(PaintArgs {
+            paint: Paint { fill, stroke },
+            fill_gradient,
+            stroke_gradient,
+        })
+    }
+
+    /// Resolves a token string written to a content field.
+    fn token_content_value(&self, field: ContentField, value: &Value) -> HostResult<Value> {
+        let Value::Str(text) = value else {
+            return Ok(value.clone());
+        };
+        match field {
+            ContentField::Fill
+            | ContentField::Stroke
+            | ContentField::Color
+            | ContentField::FillStopColor(_)
+            | ContentField::StrokeStopColor(_) => {
+                Ok(Value::Str(Rc::from(self.resolve_color(text)?.to_hex())))
+            }
+            ContentField::Width
+            | ContentField::Height
+            | ContentField::Radius
+            | ContentField::StrokeWidth
+            | ContentField::TrimStart
+            | ContentField::TrimEnd
+            | ContentField::TrimOffset
+            | ContentField::Dash
+            | ContentField::DashOffset
+            | ContentField::Size
+            | ContentField::Tracking
+            | ContentField::LineHeight
+            | ContentField::Gain
+            | ContentField::Pan
+            | ContentField::InPoint
+            | ContentField::OutPoint
+            | ContentField::FadeIn
+            | ContentField::FadeOut
+            | ContentField::Speed
+            | ContentField::FillStopOffset(_)
+            | ContentField::StrokeStopOffset(_) => {
+                Ok(Value::Number(self.number_arg(Some(value), 0.0)?))
+            }
+            _ => Ok(value.clone()),
+        }
+    }
+
+    /// A numeric argument that also accepts a spacing/radius/size token.
+    fn length_arg(&self, value: Option<&Value>, default_token: &str) -> HostResult<f64> {
+        let height = self.composition_height()?;
+        match value {
+            None => self
+                .theme
+                .space(default_token, height)
+                .ok_or_else(|| HostError::value_error(format!("unknown token {default_token:?}"))),
+            Some(Value::Number(value)) => Ok(*value),
+            Some(Value::Str(token)) => self
+                .theme
+                .space(token, height)
+                .or_else(|| self.theme.radius(token, height))
+                .ok_or_else(|| {
+                    HostError::value_error(format!(
+                        "unknown spacing token {token:?}; nearest is {:?}",
+                        theme::spacing_token_suggestion(token)
+                    ))
+                }),
+            Some(other) => Err(HostError::type_error(format!(
+                "expected a number or a spacing token, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // the constructor mirrors its flat parameter list
     fn text(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
         let params = [
             "content",
@@ -312,6 +1148,7 @@ impl Scene {
             "weight",
             "tracking",
             "line_height",
+            "style",
         ];
         let bound = bind("text", &params, 1, args)?;
         let Some(Value::Str(content)) = bound.get(0) else {
@@ -326,14 +1163,36 @@ impl Scene {
                 "text(): unknown align {align_name:?}; use \"left\", \"center\" or \"right\""
             ))
         })?;
-        let color = bound.optional_paint(3, Some(PaintInput::Color(Color::WHITE)))?;
+        let color = self.paint_arg(bound.get(3), Some(PaintInput::Color(Color::WHITE)))?;
         let (color, gradient) = split_paint(color);
+        let height = self.composition_height()?;
+        let style = bound.get(8).map(|value| match value {
+            Value::Str(name) => Ok(name.to_string()),
+            other => Err(HostError::type_error(format!(
+                "text(): 'style' must be a type-scale token, got {}",
+                other.type_name()
+            ))),
+        });
+        let style = match style {
+            None => None,
+            Some(Ok(name)) => Some(name),
+            Some(Err(error)) => return Err(error),
+        };
+        let em_size = match style.as_deref() {
+            Some(name) => self.theme.size(name, height).ok_or_else(|| {
+                HostError::value_error(format!(
+                    "text(): unknown style {name:?}; nearest is {:?}",
+                    theme::size_token_suggestion(name)
+                ))
+            })?,
+            None => self.number_arg(bound.get(2), 48.0)?,
+        };
         let content = NodeContent::Text(TextContent::new(
             content.to_string(),
             // Roboto is the historical default: documents that never asked for
             // a family keep the exact advances they were authored with.
-            bound.string_or(1, "Roboto")?.to_string(),
-            bound.number_or(2, 48.0)?,
+            self.font_arg(bound.get(1), "Roboto")?,
+            em_size,
             color.unwrap_or(Color::WHITE),
             align,
         ));
@@ -348,8 +1207,33 @@ impl Scene {
                     )
                     .map_err(|error| core_error(&error))?;
             }
-            let weight = bound.number_or(5, 400.0)?;
-            let tracking = bound.number_or(6, 0.0)?;
+            let weight = match bound.get(5) {
+                Some(value) => match value {
+                    Value::Number(value) => *value,
+                    other => {
+                        return Err(HostError::type_error(format!(
+                            "text(): 'weight' must be a number, got {}",
+                            other.type_name()
+                        )))
+                    }
+                },
+                None => style.as_deref().map_or(400.0, |style| match style {
+                    "display" => f64::from(self.theme.display_weight),
+                    "h1" | "h2" | "h3" => f64::from(self.theme.heading_weight),
+                    "label" => f64::from(self.theme.label_weight),
+                    _ => 400.0,
+                }),
+            };
+            let tracking = match bound.get(6) {
+                Some(value) => self.number_arg(Some(value), 0.0)?,
+                None => style.as_deref().map_or(0.0, |style| {
+                    if matches!(style, "display" | "h1" | "h2" | "h3") {
+                        self.theme.heading_tracking
+                    } else {
+                        self.theme.body_tracking
+                    }
+                }),
+            };
             let line_height = bound.number_or(7, 1.0)?;
             let document = self.document_mut()?;
             for (field, value) in [
@@ -740,7 +1624,13 @@ impl Scene {
         })?;
         geometry.set_cap(cap);
         geometry.set_join(join);
-        let paint = path_paint(bound, paint_at)?;
+        let paint = self.paint_args(
+            bound,
+            paint_at,
+            None,
+            Some(PaintInput::Color(Color::WHITE)),
+            2.0,
+        )?;
         let node = self.create(NodeContent::path(geometry, paint.paint), site)?;
         if let Value::Node(id) = node {
             self.apply_gradients(id, paint)?;
@@ -891,7 +1781,8 @@ impl Scene {
             if !accepts {
                 return Err(unknown_attribute(name));
             }
-            let value = content_value(field, value)?;
+            let value = self.token_content_value(field, value)?;
+            let value = content_value(field, &value)?;
             self.document_mut()?
                 .set_content(id, field, value)
                 .map_err(|error| core_error(&error))
@@ -914,6 +1805,7 @@ impl Scene {
         method: NodeMethod,
         args: CallArgs,
         site: &WriteSite,
+        metrics: &dyn TextMetrics,
     ) -> HostResult<Value> {
         match method {
             NodeMethod::Key => self.key(id, args, site),
@@ -925,6 +1817,27 @@ impl Scene {
             NodeMethod::AnimateChars => self.animate_chars(id, args, site),
             NodeMethod::ClearChars => self.clear_chars(id),
             NodeMethod::Wiggle => self.wiggle(id, args, site),
+            NodeMethod::Place => self.place(id, args, metrics),
+            NodeMethod::Bounds => {
+                bind("bounds", &[], 0, args)?;
+                let bounds = self.bounds_of(id, metrics)?;
+                Ok(Value::tuple(vec![
+                    Value::Number(bounds.left),
+                    Value::Number(bounds.top),
+                    Value::Number(bounds.right),
+                    Value::Number(bounds.bottom),
+                ]))
+            }
+            NodeMethod::SceneTime => {
+                let bound = bind("t", &["offset"], 1, args)?;
+                let offset = bound.number(0)?;
+                let window = self.scenes.get(&id).ok_or_else(|| {
+                    HostError::value_error(
+                        "t(): this node is not a scene; create one with scene(name, start, length)",
+                    )
+                })?;
+                Ok(Value::Number(window.start + offset))
+            }
         }
     }
 
@@ -1267,7 +2180,16 @@ impl Scene {
                 .map_err(|error| core_error(&error))?;
         }
         if let (true, Some(argument)) = (bound.get(1).is_some(), bound.argument(1)) {
-            let color = bound.color_or(1, Color::BLACK)?;
+            let color = match bound.get(1) {
+                Some(Value::Str(text)) => self.resolve_color(text)?,
+                Some(Value::None) | None => Color::BLACK,
+                Some(other) => {
+                    return Err(HostError::type_error(format!(
+                        "effect(): 'color' must be a colour or a colour token, got {}",
+                        other.type_name()
+                    )))
+                }
+            };
             let channel = EffectChannel {
                 kind,
                 param: EffectParam::Color,
@@ -1554,7 +2476,9 @@ impl Scene {
                 "key(): 'time' must be a finite number of seconds",
             ));
         }
-        let value = content_value(field, bound.get(2).unwrap_or(&Value::None))?;
+        let raw = bound.get(2).unwrap_or(&Value::None);
+        let token_value = self.token_content_value(field, raw)?;
+        let value = content_value(field, &token_value)?;
         let timing = self.key_timing(bound, time)?;
         self.document_mut()?
             .add_content_keyframe(id, field, timing.frame, value, timing.ease)
@@ -1685,12 +2609,23 @@ impl Scene {
         if !args.keywords.is_empty() {
             return Err(HostError::type_error("add() takes no keyword arguments"));
         }
+        let children: Vec<Value> = match args.positional.as_slice() {
+            [only] => match &only.value {
+                Value::List(items) | Value::Tuple(items) => items.borrow().clone(),
+                other => vec![other.clone()],
+            },
+            _ => args
+                .positional
+                .iter()
+                .map(|argument| argument.value.clone())
+                .collect(),
+        };
         let document = self.document_mut()?;
-        for child in &args.positional {
-            let Value::Node(child) = &child.value else {
+        for child in &children {
+            let Value::Node(child) = child else {
                 return Err(HostError::type_error(format!(
                     "add() expects nodes, got {}",
-                    child.value.type_name()
+                    child.type_name()
                 )));
             };
             document
@@ -1777,26 +2712,6 @@ struct PaintArgs {
     stroke_gradient: Option<Gradient>,
 }
 
-/// Reads optional `fill`, `stroke` and `stroke_width` starting at `first`.
-fn paint(bound: &Bound<'_>, first: usize) -> HostResult<PaintArgs> {
-    let fill = bound.optional_paint(first, Some(PaintInput::Color(Color::WHITE)))?;
-    let stroke_color = bound.optional_paint(first + 1, None)?;
-    let stroke_width = bound.number_or(first + 2, 0.0)?;
-    let (fill, fill_gradient) = split_paint(fill);
-    let (stroke_color, stroke_gradient) = split_paint(stroke_color);
-    let stroke = stroke_color
-        .filter(|_| stroke_width != 0.0)
-        .map(|color| Stroke {
-            color,
-            width: stroke_width,
-        });
-    Ok(PaintArgs {
-        paint: Paint { fill, stroke },
-        fill_gradient,
-        stroke_gradient,
-    })
-}
-
 /// Splits a paint argument into its solid fallback and its gradient.
 fn split_paint(input: Option<PaintInput>) -> (Option<Color>, Option<Gradient>) {
     match input {
@@ -1852,25 +2767,38 @@ fn path_points(value: &Value) -> HostResult<Vec<PathPoint>> {
         .collect()
 }
 
-/// Reads optional `fill`, `stroke` and `stroke_width` starting at `first`,
-/// with the path defaults (no fill, white 2 px stroke).
-fn path_paint(bound: &Bound<'_>, first: usize) -> HostResult<PaintArgs> {
-    let fill = bound.optional_paint(first, None)?;
-    let stroke_color = bound.optional_paint(first + 1, Some(PaintInput::Color(Color::WHITE)))?;
-    let stroke_width = bound.number_or(first + 2, 2.0)?;
-    let (fill, fill_gradient) = split_paint(fill);
-    let (stroke_color, stroke_gradient) = split_paint(stroke_color);
-    let stroke = stroke_color
-        .filter(|_| stroke_width != 0.0)
-        .map(|color| Stroke {
-            color,
-            width: stroke_width,
-        });
-    Ok(PaintArgs {
-        paint: Paint { fill, stroke },
-        fill_gradient,
-        stroke_gradient,
+/// The main axis of `row` / `column`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Axis2 {
+    Row,
+    Column,
+}
+
+/// Anchor placement as `(comp_x, comp_y, box_x, box_y)`, each a 0..1
+/// fraction of the corresponding span.
+fn anchor_point(name: &str) -> Option<(f64, f64, f64, f64)> {
+    let normalized = name.trim().to_ascii_lowercase().replace('-', "_");
+    Some(match normalized.as_str() {
+        "center" | "middle" => (0.5, 0.5, 0.5, 0.5),
+        "top" | "top_center" => (0.5, 0.0, 0.5, 0.0),
+        "bottom" | "bottom_center" => (0.5, 1.0, 0.5, 1.0),
+        "left" | "left_center" => (0.0, 0.5, 0.0, 0.5),
+        "right" | "right_center" => (1.0, 0.5, 1.0, 0.5),
+        "top_left" => (0.0, 0.0, 0.0, 0.0),
+        "top_right" => (1.0, 0.0, 1.0, 0.0),
+        "bottom_left" => (0.0, 1.0, 0.0, 1.0),
+        "bottom_right" => (1.0, 1.0, 1.0, 1.0),
+        _ => return None,
     })
+}
+
+/// The box-centre coordinate on the cross axis of a row or column.
+fn align_cross(align: &str, start: f64, end: f64, size: f64) -> f64 {
+    match align {
+        "start" | "left" | "top" => start + size * 0.5,
+        "end" | "right" | "bottom" => end - size * 0.5,
+        _ => (start + end) * 0.5,
+    }
 }
 
 /// Maps a decimal or integer fps to an exact rational frame rate.

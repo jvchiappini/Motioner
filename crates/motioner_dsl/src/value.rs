@@ -10,6 +10,7 @@ use motioner_core::{Ease, Gradient, NodeId};
 use crate::ast::FunctionDef;
 use crate::host::{HostError, HostResult};
 use crate::limits::{Budget, Limits};
+use crate::theme::Theme;
 
 /// A lazily iterated integer range produced by `range()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,11 +76,22 @@ pub(crate) enum Builtin {
     Video,
     Bezier,
     Stagger,
+    Theme,
+    UseTheme,
+    Token,
+    Beat,
+    Bar,
+    Scene,
+    Row,
+    Column,
+    Grid,
+    Stack,
+    CompSize,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 32] = [
+    pub const ALL: [(Self, &'static str); 43] = [
         (Self::Range, "range"),
         (Self::Enumerate, "enumerate"),
         (Self::Len, "len"),
@@ -112,6 +124,17 @@ impl Builtin {
         (Self::Video, "video"),
         (Self::Bezier, "bezier"),
         (Self::Stagger, "stagger"),
+        (Self::Theme, "theme"),
+        (Self::UseTheme, "use_theme"),
+        (Self::Token, "token"),
+        (Self::Beat, "beat"),
+        (Self::Bar, "bar"),
+        (Self::Scene, "scene"),
+        (Self::Row, "row"),
+        (Self::Column, "column"),
+        (Self::Grid, "grid"),
+        (Self::Stack, "stack"),
+        (Self::CompSize, "comp_size"),
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -141,6 +164,9 @@ pub(crate) enum NodeMethod {
     AnimateChars,
     ClearChars,
     Wiggle,
+    Place,
+    Bounds,
+    SceneTime,
 }
 
 impl NodeMethod {
@@ -155,6 +181,9 @@ impl NodeMethod {
             "animate_chars" => Some(Self::AnimateChars),
             "clear_chars" => Some(Self::ClearChars),
             "wiggle" => Some(Self::Wiggle),
+            "place" => Some(Self::Place),
+            "bounds" => Some(Self::Bounds),
+            "t" => Some(Self::SceneTime),
             _ => None,
         }
     }
@@ -170,6 +199,9 @@ impl NodeMethod {
             Self::AnimateChars => "animate_chars",
             Self::ClearChars => "clear_chars",
             Self::Wiggle => "wiggle",
+            Self::Place => "place",
+            Self::Bounds => "bounds",
+            Self::SceneTime => "t",
         }
     }
 }
@@ -254,6 +286,8 @@ pub(crate) enum Value {
     Method(NodeId, NodeMethod),
     Gradient(Rc<Gradient>),
     Ease(Ease),
+    /// An active design-token set (D-0039).
+    Theme(Rc<Theme>),
 }
 
 impl Value {
@@ -281,6 +315,7 @@ impl Value {
             Self::Node(_) => "node",
             Self::Gradient(_) => "gradient",
             Self::Ease(_) => "ease",
+            Self::Theme(_) => "theme",
         }
     }
 
@@ -298,7 +333,8 @@ impl Value {
             | Self::Node(_)
             | Self::Method(..)
             | Self::Gradient(_)
-            | Self::Ease(_) => true,
+            | Self::Ease(_)
+            | Self::Theme(_) => true,
         }
     }
 
@@ -381,6 +417,7 @@ impl Value {
             (Self::Node(a), Self::Node(b)) => Ok(a == b),
             (Self::Gradient(a), Self::Gradient(b)) => Ok(a == b),
             (Self::Ease(a), Self::Ease(b)) => Ok(a == b),
+            (Self::Theme(a), Self::Theme(b)) => Ok(Rc::ptr_eq(a, b)),
             (Self::Method(a, m), Self::Method(b, n)) => Ok(a == b && m == n),
             _ => Ok(false),
         }
@@ -449,6 +486,7 @@ impl Value {
                 limits,
             ),
             Self::Ease(ease) => push_checked(out, &format!("<ease {}>", ease.mdf_value()), limits),
+            Self::Theme(theme) => push_checked(out, &format!("<theme {}>", theme.name), limits),
         }
     }
 

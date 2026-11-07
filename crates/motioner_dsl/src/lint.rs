@@ -55,6 +55,7 @@ pub fn lint(source: &str) -> Result<Vec<Diagnostic>, Diagnostic> {
     let mut diagnostics = Vec::new();
     check_block(&program.body, &mut diagnostics);
     check_inline_constructors(&program.body, &mut diagnostics);
+    check_prelude_shadowing(&program.body, &mut diagnostics);
     diagnostics.sort_by(|left, right| {
         left.span
             .start
@@ -63,6 +64,28 @@ pub fn lint(source: &str) -> Result<Vec<Diagnostic>, Diagnostic> {
     });
     diagnostics.dedup();
     Ok(diagnostics)
+}
+
+/// Warns when a top-level definition shadows a standard-library name.
+fn check_prelude_shadowing(stmts: &[Stmt], out: &mut Vec<Diagnostic>) {
+    let names = crate::prelude::exported_names();
+    if names.is_empty() {
+        return;
+    }
+    for statement in stmts {
+        if let StmtKind::Def(function) = &statement.kind {
+            if names.iter().any(|name| name == &*function.name) {
+                out.push(warning(
+                    function.span,
+                    format!(
+                        "function '{}' shadows a standard-library name; rename it to keep the \
+                         program portable",
+                        function.name
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 // ---- block walks -----------------------------------------------------------

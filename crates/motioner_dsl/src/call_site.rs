@@ -210,6 +210,13 @@ fn promote_literal(
     args: &[crate::ast::Argument],
     new_value: &str,
 ) -> Result<Option<CodeEdit>, String> {
+    if crate::prelude::is_library_span(call.definition) {
+        return Err(
+            "the value comes from the standard library; pass the value as an argument or bind \
+             the call result to a variable"
+                .to_owned(),
+        );
+    }
     if write.literal.is_none() {
         return Err(
             "the value written in the function is computed, so it cannot become a parameter"

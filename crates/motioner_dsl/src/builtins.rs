@@ -98,7 +98,18 @@ pub(crate) fn call(
         | Builtin::Image
         | Builtin::Audio
         | Builtin::Video
-        | Builtin::Stagger => Err(HostError::type_error(format!(
+        | Builtin::Stagger
+        | Builtin::Theme
+        | Builtin::UseTheme
+        | Builtin::Token
+        | Builtin::Beat
+        | Builtin::Bar
+        | Builtin::Scene
+        | Builtin::Row
+        | Builtin::Column
+        | Builtin::Grid
+        | Builtin::Stack
+        | Builtin::CompSize => Err(HostError::type_error(format!(
             "{}() is a scene constructor",
             builtin.name()
         ))),

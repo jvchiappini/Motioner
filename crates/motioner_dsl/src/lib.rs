@@ -34,7 +34,9 @@ mod origins;
 mod overrides_file;
 mod parser;
 mod plan;
+pub mod prelude;
 mod scene;
+pub mod theme;
 mod token;
 mod value;
 mod write_text;
@@ -65,6 +67,44 @@ pub use plan::{
     plan, plan_with_scope, plan_with_scope_and_metrics, verify, verify_with_metrics, Plan, Scope,
 };
 pub use token::{Keyword, Op, Token, TokenKind};
+
+/// The MDF standard-library version shipped with this build (D-0039).
+#[must_use]
+pub const fn std_version() -> u32 {
+    prelude::VERSION
+}
+
+/// Rewrites a diagnostic raised inside the prelude so it reports the library
+/// source rather than the user's file.
+fn normalize_diagnostic(mut diagnostic: Diagnostic) -> Diagnostic {
+    if prelude::is_library_span(diagnostic.span) {
+        diagnostic.span = prelude::normalize_span(diagnostic.span);
+        if !diagnostic.message.starts_with("std: ") {
+            diagnostic.message = format!("std: {}", diagnostic.message);
+        }
+    }
+    diagnostic
+}
+
+/// Parses a user program with the standard-library prelude prepended.
+///
+/// Tools that execute a program themselves (benchmarks, the future agent
+/// runtime) use this instead of [`parse`] so the prelude, its library spans
+/// and the shadowing rules are identical to [`run`].
+///
+/// # Errors
+///
+/// Returns the first lexical or parse diagnostic of either source.
+pub fn parse_with_prelude(source: &str) -> Result<crate::ast::Program, Diagnostic> {
+    with_prelude(source)
+}
+
+/// Parses a user program and prepends the standard-library prelude.
+fn with_prelude(source: &str) -> Result<crate::ast::Program, Diagnostic> {
+    let user = parse(source)?;
+    let library = prelude::parse_library()?;
+    Ok(prelude::with_user(library, user))
+}
 
 use motioner_core::{Document, NodeId, OverrideSet};
 
@@ -125,7 +165,9 @@ pub fn run_with_metrics(
             .name("mdf-interpreter".to_owned())
             .stack_size(INTERPRETER_STACK_BYTES)
             .spawn_scoped(scope, move || {
-                interpreter::execute_with_metrics(&parse(&source)?, &limits, metrics)
+                let program = with_prelude(&source)?;
+                interpreter::execute_with_metrics(&program, &limits, metrics)
+                    .map_err(normalize_diagnostic)
             });
         let handle = match worker {
             Ok(handle) => handle,
@@ -221,8 +263,9 @@ fn compile(
     limits: &Limits,
     metrics: &dyn motioner_core::TextMetrics,
 ) -> Result<Compiled, Diagnostic> {
-    let program = parse(source)?;
-    let execution = interpreter::execute_detailed_with_metrics(&program, limits, metrics)?;
+    let program = with_prelude(source)?;
+    let execution = interpreter::execute_detailed_with_metrics(&program, limits, metrics)
+        .map_err(normalize_diagnostic)?;
     let mut document = execution.document;
     let bindings = execution.bindings;
     let origins = execution.origins;

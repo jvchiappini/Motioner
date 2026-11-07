@@ -139,10 +139,16 @@ pub fn plan_with_scope_and_metrics(
         ));
     };
     let mut reason = String::from("no exact code edit");
+    // The standard library is read-only for write-through (D-0039): a value
+    // produced inside `std` is edited at the user's call site or by a local
+    // assignment, never inside the library source.
+    let library_node = origins
+        .node_origin(node)
+        .is_some_and(|origin| crate::prelude::is_library_span(origin.statement));
 
     // An edit that leaves every iteration with the same value is a shared
     // literal edit: the guards have become dead code (D-0036 section 2.2).
-    if scope == Scope::This {
+    if !library_node && scope == Scope::This {
         if let Some(edit) =
             automatic_shared_value(program, origins, document, &resolved, node, metrics)
         {
@@ -152,41 +158,45 @@ pub fn plan_with_scope_and_metrics(
 
     // A guard that became equal to the unguarded value is dead code; remove it
     // before the private-literal edit would rewrite the guarded literal.
-    if let Ok(Some(edit)) = crate::loop_guard::remove_redundant(program, origins, &resolved, node) {
-        if verify_edit(program, &edit, &expected, metrics) {
-            return Plan::Code(edit);
+    if !library_node {
+        if let Ok(Some(edit)) =
+            crate::loop_guard::remove_redundant(program, origins, &resolved, node)
+        {
+            if verify_edit(program, &edit, &expected, metrics) {
+                return Plan::Code(edit);
+            }
         }
-    }
 
-    if let Some(edit) = private_literal(&resolved, node, origins) {
-        if verify_edit(program, &edit, &expected, metrics) {
-            return Plan::Code(edit);
+        if let Some(edit) = private_literal(&resolved, node, origins) {
+            if verify_edit(program, &edit, &expected, metrics) {
+                return Plan::Code(edit);
+            }
+            "the private literal did not reproduce the document".clone_into(&mut reason);
         }
-        "the private literal did not reproduce the document".clone_into(&mut reason);
-    }
 
-    if scope == Scope::All {
-        match crate::loop_guard::shared_value(program, origins, &resolved, node) {
+        if scope == Scope::All {
+            match crate::loop_guard::shared_value(program, origins, &resolved, node) {
+                Ok(Some(edit)) => {
+                    if verify_edit(program, &edit, &expected, metrics) {
+                        return Plan::Code(edit);
+                    }
+                    "the shared literal did not reproduce the document".clone_into(&mut reason);
+                }
+                Ok(None) => {}
+                Err(error) => reason = error,
+            }
+        }
+
+        match crate::loop_guard::plan_loop(program, origins, &resolved, node, rate) {
             Ok(Some(edit)) => {
                 if verify_edit(program, &edit, &expected, metrics) {
                     return Plan::Code(edit);
                 }
-                "the shared literal did not reproduce the document".clone_into(&mut reason);
+                "the loop guard did not reproduce the document".clone_into(&mut reason);
             }
             Ok(None) => {}
             Err(error) => reason = error,
         }
-    }
-
-    match crate::loop_guard::plan_loop(program, origins, &resolved, node, rate) {
-        Ok(Some(edit)) => {
-            if verify_edit(program, &edit, &expected, metrics) {
-                return Plan::Code(edit);
-            }
-            "the loop guard did not reproduce the document".clone_into(&mut reason);
-        }
-        Ok(None) => {}
-        Err(error) => reason = error,
     }
 
     match crate::call_site::plan_call(program, origins, &resolved, node, rate) {
@@ -200,30 +210,37 @@ pub fn plan_with_scope_and_metrics(
         Err(error) => reason = error,
     }
 
-    match local_assignment(program, origins, &resolved, node, rate) {
-        Ok(Some(edit)) => {
-            if verify_edit(program, &edit, &expected, metrics) {
-                return Plan::Code(edit);
+    if !library_node {
+        match local_assignment(program, origins, &resolved, node, rate) {
+            Ok(Some(edit)) => {
+                if verify_edit(program, &edit, &expected, metrics) {
+                    return Plan::Code(edit);
+                }
+                "the local assignment did not reproduce the document".clone_into(&mut reason);
             }
-            "the local assignment did not reproduce the document".clone_into(&mut reason);
-        }
-        Ok(None) => {
-            if reason == "no exact code edit" {
-                reason = local_assignment_reason(&resolved, origins, node);
+            Ok(None) => {
+                if reason == "no exact code edit" {
+                    reason = local_assignment_reason(&resolved, origins, node);
+                }
             }
-        }
-        Err(error) => {
-            let structural = local_assignment_reason(&resolved, origins, node);
-            if reason == "no exact code edit" {
-                reason = if structural.starts_with("no exact code edit") {
-                    error
-                } else {
-                    structural
-                };
+            Err(error) => {
+                let structural = local_assignment_reason(&resolved, origins, node);
+                if reason == "no exact code edit" {
+                    reason = if structural.starts_with("no exact code edit") {
+                        error
+                    } else {
+                        structural
+                    };
+                }
             }
         }
     }
 
+    if library_node && reason == "no exact code edit" {
+        "the value comes from the standard library; bind the call result to a variable \
+         or pass the value as an argument"
+            .clone_into(&mut reason);
+    }
     Plan::Fallback(reason)
 }
 
@@ -475,7 +492,7 @@ fn private_literal(resolved: &Resolved, node: NodeId, origins: &ValueOrigins) ->
     let replacements = match (&resolved.action, &entry.action) {
         (Action::Set, OverrideAction::Set(value)) => {
             let origin = origins.set_origin(node, &entry.property)?;
-            if !origins.is_private(origin) {
+            if crate::prelude::is_library_span(origin.span) || !origins.is_private(origin) {
                 return None;
             }
             vec![Replacement::new(
@@ -544,6 +561,9 @@ fn local_assignment(
     let Some(origin) = origins.node_origin(node) else {
         return Err("the node has no recorded creation site".to_owned());
     };
+    if crate::prelude::is_library_span(origin.statement) {
+        return Ok(None);
+    }
     if !origin.site.loops.is_empty() {
         return Err("the node is created in a loop; loop specialisation comes later".to_owned());
     }

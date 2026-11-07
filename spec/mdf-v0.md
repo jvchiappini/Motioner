@@ -367,6 +367,34 @@ path. A loose `.motion` file keeps single-file mode: root = the process
 working directory, no registry, no autosave. `docs/projects.md` describes
 the folder, the authoritative files and what is safe to delete.
 
+### 7.8 Standard library (D-0039)
+
+`std` is an implicit prelude: its definitions are in scope before the user
+program, a user definition shadows one, and `lint` warns about the shadow.
+`std_version()` and `query` report the library version. The library is
+read-only for write-through: edits resolve to the user call site or a local
+assignment.
+
+- `theme(name)` returns a validated token set; `use_theme(t)` makes it the
+  default. `comp(..., theme=name, tempo=bpm)` does both. Constructors and
+  setters accept colour, type-scale, spacing, radius, font and ease tokens in
+  place of literals; `token(name)` returns the active value.
+- `beat(n)` and `bar(n)` return seconds at the composition tempo. `comp`
+  takes `tempo`; presets take durations in beats.
+- `scene(name, start, length)` returns a named group visible only inside its
+  window; `scene.t(x)` converts scene-local time to absolute seconds.
+- `node.place(anchor, x=None, y=None, margin=None)` positions by anchor and
+  composition fractions; text gets a title-safe default margin.
+  `node.bounds()` returns `(left, top, right, bottom)` in composition space.
+  `row`, `column`, `grid` and `stack` lay out measured children.
+- Motion presets: `enter`, `exit`, `emphasis`, `move_to`, text `reveal`,
+  `enter_all`, `exit_all`. They emit ordinary keys.
+- Components: `card`, `title_card`, `lower_third`, `logo_lockup`, `badge`,
+  `button`, `bar_chart`, `progress`, `background(kind)`; each returns a group
+  with named parts.
+
+`docs/std.md` documents every token, theme, preset and component with images.
+
 ## 8. Control flow example
 
 ```

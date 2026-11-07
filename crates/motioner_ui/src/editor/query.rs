@@ -35,6 +35,8 @@ impl Editor {
         j.key("frame").int(frame);
         j.key("time").number(motioner_core::seconds_of(frame, rate));
         composition(&mut j, document);
+        j.key("std_version")
+            .int(i64::from(motioner_dsl::std_version()));
         j.key("nodes").begin_array();
         for row in &self.outline {
             let identity = self.node_identity(row.node);

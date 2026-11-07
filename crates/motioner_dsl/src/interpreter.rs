@@ -364,6 +364,19 @@ impl Interpreter<'_> {
         bindings
     }
 
+    /// Looks up a user-defined function without calling into builtins.
+    fn lookup_function(&self, name: &str) -> Option<Rc<FunctionDef>> {
+        if let Some(Value::Function(function)) =
+            self.frames.last().and_then(|frame| frame.locals.get(name))
+        {
+            return Some(Rc::clone(function));
+        }
+        match self.globals.get(name) {
+            Some(Value::Function(function)) => Some(Rc::clone(function)),
+            _ => None,
+        }
+    }
+
     fn lookup(&self, name: &str, span: Span) -> Exec<Value> {
         let local = self.frames.last().and_then(|frame| frame.locals.get(name));
         if let Some(value) = local.or_else(|| self.globals.get(name)) {
@@ -808,22 +821,28 @@ impl Interpreter<'_> {
     }
 
     fn call(&mut self, callee: &Expr, args: &[Argument], span: Span) -> Exec<Value> {
-        let function = self.eval(callee)?;
-        let mut call_args = CallArgs::default();
-        for arg in args {
-            let value = self.eval(&arg.value)?;
-            let literal = literal_of(&arg.value);
-            let call_value = CallValue {
-                value,
-                span: arg.value.span,
-                literal,
-                origin: self.expression_origin(&arg.value, literal),
-            };
-            match &arg.name {
-                Some(name) => call_args.keywords.push((name.clone(), call_value)),
-                None => call_args.positional.push(call_value),
+        // Standard-library methods such as `node.enter(...)`: a user function
+        // with the attribute's name receives the node as its first argument.
+        if let ExprKind::Attribute { object, name } = &callee.kind {
+            if let Some(function) = self.lookup_function(name) {
+                let receiver = self.eval(object)?;
+                if matches!(receiver, Value::Node(_)) {
+                    let mut call_args = self.evaluate_arguments(args)?;
+                    call_args.positional.insert(
+                        0,
+                        CallValue {
+                            value: receiver,
+                            span,
+                            literal: None,
+                            origin: crate::origins::ExpressionOrigin::Computed,
+                        },
+                    );
+                    return self.call_function(&function, call_args, span);
+                }
             }
         }
+        let function = self.eval(callee)?;
+        let call_args = self.evaluate_arguments(args)?;
         let site = self.site(span);
         let write = self.write_site();
         let result = match function {
@@ -841,8 +860,19 @@ impl Interpreter<'_> {
                 | Builtin::Image
                 | Builtin::Audio
                 | Builtin::Video
-                | Builtin::Stagger),
-            ) => self.scene.call(builtin, call_args, &site),
+                | Builtin::Stagger
+                | Builtin::Theme
+                | Builtin::UseTheme
+                | Builtin::Token
+                | Builtin::Beat
+                | Builtin::Bar
+                | Builtin::Scene
+                | Builtin::Row
+                | Builtin::Column
+                | Builtin::Grid
+                | Builtin::Stack
+                | Builtin::CompSize),
+            ) => self.scene.call(builtin, call_args, &site, self.metrics),
             Value::Builtin(builtin) => builtins::call(
                 builtin,
                 call_args,
@@ -850,13 +880,35 @@ impl Interpreter<'_> {
                 &mut self.budget,
                 self.metrics,
             ),
-            Value::Method(id, method) => self.scene.call_method(id, method, call_args, &write),
+            Value::Method(id, method) => {
+                self.scene
+                    .call_method(id, method, call_args, &write, self.metrics)
+            }
             other => Err(HostError::type_error(format!(
                 "a {} is not callable",
                 other.type_name()
             ))),
         };
         result.map_err(|e| self.host_error(span, e))
+    }
+
+    fn evaluate_arguments(&mut self, args: &[Argument]) -> Exec<CallArgs> {
+        let mut call_args = CallArgs::default();
+        for arg in args {
+            let value = self.eval(&arg.value)?;
+            let literal = literal_of(&arg.value);
+            let call_value = CallValue {
+                value,
+                span: arg.value.span,
+                literal,
+                origin: self.expression_origin(&arg.value, literal),
+            };
+            match &arg.name {
+                Some(name) => call_args.keywords.push((name.clone(), call_value)),
+                None => call_args.positional.push(call_value),
+            }
+        }
+        Ok(call_args)
     }
 
     fn call_function(

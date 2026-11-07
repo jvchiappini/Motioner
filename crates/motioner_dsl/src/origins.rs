@@ -107,7 +107,20 @@ impl BlockOrigin {
     /// The block formed by `body`.
     #[must_use]
     pub(crate) fn of(body: &[Stmt]) -> Self {
-        match (body.first(), body.last()) {
+        // The top-level block of a run contains the library statements and the
+        // user's statements. Write-through locates blocks in the user's source,
+        // so the block must span only the user's statements; a block made only
+        // of library statements keeps its own range.
+        let user: Vec<&Stmt> = body
+            .iter()
+            .filter(|statement| !crate::prelude::is_library_span(statement.span))
+            .collect();
+        let (first, last) = if user.is_empty() {
+            (body.first(), body.last())
+        } else {
+            (user.first().copied(), user.last().copied())
+        };
+        match (first, last) {
             (Some(first), Some(last)) => Self {
                 span: first.span.to(last.span),
                 indent: u16::try_from(first.span.column.saturating_sub(1)).unwrap_or(u16::MAX),
