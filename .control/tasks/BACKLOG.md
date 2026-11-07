@@ -2,10 +2,14 @@
 
 (generado por `pctl reindex` — no editar a mano)
 
+- **T-AI-0003** — Agent tool runtime: D-0043 catalogue, executors, motioner tool CLI and contract tests `[alta]` (actualizado 2026-11-07)
 - **T-ARCH-0007** — Run GUIMaker widget gap analysis for the editor `[alta]` (actualizado 2026-10-31)
 - **T-AUDIO-0001** — Audio engine and stereo mixer (decode, tracks, gain/pan/fades, export) `[alta]` (actualizado 2026-11-03)
 - **T-AUDIO-0003** — Audio effects: EQ, compressor and reverb with a mixer panel `[alta]` (actualizado 2026-11-04)
 - **T-DSL-0011** — Spring eases and deterministic noise() for organic motion `[alta]` (actualizado 2026-11-04)
+- **T-DSL-0020** — Design analysis crate: describe_frame, motion/layout/legibility reports, check_design rule table and defect fixtures `[alta]` (actualizado 2026-11-07)
+- **T-DSL-0021** — Render tools: overlays, filmstrip, contact sheet, zoom, compare, variants, preview, image cache `[alta]` (actualizado 2026-11-07)
+- **T-DSL-0023** — Std examples, design-rules docs, tools docs, spec update, release measurements and final report `[alta]` (actualizado 2026-11-07)
 - **T-FORMAT-0001** — Specify project format v0 `[alta]` (actualizado 2026-10-31)
 - **T-FORMAT-0002** — Implement project load and save round-trip `[alta]` (actualizado 2026-10-31)
 - **T-NLE-0001** — NLE video: import, cut, trim, arrange and export with audio `[alta]` (actualizado 2026-11-03)
@@ -20,6 +24,8 @@
 - **T-AI-0002** — Motioner code-model training pipeline: generation, corpus filter, distillation and evaluation `[media]` (actualizado 2026-11-06)
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)
+- **T-DSL-0022** — Media analysis: deterministic palette, salient/empty regions, video cuts, audio tempo/beats `[media]` (actualizado 2026-11-07)
+- **T-DSL-0024** — Library planner corpus cases for every preset/component kind; count_up preset; full theme x preset visual matrix `[media]` (actualizado 2026-11-07)
 - **T-PHYS-0001** — GPU particles and rigid-body physics (post-1.0 spike) `[media]` (actualizado 2026-11-03)
 - **T-PUB-0001** — Installer (MSI/NSIS), portable ZIP and .motioner file association `[media]` (actualizado 2026-11-04)
 - **T-UI-0006** — Editor quality of life for big scenes (names, outline, search, graph editor, 1000 layers) `[media]` (actualizado 2026-11-01)
