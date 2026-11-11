@@ -1,18 +1,17 @@
 ---
 id: T-AUDIO-0001
 titulo: Audio engine and stereo mixer (decode, tracks, gain/pan/fades, export)
-estado: backlog
+estado: done
 prioridad: alta
 tipo: feature
 creado_por: usuario
 asignado_a: agente
 creado: 2026-11-03
-actualizado: 2026-11-03
+actualizado: 2026-11-11
 depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 The 1.0 success criterion is a stereo mixer: import/record audio, per-track
