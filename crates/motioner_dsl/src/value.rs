@@ -4,6 +4,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use motioner_core::{Ease, Gradient, NodeId};
 
@@ -276,18 +277,18 @@ pub(crate) enum Value {
     None,
     Bool(bool),
     Number(f64),
-    Str(Rc<str>),
+    Str(Arc<str>),
     List(Rc<Items>),
     Tuple(Rc<Items>),
     Range(RangeValue),
-    Function(Rc<FunctionDef>),
+    Function(Arc<FunctionDef>),
     Builtin(Builtin),
     Node(NodeId),
     Method(NodeId, NodeMethod),
-    Gradient(Rc<Gradient>),
+    Gradient(Arc<Gradient>),
     Ease(Ease),
     /// An active design-token set (D-0039).
-    Theme(Rc<Theme>),
+    Theme(Arc<Theme>),
 }
 
 impl Value {
@@ -412,12 +413,12 @@ impl Value {
                 items_equal(&a.borrow(), &b.borrow(), depth, limits, budget)
             }
             (Self::Range(a), Self::Range(b)) => Ok(a == b),
-            (Self::Function(a), Self::Function(b)) => Ok(Rc::ptr_eq(a, b)),
+            (Self::Function(a), Self::Function(b)) => Ok(Arc::ptr_eq(a, b)),
             (Self::Builtin(a), Self::Builtin(b)) => Ok(a == b),
             (Self::Node(a), Self::Node(b)) => Ok(a == b),
             (Self::Gradient(a), Self::Gradient(b)) => Ok(a == b),
             (Self::Ease(a), Self::Ease(b)) => Ok(a == b),
-            (Self::Theme(a), Self::Theme(b)) => Ok(Rc::ptr_eq(a, b)),
+            (Self::Theme(a), Self::Theme(b)) => Ok(Arc::ptr_eq(a, b)),
             (Self::Method(a, m), Self::Method(b, n)) => Ok(a == b && m == n),
             _ => Ok(false),
         }
@@ -629,7 +630,7 @@ mod tests {
         let tuple = Value::tuple(vec![
             Value::Number(1.0),
             Value::Number(2.5),
-            Value::Str(Rc::from("a")),
+            Value::Str(Arc::from("a")),
         ]);
         assert_eq!(
             tuple.display(&limits, &mut budget).unwrap(),

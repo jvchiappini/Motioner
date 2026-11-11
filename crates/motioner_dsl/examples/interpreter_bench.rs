@@ -5,6 +5,10 @@
 //! **p90** of the per-run wall time, never the mean: a loaded host moves the
 //! mean with a single outlier, while the median stays comparable.
 //!
+//! With the prelude enabled the benchmark parses through
+//! [`motioner_dsl::execute_parsed_with_metrics`], which binds the cached
+//! library definitions instead of walking them every run (prompt 13b, C0).
+//!
 //! Run it in release mode:
 //!
 //! ```text
@@ -12,14 +16,18 @@
 //! ```
 //!
 //! `BENCH_LABEL` labels the output (`baseline`, `current`, ...) so two builds
-//! can be run back to back without editing the source. Percentiles use the
+//! can be run back to back without editing the source. `BENCH_PRELUDE=0`
+//! measures the bare program as the reference. Percentiles use the
 //! nearest-rank definition: the value at `ceil(p / 100 * n)` in the sorted
 //! samples.
 
 use std::time::Instant;
 
 use motioner_core::{TextBounds, TextMeasurement, TextMetrics, TextRequest};
-use motioner_dsl::{execute_detailed_with_metrics, parse, parse_with_prelude, Limits};
+use motioner_dsl::{
+    execute_detailed_with_metrics, execute_parsed_with_metrics, parse, parse_with_prelude,
+    Execution, Limits,
+};
 
 const WARMUP_RUNS: usize = 20;
 const MEASURED_RUNS: usize = 200;
@@ -53,20 +61,42 @@ fn main() {
     let label = std::env::var("BENCH_LABEL").unwrap_or_else(|_| "current".to_owned());
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("cannot read {path}: {error}"));
-    let prelude = std::env::var("BENCH_PRELUDE").is_ok_and(|value| value != "0");
-    let parse_start = Instant::now();
-    let program = if prelude {
-        parse_with_prelude(&source)
-    } else {
-        parse(&source)
+    let with_prelude = std::env::var("BENCH_PRELUDE").is_ok_and(|value| value != "0");
+    // Warm the process-wide prelude cache outside the parse measurement so the
+    // reported time is the cost a later run actually pays.
+    if with_prelude {
+        let _ = parse_with_prelude(&source);
     }
-    .unwrap_or_else(|error| panic!("cannot parse {path}: {error}"));
+    let parse_start = Instant::now();
+    let parsed = if with_prelude {
+        Some(
+            parse_with_prelude(&source)
+                .unwrap_or_else(|error| panic!("cannot parse {path}: {error}")),
+        )
+    } else {
+        None
+    };
+    let plain = if with_prelude {
+        None
+    } else {
+        Some(parse(&source).unwrap_or_else(|error| panic!("cannot parse {path}: {error}")))
+    };
+    let parsed = parsed.as_ref();
     let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
     let limits = Limits::default();
+    let metrics = FixedMetrics;
+
+    let run = || -> Execution {
+        match (&plain, parsed) {
+            (Some(program), _) => execute_detailed_with_metrics(program, &limits, &metrics),
+            (None, Some(parsed)) => execute_parsed_with_metrics(parsed, &limits, &metrics),
+            (None, None) => unreachable!("one of the two parses is always present"),
+        }
+        .unwrap_or_else(|error| panic!("cannot run {path}: {error}"))
+    };
 
     for _ in 0..WARMUP_RUNS {
-        let execution = execute_detailed_with_metrics(&program, &limits, &FixedMetrics)
-            .unwrap_or_else(|error| panic!("cannot run {path}: {error}"));
+        let execution = run();
         std::hint::black_box(&execution);
     }
 
@@ -75,8 +105,7 @@ fn main() {
     let mut origins = 0;
     for _ in 0..MEASURED_RUNS {
         let start = Instant::now();
-        let execution = execute_detailed_with_metrics(&program, &limits, &FixedMetrics)
-            .unwrap_or_else(|error| panic!("cannot run {path}: {error}"));
+        let execution = run();
         samples.push(start.elapsed().as_secs_f64() * 1000.0);
         nodes = execution.document.nodes().count();
         origins = execution.origins.entries().len();
@@ -85,7 +114,7 @@ fn main() {
 
     samples.sort_by(f64::total_cmp);
     println!(
-        "{label}: median {:.3} ms, p90 {:.3} ms (parse {parse_ms:.3} ms, prelude {prelude}, warm-up {WARMUP_RUNS}, runs {MEASURED_RUNS}, nodes {nodes}, origins {origins}, {path})",
+        "{label}: median {:.3} ms, p90 {:.3} ms (parse {parse_ms:.3} ms, prelude {with_prelude}, warm-up {WARMUP_RUNS}, runs {MEASURED_RUNS}, nodes {nodes}, origins {origins}, {path})",
         percentile(&samples, 50),
         percentile(&samples, 90)
     );

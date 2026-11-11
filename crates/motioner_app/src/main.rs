@@ -24,6 +24,8 @@ mod agent;
 mod audio_out;
 mod corpus;
 mod host;
+mod toolcmd;
+mod toolhost;
 mod tools;
 mod trace;
 mod video_cache;
@@ -70,6 +72,8 @@ Usage:
   motioner trace   replay <file.jsonl>
   motioner corpus  check <dir> [--frames N]
   motioner tools   --schema
+  motioner tool    <project|file.motion> <name> [--args JSON] [--out DIR]
+  motioner tool    <project|file.motion> --batch FILE.jsonl
   motioner preview <project|file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--window-size WxH] [--ui-scale F] [--select ROW]
                    [--screenshot <file.png>] [--control] [--control-file FILE]
@@ -141,6 +145,8 @@ enum Command {
     Corpus(corpus::CheckArgs),
     /// Print the agent tool schema.
     Tools,
+    /// Run one D-0043 tool headless.
+    Tool(toolcmd::ToolArgs),
     /// Print usage.
     Help,
     /// Open the start screen with no project.
@@ -278,7 +284,7 @@ struct PreviewArgs {
 }
 
 /// Why the run stopped and with which exit code.
-enum Failure {
+pub(crate) enum Failure {
     /// An MDF lexical, parse or runtime diagnostic (exit code 2).
     Diagnostic(String),
     /// Any other application error (exit code 1).
@@ -367,6 +373,7 @@ fn run(args: &[OsString]) -> Result<bool, Failure> {
             println!("{}", tools::schema());
             Ok(true)
         }
+        Command::Tool(args) => toolcmd::run(&args),
         Command::Desktop(args) => run_desktop(&args).map(|()| true),
         Command::Import(args) => run_import(&args).map(|()| true),
         Command::Backup(args) => run_backup(&args).map(|()| true),
@@ -401,6 +408,7 @@ fn parse(args: &[OsString]) -> Result<Command> {
         "trace" => parse_trace(rest),
         "corpus" => parse_corpus(rest),
         "tools" => parse_tools(rest),
+        "tool" => parse_tool(rest),
         other
             if !other.starts_with('-')
                 && (other.ends_with(".motion")
@@ -913,6 +921,31 @@ fn parse_tools(args: &[OsString]) -> Result<Command> {
     Ok(Command::Tools)
 }
 
+/// Parses `tool <project|file> <name> [--args JSON] [--out DIR]` and
+/// `tool <project|file> --batch FILE.jsonl`.
+fn parse_tool(args: &[OsString]) -> Result<Command> {
+    let parsed = parse_flags("tool", args, true, &["--args", "--out", "--batch"], &[])?;
+    let batch = parsed.value("--batch").map(PathBuf::from);
+    let name = parsed.rest.first().cloned();
+    let args_json = parsed.value("--args").map(str::to_owned);
+    let out = parsed.value("--out").map(PathBuf::from);
+    if batch.is_some() && name.is_some() {
+        bail!("tool takes either a tool name or --batch, not both");
+    }
+    if batch.is_none() && name.is_none() {
+        bail!("tool needs a tool name (try `motioner tools --schema`)");
+    }
+    Ok(Command::Tool(toolcmd::ToolArgs {
+        input: parsed
+            .input
+            .ok_or_else(|| anyhow!("tool needs a project or composition"))?,
+        name,
+        args: args_json,
+        out,
+        batch,
+    }))
+}
+
 /// Parses `trace export|replay`.
 fn parse_trace(args: &[OsString]) -> Result<Command> {
     let Some(subcommand) = args.first().and_then(|value| value.to_str()) else {
@@ -1337,7 +1370,7 @@ fn load_document(
 }
 
 /// Every decoded image as the renderer's upload set.
-fn image_set(images: &ProjectImages) -> ImageSet {
+pub(crate) fn image_set(images: &ProjectImages) -> ImageSet {
     let mut set = ImageSet::new();
     for image in images.decoded() {
         set.insert(ImageData {
@@ -1352,7 +1385,7 @@ fn image_set(images: &ProjectImages) -> ImageSet {
 }
 
 /// Creates the output's parent directory when it does not exist.
-fn ensure_parent(path: &Path) -> Result<()> {
+pub(crate) fn ensure_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -1598,7 +1631,7 @@ fn run_still(args: &StillArgs) -> std::result::Result<(), Failure> {
 ///
 /// `still`/`render` always decode the original at full resolution; the
 /// returned images reuse one texture key per node and bump the revision.
-fn video_images(
+pub(crate) fn video_images(
     images: &ProjectImages,
     document: &Document,
     frame: motioner_core::Frame,

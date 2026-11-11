@@ -161,3 +161,52 @@ fn components_return_a_named_group_with_parts() {
         .nodes()
         .any(|node| node.name() == Some("card.title")));
 }
+
+#[test]
+fn a_user_definition_shadows_the_library() {
+    // The library is never walked into the global scope, so the only way this
+    // passes is if lookup prefers the user's own definition (prompt 13b, C0).
+    let source =
+        "def std_version():\n    return 99\ncomp(name=str(std_version()), width=100, height=100)\n";
+    let document = run_with_metrics(source, &Limits::default(), &FixedMetrics).unwrap();
+    assert_eq!(document.composition().name(), "99");
+}
+
+#[test]
+fn library_functions_are_bound_without_executing_the_prelude() {
+    let source = "comp(name=\"Cached\", width=100, height=100)\nr = rect(10, 10)\n";
+    let parsed = motioner_dsl::parse_with_prelude(source).unwrap();
+    assert!(parsed.library_len() > 0);
+    assert_eq!(parsed.user_body().len(), 2);
+    let execution =
+        motioner_dsl::execute_parsed_with_metrics(&parsed, &Limits::default(), &FixedMetrics)
+            .expect("the cached prelude path must run");
+    assert_eq!(execution.document.len(), 1);
+}
+#[test]
+fn count_up_switches_one_value_per_step_with_hold_keys() {
+    let document = build("c = count_up(100, at=0.0, duration=4.0, steps=10)\nc.pos = (500, 250)\n");
+    let group = document.nodes().next().unwrap();
+    assert_eq!(group.name(), Some("count_up"));
+    assert_eq!(group.children().len(), 10);
+    let values: Vec<&str> = document
+        .nodes()
+        .filter(|node| node.name() == Some("count_up.value"))
+        .filter_map(|node| match node.content() {
+            NodeContent::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(values.len(), 10);
+    assert_eq!(values[0], "0");
+    assert_eq!(values[9], "100");
+    let first = document
+        .nodes()
+        .find(|node| node.name() == Some("count_up.value"))
+        .unwrap();
+    assert_eq!(first.transform().opacity.keys().len(), 2);
+    assert_eq!(
+        first.transform().opacity.keys()[0].ease,
+        motioner_core::Ease::Hold
+    );
+}

@@ -6,7 +6,7 @@
 //! [`CommandKind`] is missing, so the published schema can never drift from
 //! the commands the editor actually understands (D-0024, D-0036 section 7).
 
-use motioner_ui::{CommandKind, Json};
+use motioner_ui::CommandKind;
 
 /// One tool parameter.
 fn param(name: &'static str, kind: &'static str, required: bool) -> Parameter {
@@ -119,41 +119,57 @@ fn kind_of(name: &str) -> &'static str {
 }
 
 /// The whole schema as one JSON document.
+///
+/// This is the single generator (D-0043): the D-0024 command tools, the code
+/// tools and the D-0043 catalogue are merged here and nowhere else.
 #[must_use]
 pub fn schema() -> String {
-    let mut tools: Vec<Tool> = CommandKind::ALL
+    let mut tools: Vec<serde_json::Value> = CommandKind::ALL
         .iter()
-        .map(|kind| Tool {
-            name: kind.name().to_owned(),
-            description: kind.signature().to_owned(),
-            parameters: parameters(kind.signature()),
-            example: kind.example().to_text(),
+        .map(|kind| {
+            let parameters: Vec<serde_json::Value> = parameters(kind.signature())
+                .into_iter()
+                .map(|parameter| {
+                    serde_json::json!({
+                        "name": parameter.name,
+                        "type": parameter.kind,
+                        "required": parameter.required,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "name": kind.name(),
+                "description": kind.signature(),
+                "parameters": parameters,
+                "example": kind.example().to_text(),
+            })
         })
         .collect();
-    tools.extend(code_tools());
-    let mut j = Json::new();
-    j.begin_object();
-    j.key("version").int(1);
-    j.key("tools").begin_array();
-    for tool in &tools {
-        j.begin_object();
-        j.key("name").string(&tool.name);
-        j.key("description").string(&tool.description);
-        j.key("parameters").begin_array();
-        for parameter in &tool.parameters {
-            j.begin_object();
-            j.key("name").string(&parameter.name);
-            j.key("type").string(parameter.kind);
-            j.key("required").boolean(parameter.required);
-            j.end_object();
-        }
-        j.end_array();
-        j.key("example").string(&tool.example);
-        j.end_object();
-    }
-    j.end_array();
-    j.end_object();
-    j.finish()
+    tools.extend(code_tools().into_iter().map(|tool| {
+        let parameters: Vec<serde_json::Value> = tool
+            .parameters
+            .iter()
+            .map(|parameter| {
+                serde_json::json!({
+                    "name": parameter.name,
+                    "type": parameter.kind,
+                    "required": parameter.required,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": parameters,
+            "example": tool.example,
+        })
+    }));
+    tools.extend(motioner_tools::catalogue_json());
+    serde_json::to_string(&serde_json::json!({
+        "version": 2,
+        "tools": tools,
+    }))
+    .unwrap_or_else(|_| "{\"version\":2,\"tools\":[]}".to_owned())
 }
 
 /// The names of the code tools (tests only; the schema is the public list).
@@ -183,10 +199,27 @@ mod tests {
     #[test]
     fn the_code_tools_and_the_version_are_present() {
         let json = schema();
-        assert!(json.contains("\"version\":1"), "{json}");
+        assert!(json.contains("\"version\":2"), "{json}");
         for name in code_tool_names() {
             assert!(json.contains(&format!("\"name\":\"{name}\"")), "{name}");
         }
         assert!(json.contains("\"example\":"), "{json}");
     }
+}
+
+#[test]
+fn the_d0043_catalogue_is_merged_into_the_single_schema() {
+    let json = schema();
+    for name in [
+        "project_summary",
+        "check_design",
+        "render_still",
+        "analyze_audio",
+        "run_commands",
+        "ask_user",
+    ] {
+        assert!(json.contains(&format!("\"name\":\"{name}\"")), "{name}");
+    }
+    assert!(json.contains("\"cost\":\"render\""), "cost class missing");
+    assert!(json.contains("\"result\":{"), "result schema missing");
 }

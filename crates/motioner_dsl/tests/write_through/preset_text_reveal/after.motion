@@ -1,0 +1,7 @@
+comp(name="P", width=1000, height=600, duration=4.0, theme="dark")
+use_theme(theme("dark"))
+t = text("Kinetic", token("font:body"), token("h1"), token("text"), "center", 700)
+t.id("t")
+t.pos = (500, 300)
+t.rotation = 10
+t.reveal("rise", at=0.0, duration=3.0)

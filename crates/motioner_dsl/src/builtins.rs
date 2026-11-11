@@ -4,7 +4,7 @@
 //! live in `scene.rs`.
 
 use std::cmp::Ordering;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use motioner_core::{Gradient, GradientKind, GradientStop, TextAlign, TextMetrics, TextRequest};
 
@@ -49,7 +49,7 @@ pub(crate) fn call(
             };
             limits.check_string_len(text.len())?;
             budget.charge_string(text.len())?;
-            Ok(Value::Str(Rc::from(text)))
+            Ok(Value::Str(Arc::from(text)))
         }
         Builtin::Int => convert_number("int", args, budget, f64::trunc),
         Builtin::Float => convert_number("float", args, budget, |v| v),
@@ -213,7 +213,7 @@ fn gradient(builtin: Builtin, args: CallArgs, budget: &mut Budget) -> HostResult
     let stops = gradient_stops(bound.get(2), name, budget)?;
     let gradient = Gradient::new(kind, stops)
         .map_err(|error| HostError::value_error(format!("{name}(): {error}")))?;
-    Ok(Value::Gradient(Rc::new(gradient)))
+    Ok(Value::Gradient(Arc::new(gradient)))
 }
 
 fn vec_or_default(
@@ -337,7 +337,7 @@ pub(crate) fn items(value: &Value, limits: &Limits, budget: &mut Budget) -> Host
             limits.check_list_len(count)?;
             budget.charge_items(count)?;
             Ok(s.chars()
-                .map(|c| Value::Str(Rc::from(c.to_string())))
+                .map(|c| Value::Str(Arc::from(c.to_string())))
                 .collect())
         }
         Value::Range(range) => {

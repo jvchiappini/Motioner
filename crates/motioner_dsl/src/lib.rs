@@ -47,6 +47,7 @@ pub mod lint;
 pub mod printer;
 pub mod structural;
 
+pub use ast::Program;
 pub use bake::{bake, BakeOutcome};
 pub use code_edit::{CodeEdit, CodeEditError, Replacement, Strategy};
 pub use diagnostic::{Diagnostic, ErrorCategory, Severity, Span, StackFrame};
@@ -86,21 +87,85 @@ fn normalize_diagnostic(mut diagnostic: Diagnostic) -> Diagnostic {
     diagnostic
 }
 
+/// A user program with the standard-library prelude prepended (D-0039).
+///
+/// Tools that execute a program themselves (benchmarks, the agent runtime)
+/// use this instead of [`parse`] so the prelude, its library spans and the
+/// shadowing rules are identical to [`run`]. The leading [`Self::library_len`]
+/// statements are library definitions; [`execute_parsed_with_metrics`] binds
+/// them once instead of walking them on every run.
+#[derive(Debug, Clone)]
+pub struct ParsedProgram {
+    program: crate::ast::Program,
+    library_len: usize,
+}
+
+impl ParsedProgram {
+    /// The merged statement list (prelude first, then user code).
+    #[must_use]
+    pub fn program(&self) -> &crate::ast::Program {
+        &self.program
+    }
+
+    /// How many leading statements come from the standard library.
+    #[must_use]
+    pub fn library_len(&self) -> usize {
+        self.library_len
+    }
+
+    /// The user's statements only (the prelude stripped).
+    #[must_use]
+    pub fn user_body(&self) -> &[crate::ast::Stmt] {
+        &self.program.body[self.library_len..]
+    }
+}
+
 /// Parses a user program with the standard-library prelude prepended.
 ///
-/// Tools that execute a program themselves (benchmarks, the future agent
-/// runtime) use this instead of [`parse`] so the prelude, its library spans
-/// and the shadowing rules are identical to [`run`].
+/// The prelude is parsed once per process and shared, so repeated calls are
+/// cheap.
 ///
 /// # Errors
 ///
 /// Returns the first lexical or parse diagnostic of either source.
-pub fn parse_with_prelude(source: &str) -> Result<crate::ast::Program, Diagnostic> {
-    with_prelude(source)
+pub fn parse_with_prelude(source: &str) -> Result<ParsedProgram, Diagnostic> {
+    let (program, library_len) = with_prelude(source)?;
+    Ok(ParsedProgram {
+        program,
+        library_len,
+    })
+}
+
+/// Executes a [`ParsedProgram`] with text metrics installed, binding the
+/// library definitions directly.
+///
+/// Unlike [`run_with_metrics`] this runs on the caller's thread and assumes
+/// the caller has enough stack for the program's call depth; benchmarks and
+/// tests that already control their stack use it. The editor and CLI keep
+/// using [`run_with_metrics`], which owns the large interpreter stack.
+///
+/// # Errors
+///
+/// Same as [`run_with_metrics`].
+pub fn execute_parsed_with_metrics(
+    parsed: &ParsedProgram,
+    limits: &Limits,
+    metrics: &dyn motioner_core::TextMetrics,
+) -> Result<interpreter::Execution, Diagnostic> {
+    interpreter::execute_library_detailed_with_metrics(
+        &parsed.program,
+        parsed.library_len,
+        limits,
+        metrics,
+    )
+    .map_err(normalize_diagnostic)
 }
 
 /// Parses a user program and prepends the standard-library prelude.
-fn with_prelude(source: &str) -> Result<crate::ast::Program, Diagnostic> {
+///
+/// Reports how many leading statements come from the library so execution can
+/// bind their definitions once instead of walking them on every run.
+fn with_prelude(source: &str) -> Result<(crate::ast::Program, usize), Diagnostic> {
     let user = parse(source)?;
     let library = prelude::parse_library()?;
     Ok(prelude::with_user(library, user))
@@ -165,8 +230,8 @@ pub fn run_with_metrics(
             .name("mdf-interpreter".to_owned())
             .stack_size(INTERPRETER_STACK_BYTES)
             .spawn_scoped(scope, move || {
-                let program = with_prelude(&source)?;
-                interpreter::execute_with_metrics(&program, &limits, metrics)
+                let (program, library_len) = with_prelude(&source)?;
+                interpreter::execute_library_with_metrics(&program, library_len, &limits, metrics)
                     .map_err(normalize_diagnostic)
             });
         let handle = match worker {
@@ -263,9 +328,10 @@ fn compile(
     limits: &Limits,
     metrics: &dyn motioner_core::TextMetrics,
 ) -> Result<Compiled, Diagnostic> {
-    let program = with_prelude(source)?;
-    let execution = interpreter::execute_detailed_with_metrics(&program, limits, metrics)
-        .map_err(normalize_diagnostic)?;
+    let (program, library_len) = with_prelude(source)?;
+    let execution =
+        interpreter::execute_library_detailed_with_metrics(&program, library_len, limits, metrics)
+            .map_err(normalize_diagnostic)?;
     let mut document = execution.document;
     let bindings = execution.bindings;
     let origins = execution.origins;

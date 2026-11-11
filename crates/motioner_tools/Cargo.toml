@@ -1,0 +1,25 @@
+[package]
+name = "motioner_tools"
+description = "The D-0043 agent tool catalogue and its executors (D-0049)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_dsl.workspace = true
+motioner_eval.workspace = true
+motioner_render.workspace = true
+motioner_io.workspace = true
+motioner_analysis.workspace = true
+# Tool arguments, results and JSON Schema (D-0050).
+serde_json = "1.0"
+
+[dev-dependencies]
+motioner_testkit.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

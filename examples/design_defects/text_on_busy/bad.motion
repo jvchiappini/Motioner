@@ -1,0 +1,6 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+g = linear_gradient((0, 0), (1000, 600), [(0, "#000000"), (0.5, "#FFFFFF"), (1, "#000000")])
+bg = rect(1000, 600, fill=g)
+bg.pos = (500, 300)
+t = text("On a gradient", "Inter", 56, "#FFFFFF", "center")
+t.pos = (500, 300)

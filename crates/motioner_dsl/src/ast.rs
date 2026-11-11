@@ -3,7 +3,7 @@
 //! Every node carries the [`Span`] it was parsed from so runtime errors
 //! and provenance can point back at the source.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::diagnostic::Span;
 
@@ -38,7 +38,7 @@ pub enum StmtKind {
         value: Expr,
     },
     /// `def name(params):` and its body.
-    Def(Rc<FunctionDef>),
+    Def(Arc<FunctionDef>),
     /// `return [value]`.
     Return(Option<Expr>),
     /// `if` / `elif` chain with an optional `else` body.
@@ -51,7 +51,7 @@ pub enum StmtKind {
     /// `for variable(s) in iterable:` and its body.
     For {
         /// Loop variables, in order; more than one unpacks a tuple.
-        variables: Vec<Rc<str>>,
+        variables: Vec<Arc<str>>,
         /// The iterated expression.
         iterable: Expr,
         /// Loop body.
@@ -84,13 +84,13 @@ pub enum AssignOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
     /// A variable.
-    Name(Rc<str>),
+    Name(Arc<str>),
     /// `object.name`, for node properties.
     Attribute {
         /// The object expression.
         object: Expr,
         /// The attribute name.
-        name: Rc<str>,
+        name: Arc<str>,
     },
     /// `object[index]`, for list items.
     Index {
@@ -105,7 +105,7 @@ pub enum Target {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     /// Parameter name.
-    pub name: Rc<str>,
+    pub name: Arc<str>,
     /// Default expression, when the parameter is optional.
     pub default: Option<Expr>,
 }
@@ -114,7 +114,7 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     /// Function name.
-    pub name: Rc<str>,
+    pub name: Arc<str>,
     /// Parameters in definition order; optional ones come last.
     pub params: Vec<Param>,
     /// Function body.
@@ -138,13 +138,13 @@ pub enum ExprKind {
     /// A number literal.
     Number(f64),
     /// A string literal.
-    Str(Rc<str>),
+    Str(Arc<str>),
     /// `True` or `False`.
     Bool(bool),
     /// `None`.
     None,
     /// A variable reference.
-    Name(Rc<str>),
+    Name(Arc<str>),
     /// `[a, b, ...]`.
     List(Vec<Expr>),
     /// `(a, b, ...)` or `()`.
@@ -197,7 +197,7 @@ pub enum ExprKind {
         /// The object expression.
         object: Box<Expr>,
         /// The attribute name.
-        name: Rc<str>,
+        name: Arc<str>,
     },
     /// `object[index]`.
     Index {
@@ -212,7 +212,7 @@ pub enum ExprKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Argument {
     /// Keyword name, or `None` for a positional argument.
-    pub name: Option<Rc<str>>,
+    pub name: Option<Arc<str>>,
     /// The argument value.
     pub value: Expr,
 }

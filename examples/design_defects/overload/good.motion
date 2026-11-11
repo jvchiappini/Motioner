@@ -1,0 +1,7 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+for i in range(2):
+    r = rect(200, 160, fill="#5B8CFF")
+    r.pos = (350 + i * 300, 300)
+    r.key("pos.y", 0.0, 300.0)
+    r.key("pos.y", 1.0, 200.0, ease="quad_out")
+    r.key("pos.y", 2.0, 300.0, ease="quad_in")

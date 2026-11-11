@@ -2263,19 +2263,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "motioner_analysis"
+version = "0.1.0"
+dependencies = [
+ "motioner_core",
+ "motioner_dsl",
+ "motioner_eval",
+]
+
+[[package]]
 name = "motioner_app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "cpal",
+ "motioner_analysis",
  "motioner_core",
  "motioner_dsl",
  "motioner_io",
  "motioner_render",
  "motioner_testkit",
+ "motioner_tools",
  "motioner_ui",
  "png 0.17.16",
  "rfd",
+ "serde_json",
 ]
 
 [[package]]
@@ -2337,6 +2349,21 @@ dependencies = [
  "motioner_render",
  "png 0.17.16",
  "sha2",
+]
+
+[[package]]
+name = "motioner_tools"
+version = "0.1.0"
+dependencies = [
+ "motioner_analysis",
+ "motioner_core",
+ "motioner_dsl",
+ "motioner_eval",
+ "motioner_io",
+ "motioner_render",
+ "motioner_testkit",
+ "png 0.17.16",
+ "serde_json",
 ]
 
 [[package]]

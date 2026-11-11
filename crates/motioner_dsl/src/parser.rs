@@ -4,7 +4,7 @@
 //! rejected with an [`ErrorCategory::Unsupported`] diagnostic instead of a
 //! confusing syntax error.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::{
     Argument, AssignOp, BinaryOp, CompareOp, Expr, ExprKind, FunctionDef, LogicalOp, Param,
@@ -154,7 +154,7 @@ impl Parser {
         }
     }
 
-    fn expect_name(&mut self, expected: &str) -> ParseResult<(Rc<str>, Span)> {
+    fn expect_name(&mut self, expected: &str) -> ParseResult<(Arc<str>, Span)> {
         match &self.peek().kind {
             TokenKind::Name(name) => {
                 let name = name.clone();
@@ -362,7 +362,7 @@ impl Parser {
             span,
         };
         Ok(Stmt {
-            kind: StmtKind::Def(Rc::new(function)),
+            kind: StmtKind::Def(Arc::new(function)),
             span,
         })
     }
@@ -421,7 +421,7 @@ impl Parser {
     }
 
     /// Parses `x`, `i, x` or `(i, x)` before the `in` of a `for`.
-    fn for_variables(&mut self) -> ParseResult<Vec<Rc<str>>> {
+    fn for_variables(&mut self) -> ParseResult<Vec<Arc<str>>> {
         let parenthesized = self.eat_op(Op::LParen);
         let mut variables = Vec::new();
         loop {
@@ -690,8 +690,8 @@ impl Parser {
         }
     }
 
-    fn arguments(&mut self) -> ParseResult<Vec<(Option<Rc<str>>, ParsedExpr)>> {
-        let mut args: Vec<(Option<Rc<str>>, ParsedExpr)> = Vec::new();
+    fn arguments(&mut self) -> ParseResult<Vec<(Option<Arc<str>>, ParsedExpr)>> {
+        let mut args: Vec<(Option<Arc<str>>, ParsedExpr)> = Vec::new();
         while !self.check_op(Op::RParen) {
             let is_keyword = matches!(self.peek().kind, TokenKind::Name(_))
                 && self.peek_kind_at(1) == Some(&TokenKind::Op(Op::Assign));

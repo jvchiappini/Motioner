@@ -1,0 +1,1 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")

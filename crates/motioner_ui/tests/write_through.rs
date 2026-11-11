@@ -110,6 +110,39 @@ const CASES: &[Case] = &[
         before: "comp(name=\"P\", duration=1.0)\r\na = circle(10)\r\n",
         command: "edit(\"@0\", \"rotation\", 15)",
     },
+    // Prompt 13b, C0: presets and components are library calls. An edit must
+    // resolve to the user's call site (or a local assignment) and never touch
+    // the prelude; a theme token argument must survive the edit.
+    Case {
+        name: "preset_enter_rise",
+        before: "comp(name=\"P\", width=1000, height=600, duration=4.0, theme=\"dark\")\nuse_theme(theme(\"dark\"))\nr = rect(220, 120, fill=\"accent\")\nr.id(\"r\")\nr.pos = (500, 300)\nr.enter(\"rise\", at=beat(2), duration=2.0)\n",
+        command: "edit(\"r\", \"rotation\", 15)",
+    },
+    Case {
+        name: "preset_exit_slide",
+        before: "comp(name=\"P\", width=1000, height=600, duration=4.0, theme=\"dark\")\nuse_theme(theme(\"dark\"))\nr = rect(220, 120, fill=\"accent\")\nr.id(\"r\")\nr.pos = (500, 300)\nr.exit(\"slide\", at=1.0, duration=2.0)\n",
+        command: "edit(\"r\", \"rotation\", 15)",
+    },
+    Case {
+        name: "preset_emphasis_bounce",
+        before: "comp(name=\"P\", width=1000, height=600, duration=3.0, theme=\"dark\")\nuse_theme(theme(\"dark\"))\nr = rect(220, 120, fill=\"accent\")\nr.id(\"r\")\nr.pos = (500, 300)\nr.emphasis(\"bounce\", at=0.5, duration=2.0)\n",
+        command: "edit(\"r\", \"scale.x\", 1.5)",
+    },
+    Case {
+        name: "preset_text_reveal",
+        before: "comp(name=\"P\", width=1000, height=600, duration=4.0, theme=\"dark\")\nuse_theme(theme(\"dark\"))\nt = text(\"Kinetic\", token(\"font:body\"), token(\"h1\"), token(\"text\"), \"center\", 700)\nt.id(\"t\")\nt.pos = (500, 300)\nt.reveal(\"rise\", at=0.0, duration=3.0)\n",
+        command: "edit(\"t\", \"rotation\", 10)",
+    },
+    Case {
+        name: "component_card_move",
+        before: "comp(name=\"P\", width=1000, height=600, duration=4.0, theme=\"dark\")\nuse_theme(theme(\"dark\"))\ng = card(\"Quarterly\", \"Revenue grew 24 percent\")\ng.id(\"card\")\ng.pos = (500, 300)\n",
+        command: "edit(\"card\", \"pos.x\", 640)",
+    },
+    Case {
+        name: "component_lower_third_part",
+        before: "comp(name=\"P\", width=1000, height=600, duration=4.0, theme=\"dark\")\nuse_theme(theme(\"dark\"))\ng = lower_third(\"Ana Silva\", \"Design lead\")\ng.id(\"third\")\ng.pos = (500, 420)\n",
+        command: "edit(\"third\", \"rotation\", 5)",
+    },
     Case {
         name: "comments_and_blank_lines",
         before: "comp(name=\"P\", duration=1.0)\n\n# a commented loop\nfor i in range(2):\n    c = circle(10)\n    c.pos = (100 + i * 20, 200)  # a dot\n",

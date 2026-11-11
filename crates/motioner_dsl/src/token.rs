@@ -1,6 +1,6 @@
 //! Tokens produced by the lexer.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::diagnostic::Span;
 
@@ -8,11 +8,11 @@ use crate::diagnostic::Span;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     /// An identifier.
-    Name(Rc<str>),
+    Name(Arc<str>),
     /// An integer or float literal (MDF has one number type).
     Number(f64),
     /// A string literal with escapes resolved.
-    Str(Rc<str>),
+    Str(Arc<str>),
     /// A reserved word.
     Keyword(Keyword),
     /// An operator or delimiter.

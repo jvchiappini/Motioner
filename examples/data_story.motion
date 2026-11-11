@@ -1,0 +1,51 @@
+# mdf: 0.1
+#
+# DATA STORY — a 6 s std example (prompt 13 phase 11).
+#
+# Prompt (see data_story.prompt.md):
+#   "A 6 s corporate data story: a question, then quarterly growth as a bar
+#    chart with a counting headline. Calm, legible, one idea per beat."
+#
+# Plan (D-0040 section 2), one scene block per beat:
+#   0.0-2.4 s  scene "question"  headline, then the supporting line
+#   2.4-6.0 s  scene "chart"     counter, then the chart with labels
+#   Tempo 120, the corporate theme's type scale and motion tokens.
+#
+# Render:
+#   motioner render examples/data_story.motion --out out/data_story.mp4
+
+comp(name="Data Story", width=1920, height=1080, fps=60, duration=6.0, theme="corporate")
+use_theme(theme("corporate"))
+
+backdrop = background("gradient_drift")
+backdrop.id("backdrop")
+backdrop.pos = (960, 540)
+
+# ---- scene 1: the question ------------------------------------------------
+s1 = scene("question", 0.0, 2.4)
+
+question = text("Where did the growth come from?", token("font:body"), token("h2"), token("text"), "center", 600)
+question.id("question")
+question.pos = (960, 460)
+question.reveal("rise", at=0.2, duration=1.4)
+
+support = text("Revenue by quarter, fiscal year 2026", token("font:body"), token("body"), token("muted"), "center", 400)
+support.id("support")
+support.pos = (960, 560)
+support.reveal("fade", at=0.7, duration=1.0)
+
+s1.add([question, support])
+
+# ---- scene 2: the chart ---------------------------------------------------
+s2 = scene("chart", 2.4, 3.6)
+
+total = count_up(84, at=s2.t(0.2), duration=1.6, from=0, steps=16, prefix="$", suffix="M")
+total.id("total")
+total.pos = (960, 245)
+
+chart = bar_chart([28, 46, 61, 84], ["Q1", "Q2", "Q3", "Q4"])
+chart.id("chart")
+chart.pos = (960, 560)
+chart.enter("rise", at=s2.t(0.15), duration=1.2)
+
+s2.add([total, chart])

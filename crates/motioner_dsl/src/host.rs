@@ -5,7 +5,7 @@
 //! arguments through [`bind`], so positional/keyword rules and error
 //! messages are identical everywhere.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use motioner_core::{Color, Gradient, Vec2};
 
@@ -17,7 +17,7 @@ use crate::value::Value;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PaintInput {
     Color(Color),
-    Gradient(Rc<Gradient>),
+    Gradient(Arc<Gradient>),
 }
 
 /// A host-side error. The interpreter attaches the span and call stack.
@@ -66,7 +66,7 @@ pub(crate) struct CallValue {
 #[derive(Debug, Default)]
 pub(crate) struct CallArgs {
     pub positional: Vec<CallValue>,
-    pub keywords: Vec<(Rc<str>, CallValue)>,
+    pub keywords: Vec<(Arc<str>, CallValue)>,
 }
 
 /// Arguments bound to a parameter list, with typed accessors that report
@@ -180,9 +180,9 @@ impl Bound<'_> {
         }
     }
 
-    pub fn string_or(&self, index: usize, default: &str) -> HostResult<Rc<str>> {
+    pub fn string_or(&self, index: usize, default: &str) -> HostResult<Arc<str>> {
         match self.get(index) {
-            None => Ok(Rc::from(default)),
+            None => Ok(Arc::from(default)),
             Some(Value::Str(s)) => Ok(s.clone()),
             Some(other) => Err(self.mismatch(index, "a string", other)),
         }

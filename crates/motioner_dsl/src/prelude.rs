@@ -10,6 +10,8 @@
 //! The prelude carries [`VERSION`] with the language: breaking changes need a
 //! migration because trained models depend on it.
 
+use std::sync::OnceLock;
+
 use crate::ast::{Argument, Expr, ExprKind, FunctionDef, Param, Program, Stmt, StmtKind, Target};
 use crate::diagnostic::Span;
 
@@ -53,16 +55,31 @@ pub(crate) fn normalize_span(mut span: Span) -> Span {
     span
 }
 
-/// Parses the prelude and shifts every span into the library range.
+/// The prelude parsed once per process (D-0039 performance debt).
+///
+/// A run never re-lexes or re-parses the library: it clones the cached
+/// statements (function definitions share their bodies through `Arc`) and
+/// binds the definitions straight into the global scope instead of executing
+/// the prelude block. The cache stores the failure too, because a prelude
+/// that does not parse is a build-time bug and re-parsing cannot fix it.
+static LIBRARY: OnceLock<Result<Program, crate::Diagnostic>> = OnceLock::new();
+
+/// The prelude in library coordinates, parsed once per process.
 ///
 /// # Errors
 ///
 /// Returns a diagnostic when the shipped prelude does not parse, which is a
 /// build-time bug rather than a user error.
-pub(crate) fn parse_library() -> Result<Program, crate::Diagnostic> {
-    let mut program = crate::parse(source())?;
-    shift_program(&mut program, LIBRARY_OFFSET, LIBRARY_LINE_OFFSET);
-    Ok(program)
+pub(crate) fn parse_library() -> Result<&'static Program, crate::Diagnostic> {
+    match LIBRARY.get_or_init(|| {
+        crate::parse(source()).map(|mut program| {
+            shift_program(&mut program, LIBRARY_OFFSET, LIBRARY_LINE_OFFSET);
+            program
+        })
+    }) {
+        Ok(program) => Ok(program),
+        Err(error) => Err(error.clone()),
+    }
 }
 
 /// The names the prelude defines at top level, in source order.
@@ -70,7 +87,7 @@ pub(crate) fn parse_library() -> Result<Program, crate::Diagnostic> {
 /// Used by `lint` to warn about shadowing.
 #[must_use]
 pub fn exported_names() -> Vec<String> {
-    let Ok(program) = crate::parse(source()) else {
+    let Ok(program) = parse_library() else {
         return Vec::new();
     };
     program
@@ -83,12 +100,47 @@ pub fn exported_names() -> Vec<String> {
         .collect()
 }
 
-/// Builds the program the interpreter runs: prelude statements followed by
-/// the user's statements.
+/// The prelude's top-level functions, keyed by name, built once per process.
+///
+/// The interpreter consults this map after the user's locals and globals, so
+/// a user definition still shadows a library one and no run pays to copy the
+/// definitions into its global scope.
+pub(crate) fn library_functions(
+) -> &'static std::collections::HashMap<&'static str, std::sync::Arc<FunctionDef>> {
+    static FUNCTIONS: OnceLock<
+        std::collections::HashMap<&'static str, std::sync::Arc<FunctionDef>>,
+    > = OnceLock::new();
+    FUNCTIONS.get_or_init(|| {
+        let Ok(program) = parse_library() else {
+            return std::collections::HashMap::new();
+        };
+        program
+            .body
+            .iter()
+            .filter_map(|statement| match &statement.kind {
+                StmtKind::Def(function) => Some((
+                    &*function.name as &'static str,
+                    std::sync::Arc::clone(function),
+                )),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// Builds the program the interpreter runs and reports how many leading
+/// statements are library definitions.
+///
+/// The definitions are not executed: the interpreter binds them into the
+/// global scope directly (see [`crate::interpreter`]). Cloning them is cheap
+/// because a function body is shared by `Arc`.
 #[must_use]
-pub(crate) fn with_user(mut library: Program, user: Program) -> Program {
-    library.body.extend(user.body);
-    library
+pub(crate) fn with_user(library: &Program, user: Program) -> (Program, usize) {
+    let mut body = Vec::with_capacity(library.body.len() + user.body.len());
+    body.extend(library.body.iter().cloned());
+    let library_len = body.len();
+    body.extend(user.body);
+    (Program { body }, library_len)
 }
 
 fn shift_span(span: &mut Span, byte_offset: usize, line_offset: u32) {
@@ -112,7 +164,7 @@ fn shift_statement(statement: &mut Stmt, byte_offset: usize, line_offset: u32) {
             shift_expr(value, byte_offset, line_offset);
         }
         StmtKind::Def(function) => {
-            shift_function(std::rc::Rc::make_mut(function), byte_offset, line_offset);
+            shift_function(std::sync::Arc::make_mut(function), byte_offset, line_offset);
         }
         StmtKind::Return(value) => {
             if let Some(value) = value {

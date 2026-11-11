@@ -1,0 +1,5 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+plate = rect(700, 140, radius=12, fill="#1B2430")
+plate.pos = (500, 300)
+t = text("On a surface", "Inter", 56, "#FFFFFF", "center")
+t.pos = (500, 300)

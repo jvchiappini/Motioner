@@ -1,0 +1,7 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+a = text("Same size one", "Inter", 40, "#FFFFFF", "center")
+a.pos = (500, 200)
+b = text("Same size two", "Inter", 40, "#FFFFFF", "center")
+b.pos = (500, 300)
+c = text("Same size three", "Inter", 40, "#FFFFFF", "center")
+c.pos = (500, 400)

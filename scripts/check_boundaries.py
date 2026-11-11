@@ -14,6 +14,10 @@ UI (`motioner_ui`) may use the engine's external graphics prefixes (wgpu,
 ferrous), declared as data in ALLOWED_PREFIXES; `motioner_ui` may depend on
 the document, DSL, evaluator and renderer crates but not on I/O, AI, the
 application or the test kit. `motioner_app` may depend on `motioner_ui`.
+`motioner_analysis` is pure over the document and evaluated frames: no DSL,
+renderer, I/O, UI, tools or application. `motioner_tools` orchestrates the
+document, DSL, evaluator, renderer, I/O and analysis, but never the UI,
+application or test kit.
 egui, eframe and guimaker stay forbidden for every crate.
 """
 
@@ -64,6 +68,23 @@ FORBIDDEN_EDGES = {
     ),
     "motioner_ui": (
         "motioner_io",
+        "motioner_ai",
+        "motioner_app",
+        "motioner_testkit",
+    ),
+    "motioner_analysis": (
+        "motioner_render",
+        "motioner_io",
+        "motioner_ui",
+        "motioner_ai",
+        "motioner_app",
+        "motioner_tools",
+        "motioner_testkit",
+    ),
+    # The tool runtime orchestrates render and I/O but never the window, the
+    # application wiring or the test kit.
+    "motioner_tools": (
+        "motioner_ui",
         "motioner_ai",
         "motioner_app",
         "motioner_testkit",

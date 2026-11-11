@@ -251,3 +251,40 @@ def exit_all(nodes, kind="fade", at=0.0, stagger=0.6, duration=3.0):
     for node in nodes:
         exit(node, kind, at + step * index, duration)
         index = index + 1
+
+
+# A number ticker: one text layer per step, switched with hold opacity keys.
+# MDF text content is static, so counting is expressed as a visible sequence
+# of values instead of an animatable string. `steps` is capped at 60 layers.
+def count_up(to, at=0.0, duration=4.0, from=0.0, steps=24, prefix="", suffix=""):
+    d = beat(duration)
+    n = int(steps)
+    if n < 1:
+        n = 1
+    if n > 60:
+        n = 60
+    g = group()
+    g.name = "count_up"
+    step_time = d / n
+    for i in range(n):
+        value = to
+        if n > 1:
+            value = from + (to - from) * i / (n - 1)
+        label = text(prefix + str(int(value)) + suffix, token("font:body"), token("h1"), token("text"), "center", 700)
+        label.name = "count_up.value"
+        label.pos = (0.0, 0.0)
+        start = at + step_time * i
+        end = at + step_time * (i + 1)
+        if start > 0.0:
+            label.key("opacity", 0.0, 0.0)
+        label.key("opacity", start, 1.0, ease="hold")
+        label.key("opacity", end, 0.0, ease="hold")
+        g.add(label)
+    return g
+
+
+# The count-up exit: the whole ticker fades like any group.
+def count_up_hold(group_node, at, duration=4.0):
+    group_node.key("opacity", at, 1.0)
+    group_node.key("opacity", at + beat(duration), 1.0)
+    return group_node

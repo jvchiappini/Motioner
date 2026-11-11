@@ -1,7 +1,7 @@
 //! Canonical printer regressions (prompt 12 phase 7).
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use motioner_dsl::ast::{Expr, ExprKind, FunctionDef, Program, Stmt, StmtKind, Target};
 use motioner_dsl::printer::{format, format_check, format_signature, format_snippet};
@@ -226,7 +226,7 @@ fn clear_stmt(stmt: &mut Stmt) {
             clear_target(target);
             clear_expr(value);
         }
-        StmtKind::Def(def) => clear_def(Rc::make_mut(def)),
+        StmtKind::Def(def) => clear_def(Arc::make_mut(def)),
         StmtKind::If {
             branches,
             otherwise,

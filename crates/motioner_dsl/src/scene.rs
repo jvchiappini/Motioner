@@ -5,7 +5,6 @@
 //! every mutation goes through the `motioner_core::Document` API.
 
 use std::fmt::Write as _;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use motioner_core::{
@@ -412,7 +411,7 @@ impl Scene {
         theme
             .validate_contrast()
             .map_err(|error| HostError::value_error(format!("theme(): {error}")))?;
-        Ok(Value::Theme(Rc::new(theme.clone())))
+        Ok(Value::Theme(Arc::new(theme.clone())))
     }
 
     /// `use_theme(t)`: makes `t` the default for constructors and setters.
@@ -440,7 +439,7 @@ impl Scene {
         let bound = bind("token", &["name"], 1, args)?;
         let name = bound.string_or(0, "")?;
         if let Some(color) = self.theme.color(&name) {
-            return Ok(Value::Str(Rc::from(color.to_hex())));
+            return Ok(Value::Str(Arc::from(color.to_hex())));
         }
         let height = self.composition_height()?;
         if let Some(size) = self.theme.size(&name, height) {
@@ -453,10 +452,10 @@ impl Scene {
             return Ok(Value::Number(radius));
         }
         if let Some(ease) = self.theme.ease(&name) {
-            return Ok(Value::Str(Rc::from(ease.mdf_value())));
+            return Ok(Value::Str(Arc::from(ease.mdf_value())));
         }
         if let Some(font) = self.theme.font(name.strip_prefix("font:").unwrap_or("")) {
-            return Ok(Value::Str(Rc::from(font)));
+            return Ok(Value::Str(Arc::from(font)));
         }
         if let Some(weight) = match &*name {
             "weight_display" => Some(self.theme.display_weight),
@@ -975,7 +974,7 @@ impl Scene {
         match value {
             None => Ok(default),
             Some(Value::None) => Ok(None),
-            Some(Value::Gradient(gradient)) => Ok(Some(PaintInput::Gradient(Rc::clone(gradient)))),
+            Some(Value::Gradient(gradient)) => Ok(Some(PaintInput::Gradient(Arc::clone(gradient)))),
             Some(Value::Str(text)) => {
                 let color = self.resolve_color(text)?;
                 Ok(Some(PaintInput::Color(color)))
@@ -1082,7 +1081,7 @@ impl Scene {
             | ContentField::Color
             | ContentField::FillStopColor(_)
             | ContentField::StrokeStopColor(_) => {
-                Ok(Value::Str(Rc::from(self.resolve_color(text)?.to_hex())))
+                Ok(Value::Str(Arc::from(self.resolve_color(text)?.to_hex())))
             }
             ContentField::Width
             | ContentField::Height
@@ -1731,8 +1730,8 @@ impl Scene {
             "opacity" => Value::Number(transform.opacity.value()),
             "name" => node
                 .name()
-                .map_or(Value::None, |name| Value::Str(Rc::from(name))),
-            "blend" => Value::Str(Rc::from(node.blend().name())),
+                .map_or(Value::None, |name| Value::Str(Arc::from(name))),
+            "blend" => Value::Str(Arc::from(node.blend().name())),
             "visible" => Value::Bool(node.is_visible()),
             _ => content_value_of(node.content(), name).ok_or_else(|| unknown_attribute(name))?,
         };
@@ -2030,7 +2029,7 @@ impl Scene {
     ) -> HostResult<()> {
         let mut args = CallArgs::default();
         args.positional.push(CallValue {
-            value: Value::Str(Rc::from(property)),
+            value: Value::Str(Arc::from(property)),
             span,
             literal: Some(Literal::Text),
             origin: crate::origins::ExpressionOrigin::Literal(Literal::Text),
@@ -2048,7 +2047,7 @@ impl Scene {
             origin: crate::origins::ExpressionOrigin::Computed,
         });
         args.keywords.push((
-            Rc::from("ease"),
+            Arc::from("ease"),
             CallValue {
                 value: Value::Ease(ease),
                 span,
@@ -2860,18 +2859,18 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
     let field = ContentField::from_name(name)?;
     Some(match content.static_value(field)? {
         ContentValue::Number(number) => Value::Number(number),
-        ContentValue::Color(Some(color)) => Value::Str(Rc::from(color.to_hex())),
+        ContentValue::Color(Some(color)) => Value::Str(Arc::from(color.to_hex())),
         ContentValue::Color(None) | ContentValue::Gradient(None) => Value::None,
-        ContentValue::Text(text) => Value::Str(Rc::from(text)),
-        ContentValue::Align(align) => Value::Str(Rc::from(match align {
+        ContentValue::Text(text) => Value::Str(Arc::from(text)),
+        ContentValue::Align(align) => Value::Str(Arc::from(match align {
             TextAlign::Left => "left",
             TextAlign::Center => "center",
             TextAlign::Right => "right",
         })),
-        ContentValue::Cap(cap) => Value::Str(Rc::from(cap.name())),
-        ContentValue::Join(join) => Value::Str(Rc::from(join.name())),
-        ContentValue::Fit(fit) => Value::Str(Rc::from(fit.name())),
-        ContentValue::Gradient(Some(gradient)) => Value::Gradient(Rc::new(gradient)),
+        ContentValue::Cap(cap) => Value::Str(Arc::from(cap.name())),
+        ContentValue::Join(join) => Value::Str(Arc::from(join.name())),
+        ContentValue::Fit(fit) => Value::Str(Arc::from(fit.name())),
+        ContentValue::Gradient(Some(gradient)) => Value::Gradient(Arc::new(gradient)),
     })
 }
 

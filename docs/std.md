@@ -145,3 +145,33 @@ c.place("center", x=0.66, y=0.58)
 - Design analysis (`check_design`, `motion_report`), render tools, media
   analysis and the `motioner tool` runtime are prompts 13 phases 7–10 and are
   tracked as `T-DSL-0020`, `T-DSL-0021`, `T-DSL-0022` and `T-AI-0003`.
+
+## count_up
+
+`count_up(to, at=0.0, duration=4.0, from=0.0, steps=24, prefix="", suffix="")`
+returns a group named `count_up` with one text layer per displayed value.
+Values are switched with `hold` opacity keys, so exactly one layer is visible
+at a time:
+
+```python
+counter = count_up(250, at=0.5, duration=2.0, steps=12, prefix="$", suffix="k")
+counter.pos = (960, 540)
+```
+
+MDF text content is static, so this is a visible sequence rather than an
+animatable string; `steps` is capped at 60 layers. See the D-0039 addendum
+for the trade-off.
+
+## Prelude cost
+
+Since prompt 13b the prelude is parsed once per process and its definitions
+are read through a shared table instead of being executed on every run. On
+`examples/showcase_pro.motion` (release, 200 runs) the median execution is
+1.28 ms with the prelude vs 1.29 ms without: the prelude cost is the
+~0.04 ms clone of the cached statements, far below the 0.2 ms budget.
+
+## Rules
+
+Every preset and component passes `check_design` on its own; the rules and
+their thresholds are in `docs/design-rules.md`, and the defect fixtures live
+in `examples/design_defects/`.

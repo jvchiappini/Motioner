@@ -7,7 +7,7 @@
 //!
 //! Engine types (`ferrous_*`, `wgpu`, `glam`) are an implementation detail: no
 //! public signature or public error payload in this crate mentions them, with
-//! one documented exception. The `live` cargo feature exposes [`LivePainter`],
+//! one documented exception. The `live` cargo feature exposes `LivePainter`,
 //! whose `new` and `paint` methods name [`ferrous_renderer::Renderer`] so the
 //! editor can paint the same plan into the window's `Pure2D` pass. The default
 //! build stays engine-free at the API boundary.
@@ -26,6 +26,9 @@ mod paths;
 mod shapes;
 mod space;
 mod text;
+/// Agent render tools: overlays, strips, sheets, zoom, compare, cache and the
+/// textless background render (D-0043 phase 8).
+pub mod tools;
 
 pub use fit::ViewFit;
 pub use fonts::{CpuTextMetrics, FontFace, FontFamilyError, FontSet, FontWarning, ResolvedFace};

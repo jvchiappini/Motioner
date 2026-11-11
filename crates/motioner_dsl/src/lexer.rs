@@ -4,7 +4,7 @@
 //! and comment-only lines do not affect indentation; newlines inside
 //! brackets join lines.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, ErrorCategory, Span};
 use crate::token::{Keyword, Op, Token, TokenKind};
@@ -251,7 +251,7 @@ impl<'s> Lexer<'s> {
         let text = &self.source[mark.byte..self.byte_offset()];
         let kind = match Keyword::from_ident(text) {
             Some(keyword) => TokenKind::Keyword(keyword),
-            None => TokenKind::Name(Rc::from(text)),
+            None => TokenKind::Name(Arc::from(text)),
         };
         self.push(kind, mark);
         Ok(())
@@ -278,7 +278,7 @@ impl<'s> Lexer<'s> {
                 Some(c) => value.push(c),
             }
         }
-        self.push(TokenKind::Str(Rc::from(value)), mark);
+        self.push(TokenKind::Str(Arc::from(value)), mark);
         Ok(())
     }
 
@@ -391,7 +391,7 @@ mod tests {
     }
 
     fn name(text: &str) -> TokenKind {
-        TokenKind::Name(Rc::from(text))
+        TokenKind::Name(Arc::from(text))
     }
 
     #[test]
@@ -440,8 +440,8 @@ mod tests {
                 TokenKind::Number(1.0),
                 TokenKind::Number(2.5),
                 TokenKind::Number(300.0),
-                TokenKind::Str(Rc::from("a\n")),
-                TokenKind::Str(Rc::from("\\d")),
+                TokenKind::Str(Arc::from("a\n")),
+                TokenKind::Str(Arc::from("\\d")),
                 TokenKind::Op(Op::SlashSlash),
                 TokenKind::Op(Op::NotEq),
                 TokenKind::Op(Op::Le),

@@ -7,7 +7,6 @@
 //! iterated.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use motioner_core::{Document, NodeId};
@@ -113,6 +112,48 @@ pub fn execute_detailed_with_metrics(
     limits: &Limits,
     metrics: &dyn TextMetrics,
 ) -> Result<Execution, Diagnostic> {
+    run(program, 0, limits, metrics)
+}
+
+/// Executes a program whose first `library_len` statements are standard
+/// library definitions, with text metrics installed (D-0039 performance).
+///
+/// The library definitions are bound into the global scope directly; the
+/// block is never walked, so a run pays for the user's code only.
+///
+/// # Errors
+///
+/// Same as [`execute`].
+pub(crate) fn execute_library_with_metrics(
+    program: &Program,
+    library_len: usize,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+) -> Result<Document, Diagnostic> {
+    execute_library_detailed_with_metrics(program, library_len, limits, metrics)
+        .map(|execution| execution.document)
+}
+
+/// [`execute_library_with_metrics`] returning the bindings and origins too.
+///
+/// # Errors
+///
+/// Same as [`execute`].
+pub(crate) fn execute_library_detailed_with_metrics(
+    program: &Program,
+    library_len: usize,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+) -> Result<Execution, Diagnostic> {
+    run(program, library_len, limits, metrics)
+}
+
+fn run(
+    program: &Program,
+    library_len: usize,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+) -> Result<Execution, Diagnostic> {
     let mut interpreter = Interpreter {
         limits,
         metrics,
@@ -129,10 +170,14 @@ pub fn execute_detailed_with_metrics(
         scene: Scene::new(limits.max_nodes),
         name_notes: Vec::new(),
     };
-    interpreter.exec_block(&program.body)?;
+    // The library is a fixed set of definitions: it is never walked and never
+    // copied into the global scope. Lookups fall back to the shared table, so
+    // a user definition still shadows a library name.
+    let split = library_len.min(program.body.len());
+    interpreter.exec_block(&program.body[split..])?;
     let bindings = interpreter.bindings();
     let mut origins = interpreter.scene.origins().clone();
-    origins.finalize(program);
+    origins.finalize(&program.body[split..]);
     origins.mark_returned(&interpreter.returned);
     let mut document = interpreter.scene.into_document().ok_or_else(|| {
         let start = Span {
@@ -163,18 +208,18 @@ enum Flow {
 }
 
 struct CallFrame {
-    function: Rc<str>,
+    function: Arc<str>,
     function_id: NameId,
     call_span: Span,
     definition: Span,
-    parameters: Vec<(Rc<str>, NameId)>,
+    parameters: Vec<(Arc<str>, NameId)>,
     defaults: Vec<Option<Span>>,
-    locals: HashMap<Rc<str>, Value>,
+    locals: HashMap<Arc<str>, Value>,
 }
 
 struct LoopFrame {
     span: Span,
-    variables: Rc<[(Rc<str>, NameId)]>,
+    variables: Arc<[(Arc<str>, NameId)]>,
     iterable: Span,
     body: Span,
     indent: u16,
@@ -190,7 +235,7 @@ struct BlockFrame {
 struct Interpreter<'l> {
     limits: &'l Limits,
     metrics: &'l dyn TextMetrics,
-    globals: HashMap<Rc<str>, Value>,
+    globals: HashMap<Arc<str>, Value>,
     frames: Vec<CallFrame>,
     /// Enclosing loops at runtime, outermost first.
     loops: Vec<LoopFrame>,
@@ -200,7 +245,7 @@ struct Interpreter<'l> {
     /// outermost first.
     index_path: Vec<i64>,
     /// How many times each user function has been called in this run.
-    call_counts: HashMap<Rc<str>, i64>,
+    call_counts: HashMap<Arc<str>, i64>,
     /// `(node, call-site span)` pairs for every function return that produced
     /// a node; origins are marked after the run.
     returned: Vec<(NodeId, Span)>,
@@ -365,22 +410,27 @@ impl Interpreter<'_> {
     }
 
     /// Looks up a user-defined function without calling into builtins.
-    fn lookup_function(&self, name: &str) -> Option<Rc<FunctionDef>> {
+    fn lookup_function(&self, name: &str) -> Option<Arc<FunctionDef>> {
         if let Some(Value::Function(function)) =
             self.frames.last().and_then(|frame| frame.locals.get(name))
         {
-            return Some(Rc::clone(function));
+            return Some(Arc::clone(function));
         }
-        match self.globals.get(name) {
-            Some(Value::Function(function)) => Some(Rc::clone(function)),
-            _ => None,
+        if let Some(Value::Function(function)) = self.globals.get(name) {
+            return Some(Arc::clone(function));
         }
+        crate::prelude::library_functions()
+            .get(name)
+            .map(Arc::clone)
     }
 
     fn lookup(&self, name: &str, span: Span) -> Exec<Value> {
         let local = self.frames.last().and_then(|frame| frame.locals.get(name));
         if let Some(value) = local.or_else(|| self.globals.get(name)) {
             return Ok(value.clone());
+        }
+        if let Some(function) = crate::prelude::library_functions().get(name) {
+            return Ok(Value::Function(Arc::clone(function)));
         }
         Builtin::from_name(name).map(Value::Builtin).ok_or_else(|| {
             self.diagnostic(
@@ -391,7 +441,7 @@ impl Interpreter<'_> {
         })
     }
 
-    fn store(&mut self, name: Rc<str>, value: Value) {
+    fn store(&mut self, name: Arc<str>, value: Value) {
         match self.frames.last_mut() {
             Some(frame) => frame.locals.insert(name, value),
             None => self.globals.insert(name, value),
@@ -474,7 +524,7 @@ impl Interpreter<'_> {
 
     fn exec_for(
         &mut self,
-        variables: &[Rc<str>],
+        variables: &[Arc<str>],
         iterable: &Expr,
         body: &[Stmt],
         span: Span,
@@ -492,18 +542,18 @@ impl Interpreter<'_> {
 
     fn run_loop(
         &mut self,
-        variables: &[Rc<str>],
+        variables: &[Arc<str>],
         body: &[Stmt],
         span: Span,
         iterable: Span,
         values: impl Iterator<Item = Value>,
     ) -> Exec<Flow> {
         let body_origin = BlockOrigin::of(body);
-        let variable_ids: Vec<(Rc<str>, NameId)> = variables
+        let variable_ids: Vec<(Arc<str>, NameId)> = variables
             .iter()
-            .map(|variable| (Rc::clone(variable), self.scene.intern_name(variable)))
+            .map(|variable| (Arc::clone(variable), self.scene.intern_name(variable)))
             .collect();
-        let variables: Rc<[(Rc<str>, NameId)]> = Rc::from(variable_ids);
+        let variables: Arc<[(Arc<str>, NameId)]> = Arc::from(variable_ids);
         for (index, value) in values.enumerate() {
             let iteration = i64::try_from(index).unwrap_or(i64::MAX);
             let iteration_value = iteration_value_of(&value);
@@ -513,7 +563,7 @@ impl Interpreter<'_> {
             // also part of the display-name path (outermost first).
             self.loops.push(LoopFrame {
                 span,
-                variables: Rc::clone(&variables),
+                variables: Arc::clone(&variables),
                 iterable,
                 body: body_origin.span,
                 indent: body_origin.indent,
@@ -539,12 +589,12 @@ impl Interpreter<'_> {
     /// `for i, x in enumerate(...)`.
     fn bind_loop_value(
         &mut self,
-        variables: &[(Rc<str>, NameId)],
+        variables: &[(Arc<str>, NameId)],
         value: Value,
         span: Span,
     ) -> Exec<()> {
         if let [(name, _)] = variables {
-            self.store(Rc::clone(name), value);
+            self.store(Arc::clone(name), value);
             return Ok(());
         }
         let (Value::List(items) | Value::Tuple(items)) = &value else {
@@ -571,7 +621,7 @@ impl Interpreter<'_> {
             ));
         }
         for ((name, _), item) in variables.iter().zip(items.iter()) {
-            self.store(Rc::clone(name), item.clone());
+            self.store(Arc::clone(name), item.clone());
         }
         Ok(())
     }
@@ -785,7 +835,7 @@ impl Interpreter<'_> {
                 let bytes = combined_len(a.len(), b.len())?;
                 self.limits.check_string_len(bytes)?;
                 self.budget.charge_string(bytes)?;
-                Ok(Value::Str(Rc::from(format!("{a}{b}"))))
+                Ok(Value::Str(Arc::from(format!("{a}{b}"))))
             }
             (BinaryOp::Add, Value::List(a), Value::List(b)) => {
                 let len = combined_len(a.borrow().len(), b.borrow().len())?;
@@ -913,7 +963,7 @@ impl Interpreter<'_> {
 
     fn call_function(
         &mut self,
-        function: &Rc<FunctionDef>,
+        function: &Arc<FunctionDef>,
         args: CallArgs,
         span: Span,
     ) -> Exec<Value> {
@@ -936,7 +986,7 @@ impl Interpreter<'_> {
         let bound =
             bind(&function.name, &names, required, args).map_err(|e| self.host_error(span, e))?;
         let has_defaults = function.params.iter().any(|param| param.default.is_some());
-        let locals: HashMap<Rc<str>, Value> = if has_defaults {
+        let locals: HashMap<Arc<str>, Value> = if has_defaults {
             let mut locals = HashMap::with_capacity(function.params.len());
             for (param, value) in function.params.iter().zip(bound.into_values()) {
                 let value = match value {
@@ -972,10 +1022,10 @@ impl Interpreter<'_> {
         } else {
             Vec::new()
         };
-        let parameters: Vec<(Rc<str>, NameId)> = function
+        let parameters: Vec<(Arc<str>, NameId)> = function
             .params
             .iter()
-            .map(|param| (Rc::clone(&param.name), self.scene.intern_name(&param.name)))
+            .map(|param| (Arc::clone(&param.name), self.scene.intern_name(&param.name)))
             .collect();
         self.frames.push(CallFrame {
             function: function.name.clone(),
@@ -1159,7 +1209,7 @@ fn index_value(object: &Value, index: &Value, budget: &mut Budget) -> HostResult
             budget.charge_items(s.len())?;
             let count = s.chars().count();
             let i = resolve_index(index, count)?;
-            Ok(Value::Str(Rc::from(
+            Ok(Value::Str(Arc::from(
                 s.chars().nth(i).map(String::from).unwrap_or_default(),
             )))
         }

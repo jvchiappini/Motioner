@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use motioner_core::{Frame, NodeId};
 
-use crate::ast::{Expr, ExprKind, Program, Stmt, StmtKind, Target};
+use crate::ast::{Expr, ExprKind, Stmt, StmtKind, Target};
 use crate::diagnostic::Span;
 
 /// An interned identifier in a [`ValueOrigins`] table.
@@ -382,9 +382,12 @@ impl ValueOrigins {
 
     /// Completes the binding facts that need the whole program: whether a
     /// bound variable is assigned again later in its block.
-    pub(crate) fn finalize(&mut self, program: &Program) {
+    ///
+    /// `body` is the user's statements: origins only ever point at them, and
+    /// scanning the library too would make every run pay for it.
+    pub(crate) fn finalize(&mut self, body: &[crate::ast::Stmt]) {
         let mut assigned_later: HashMap<usize, Vec<String>> = HashMap::new();
-        collect_assigned_later(&program.body, &mut assigned_later);
+        collect_assigned_later(body, &mut assigned_later);
         for origin in &mut self.nodes {
             for binding in &mut origin.bindings {
                 let binding_name = &self.names[binding.name.index()];

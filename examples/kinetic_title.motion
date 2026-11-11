@@ -1,0 +1,58 @@
+# mdf: 0.1
+#
+# KINETIC TITLE — a 6 s std example (prompt 13 phase 11).
+#
+# Prompt (see kinetic_title.prompt.md):
+#   "A bold editorial title card for a design studio reel: kicker, giant
+#    headline, an accent rule, then a short tagline. Calm, confident, no
+#    gimmicks."
+#
+# Plan (D-0040 section 2), one scene block per beat:
+#   0.0-3.0 s  scene "title"    kicker -> headline -> accent rule
+#   3.0-6.0 s  scene "tagline"  two lines, staggered
+#   Tempo 120, the editorial theme's type scale and motion tokens.
+#
+# Render:
+#   motioner render examples/kinetic_title.motion --out out/kinetic_title.mp4
+
+comp(name="Kinetic Title", width=1920, height=1080, fps=60, duration=6.0, theme="editorial")
+use_theme(theme("editorial"))
+
+backdrop = background("gradient_drift")
+backdrop.id("backdrop")
+backdrop.pos = (960, 540)
+
+# ---- scene 1: the title ----------------------------------------------------
+s1 = scene("title", 0.0, 3.6)
+
+kicker = text("STUDIO REEL 2026", token("font:body"), token("label"), token("accent"), "center", 600)
+kicker.id("kicker")
+kicker.pos = (960, 400)
+kicker.reveal("fade", at=0.2, duration=1.2)
+
+headline = text("MAKE IT MOVE", token("font:body"), token("h1"), token("text"), "center", 700)
+headline.id("headline")
+headline.pos = (960, 520)
+headline.reveal("rise", at=0.5, duration=1.6)
+
+rule = rect(520, 5, 2.5, fill="accent")
+rule.id("rule")
+rule.pos = (960, 610)
+rule.enter("wipe", at=1.0, duration=1.0)
+
+s1.add([kicker, headline, rule])
+
+# ---- scene 2: the tagline -------------------------------------------------
+s2 = scene("tagline", 3.6, 2.4)
+
+line_a = text("Motion design that behaves", token("font:body"), token("h3"), token("text"), "center", 500)
+line_a.id("line_a")
+line_a.pos = (960, 500)
+line_a.reveal("rise", at=s2.t(0.2), duration=1.2)
+
+line_b = text("like the product it sells", token("font:body"), token("h3"), token("muted"), "center", 400)
+line_b.id("line_b")
+line_b.pos = (960, 580)
+line_b.reveal("rise", at=s2.t(0.45), duration=1.2)
+
+s2.add([line_a, line_b])

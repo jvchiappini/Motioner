@@ -17,6 +17,9 @@ motioner_dsl.workspace = true
 motioner_io.workspace = true
 motioner_render.workspace = true
 motioner_ui.workspace = true
+motioner_analysis.workspace = true
+motioner_tools.workspace = true
+serde_json = "1.0"
 anyhow.workspace = true
 # Native folder picker, application-only (D-0046).
 rfd = "0.15"

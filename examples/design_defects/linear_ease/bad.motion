@@ -1,0 +1,5 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+r = rect(200, 200, fill="#5B8CFF")
+r.pos = (200, 300)
+r.key("rotation", 0.0, 0.0)
+r.key("rotation", 1.0, 90.0, ease="linear")

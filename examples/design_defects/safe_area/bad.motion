@@ -1,0 +1,3 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+t = text("Too close", "Inter", 64, "#FFFFFF", "left")
+t.pos = (4, 40)
