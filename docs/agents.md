@@ -376,19 +376,27 @@ motioner query <file> [--frame N] [--node ID | --rig NAME|all]
 `--rig NAME` prints the typed rig manifest instead of the scene (D-0056), and
 `--rig all` prints every rig. `motioner query rig <file> <instance>` is the
 positional alias. The manifest lists parts with their node identities,
-properties with type/range/step/group/mirror, poses, clips, layers, aims and
-the machine, so an agent can drive a rig by name without reading the program:
+properties with type/range/step/group/mirror and their authored keys, poses,
+clips, layers, aims and the machine, so an agent can drive a rig by name
+without reading the program:
 
 ```json
-{"version":1,"rigs":[{"id":"@636/c465/svg#mascot","name":"mascot",
+{"version":2,"rigs":[{"id":"@636/c465/svg#mascot","name":"mascot",
  "parts":[{"id":"mouth-line","node":"@636/c465/svg#mouth-line"}],
  "properties":[{"name":"lt_L","kind":"float","angle":false,"default":0,
                 "min":0,"max":1,"step":0.01,"values":[],"group":"lid",
-                "mirror":{"group":"lid","side":"left","flip":false}}],
+                "mirror":{"group":"lid","side":"left","flip":false},
+                "keys":[{"frame":0,"value":0,"ease":"linear"}]}],
  "poses":[{"name":"Feliz","reset":true,"values":[{"property":"mouth_open","value":9}]}],
  "clips":[{"name":"salto","length":134.4,"keys":[{"property":"sy","frame":0,"value":0.58,"ease":"cubic_out"}]}],
  "machine":{"default":"calm","inputs":[{"name":"mood","kind":"enum","values":["calm","sad","happy"]}]}}]}
 ```
+
+The `rig_*` tools in `motioner tools --schema` read this manifest and edit the
+same calls: `rig_list`, `rig_manifest`, `rig_set`, `rig_key`,
+`rig_key_input`, `rig_apply_pose`, `rig_play_clip` and `rig_save_pose`. Each
+mutation is write-through, one undo step, and refused with a reason when the
+declaration lives in a used module (D-0057).
 
 Prints the scene at a frame (0 by default):
 

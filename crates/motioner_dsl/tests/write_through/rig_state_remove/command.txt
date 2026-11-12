@@ -1,0 +1,4 @@
+RemoveState {
+    rig: "mascot",
+    name: "happy",
+}

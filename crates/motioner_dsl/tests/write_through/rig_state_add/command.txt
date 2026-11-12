@@ -1,0 +1,10 @@
+AddState {
+    rig: "mascot",
+    name: "extra",
+    pose: Some(
+        "Neutral",
+    ),
+    clip: None,
+    speed: 1.0,
+    looping: true,
+}

@@ -239,6 +239,16 @@ fn property_json(json: &mut Json, property: &RigPropertyManifest) {
             json.null();
         }
     }
+    json.key("keys").begin_array();
+    for key in &property.keys {
+        json.begin_object();
+        json.key("frame").number(key.frame);
+        json.key("value");
+        value_json(json, &key.value);
+        json.key("ease").string(&key.ease);
+        json.end_object();
+    }
+    json.end_array();
     json.end_object();
 }
 

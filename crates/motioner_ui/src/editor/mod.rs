@@ -15,6 +15,7 @@ mod graph;
 mod query;
 mod rebind;
 mod resolve;
+mod rig_edit;
 mod rig_json;
 mod view;
 

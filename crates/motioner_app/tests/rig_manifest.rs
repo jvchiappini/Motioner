@@ -93,7 +93,7 @@ fn query_prints_the_manifest_of_one_instance() {
     let json = editor
         .rig_manifest_json(Some("mascot"))
         .expect("the rig is in the manifest");
-    assert!(json.starts_with("{\"version\":1,\"rigs\":["));
+    assert!(json.starts_with("{\"version\":2,\"rigs\":["));
     assert!(json.contains("\"name\":\"mascot\""));
     assert!(json.contains("\"kind\":\"blink\""));
 

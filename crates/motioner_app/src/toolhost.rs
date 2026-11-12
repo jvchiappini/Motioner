@@ -288,6 +288,22 @@ impl Host for AppHost {
         }))
     }
 
+    fn rig_edit(&mut self, edit: &motioner_dsl::RigEdit) -> Result<Value, ToolError> {
+        self.editor
+            .apply_rig_edit(edit)
+            .map_err(|error| ToolError::Host(error.to_string()))?;
+        self.editor
+            .flush_now()
+            .map_err(|error| ToolError::Host(error.to_string()))?;
+        self.refresh();
+        let (undo, _) = self.editor.history();
+        Ok(json!({
+            "ok": true,
+            "diff": self.editor.last_diff(),
+            "checkpoint": format!("undo:{undo}"),
+        }))
+    }
+
     fn apply_code_edit(&mut self, file: &str, edits: &[Value]) -> Result<Value, ToolError> {
         let path = self.target.composition.clone();
         let same_file = Path::new(file)
@@ -511,5 +527,175 @@ impl AppHost {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use serde_json::json;
+
+    use super::AppHost;
+    use motioner_tools::{execute, Host, Runtime};
+
+    fn root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn project(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("motioner_rig_tools_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("examples/rig/assets")).unwrap();
+        std::fs::create_dir_all(dir.join("compositions")).unwrap();
+        std::fs::write(
+            dir.join("project.motion"),
+            "project(version=1, name=\"Rig tools\", width=1920, height=1080, fps=60, \
+             duration=900, background=\"#000000\", main=\"main\")\n\
+             composition(slug=\"main\", title=\"Main\")\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            root().join("examples/rig/mascot_demo.motion"),
+            dir.join("compositions/main.motion"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root().join("examples/rig/mascot.motion"),
+            dir.join("examples/rig/mascot.motion"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root().join("examples/rig/assets/mascot.svg"),
+            dir.join("examples/rig/assets/mascot.svg"),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn call(
+        host: &mut AppHost,
+        runtime: &mut Runtime,
+        name: &str,
+        args: serde_json::Value,
+        dir: &Path,
+    ) -> serde_json::Value {
+        execute(name, &args, runtime, host, dir).unwrap().result
+    }
+
+    #[test]
+    fn every_rig_tool_runs_on_the_mascot_demo() {
+        let dir = project("contract");
+        let mut host = AppHost::open(&dir).unwrap();
+        let mut runtime = Runtime::default();
+
+        let list = call(&mut host, &mut runtime, "rig_list", json!({}), &dir);
+        assert_eq!(list["rigs"][0]["name"], "mascot");
+
+        let manifest = call(
+            &mut host,
+            &mut runtime,
+            "rig_manifest",
+            json!({"instance": "mascot"}),
+            &dir,
+        );
+        assert_eq!(manifest["version"], 2);
+        assert_eq!(manifest["rigs"][0]["name"], "mascot");
+        assert!(manifest["rigs"][0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|property| property["name"] == "look" && property["keys"].is_array()));
+
+        let set = call(
+            &mut host,
+            &mut runtime,
+            "rig_set",
+            json!({"rig": "mascot", "property": "look", "value": [0.2, -0.1]}),
+            &dir,
+        );
+        assert_eq!(set["ok"], true);
+        assert!(host.program_source().contains("m.look.set((0.2, -0.1))"));
+
+        let key = call(
+            &mut host,
+            &mut runtime,
+            "rig_key",
+            json!({"rig": "mascot", "property": "mouth_open", "time": 2.0, "value": 12}),
+            &dir,
+        );
+        assert_eq!(key["ok"], true);
+
+        let pose = call(
+            &mut host,
+            &mut runtime,
+            "rig_apply_pose",
+            json!({"rig": "mascot", "pose": "Feliz", "at": 5.5, "dur": 0.25, "ease": "cubic_out"}),
+            &dir,
+        );
+        assert_eq!(pose["ok"], true);
+
+        let play = call(
+            &mut host,
+            &mut runtime,
+            "rig_play_clip",
+            json!({"rig": "mascot", "clip": "salto", "at": 11.0, "loops": 2, "speed": 0.5}),
+            &dir,
+        );
+        assert_eq!(play["ok"], true);
+
+        let input = call(
+            &mut host,
+            &mut runtime,
+            "rig_key_input",
+            json!({"rig": "mascot", "property": "mood", "time": 13.4, "value": "sad"}),
+            &dir,
+        );
+        assert_eq!(input["ok"], true);
+
+        let saved = call(
+            &mut host,
+            &mut runtime,
+            "rig_save_pose",
+            json!({"rig": "mascot", "pose": "ToolPose", "reset": true,
+                   "values": {"mouth_open": 8, "sx": 1.1}}),
+            &dir,
+        );
+        assert_eq!(saved["ok"], true);
+        let manifest = call(
+            &mut host,
+            &mut runtime,
+            "rig_manifest",
+            json!({"instance": "mascot"}),
+            &dir,
+        );
+        assert!(manifest["rigs"][0]["poses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pose| pose["name"] == "ToolPose"));
+        assert!(manifest["rigs"][0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|property| property["name"] == "mouth_open")
+            .unwrap()["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key["frame"] == 120.0));
+
+        let bad = execute(
+            "rig_key_input",
+            &json!({"rig": "mascot", "property": "sx", "time": 1.0, "value": 1}),
+            &mut runtime,
+            &mut host,
+            &dir,
+        );
+        assert!(bad.is_err(), "sx is not a machine input");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

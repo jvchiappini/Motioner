@@ -1,0 +1,7 @@
+Play {
+    rig: "mascot",
+    clip: "jump",
+    at: 1.0,
+    loops: 2,
+    speed: 1.0,
+}

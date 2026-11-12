@@ -13,8 +13,9 @@ use motioner_core::{
     Property, PropertyValue, RigAimManifest, RigClipKeyManifest, RigClipManifest, RigEventManifest,
     RigInputManifest, RigInstanceManifest, RigLayerManifest, RigMachineManifest, RigManifest,
     RigMirrorManifest, RigMirrorSide, RigPartManifest, RigPlayManifest, RigPoseManifest,
-    RigPoseTrackManifest, RigPropertyManifest, RigPropertyValue, RigStateManifest,
-    RigTransitionManifest, RigValue, RigValueKind, Symbol, SymbolPart, SymbolShape, Vec2,
+    RigPoseTrackManifest, RigPropertyKeyManifest, RigPropertyManifest, RigPropertyValue,
+    RigStateManifest, RigTransitionManifest, RigValue, RigValueKind, Symbol, SymbolPart,
+    SymbolShape, Vec2,
 };
 use motioner_rig as rig_rt;
 
@@ -23,6 +24,7 @@ use crate::ast::{
     BinaryOp, CompareOp, Expr as AstExpr, ExprKind, FunctionDef, LogicalOp, Stmt, StmtKind, UnaryOp,
 };
 use crate::host::{as_vec2, bind, CallArgs, HostError, HostResult};
+use crate::origins::NodeOrigin;
 use crate::value::{RigMethod, Value};
 
 /// One node created from a symbol part.
@@ -288,6 +290,14 @@ impl Scene {
                     .reparent(child, root)
                     .map_err(|error| core_error(&error))?;
             }
+            self.origins.record_node(NodeOrigin {
+                node: root,
+                creation: site.creation,
+                statement: site.statement,
+                block: site.block,
+                site: Arc::clone(&site.site),
+                bindings: Vec::new(),
+            });
             root
         };
         let centre = symbol.bounds().map_or(Vec2::ZERO, |bounds| {
@@ -317,7 +327,8 @@ impl Scene {
         Ok(Value::Node(root))
     }
 
-    #[allow(clippy::too_many_arguments)] // one recursion for a whole subtree
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    // one recursion for a whole subtree
     fn instantiate_part(
         &mut self,
         part: &SymbolPart,
@@ -374,6 +385,14 @@ impl Scene {
                 }
             }
         };
+        self.origins.record_node(NodeOrigin {
+            node,
+            creation: site.creation,
+            statement: site.statement,
+            block: site.block,
+            site: Arc::clone(&site.site),
+            bindings: Vec::new(),
+        });
         {
             let document = self.document_mut()?;
             document
@@ -1362,6 +1381,19 @@ impl Scene {
                         values: property.values.clone(),
                         group: mirror.as_ref().map(|mirror| mirror.group.clone()),
                         mirror,
+                        keys: {
+                            let mut keys: Vec<RigPropertyKeyManifest> = rig.channels[index]
+                                .keys
+                                .iter()
+                                .map(|key| RigPropertyKeyManifest {
+                                    frame: key.frame,
+                                    value: manifest_value(&key.value),
+                                    ease: key.ease.name().to_owned(),
+                                })
+                                .collect();
+                            keys.sort_by(|a, b| a.frame.total_cmp(&b.frame));
+                            keys
+                        },
                     }
                 })
                 .collect();

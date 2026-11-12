@@ -1,0 +1,10 @@
+ClipKey {
+    rig: "mascot",
+    clip: "jump",
+    property: "glow",
+    time: 1.0,
+    value: Number(
+        0.9,
+    ),
+    ease: CubicOut,
+}

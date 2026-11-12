@@ -17,9 +17,10 @@ use motioner_analysis::{
     ElementKind, LineExtent, MediaOptions, RgbaImage, Rules, TextMeasure,
 };
 use motioner_core::{
-    Color, ContentField, Document, NodeContent, NodeId, Property, TextAlign, TextMetrics,
-    TextRequest, Vec2,
+    Color, ContentField, Document, Ease, NodeContent, NodeId, Property, RigInstanceManifest,
+    RigValue, TextAlign, TextMetrics, TextRequest, Vec2,
 };
+use motioner_dsl::{RigEdit, RigSide};
 use motioner_eval::{sample, sample_vec2};
 use motioner_render::tools::{
     self, CompareMode, ImageFrame, ImageRect, Overlay, OverlayBox, OverlayCaption, OverlaySpec,
@@ -148,6 +149,169 @@ fn arg_ids(args: &Value, name: &str) -> Result<Option<Vec<String>>, ToolError> {
             .map(Some),
         Some(_) => Err(ToolError::InvalidArgs(format!("`{name}` must be an array"))),
     }
+}
+
+fn rig_of<'a>(document: &'a Document, name: &str) -> Result<&'a RigInstanceManifest, ToolError> {
+    document
+        .rig_manifest()
+        .rigs
+        .iter()
+        .find(|rig| rig.name == name || rig.id == name)
+        .ok_or_else(|| ToolError::InvalidArgs(format!("no rig named {name:?}")))
+}
+
+fn side_of(args: &Value) -> Result<RigSide, ToolError> {
+    match arg_str(args, "side")?.unwrap_or("both") {
+        "both" => Ok(RigSide::Both),
+        "left" => Ok(RigSide::Left),
+        "right" => Ok(RigSide::Right),
+        other => Err(ToolError::InvalidArgs(format!(
+            "unknown side {other:?}; use left, right or both"
+        ))),
+    }
+}
+
+fn ease_of(args: &Value) -> Result<Ease, ToolError> {
+    match arg_str(args, "ease")? {
+        None => Ok(Ease::Linear),
+        Some(name) => Ease::from_name(name)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unknown ease {name:?}"))),
+    }
+}
+
+fn value_of(
+    instance: &RigInstanceManifest,
+    property: &str,
+    value: &Value,
+) -> Result<RigValue, ToolError> {
+    let definition = instance
+        .properties
+        .iter()
+        .find(|item| item.name == property)
+        .ok_or_else(|| ToolError::InvalidArgs(format!("no property named {property:?}")))?;
+    match definition.kind {
+        motioner_core::RigValueKind::Float | motioner_core::RigValueKind::Int => value
+            .as_f64()
+            .map(RigValue::Number)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("`{property}` needs a number"))),
+        motioner_core::RigValueKind::Bool => value
+            .as_bool()
+            .map(RigValue::Bool)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("`{property}` needs a boolean"))),
+        motioner_core::RigValueKind::Enum => value
+            .as_str()
+            .map(|text| RigValue::Text(text.to_owned()))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("`{property}` needs a variant name"))),
+        motioner_core::RigValueKind::Color => value
+            .as_str()
+            .and_then(|text| Color::parse_hex(text).ok())
+            .map(RigValue::Color)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("`{property}` needs \"#rrggbb\""))),
+        motioner_core::RigValueKind::Vec2 => {
+            let items = value
+                .as_array()
+                .ok_or_else(|| ToolError::InvalidArgs(format!("`{property}` needs [x, y]")))?;
+            let x = items.first().and_then(Value::as_f64);
+            let y = items.get(1).and_then(Value::as_f64);
+            match (x, y) {
+                (Some(x), Some(y)) => Ok(RigValue::Vec2(Vec2::new(x, y))),
+                _ => Err(ToolError::InvalidArgs(format!("`{property}` needs [x, y]"))),
+            }
+        }
+    }
+}
+
+fn rig_value_json(value: &RigValue) -> Value {
+    match value {
+        RigValue::Number(number) => json!(number),
+        RigValue::Bool(flag) => json!(flag),
+        RigValue::Text(text) => json!(text),
+        RigValue::Vec2(pair) => json!([pair.x, pair.y]),
+        RigValue::Color(color) => json!(color.to_hex()),
+    }
+}
+
+fn rig_manifest_json(instance: &RigInstanceManifest) -> Value {
+    let properties: Vec<Value> = instance
+        .properties
+        .iter()
+        .map(|property| {
+            json!({
+                "name": property.name,
+                "kind": property.kind.name(),
+                "angle": property.angle,
+                "default": rig_value_json(&property.default),
+                "min": property.min,
+                "max": property.max,
+                "step": property.step,
+                "values": property.values,
+                "group": property.group,
+                "mirror": property.mirror.as_ref().map(|mirror| json!({
+                    "group": mirror.group,
+                    "side": mirror.side.name(),
+                    "flip": mirror.flip,
+                })),
+                "keys": property.keys.iter().map(|key| json!({
+                    "frame": key.frame,
+                    "value": rig_value_json(&key.value),
+                    "ease": key.ease,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "id": instance.id,
+        "name": instance.name,
+        "parts": instance.parts.iter().map(|part| json!({"id": part.id, "node": part.node})).collect::<Vec<_>>(),
+        "properties": properties,
+        "poses": instance.poses.iter().map(|pose| json!({
+            "name": pose.name,
+            "reset": pose.reset,
+            "values": pose.values.iter().map(|value| json!({
+                "property": value.property,
+                "value": rig_value_json(&value.value),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "pose_tracks": instance.pose_tracks.iter().map(|track| json!({
+            "pose": track.pose, "start": track.start, "duration": track.duration, "ease": track.ease,
+        })).collect::<Vec<_>>(),
+        "clips": instance.clips.iter().map(|clip| json!({
+            "name": clip.name,
+            "length": clip.length,
+            "keys": clip.keys.iter().map(|key| json!({
+                "property": key.property, "frame": key.frame,
+                "value": rig_value_json(&key.value), "ease": key.ease,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "plays": instance.plays.iter().map(|play| json!({
+            "clip": play.clip, "start": play.start, "loops": play.loops, "speed": play.speed,
+        })).collect::<Vec<_>>(),
+        "layers": instance.layers.iter().map(|layer| json!({
+            "kind": layer.kind, "start": layer.start, "period": layer.period,
+            "jitter": layer.jitter, "duration": layer.duration, "seed": layer.seed,
+        })).collect::<Vec<_>>(),
+        "aims": instance.aims.iter().map(|aim| json!({
+            "part": aim.part, "property": aim.property, "radius": aim.radius,
+        })).collect::<Vec<_>>(),
+        "machine": instance.machine.as_ref().map(|machine| json!({
+            "default": machine.default,
+            "inputs": machine.inputs.iter().map(|input| json!({
+                "name": input.name, "kind": input.kind.name(), "values": input.values,
+            })).collect::<Vec<_>>(),
+            "states": machine.states.iter().map(|state| json!({
+                "name": state.name, "pose": state.pose, "clip": state.clip,
+                "speed": state.speed, "looping": state.looping,
+            })).collect::<Vec<_>>(),
+            "transitions": machine.transitions.iter().map(|transition| json!({
+                "from": transition.from, "to": transition.to, "input": transition.input,
+                "compare": transition.compare, "value": rig_value_json(&transition.value),
+                "duration": transition.duration,
+            })).collect::<Vec<_>>(),
+            "events": machine.events.iter().map(|event| json!({
+                "from": event.from, "to": event.to,
+            })).collect::<Vec<_>>(),
+        })),
+    })
 }
 
 fn resolve_id(document: &Document, runtime: &Runtime, text: &str) -> Result<NodeId, ToolError> {
@@ -738,6 +902,141 @@ pub fn execute(
     let measure = RenderTextMeasure(host.text_metrics());
     match name {
         "project_summary" => Ok(ToolOutput::json(host.summary())),
+        "rig_list" => {
+            let rigs: Vec<Value> = host
+                .document()
+                .rig_manifest()
+                .rigs
+                .iter()
+                .map(|rig| {
+                    json!({
+                        "id": rig.id,
+                        "name": rig.name,
+                        "parts": rig.parts.len(),
+                        "properties": rig.properties.len(),
+                        "poses": rig.poses.len(),
+                        "clips": rig.clips.len(),
+                        "states": rig.machine.as_ref().map_or(0, |machine| machine.states.len()),
+                    })
+                })
+                .collect();
+            Ok(ToolOutput::json(json!({
+                "version": host.document().rig_manifest().version,
+                "rigs": rigs,
+            })))
+        }
+        "rig_manifest" => {
+            let manifest = host.document().rig_manifest();
+            let rigs: Vec<&RigInstanceManifest> = match arg_str(args, "instance")? {
+                Some(name) => vec![rig_of(host.document(), name)?],
+                None => manifest.rigs.iter().collect(),
+            };
+            Ok(ToolOutput::json(json!({
+                "version": manifest.version,
+                "rigs": rigs.iter().map(|rig| rig_manifest_json(rig)).collect::<Vec<_>>(),
+            })))
+        }
+        "rig_set" => {
+            let rig = required_str(args, "rig")?;
+            let property = required_str(args, "property")?;
+            let value = arg_object(args)?
+                .get("value")
+                .ok_or_else(|| ToolError::InvalidArgs("`value` is required".to_owned()))?;
+            let instance = rig_of(host.document(), rig)?;
+            let edit = RigEdit::Set {
+                rig: rig.to_owned(),
+                property: property.to_owned(),
+                side: side_of(args)?,
+                value: value_of(instance, property, value)?,
+            };
+            Ok(ToolOutput::json(host.rig_edit(&edit)?))
+        }
+        "rig_key" | "rig_key_input" => {
+            let rig = required_str(args, "rig")?;
+            let property = required_str(args, "property")?;
+            let time = arg_f64(args, "time")?
+                .ok_or_else(|| ToolError::InvalidArgs("`time` is required".to_owned()))?;
+            let value = arg_object(args)?
+                .get("value")
+                .ok_or_else(|| ToolError::InvalidArgs("`value` is required".to_owned()))?;
+            let instance = rig_of(host.document(), rig)?;
+            if name == "rig_key_input"
+                && !instance
+                    .machine
+                    .as_ref()
+                    .is_some_and(|machine| machine.inputs.iter().any(|input| input.name == property))
+            {
+                return Err(ToolError::InvalidArgs(format!(
+                    "{property:?} is not a machine input of {rig:?}"
+                )));
+            }
+            let edit = RigEdit::Key {
+                rig: rig.to_owned(),
+                property: property.to_owned(),
+                side: side_of(args)?,
+                time,
+                value: value_of(instance, property, value)?,
+                ease: ease_of(args)?,
+            };
+            Ok(ToolOutput::json(host.rig_edit(&edit)?))
+        }
+        "rig_apply_pose" => {
+            let rig = required_str(args, "rig")?;
+            let pose = required_str(args, "pose")?;
+            let at = arg_f64(args, "at")?
+                .ok_or_else(|| ToolError::InvalidArgs("`at` is required".to_owned()))?;
+            let edit = RigEdit::ApplyPose {
+                rig: rig.to_owned(),
+                pose: pose.to_owned(),
+                at,
+                duration: arg_f64(args, "dur")?.unwrap_or(0.3),
+                ease: ease_of(args)?,
+            };
+            Ok(ToolOutput::json(host.rig_edit(&edit)?))
+        }
+        "rig_play_clip" => {
+            let rig = required_str(args, "rig")?;
+            let clip = required_str(args, "clip")?;
+            let loops = arg_i64(args, "loops")?.unwrap_or(1);
+            let edit = RigEdit::Play {
+                rig: rig.to_owned(),
+                clip: clip.to_owned(),
+                at: arg_f64(args, "at")?.unwrap_or(0.0),
+                loops: u32::try_from(loops.max(0)).unwrap_or(u32::MAX),
+                speed: arg_f64(args, "speed")?.unwrap_or(1.0),
+            };
+            Ok(ToolOutput::json(host.rig_edit(&edit)?))
+        }
+        "rig_save_pose" => {
+            let rig = required_str(args, "rig")?;
+            let pose = required_str(args, "pose")?;
+            let instance = rig_of(host.document(), rig)?;
+            let values = match arg_object(args)?.get("values") {
+                Some(Value::Object(map)) => map
+                    .iter()
+                    .map(|(property, value)| {
+                        Ok((property.clone(), value_of(instance, property, value)?))
+                    })
+                    .collect::<Result<Vec<_>, ToolError>>()?,
+                Some(value) if !value.is_null() => {
+                    return Err(ToolError::InvalidArgs(
+                        "`values` must be an object of property values".to_owned(),
+                    ))
+                }
+                _ => instance
+                    .properties
+                    .iter()
+                    .map(|property| (property.name.clone(), property.default.clone()))
+                    .collect(),
+            };
+            let edit = RigEdit::SavePose {
+                rig: rig.to_owned(),
+                pose: pose.to_owned(),
+                reset: arg_bool(args, "reset")?,
+                values,
+            };
+            Ok(ToolOutput::json(host.rig_edit(&edit)?))
+        }
         "outline" => {
             let depth = arg_i64(args, "depth")?.map(|value| value.max(0) as usize);
             let filter = arg_str(args, "filter")?;

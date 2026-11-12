@@ -15,7 +15,7 @@ use crate::color::Color;
 use crate::math::Vec2;
 
 /// Schema version of [`RigManifest`], bumped only on a breaking change.
-pub const RIG_MANIFEST_VERSION: u32 = 1;
+pub const RIG_MANIFEST_VERSION: u32 = 2;
 
 /// Every rig instance in one document.
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +172,19 @@ pub struct RigPropertyManifest {
     pub group: Option<String>,
     /// Mirror membership details, when the property belongs to one.
     pub mirror: Option<RigMirrorManifest>,
+    /// Authored keys on the instance, in frame order.
+    pub keys: Vec<RigPropertyKeyManifest>,
+}
+
+/// One authored key on a rig property.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RigPropertyKeyManifest {
+    /// Composition frame.
+    pub frame: f64,
+    /// Value at the key.
+    pub value: RigValue,
+    /// Ease of the arriving segment.
+    pub ease: String,
 }
 
 /// One property bound to a value inside a pose or layer.

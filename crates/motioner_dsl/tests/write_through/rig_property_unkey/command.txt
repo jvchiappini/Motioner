@@ -1,0 +1,6 @@
+Unkey {
+    rig: "mascot",
+    property: "glow",
+    side: Both,
+    time: 0.25,
+}

@@ -5,8 +5,9 @@
 //! --schema` merges this list with the D-0024 command tools; it never builds a
 //! second one.
 //!
-//! The `rig` family starts with `rig_manifest`; prompt 16b E2 adds the editing
-//! tools that share its result shape.
+//! The `rig` family shares the v2 manifest: `rig_list` and `rig_manifest`
+//! read it, and `rig_set`/`rig_key`/`rig_key_input`/`rig_apply_pose`/
+//! `rig_play_clip`/`rig_save_pose` edit through the same `Editor` sink.
 
 use serde_json::{json, Value};
 
@@ -637,11 +638,20 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     // Rig.
     ToolSpec {
-        name: "rig_manifest",
-        description: "Typed description of every rig instance: properties with type, range, step, group and mirror, poses, clips, layers, aims, addressable parts and the state machine. Read it before editing a rig by name. Cost: cheap.",
+        name: "rig_list",
+        description: "Every rig instance with id, name and counts of parts, properties, poses, clips and states. Start here when the program has more than one rig. Cost: cheap.",
         cost: Cost::Cheap,
         family: "rig",
-        implemented: false,
+        implemented: true,
+        params: NONE,
+        example: "rig_list()",
+    },
+    ToolSpec {
+        name: "rig_manifest",
+        description: "Typed description of every rig instance: properties with type, range, step, group, mirror and authored keys, poses, clips, layers, aims, addressable parts and the state machine. Read it before editing a rig by name. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
         params: &[param(
             "instance",
             "string",
@@ -649,6 +659,95 @@ pub const TOOLS: &[ToolSpec] = &[
             "Rig display name or root identity; every rig when omitted.",
         )],
         example: "rig_manifest(\"mascot\")",
+    },
+    ToolSpec {
+        name: "rig_set",
+        description: "Set a rig property or mirror group as code (static value at frame 0, clearing later keys). `side` is left, right or both. Returns the diff and an undo checkpoint. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
+        params: &[
+            param("rig", "string", true, "Rig display name or root identity."),
+            param("property", "string", true, "Property or mirror group name."),
+            param("value", "object", true, "Number, string, boolean or [x, y]."),
+            param("side", "string", false, "`both` (default), `left` or `right`."),
+        ],
+        example: "rig_set(\"mascot\", \"look\", [0.2, -0.1])",
+    },
+    ToolSpec {
+        name: "rig_key",
+        description: "Add or replace a key on a rig property or mirror group as code. Returns the diff and an undo checkpoint. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
+        params: &[
+            param("rig", "string", true, "Rig display name or root identity."),
+            param("property", "string", true, "Property or mirror group name."),
+            param("time", "number", true, "Composition time in seconds."),
+            param("value", "object", true, "Number, string, boolean or [x, y]."),
+            param("ease", "string", false, "Ease name; linear when omitted."),
+            param("side", "string", false, "`both` (default), `left` or `right`."),
+        ],
+        example: "rig_key(\"mascot\", \"mouth_open\", 2.0, 12)",
+    },
+    ToolSpec {
+        name: "rig_key_input",
+        description: "Key a state-machine input on the timeline, as code. Refuses when the property is not a machine input. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
+        params: &[
+            param("rig", "string", true, "Rig display name or root identity."),
+            param("property", "string", true, "Machine input name."),
+            param("time", "number", true, "Composition time in seconds."),
+            param("value", "object", true, "Input value."),
+            param("ease", "string", false, "Ease name; linear when omitted."),
+        ],
+        example: "rig_key_input(\"mascot\", \"mood\", 6.0, \"sad\")",
+    },
+    ToolSpec {
+        name: "rig_apply_pose",
+        description: "Apply a declared pose at a time, as code. Returns the diff and an undo checkpoint. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
+        params: &[
+            param("rig", "string", true, "Rig display name or root identity."),
+            param("pose", "string", true, "Declared pose name."),
+            param("at", "number", true, "Composition time in seconds."),
+            param("dur", "number", false, "Blend duration in seconds, default 0.3."),
+            param("ease", "string", false, "Blend ease; linear when omitted."),
+        ],
+        example: "rig_apply_pose(\"mascot\", \"Feliz\", 2.0, 0.3)",
+    },
+    ToolSpec {
+        name: "rig_play_clip",
+        description: "Play a declared clip at a time, as code. Returns the diff and an undo checkpoint. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
+        params: &[
+            param("rig", "string", true, "Rig display name or root identity."),
+            param("clip", "string", true, "Declared clip name."),
+            param("at", "number", false, "Composition time in seconds, default 0."),
+            param("loops", "integer", false, "Repetitions, default 1."),
+            param("speed", "number", false, "Playback speed, default 1."),
+        ],
+        example: "rig_play_clip(\"mascot\", \"salto\", 4.0, 2)",
+    },
+    ToolSpec {
+        name: "rig_save_pose",
+        description: "Declare or replace a pose as code. `values` maps property or mirror group names to values; omit it to save the current defaults. Refuses when the pose is declared in a used module. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: true,
+        params: &[
+            param("rig", "string", true, "Rig display name or root identity."),
+            param("pose", "string", true, "New or existing pose name."),
+            param("reset", "boolean", false, "Reset omitted properties to defaults."),
+            param("values", "object", false, "Property or mirror group to value."),
+        ],
+        example: "rig_save_pose(\"mascot\", \"Saludo\", values={\"mouth_open\": 8})",
     },
     // Export.
     ToolSpec {
@@ -856,6 +955,10 @@ pub fn result_schema(name: &str) -> Value {
         "brand_kit" => object(json!({"colors": {"type": "object"}, "fonts": {"type": "object"}})),
         "import_asset" => object(json!({"key": {"type": "string"}, "kind": {"type": "string"}})),
         "place_asset" => object(json!({"ids": {"type": "array"}})),
+        "rig_list" => object(json!({
+            "version": {"type": "integer"},
+            "rigs": {"type": "array"}
+        })),
         "rig_manifest" => object(json!({
             "version": {"type": "integer"},
             "rigs": {"type": "array", "items": {
@@ -874,6 +977,12 @@ pub fn result_schema(name: &str) -> Value {
                     "machine": {"type": ["object", "null"]}
                 }
             }}
+        })),
+        "rig_set" | "rig_key" | "rig_key_input" | "rig_apply_pose" | "rig_play_clip"
+        | "rig_save_pose" => object(json!({
+            "ok": {"type": "boolean"},
+            "diff": {"type": "string"},
+            "checkpoint": {"type": "string"}
         })),
         "render_preview" => object(json!({
             "path": {"type": "string"},

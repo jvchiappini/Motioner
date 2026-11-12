@@ -1,0 +1,13 @@
+SavePose {
+    rig: "mascot",
+    pose: "Fresh",
+    reset: true,
+    values: [
+        (
+            "glow",
+            Number(
+                0.8,
+            ),
+        ),
+    ],
+}

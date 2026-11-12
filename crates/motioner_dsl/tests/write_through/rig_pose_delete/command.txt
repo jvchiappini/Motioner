@@ -1,0 +1,4 @@
+DeletePose {
+    rig: "mascot",
+    pose: "Unused",
+}

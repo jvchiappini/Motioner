@@ -32,6 +32,8 @@ pub enum Strategy {
     StructuralEdit,
     /// One loop instance is skipped with `if <guard>: continue`.
     StructuralLoopContinue,
+    /// A rig declaration or instance call is written as code (prompt 16b E2).
+    RigEdit,
     /// Several single-change edits combined into one bake write.
     Combined,
 }
@@ -50,6 +52,7 @@ impl Strategy {
             Self::CallResult => "call-result",
             Self::StructuralEdit => "structural-edit",
             Self::StructuralLoopContinue => "structural-loop-continue",
+            Self::RigEdit => "rig-edit",
             Self::Combined => "combined",
         }
     }

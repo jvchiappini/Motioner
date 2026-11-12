@@ -13,9 +13,9 @@ Status line: prompt 16 delivered the import model (D-0051), SVG symbols
 poses, clips and layers (D-0053), state machines keyed on the timeline,
 the headless `motioner_rig` runtime (D-0055) and the mascot acceptance
 example. Rive's deformers (bones, skinning, mesh, blend shapes, IK) and
-its interactive player are backlogged; each row below says so. The editor
-rig panel, the write-through corpus for rig edits and the resolver wiring
-inside the editor session are tracked in T-RIG-0014.
+its interactive player are backlogged; each row below says so. Prompt 16b E2
+shipped rig write-through and the `rig_*` agent tools; the editor rig panel
+and the wasm player remain tracked in T-RIG-0009 and T-RIG-0015.
 
 Measured on the reference machine (release): mascot.svg import 0.10 ms;
 the whole 15 s demo builds and bakes in 31 ms (901 frames, 0.035 ms per
@@ -194,10 +194,10 @@ keyed, the machine stays in its default state.
 
 Every compile stores a typed, versioned description of the rigs in the
 document (`RigManifest`, D-0056): root identity and name, addressable parts
-with their node identities, properties with type/range/step/group/mirror,
-poses, pose tracks, clips, plays, procedural layers, aims and the machine
-(states, transitions, inputs and emitted events). It is descriptive data:
-evaluation always uses the baked keys.
+with their node identities, properties with type/range/step/group/mirror and
+their authored keys, poses, pose tracks, clips, plays, procedural layers,
+aims and the machine (states, transitions, inputs and emitted events). It is
+descriptive data: evaluation always uses the baked keys.
 
 ```text
 # the manifest of one instance (by name or root identity)
@@ -210,9 +210,28 @@ motioner query rig examples/rig/mascot_demo.motion mascot
 motioner query examples/rig/mascot_demo.motion --rig all
 ```
 
-The JSON is `{"version":1,"rigs":[...]}` with fixed field order. The same
+The JSON is `{"version":2,"rigs":[...]}` with fixed field order. The same
 shape is the `rig_manifest` result schema in `motioner tools --schema`,
 which agents use before editing a rig by property name.
+
+The rig family in `motioner tools --schema` is:
+
+| Tool | What it does |
+|---|---|
+| `rig_list` | every instance with part/property/pose/clip/state counts |
+| `rig_manifest` | the typed manifest above, one instance or all |
+| `rig_set` | set a property or mirror group (`side` = left/right/both) |
+| `rig_key` | add or replace a property key |
+| `rig_key_input` | key a state-machine input on the timeline |
+| `rig_apply_pose` | apply a declared pose at a time |
+| `rig_play_clip` | play a clip at a time, with loops and speed |
+| `rig_save_pose` | declare or replace a pose |
+
+Every editing tool goes through the same `Editor` as a drag: the DSL plans a
+byte-range edit on the call, the editor compiles it, compares the rig
+manifest with the exact expectation and records one undo step. When the
+declaration lives inside a used `.motion` module the tool refuses with a
+reason instead of editing the module behind the program's back (D-0057).
 
 ## 8. Rive and Lottie comparison
 

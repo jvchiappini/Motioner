@@ -99,6 +99,17 @@ pub trait Host {
         ))
     }
 
+    /// Applies one rig edit through the editor's write-through sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns the planner's refusal reason or a compile error.
+    fn rig_edit(&mut self, _edit: &motioner_dsl::RigEdit) -> Result<Value, ToolError> {
+        Err(ToolError::RequiresHarness(
+            "rig edits need an open editor (prompt 14 harness or `motioner tool`)".to_owned(),
+        ))
+    }
+
     /// Writes a new program file.
     ///
     /// # Errors

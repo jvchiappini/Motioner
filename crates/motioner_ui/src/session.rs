@@ -522,14 +522,41 @@ impl PreviewSession {
                 return false;
             }
         };
+        self.finish_compiled(source, set, &overrides_text, compiled)
+    }
+
+    /// Installs a candidate the caller already compiled (rig write-through
+    /// verifies the manifest before it commits, so compiling twice would pay
+    /// for the same run). `source`, `set` and `compiled` must come from the
+    /// same compile.
+    pub(crate) fn install_compiled(
+        &mut self,
+        source: &str,
+        set: &OverrideSet,
+        compiled: Compiled,
+    ) -> bool {
+        let rate = self
+            .composition()
+            .map_or_else(default_rate, Composition::frame_rate);
+        let overrides_text = set.to_mdf(rate);
+        self.finish_compiled(source, set, &overrides_text, compiled)
+    }
+
+    fn finish_compiled(
+        &mut self,
+        source: &str,
+        set: &OverrideSet,
+        overrides_text: &str,
+        compiled: Compiled,
+    ) -> bool {
         let program_changed = source != self.source;
-        let overrides_changed = self.overrides_need_write(set, &overrides_text);
+        let overrides_changed = self.overrides_need_write(set, overrides_text);
         let writable = self.write_enabled && !self.path.as_os_str().is_empty();
         if writable {
             // Write the overrides first: a crash between the two writes leaves
-            // the program unchanged, never a stale override over new code.
+            // the program unchanged, never a stale override on top of new code.
             if overrides_changed {
-                if let Err(error) = write_atomic(&self.overrides_path, &overrides_text) {
+                if let Err(error) = write_atomic(&self.overrides_path, overrides_text) {
                     self.diagnostics = vec![DiagnosticInfo::io(&self.overrides_path, &error)];
                     return false;
                 }
@@ -542,7 +569,7 @@ impl PreviewSession {
                 self.program_writes = self.program_writes.saturating_add(1);
             }
             source.clone_into(&mut self.last_program_text);
-            self.last_overrides_text.clone_from(&overrides_text);
+            overrides_text.clone_into(&mut self.last_overrides_text);
         }
         source.clone_into(&mut self.source);
         self.accept(compiled);

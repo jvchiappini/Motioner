@@ -46,6 +46,7 @@ mod write_text;
 // subagents never edit this file concurrently.
 pub mod lint;
 pub mod printer;
+pub mod rig_edit;
 pub mod structural;
 
 pub use assets::{AssetResolver, LoadedAsset, NoAssets};
@@ -69,6 +70,7 @@ pub use parser::{parse, MAX_EXPR_DEPTH};
 pub use plan::{
     plan, plan_with_scope, plan_with_scope_and_metrics, verify, verify_with_metrics, Plan, Scope,
 };
+pub use rig_edit::{apply_to_manifest, plan_rig_edit, RigCompare, RigEdit, RigSide};
 pub use token::{Keyword, Op, Token, TokenKind};
 
 /// The MDF standard-library version shipped with this build (D-0039).
