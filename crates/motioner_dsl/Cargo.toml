@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 motioner_core.workspace = true
+motioner_rig.workspace = true
 
 [lints]
 workspace = true

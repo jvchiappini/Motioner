@@ -1345,7 +1345,8 @@ fn load_document(
         .map_err(Failure::Error)?;
     let name = path.display().to_string();
     let metrics = CpuTextMetrics::new(project_fonts(target));
-    match motioner_dsl::run_with_metrics(&source, &Limits::default(), &metrics) {
+    let assets = motioner_io::ProjectAssets::new(target.root.clone());
+    match motioner_dsl::run_with_assets(&source, &Limits::default(), &metrics, &assets) {
         Ok(mut document) => {
             let images = match &target.project {
                 Some(project) => ProjectImages::new(project),

@@ -89,6 +89,17 @@ FORBIDDEN_EDGES = {
         "motioner_app",
         "motioner_testkit",
     ),
+    "motioner_rig": (
+        "motioner_dsl",
+        "motioner_render",
+        "motioner_io",
+        "motioner_ui",
+        "motioner_ai",
+        "motioner_app",
+        "motioner_testkit",
+        "motioner_analysis",
+        "motioner_tools",
+    ),
     "motioner_app": (),
     "motioner_testkit": (),
 }

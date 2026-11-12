@@ -2300,6 +2300,7 @@ version = "0.1.0"
 dependencies = [
  "motioner_core",
  "motioner_eval",
+ "motioner_rig",
 ]
 
 [[package]]
@@ -2338,6 +2339,14 @@ dependencies = [
  "png 0.17.16",
  "sha2",
  "wgpu",
+]
+
+[[package]]
+name = "motioner_rig"
+version = "0.1.0"
+dependencies = [
+ "motioner_core",
+ "motioner_eval",
 ]
 
 [[package]]

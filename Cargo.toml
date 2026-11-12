@@ -11,6 +11,7 @@ members = [
     "crates/motioner_ui",
     "crates/motioner_analysis",
     "crates/motioner_tools",
+    "crates/motioner_rig",
 ]
 # FerrousEngine is a pinned submodule with its own workspace; its crates are
 # consumed as path dependencies by `motioner_render` and `motioner_ui` only.
@@ -33,6 +34,7 @@ motioner_ui = { path = "crates/motioner_ui" }
 motioner_testkit = { path = "crates/motioner_testkit" }
 motioner_analysis = { path = "crates/motioner_analysis" }
 motioner_tools = { path = "crates/motioner_tools" }
+motioner_rig = { path = "crates/motioner_rig" }
 
 # FerrousEngine (pinned submodule, see engine/README.md). Only
 # `motioner_render` and `motioner_ui` may depend on these.

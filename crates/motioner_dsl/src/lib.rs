@@ -18,6 +18,7 @@
 //! assert_eq!(document.len(), 1);
 //! ```
 
+pub mod assets;
 pub mod ast;
 mod bake;
 mod builtins;
@@ -47,6 +48,7 @@ pub mod lint;
 pub mod printer;
 pub mod structural;
 
+pub use assets::{AssetResolver, LoadedAsset, NoAssets};
 pub use ast::Program;
 pub use bake::{bake, BakeOutcome};
 pub use code_edit::{CodeEdit, CodeEditError, Replacement, Strategy};
@@ -223,6 +225,29 @@ pub fn run_with_metrics(
     limits: &Limits,
     metrics: &dyn motioner_core::TextMetrics,
 ) -> Result<Document, Diagnostic> {
+    run_with_assets(source, limits, metrics, &NoAssets)
+}
+
+/// [`run`] with an asset resolver for `use()` (D-0051).
+///
+/// The resolver is the host's seam into the file system; the DSL itself stays
+/// file-system free. Without a resolver, `use()` of a `.motion` module or an
+/// SVG fails with a clear message while `use()` of a raster or media file
+/// still works (their readers resolve the path later).
+///
+/// # Errors
+///
+/// Same as [`run`].
+///
+/// # Panics
+///
+/// Re-raises a panic from the interpreter thread.
+pub fn run_with_assets(
+    source: &str,
+    limits: &Limits,
+    metrics: &dyn motioner_core::TextMetrics,
+    assets: &dyn AssetResolver,
+) -> Result<Document, Diagnostic> {
     let source = source.to_owned();
     let limits = limits.clone();
     std::thread::scope(|scope| {
@@ -231,8 +256,15 @@ pub fn run_with_metrics(
             .stack_size(INTERPRETER_STACK_BYTES)
             .spawn_scoped(scope, move || {
                 let (program, library_len) = with_prelude(&source)?;
-                interpreter::execute_library_with_metrics(&program, library_len, &limits, metrics)
-                    .map_err(normalize_diagnostic)
+                interpreter::execute_library_detailed_with_assets(
+                    &program,
+                    library_len,
+                    &limits,
+                    metrics,
+                    assets,
+                )
+                .map(|execution| execution.document)
+                .map_err(normalize_diagnostic)
             });
         let handle = match worker {
             Ok(handle) => handle,

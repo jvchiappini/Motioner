@@ -395,6 +395,39 @@ assignment.
 
 `docs/std.md` documents every token, theme, preset and component with images.
 
+### 7.9 Rigs, drivers and state machines
+
+`rig(symbol_or_node, pos=None, scale=None, name=None)` creates a component
+instance: a group whose symbol parts are real nodes (`m.part("eye-L")`,
+`m.parts()`). Properties are declared with `m.prop(name, default,
+range=None, step=None, kind=None, values=None, angle=False)`; their types
+are float, int, bool, enum, color, vec2 and angle. A property is keyed
+like any channel (`m.name.key(time, value, ease=...)`) and set with
+`m.name.set(value)`. `m.mirror(group, (left, right), flip=False)` makes
+one name write both sides.
+
+`m.driver(fn)` registers a pure expression function: its body must be
+exactly `return [ [part, field, value], ... ]`, and it may read property
+names and use numbers, `+ - * /`, comparisons, `and/or/not` and
+`min/max/abs/sin/cos/clamp/lerp`. Fields are `position.x`, `position.y`,
+`rotation`, `scale.x`, `scale.y`, `opacity` and `stroke_width`. Anything
+else is a typed error naming the driver.
+
+Poses (`m.pose(name, prop=value, reset=False)` to declare;
+`m.pose(name, at=..., dur=..., ease=...)` to apply), clips
+(`cl = m.clip(name, length=...)`, `cl.key(prop, time, value, ease=...)`,
+`m.play(name, at=..., loops=1, speed=1.0)`) and layers
+(`m.blink(prop, every=..., jitter=..., duration=..., closed=...)`) are
+property tracks. State machines use `m.input`, `m.state`,
+`m.transition(from, to, input=..., equals=/gt=/lt=..., trigger=...,
+dur=...)` and fire triggers with `m.fire(name, at=...)`; inputs are
+properties, so they are keyed on the timeline.
+
+The document is derived at load (section 2): rig evaluation runs once per
+frame while the program loads and writes ordinary keys. Preview, export
+and scrubbing therefore use the one evaluator, and seeking backwards is
+exact by construction (D-0052/D-0053).
+
 ## 8. Control flow example
 
 ```
@@ -518,16 +551,27 @@ Outline and graph state is editor-only: collapse, `filter_layers`, `solo`,
 override; graph drags are ordinary `ease` (with a `bezier(...)` value) and
 `move_key_value` commands, so they are undoable and visible to agents.
 
-## 10. Modules
+## 10. Modules and imports
 
-`use("path/to/file.motion")` executes a project-relative module once and
-returns a module handle. Top-level names become attributes on the module.
-Paths are sandboxed to the project root; absolute paths and parent
-escapes are rejected. Modules cannot perform I/O.
+`use(path)` returns a definition (D-0051). The extension decides the kind:
 
-This is a v0 proposal and is open for review. If modules are deferred,
-programs are self-contained and shared helpers are duplicated, which
-conflicts with the project's DRY standard.
+- `.motion` executes the module once and returns a namespace; its
+  top-level names are attributes on the namespace and the module's
+  functions build into the caller's document.
+- `.svg` returns a symbol definition; calling it instantiates a group
+  whose parts are addressable by id (`m.part("eye-L")`).
+- image, audio, video and font extensions return asset definitions;
+  calling one builds the same node as the matching constructor.
+
+Definitions are callable values with metadata (`width`, `height`, `name`,
+`parts`, `kind`, `path`). Paths are sandboxed to the project root:
+absolute paths and parent escapes outside the root are rejected before
+any I/O. Modules cannot perform I/O; the host injects a resolver at the
+`run_*` entry point. A module cycle is a typed diagnostic. Relative
+`use()` inside a module resolves against that module's directory.
+
+v0 module semantics import the module's top-level names into one shared
+global scope; namespaced globals are backlogged.
 
 ## 11. Determinism
 
@@ -655,7 +699,7 @@ for i in range(5):
 
 ## 17. Deferred to v0.1
 
-1. `use` modules and shared helper files.
+1. Namespaced module globals and explicit export lists.
 2. Override *statements inside a program* (overrides live in the separate
    `<name>.overrides.motion` file described in §9 and D-0022; that subset is
    implemented) and override diagnostics for animated content
@@ -668,3 +712,5 @@ for i in range(5):
 
 The v0 subset is frozen; these items have specifications in this
 document but are not required for the first MP4 milestone.
+
+

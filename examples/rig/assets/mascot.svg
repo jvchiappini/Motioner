@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!--
+    Reference mascot, exported from the Neutral pose of
+    DailyAiRecap/mascot_controller.html and re-authored for Motioner.
+    Ids are the controller's stable ids so a rig can address every part.
+
+    Deviations from the HTML export, both documented in D-0054 and
+    out/rigs/mascot/COMPARISON.md:
+      * the eye overflow ring (#eye-mask-*) is a clipPath here, because a
+        Motioner path node is a single subpath (D-0033 mask);
+      * lid and closed-eye paths are authored at their "closed" position
+        with opacity 0, which is what the Neutral pose shows; the rig
+        moves them to reach other poses.
+  -->
+  <defs>
+    <clipPath id="clip-eye-left"><circle cx="76" cy="88" r="15"/></clipPath>
+    <clipPath id="clip-eye-right"><circle cx="124" cy="88" r="15"/></clipPath>
+  </defs>
+  <g id="mascot">
+    <path id="body" fill="#FFFFFF" stroke="#0A0A0A" stroke-opacity="0.25" stroke-width="1"
+          d="M 40 40 Q 100 40 160 40 Q 160 100 160 160 Q 100 160 40 160 Q 40 100 40 40 Z"/>
+
+    <g id="face">
+      <g id="eye-left" clip-path="url(#clip-eye-left)">
+        <circle id="sclera-left" cx="76" cy="88" r="15" fill="#FFFFFF"/>
+        <g id="pupil-left">
+          <circle cx="76" cy="88" r="8" fill="#0A0A0A"/>
+          <circle id="catch-a-left" cx="79" cy="84.5" r="2.8" fill="#FFFFFF"/>
+          <circle id="catch-b-left" cx="73" cy="91.5" r="1.3" fill="#FFFFFF"/>
+        </g>
+        <path id="lid-top-left" opacity="0" fill="#FFFFFF" stroke="#0A0A0A" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              d="M 61 88 A 15 15 0 0 1 91 88 L 91 70 L 61 70 Z"/>
+        <path id="lid-bottom-left" opacity="0" fill="#FFFFFF" stroke="#0A0A0A" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              d="M 61 88 A 15 15 0 0 0 91 88 L 91 106 L 61 106 Z"/>
+      </g>
+      <circle id="ring-left" cx="76" cy="88" r="15" fill="none"
+              stroke="#0A0A0A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <path id="eye-closed-left" opacity="0" fill="none" stroke="#0A0A0A" stroke-width="3"
+            stroke-linecap="round" stroke-linejoin="round"
+            d="M 61 88 Q 76 88 91 88"/>
+
+      <g id="eye-right" clip-path="url(#clip-eye-right)">
+        <circle id="sclera-right" cx="124" cy="88" r="15" fill="#FFFFFF"/>
+        <g id="pupil-right">
+          <circle cx="124" cy="88" r="8" fill="#0A0A0A"/>
+          <circle id="catch-a-right" cx="127" cy="84.5" r="2.8" fill="#FFFFFF"/>
+          <circle id="catch-b-right" cx="121" cy="91.5" r="1.3" fill="#FFFFFF"/>
+        </g>
+        <path id="lid-top-right" opacity="0" fill="#FFFFFF" stroke="#0A0A0A" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              d="M 109 88 A 15 15 0 0 1 139 88 L 139 70 L 109 70 Z"/>
+        <path id="lid-bottom-right" opacity="0" fill="#FFFFFF" stroke="#0A0A0A" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              d="M 109 88 A 15 15 0 0 0 139 88 L 139 106 L 109 106 Z"/>
+      </g>
+      <circle id="ring-right" cx="124" cy="88" r="15" fill="none"
+              stroke="#0A0A0A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <path id="eye-closed-right" opacity="0" fill="none" stroke="#0A0A0A" stroke-width="3"
+            stroke-linecap="round" stroke-linejoin="round"
+            d="M 109 88 Q 124 88 139 88"/>
+
+      <g id="brow-left">
+        <path id="brow-path-left" fill="none" stroke="#0A0A0A" stroke-width="4"
+              stroke-linecap="round" d="M 64 62 Q 76 62 88 62"/>
+      </g>
+      <g id="brow-right">
+        <path id="brow-path-right" fill="none" stroke="#0A0A0A" stroke-width="4"
+              stroke-linecap="round" d="M 112 62 Q 124 62 136 62"/>
+      </g>
+
+      <g id="mouth">
+        <path id="mouth-shape" fill="#0A0A0A"
+              d="M 85 122 Q 100 110 115 122 Q 100 134 85 122 Z"/>
+        <path id="mouth-teeth" fill="#FFFFFF"
+              d="M 85 122 Q 100 110 115 122 Q 100 134 85 122 Z"/>
+        <path id="mouth-line" fill="none" stroke="#0A0A0A" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              d="M 85 122 Q 100 110 115 122 Q 100 134 85 122 Z"/>
+      </g>
+    </g>
+
+    <path id="glow" opacity="0" fill="none" stroke="#39FF14" stroke-width="3"
+          d="M 40 40 Q 100 40 160 40 Q 160 100 160 160 Q 100 160 40 160 Q 40 100 40 40 Z"/>
+    <g id="sparks" opacity="0">
+      <path id="spark-a" fill="none" d="M 166 33 L 172 27" stroke="#00E5FF" stroke-width="2" stroke-linecap="round"/>
+      <path id="spark-b" fill="none" d="M 170 40 L 178 34" stroke="#FF2ECC" stroke-width="2" stroke-linecap="round"/>
+      <path id="spark-c" fill="none" d="M 167 27 L 167 21" stroke="#39FF14" stroke-width="2" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>
+

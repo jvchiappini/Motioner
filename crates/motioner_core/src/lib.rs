@@ -21,6 +21,7 @@ mod math;
 mod node;
 mod overrides;
 mod path;
+mod symbol;
 mod text;
 mod time;
 
@@ -53,5 +54,6 @@ pub use path::{
     DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,
     FLATTEN_TOLERANCE,
 };
+pub use symbol::{Symbol, SymbolPart, SymbolPath, SymbolShape};
 pub use text::{NoTextMetrics, TextBounds, TextMeasurement, TextMetrics, TextRequest};
 pub use time::{Frame, FrameRate, MAX_ABS_FRAME};

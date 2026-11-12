@@ -7,10 +7,12 @@
 //! iterated.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use motioner_core::{Document, NodeId};
 
+use crate::assets::{AssetResolver, LoadedAsset, NoAssets};
 use crate::ast::{
     Argument, AssignOp, BinaryOp, CompareOp, Expr, ExprKind, FunctionDef, LogicalOp, Program, Stmt,
     StmtKind, Target, UnaryOp,
@@ -25,7 +27,7 @@ use crate::origins::{
     LoopOrigin, NameId, OriginSite, ParameterOrigin, ValueOrigins, ValueSource,
 };
 use crate::scene::{CreationSite, Scene, WriteSite};
-use crate::value::{Builtin, Value};
+use crate::value::{AssetKind, AssetRef, Builtin, Namespace, RigMethod, Value};
 use motioner_core::{NoTextMetrics, TextMetrics};
 
 /// Executes a parsed program and returns the document it built.
@@ -112,7 +114,7 @@ pub fn execute_detailed_with_metrics(
     limits: &Limits,
     metrics: &dyn TextMetrics,
 ) -> Result<Execution, Diagnostic> {
-    run(program, 0, limits, metrics)
+    run(program, 0, limits, metrics, &NoAssets)
 }
 
 /// Executes a program whose first `library_len` statements are standard
@@ -124,17 +126,13 @@ pub fn execute_detailed_with_metrics(
 /// # Errors
 ///
 /// Same as [`execute`].
-pub(crate) fn execute_library_with_metrics(
-    program: &Program,
-    library_len: usize,
-    limits: &Limits,
-    metrics: &dyn TextMetrics,
-) -> Result<Document, Diagnostic> {
-    execute_library_detailed_with_metrics(program, library_len, limits, metrics)
-        .map(|execution| execution.document)
-}
-
-/// [`execute_library_with_metrics`] returning the bindings and origins too.
+/// Executes a prelude-prefixed program with text metrics installed and with
+/// the default (asset-free) resolver.
+///
+/// # Errors
+///
+/// Same as [`execute`].
+/// [`execute_library_with_metrics`] without an asset resolver (D-0051).
 ///
 /// # Errors
 ///
@@ -145,7 +143,22 @@ pub(crate) fn execute_library_detailed_with_metrics(
     limits: &Limits,
     metrics: &dyn TextMetrics,
 ) -> Result<Execution, Diagnostic> {
-    run(program, library_len, limits, metrics)
+    run(program, library_len, limits, metrics, &NoAssets)
+}
+
+/// Executes a prelude-prefixed program with an asset resolver (D-0051).
+///
+/// # Errors
+///
+/// Same as [execute].
+pub(crate) fn execute_library_detailed_with_assets(
+    program: &Program,
+    library_len: usize,
+    limits: &Limits,
+    metrics: &dyn TextMetrics,
+    assets: &dyn AssetResolver,
+) -> Result<Execution, Diagnostic> {
+    run(program, library_len, limits, metrics, assets)
 }
 
 fn run(
@@ -153,6 +166,7 @@ fn run(
     library_len: usize,
     limits: &Limits,
     metrics: &dyn TextMetrics,
+    assets: &dyn AssetResolver,
 ) -> Result<Execution, Diagnostic> {
     let mut interpreter = Interpreter {
         limits,
@@ -169,6 +183,10 @@ fn run(
         budget: Budget::new(limits),
         scene: Scene::new(limits.max_nodes),
         name_notes: Vec::new(),
+        assets,
+        modules: HashMap::new(),
+        module_stack: Vec::new(),
+        module_dirs: Vec::new(),
     };
     // The library is a fixed set of definitions: it is never walked and never
     // copied into the global scope. Lookups fall back to the shared table, so
@@ -179,24 +197,42 @@ fn run(
     let mut origins = interpreter.scene.origins().clone();
     origins.finalize(&program.body[split..]);
     origins.mark_returned(&interpreter.returned);
-    let mut document = interpreter.scene.into_document().ok_or_else(|| {
-        let start = Span {
-            line: 1,
-            column: 1,
-            ..Span::default()
+    let start = Span {
+        line: 1,
+        column: 1,
+        ..Span::default()
+    };
+    let mut document =
+        match interpreter.scene.into_document() {
+            Ok(Some(document)) => document,
+            Ok(None) => return Err(Diagnostic::new(
+                ErrorCategory::Value,
+                start,
+                "the program never called comp(...); every MDF program must create a composition",
+            )),
+            Err(error) => return Err(Diagnostic::new(error.category, start, error.message)),
         };
-        Diagnostic::new(
-            ErrorCategory::Value,
-            start,
-            "the program never called comp(...); every MDF program must create a composition",
-        )
-    })?;
     assign_default_names(&mut document, &interpreter.name_notes);
     Ok(Execution {
         document,
         bindings,
         origins,
     })
+}
+
+fn media_kind(path: &str) -> Option<AssetKind> {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" | "jpg" | "jpeg" | "webp" => Some(AssetKind::Image),
+        "wav" | "flac" | "mp3" | "ogg" => Some(AssetKind::Audio),
+        "mp4" | "mov" | "mkv" => Some(AssetKind::Video),
+        "ttf" | "otf" => Some(AssetKind::Font),
+        _ => None,
+    }
 }
 
 /// How a statement finished.
@@ -257,6 +293,14 @@ struct Interpreter<'l> {
     budget: Budget,
     scene: Scene,
     name_notes: Vec<NameNote>,
+    /// Resolver injected by the host for `use()` (D-0051).
+    assets: &'l dyn AssetResolver,
+    /// Modules already executed, by resolved key.
+    modules: HashMap<String, Rc<Namespace>>,
+    /// Modules currently executing, for cycle detection.
+    module_stack: Vec<String>,
+    /// Directories of the modules currently executing, innermost last.
+    module_dirs: Vec<String>,
 }
 
 type Exec<T> = Result<T, Diagnostic>;
@@ -726,6 +770,7 @@ impl Interpreter<'_> {
 
     // ---- expressions ---------------------------------------------------
 
+    #[allow(clippy::too_many_lines)] // one arm per expression kind
     fn eval(&mut self, expr: &Expr) -> Exec<Value> {
         let span = expr.span;
         let host =
@@ -806,14 +851,71 @@ impl Interpreter<'_> {
             ExprKind::Call { callee, args } => self.call(callee, args, span),
             ExprKind::Attribute { object, name } => {
                 let object = self.eval(object)?;
-                let Value::Node(id) = object else {
-                    return Err(self.diagnostic(
+                match object {
+                    Value::Node(id) => host(self, self.scene.get_attribute(id, name)),
+                    Value::Namespace(namespace) => namespace
+                        .names
+                        .iter()
+                        .find(|(candidate, _)| candidate.as_ref() == name.as_ref())
+                        .map(|(_, value)| value.clone())
+                        .ok_or_else(|| {
+                            self.diagnostic(
+                                ErrorCategory::Name,
+                                span,
+                                format!(
+                                    "module {:?} has no definition '{name}'; it exports {}",
+                                    namespace.path,
+                                    namespace
+                                        .names
+                                        .iter()
+                                        .map(|(name, _)| name.as_ref())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ),
+                            )
+                        }),
+                    Value::Symbol(symbol) => match &**name {
+                        "width" => Ok(Value::Number(symbol.width)),
+                        "height" => Ok(Value::Number(symbol.height)),
+                        "name" => Ok(Value::Str(Arc::from(symbol.name.as_str()))),
+                        "parts" => Ok(Value::list(
+                            symbol
+                                .part_ids()
+                                .into_iter()
+                                .map(|id| Value::Str(Arc::from(id)))
+                                .collect(),
+                        )),
+                        other => Err(self.diagnostic(
+                            ErrorCategory::Name,
+                            span,
+                            format!("a symbol has no attribute '{other}'"),
+                        )),
+                    },
+                    Value::Asset(asset) => match &**name {
+                        "kind" => Ok(Value::Str(Arc::from(asset.kind.name()))),
+                        "path" => Ok(Value::Str(asset.path.clone())),
+                        other => Err(self.diagnostic(
+                            ErrorCategory::Name,
+                            span,
+                            format!("a {} definition has no attribute '{other}'", asset.kind.name()),
+                        )),
+                    },
+                    Value::RigProperty(id, property) => RigMethod::from_name(name)
+                        .map(|method| Value::RigMethod(id, property, method))
+                        .ok_or_else(|| {
+                            self.diagnostic(
+                                ErrorCategory::Name,
+                                span,
+                                format!("a rig property has no attribute '{name}'; use .key(...) or .set(...)"),
+                            )
+                        }),
+                    Value::Clip(id, clip) if &**name == "key" => Ok(Value::ClipMethod(id, clip)),
+                    other => Err(self.diagnostic(
                         ErrorCategory::Name,
                         span,
-                        format!("a {} has no attribute '{name}'", object.type_name()),
-                    ));
-                };
-                host(self, self.scene.get_attribute(id, name))
+                        format!("a {} has no attribute '{name}'", other.type_name()),
+                    )),
+                }
             }
             ExprKind::Index { object, index } => {
                 let object = self.eval(object)?;
@@ -893,6 +995,9 @@ impl Interpreter<'_> {
         }
         let function = self.eval(callee)?;
         let call_args = self.evaluate_arguments(args)?;
+        if matches!(function, Value::Builtin(Builtin::Use)) {
+            return self.use_definition(call_args, span);
+        }
         let site = self.site(span);
         let write = self.write_site();
         let result = match function {
@@ -921,7 +1026,8 @@ impl Interpreter<'_> {
                 | Builtin::Column
                 | Builtin::Grid
                 | Builtin::Stack
-                | Builtin::CompSize),
+                | Builtin::CompSize
+                | Builtin::Rig),
             ) => self.scene.call(builtin, call_args, &site, self.metrics),
             Value::Builtin(builtin) => builtins::call(
                 builtin,
@@ -934,12 +1040,148 @@ impl Interpreter<'_> {
                 self.scene
                     .call_method(id, method, call_args, &write, self.metrics)
             }
+            Value::RigMethod(id, property, method) => self
+                .scene
+                .rig_property_key(id, &property, method, call_args),
+            Value::ClipMethod(id, clip) => self.scene.rig_clip_key(id, &clip, call_args),
+            Value::Symbol(symbol) => self.scene.instantiate_symbol(&symbol, call_args, &site),
+            Value::Asset(asset) => return self.call_asset(&asset, call_args, &site, span),
             other => Err(HostError::type_error(format!(
                 "a {} is not callable",
                 other.type_name()
             ))),
         };
         result.map_err(|e| self.host_error(span, e))
+    }
+
+    /// `use(path)`: a definition, a module namespace or a symbol (D-0051).
+    fn use_definition(&mut self, args: CallArgs, span: Span) -> Exec<Value> {
+        let bound =
+            bind("use", &["path"], 1, args).map_err(|error| self.host_error(span, error))?;
+        let path = bound
+            .string_or(0, "")
+            .map_err(|error| self.host_error(span, error))?;
+        if path.is_empty() {
+            return Err(self.diagnostic(
+                ErrorCategory::Value,
+                span,
+                "use(): 'path' must be a non-empty project-relative path",
+            ));
+        }
+        if let Some(kind) = media_kind(&path) {
+            return Ok(Value::Asset(Arc::new(AssetRef { kind, path })));
+        }
+        let base = self.module_dirs.last().cloned().unwrap_or_default();
+        let loaded = self.assets.load(&path, &base).map_err(|message| {
+            self.diagnostic(
+                ErrorCategory::Value,
+                span,
+                format!("use({path:?}): {message}"),
+            )
+        })?;
+        match loaded {
+            LoadedAsset::Symbol { symbol, .. } => Ok(Value::Symbol(symbol)),
+            LoadedAsset::Module { key, source, dir } => {
+                if let Some(namespace) = self.modules.get(&key) {
+                    return Ok(Value::Namespace(Rc::clone(namespace)));
+                }
+                if self.module_stack.iter().any(|module| module == &key) {
+                    return Err(self.diagnostic(
+                        ErrorCategory::Value,
+                        span,
+                        format!("use({path:?}): module import cycle through {key:?}"),
+                    ));
+                }
+                let program = crate::parser::parse(&source).map_err(|diagnostic| {
+                    self.diagnostic(
+                        diagnostic.category,
+                        span,
+                        format!(
+                            "module {path:?} line {}: {}",
+                            diagnostic.span.line, diagnostic.message
+                        ),
+                    )
+                })?;
+                self.module_stack.push(key.clone());
+                self.module_dirs.push(dir);
+                let flow = self.exec_block(&program.body);
+                self.module_stack.pop();
+                self.module_dirs.pop();
+                let flow = flow.map_err(|diagnostic| {
+                    self.diagnostic(
+                        diagnostic.category,
+                        span,
+                        format!(
+                            "module {path:?} line {}: {}",
+                            diagnostic.span.line, diagnostic.message
+                        ),
+                    )
+                })?;
+                if matches!(flow, Flow::Return(_)) {
+                    return Err(self.diagnostic(
+                        ErrorCategory::Value,
+                        span,
+                        format!("module {path:?}: a top-level return is not allowed"),
+                    ));
+                }
+                let mut names = Vec::new();
+                for statement in &program.body {
+                    let name = match &statement.kind {
+                        StmtKind::Def(function) => Some(Arc::clone(&function.name)),
+                        StmtKind::Assign {
+                            target: Target::Name(name),
+                            ..
+                        } => Some(Arc::clone(name)),
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        if let Some(value) = self.globals.get(&name).cloned() {
+                            names.push((name, value));
+                        }
+                    }
+                }
+                let namespace = Rc::new(Namespace {
+                    path: path.to_string(),
+                    names,
+                });
+                self.modules.insert(key, Rc::clone(&namespace));
+                Ok(Value::Namespace(namespace))
+            }
+        }
+    }
+
+    /// Calls an imported image, audio, video or font definition.
+    fn call_asset(
+        &mut self,
+        asset: &Arc<AssetRef>,
+        args: CallArgs,
+        site: &CreationSite,
+        span: Span,
+    ) -> Exec<Value> {
+        let builtin =
+            match asset.kind {
+                AssetKind::Image => Builtin::Image,
+                AssetKind::Audio => Builtin::Audio,
+                AssetKind::Video => Builtin::Video,
+                AssetKind::Font => return Err(self.diagnostic(
+                    ErrorCategory::Value,
+                    span,
+                    "a font definition cannot be instantiated; add the file to the project fonts",
+                )),
+            };
+        let mut call_args = args;
+        call_args.positional.insert(
+            0,
+            CallValue {
+                value: Value::Str(Arc::clone(&asset.path)),
+                span,
+                literal: None,
+                origin: ExpressionOrigin::Computed,
+            },
+        );
+        self.scene
+            .call(builtin, call_args, site, self.metrics)
+            .map_err(|error| self.host_error(span, error))
     }
 
     fn evaluate_arguments(&mut self, args: &[Argument]) -> Exec<CallArgs> {

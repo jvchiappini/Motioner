@@ -88,11 +88,15 @@ pub(crate) enum Builtin {
     Grid,
     Stack,
     CompSize,
+    /// `use(path)`: import a definition (D-0051).
+    Use,
+    /// `rig(symbol, ...)`: build a rig component (D-0052).
+    Rig,
 }
 
 impl Builtin {
     /// Every builtin with its MDF name.
-    pub const ALL: [(Self, &'static str); 43] = [
+    pub const ALL: [(Self, &'static str); 45] = [
         (Self::Range, "range"),
         (Self::Enumerate, "enumerate"),
         (Self::Len, "len"),
@@ -136,6 +140,8 @@ impl Builtin {
         (Self::Grid, "grid"),
         (Self::Stack, "stack"),
         (Self::CompSize, "comp_size"),
+        (Self::Use, "use"),
+        (Self::Rig, "rig"),
     ];
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -168,6 +174,20 @@ pub(crate) enum NodeMethod {
     Place,
     Bounds,
     SceneTime,
+    RigPart,
+    RigParts,
+    RigProp,
+    RigMirror,
+    RigDriver,
+    RigPose,
+    RigClip,
+    RigPlay,
+    RigInput,
+    RigState,
+    RigTransition,
+    RigFire,
+    RigAim,
+    RigBlink,
 }
 
 impl NodeMethod {
@@ -185,6 +205,20 @@ impl NodeMethod {
             "place" => Some(Self::Place),
             "bounds" => Some(Self::Bounds),
             "t" => Some(Self::SceneTime),
+            "part" => Some(Self::RigPart),
+            "parts" => Some(Self::RigParts),
+            "prop" => Some(Self::RigProp),
+            "mirror" => Some(Self::RigMirror),
+            "driver" => Some(Self::RigDriver),
+            "pose" => Some(Self::RigPose),
+            "clip" => Some(Self::RigClip),
+            "play" => Some(Self::RigPlay),
+            "input" => Some(Self::RigInput),
+            "state" => Some(Self::RigState),
+            "transition" => Some(Self::RigTransition),
+            "fire" => Some(Self::RigFire),
+            "aim" => Some(Self::RigAim),
+            "blink" => Some(Self::RigBlink),
             _ => None,
         }
     }
@@ -203,6 +237,20 @@ impl NodeMethod {
             Self::Place => "place",
             Self::Bounds => "bounds",
             Self::SceneTime => "t",
+            Self::RigPart => "part",
+            Self::RigParts => "parts",
+            Self::RigProp => "prop",
+            Self::RigMirror => "mirror",
+            Self::RigDriver => "driver",
+            Self::RigPose => "pose",
+            Self::RigClip => "clip",
+            Self::RigPlay => "play",
+            Self::RigInput => "input",
+            Self::RigState => "state",
+            Self::RigTransition => "transition",
+            Self::RigFire => "fire",
+            Self::RigAim => "aim",
+            Self::RigBlink => "blink",
         }
     }
 }
@@ -289,6 +337,81 @@ pub(crate) enum Value {
     Ease(Ease),
     /// An active design-token set (D-0039).
     Theme(Arc<Theme>),
+    /// An imported SVG definition (D-0051/D-0054).
+    Symbol(Arc<motioner_core::Symbol>),
+    /// A `.motion` module namespace.
+    Namespace(Rc<Namespace>),
+    /// An imported raster, audio, video or font definition.
+    Asset(Arc<AssetRef>),
+    /// A custom property of the rig rooted at a node.
+    RigProperty(NodeId, Arc<str>),
+    /// A method on a rig property (`m.lid.key(...)`).
+    RigMethod(NodeId, Arc<str>, RigMethod),
+    /// A named clip handle (`cl = r.clip("jump")`).
+    Clip(NodeId, Arc<str>),
+    /// A method on a clip handle (`cl.key(...)`).
+    ClipMethod(NodeId, Arc<str>),
+}
+
+/// A method on a rig property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RigMethod {
+    /// Adds a key at a time.
+    Key,
+    /// Sets the static value.
+    Set,
+}
+
+impl RigMethod {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "key" => Some(Self::Key),
+            "set" => Some(Self::Set),
+            _ => None,
+        }
+    }
+}
+
+/// A module namespace returned by `use("x.motion")`.
+#[derive(Debug, Clone)]
+pub(crate) struct Namespace {
+    /// Project-relative path that produced it.
+    pub path: String,
+    /// Exported top-level values, in definition order.
+    pub names: Vec<(Arc<str>, Value)>,
+}
+
+/// The kind of a raster or media definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssetKind {
+    /// A still image.
+    Image,
+    /// An audio file.
+    Audio,
+    /// A video file.
+    Video,
+    /// A font file.
+    Font,
+}
+
+impl AssetKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Audio => "audio",
+            Self::Video => "video",
+            Self::Font => "font",
+        }
+    }
+}
+
+/// An imported non-symbol asset definition.
+#[derive(Debug, Clone)]
+pub(crate) struct AssetRef {
+    /// What kind of definition it is.
+    pub kind: AssetKind,
+    /// The path as written in the program.
+    pub path: Arc<str>,
 }
 
 impl Value {
@@ -317,6 +440,11 @@ impl Value {
             Self::Gradient(_) => "gradient",
             Self::Ease(_) => "ease",
             Self::Theme(_) => "theme",
+            Self::Symbol(_) => "symbol",
+            Self::Namespace(_) => "module",
+            Self::Asset(asset) => asset.kind.name(),
+            Self::RigProperty(..) | Self::RigMethod(..) => "rig property",
+            Self::Clip(..) | Self::ClipMethod(..) => "clip",
         }
     }
 
@@ -335,7 +463,14 @@ impl Value {
             | Self::Method(..)
             | Self::Gradient(_)
             | Self::Ease(_)
-            | Self::Theme(_) => true,
+            | Self::Theme(_)
+            | Self::Symbol(_)
+            | Self::Namespace(_)
+            | Self::Asset(_)
+            | Self::RigProperty(..)
+            | Self::RigMethod(..)
+            | Self::Clip(..)
+            | Self::ClipMethod(..) => true,
         }
     }
 
@@ -388,6 +523,7 @@ impl Value {
         Ok(())
     }
 
+    #[allow(clippy::many_single_char_names)] // identity comparison of tuple fields
     fn equals_at(
         &self,
         other: &Self,
@@ -420,6 +556,14 @@ impl Value {
             (Self::Ease(a), Self::Ease(b)) => Ok(a == b),
             (Self::Theme(a), Self::Theme(b)) => Ok(Arc::ptr_eq(a, b)),
             (Self::Method(a, m), Self::Method(b, n)) => Ok(a == b && m == n),
+            (Self::Symbol(a), Self::Symbol(b)) => Ok(Arc::ptr_eq(a, b)),
+            (Self::Namespace(a), Self::Namespace(b)) => Ok(Rc::ptr_eq(a, b)),
+            (Self::Asset(a), Self::Asset(b)) => Ok(a.kind == b.kind && a.path == b.path),
+            #[allow(clippy::match_same_arms)] // one arm per variant keeps the table readable
+            (Self::RigProperty(a, m), Self::RigProperty(b, n)) => Ok(a == b && m == n),
+            (Self::RigMethod(a, m, x), Self::RigMethod(b, n, y)) => Ok(a == b && m == n && x == y),
+            (Self::Clip(a, m), Self::Clip(b, n))
+            | (Self::ClipMethod(a, m), Self::ClipMethod(b, n)) => Ok(a == b && m == n),
             _ => Ok(false),
         }
     }
@@ -488,6 +632,51 @@ impl Value {
             ),
             Self::Ease(ease) => push_checked(out, &format!("<ease {}>", ease.mdf_value()), limits),
             Self::Theme(theme) => push_checked(out, &format!("<theme {}>", theme.name), limits),
+            Self::Symbol(symbol) => push_checked(
+                out,
+                &format!(
+                    "<symbol {} {}x{} {} parts>",
+                    symbol.name,
+                    format_number(symbol.width),
+                    format_number(symbol.height),
+                    symbol.part_count()
+                ),
+                limits,
+            ),
+            Self::Namespace(namespace) => push_checked(
+                out,
+                &format!(
+                    "<module {} ({} names)>",
+                    namespace.path,
+                    namespace.names.len()
+                ),
+                limits,
+            ),
+            Self::Asset(asset) => push_checked(
+                out,
+                &format!("<{} {}>", asset.kind.name(), asset.path),
+                limits,
+            ),
+            Self::RigProperty(id, name) => {
+                push_checked(out, &format!("<rig property {name} of node {id}>"), limits)
+            }
+            Self::RigMethod(id, name, method) => push_checked(
+                out,
+                &format!(
+                    "<{} of rig property {name} on node {id}>",
+                    match method {
+                        RigMethod::Key => "key",
+                        RigMethod::Set => "set",
+                    }
+                ),
+                limits,
+            ),
+            Self::Clip(id, name) => {
+                push_checked(out, &format!("<clip {name} of node {id}>"), limits)
+            }
+            Self::ClipMethod(id, name) => {
+                push_checked(out, &format!("<key of clip {name} on node {id}>"), limits)
+            }
         }
     }
 

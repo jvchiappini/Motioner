@@ -1,0 +1,215 @@
+# Mascot rig (prompt 16 acceptance).
+#
+# Rebuilds DailyAiRecap/mascot_controller.html as an addressable rig. The
+# SVG is the Neutral export; every driver below replaces a line of the
+# controller's apply(), and the poses are its presets as partial poses.
+# Documented deviations from the HTML: no path re-derivation (Motioner v0
+# drivers write transforms, opacity and paint), so lids blink by sliding,
+# the mouth opens by scaling the authored lens, and perspective/skew and
+# the four movable corners are approximated with scale and rotation.
+
+art = use("assets/mascot.svg")
+
+def build(pos=(0, 0), scale=1.0, name="mascot"):
+    m = rig(art, pos=pos, scale=scale, name=name)
+
+    # ---- body / face ------------------------------------------------
+    m.prop("sx", 1.0, range=(0.4, 2.0), step=0.01)
+    m.prop("sy", 1.0, range=(0.4, 2.0), step=0.01)
+    m.prop("tx", 0.0, range=(-40.0, 40.0))
+    m.prop("ty", 0.0, range=(-100.0, 40.0))
+    m.prop("rot", 0.0, range=(-25.0, 25.0), kind="angle", step=0.5)
+
+    # ---- eyes -------------------------------------------------------
+    m.prop("ew", 1.0, range=(0.5, 1.6), step=0.01)
+    m.prop("eh", 1.0, range=(0.3, 1.6), step=0.01)
+    m.prop("lt_L", 0.0, range=(0.0, 1.0), step=0.01)
+    m.prop("lt_R", 0.0, range=(0.0, 1.0), step=0.01)
+    m.prop("lb", 0.0, range=(0.0, 0.8), step=0.01)
+    m.prop("ps", 1.0, range=(0.4, 1.7), step=0.01)
+    m.prop("look", (0.0, 0.0), range=((-1.0, -1.0), (1.0, 1.0)))
+    m.mirror("lid", ("lt_L", "lt_R"), False)
+
+    # ---- brows / mouth ----------------------------------------------
+    m.prop("brow_y", 0.0, range=(-14.0, 14.0), step=0.5)
+    m.prop("brow_rot", 0.0, range=(-35.0, 35.0), kind="angle", step=1.0)
+    m.prop("mouth_open", 0.0, range=(0.0, 26.0), step=0.5)
+    m.prop("mouth_w", 1.0, range=(0.5, 2.0), step=0.01)
+    m.prop("mouth_y", 0.0, range=(-10.0, 12.0), step=0.5)
+
+    # ---- effects ----------------------------------------------------
+    m.prop("glow", 0.0, range=(0.0, 1.0), step=0.05)
+    m.prop("spark", 0.0, range=(0.0, 1.0), step=0.05)
+
+    # ---- drivers (the HTML's apply(), split in readable pieces) ------
+    def body_motion(sx, sy, tx, ty, rot):
+        return [
+            ["mascot", "scale.x", sx],
+            ["mascot", "scale.y", sy],
+            ["mascot", "position.x", tx],
+            ["mascot", "position.y", ty],
+            ["mascot", "rotation", rot]
+        ]
+
+    def eye_motion(ew, eh):
+        return [
+            ["eye-left", "scale.x", ew],
+            ["eye-left", "scale.y", eh],
+            ["eye-right", "scale.x", ew],
+            ["eye-right", "scale.y", eh],
+            ["pupil-left", "scale.x", ps],
+            ["pupil-left", "scale.y", ps],
+            ["pupil-right", "scale.x", ps],
+            ["pupil-right", "scale.y", ps]
+        ]
+
+    def lid_motion(lt_L, lt_R, lb):
+        return [
+            ["lid-top-left", "opacity", lt_L],
+            ["lid-top-left", "position.y", -30.0 + 30.0 * lt_L],
+            ["lid-top-right", "opacity", lt_R],
+            ["lid-top-right", "position.y", -30.0 + 30.0 * lt_R],
+            ["lid-bottom-left", "opacity", lb],
+            ["lid-bottom-left", "position.y", 30.0 - 30.0 * lb],
+            ["lid-bottom-right", "opacity", lb],
+            ["lid-bottom-right", "position.y", 30.0 - 30.0 * lb],
+            ["eye-closed-left", "opacity", lt_L > 0.95],
+            ["eye-closed-right", "opacity", lt_R > 0.95]
+        ]
+
+    def brow_motion(brow_y, brow_rot):
+        return [
+            ["brow-left", "position.y", brow_y],
+            ["brow-left", "rotation", brow_rot],
+            ["brow-right", "position.y", brow_y],
+            ["brow-right", "rotation", -brow_rot]
+        ]
+
+    def mouth_motion(mouth_open, mouth_w, mouth_y):
+        return [
+            ["mouth", "scale.x", mouth_w],
+            ["mouth", "scale.y", 0.06 + mouth_open / 14.0],
+            ["mouth", "position.y", mouth_y]
+        ]
+
+    def fx_motion(glow, spark):
+        return [
+            ["glow", "opacity", glow],
+            ["sparks", "opacity", spark],
+            ["sparks", "scale.x", 0.6 + 0.4 * spark],
+            ["sparks", "scale.y", 0.6 + 0.4 * spark]
+        ]
+
+    m.driver(body_motion)
+    m.driver(eye_motion)
+    m.driver(lid_motion)
+    m.driver(brow_motion)
+    m.driver(mouth_motion)
+    m.driver(fx_motion)
+
+    # ---- the controller's look pad and blink ------------------------
+    m.aim("pupil-left", "look", radius=5.0)
+    m.aim("pupil-right", "look", radius=5.0)
+    m.blink("lt_L,lt_R", every=3.4, jitter=0.55, duration=0.09)
+
+    # ---- the 17 presets as partial poses ----------------------------
+    m.pose("Neutral", reset=True, sx=1.0, sy=1.0, tx=0.0, ty=0.0, rot=0.0,
+           ew=1.0, eh=1.0, lt_L=0.0, lt_R=0.0, lb=0.0, ps=1.0,
+           brow_y=0.0, brow_rot=0.0, mouth_open=0.0, mouth_w=1.0,
+           mouth_y=0.0, glow=0.0, spark=0.0)
+    m.pose("Feliz", reset=True, mouth_open=9.0, mouth_w=1.2, lb=0.3, brow_y=-3.0,
+           brow_rot=-1.0, ps=1.05)
+    m.pose("Excitado", reset=True, ew=1.15, eh=1.15, ps=1.15, mouth_open=13.0,
+           mouth_w=1.27, brow_y=-6.0, brow_rot=-2.0, spark=1.0, glow=0.8,
+           sy=1.08, sx=0.95)
+    m.pose("Triste", reset=True, mouth_open=0.0, mouth_w=0.8, brow_rot=-14.0,
+           brow_y=2.0, lt_L=0.3, lt_R=0.3, ps=0.9)
+    m.pose("Enojado", reset=True, mouth_open=2.0, mouth_w=1.13, brow_rot=16.0,
+           brow_y=3.0, lt_L=0.2, lt_R=0.2, ps=0.85)
+    m.pose("Sorpresa", reset=True, ew=1.3, eh=1.35, ps=0.65, brow_y=-9.0,
+           mouth_open=18.0, mouth_w=0.73, sy=1.06, sx=0.95)
+    m.pose("Pensando", reset=True, lt_L=0.45, lt_R=0.45, mouth_w=0.73, mouth_open=0.0,
+           brow_y=4.0)
+    m.pose("Guino", reset=True, mouth_open=7.0, mouth_w=1.13, lt_L=1.0, lt_R=0.0,
+           brow_y=1.0)
+    m.pose("Picaro", reset=True, lt_L=0.35, lt_R=0.35, mouth_open=4.0, mouth_w=1.07,
+           brow_y=1.0, brow_rot=4.0)
+    m.pose("Estirar", reset=True, sy=1.3, sx=0.77)
+    m.pose("Aplastar", reset=True, sy=0.65, sx=1.35)
+    m.pose("Inclinar", reset=True, rot=-3.0, tx=6.0)
+    m.pose("Perspectiva", reset=True, sy=1.02, sx=1.04, tx=-4.0)
+    m.pose("Giro 3D", reset=True, tx=-3.0, rot=4.0, sy=0.98)
+    m.pose("Gelatina", reset=True, sx=1.12, sy=0.9)
+    m.pose("Torcido", reset=True, rot=5.0, tx=3.0)
+    m.pose("Dormido", reset=True, lt_L=1.0, lt_R=1.0, sy=0.62, sx=1.08, ty=23.0,
+           mouth_w=0.67, mouth_open=0.0, brow_y=3.0)
+
+    # ---- the two clips from the controller --------------------------
+    j = m.clip("salto", length=2.24)
+    j.key("sy", 0.0, 0.58, ease="cubic_out")
+    j.key("sy", 0.28, 1.32, ease="cubic_out")
+    j.key("sy", 0.5, 1.04, ease="cubic_out")
+    j.key("sy", 0.75, 1.28, ease="cubic_in")
+    j.key("sy", 1.05, 0.5, ease="cubic_out")
+    j.key("sy", 1.15, 1.14, ease="cubic_out")
+    j.key("sy", 1.35, 0.8, ease="cubic_in")
+    j.key("sy", 1.53, 1.0, ease="elastic_out")
+    j.key("sx", 0.0, 1.32, ease="cubic_out")
+    j.key("sx", 0.28, 0.8)
+    j.key("sx", 0.75, 0.82)
+    j.key("sx", 1.05, 1.5)
+    j.key("sx", 1.15, 0.9)
+    j.key("sx", 1.35, 1.2)
+    j.key("sx", 1.53, 1.0, ease="elastic_out")
+    j.key("ty", 0.28, -60.0)
+    j.key("ty", 0.5, -95.0)
+    j.key("ty", 0.75, 0.0)
+    j.key("ty", 1.15, -14.0)
+    j.key("ty", 1.35, 0.0, ease="cubic_in")
+    j.key("rot", 0.5, -4.0)
+    j.key("rot", 0.75, 3.0)
+    j.key("rot", 1.05, 0.0)
+    j.key("mouth_open", 0.28, 14.0)
+    j.key("mouth_open", 1.05, 0.0)
+    j.key("mouth_open", 1.15, 9.0)
+    j.key("mouth_open", 1.53, 0.0, ease="elastic_out")
+    j.key("spark", 0.28, 1.0)
+    j.key("spark", 1.05, 0.0)
+
+    g = m.clip("giro", length=3.46)
+    g.key("sy", 0.0, 0.75, ease="cubic_out")
+    g.key("sy", 0.3, 1.15, ease="cubic_in_out")
+    g.key("tx", 0.3, -48.0)
+    g.key("tx", 0.5, 0.0, ease="cubic_in")
+    g.key("ty", 0.3, -26.0)
+    g.key("ty", 0.5, 0.0, ease="cubic_in")
+    g.key("sy", 0.7, 0.78, ease="cubic_out")
+    g.key("sy", 0.82, 1.0, ease="elastic_out")
+    g.key("rot", 1.2, -4.0, ease="sine_in_out")
+    g.key("rot", 1.4, 4.0, ease="sine_in_out")
+    g.key("rot", 1.6, 0.0, ease="sine_in_out")
+    g.key("sy", 1.9, 0.75)
+    g.key("sy", 2.18, 1.15)
+    g.key("tx", 2.18, -30.0)
+    g.key("ty", 2.18, -20.0)
+    g.key("tx", 2.4, 0.0, ease="cubic_in")
+    g.key("ty", 2.4, 0.0, ease="cubic_in")
+    g.key("sy", 2.63, 0.8, ease="cubic_out")
+    g.key("sy", 2.75, 1.0, ease="elastic_out")
+    g.key("spark", 2.18, 1.0)
+    g.key("spark", 2.75, 0.0)
+    g.key("mouth_open", 2.18, 8.0)
+    g.key("mouth_open", 2.75, 0.0, ease="elastic_out")
+
+    # ---- state machine: mood and the jump trigger -------------------
+    m.input("mood", "calm", kind="enum", values=["calm", "sad", "happy"])
+    m.state("calm")
+    m.state("sad", pose="Triste")
+    m.state("happy", pose="Feliz")
+    m.transition("calm", "sad", input="mood", equals="sad", dur=0.25)
+    m.transition("sad", "calm", input="mood", equals="calm", dur=0.3)
+    m.transition("calm", "happy", input="mood", equals="happy", dur=0.2)
+    m.transition("happy", "calm", input="mood", equals="calm", dur=0.25)
+    m.transition("sad", "happy", input="mood", equals="happy", dur=0.2)
+    m.transition("happy", "sad", input="mood", equals="sad", dur=0.25)
+    return m

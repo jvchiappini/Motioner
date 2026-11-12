@@ -1,0 +1,48 @@
+# Mascot demo: the prompt 16 acceptance scene.
+#
+# 15 seconds that exercise the whole rig: all 17 presets as poses, the two
+# controller clips, the look pad, a blink layer and a mood state machine
+# driven by keyed inputs. Render with:
+#   cargo run -p motioner_app --release -- render examples/rig/mascot_demo.motion
+
+comp(name="Mascot demo", width=1920, height=1080, fps=60, duration=15.0,
+     background="#0A0A0A")
+
+rigs = use("examples/rig/mascot.motion")
+m = rigs.build(pos=(960, 540), scale=4.2)
+
+# The look pad, written as a vec2 property on the timeline.
+m.look.key(0.4, (0.6, -0.25))
+m.look.key(2.6, (-0.55, 0.2))
+m.look.key(5.0, (0.0, 0.0))
+m.look.key(8.4, (0.35, 0.35))
+m.look.key(12.0, (0.7, 0.1))
+
+# The 17 presets, 0.6 s apart.
+m.pose("Neutral", at=0.0, dur=0.0)
+m.pose("Feliz", at=0.7, dur=0.3, ease="cubic_out")
+m.pose("Excitado", at=1.3, dur=0.3, ease="back_out")
+m.pose("Triste", at=1.9, dur=0.35, ease="cubic_out")
+m.pose("Enojado", at=2.5, dur=0.25, ease="cubic_out")
+m.pose("Sorpresa", at=3.1, dur=0.3, ease="back_out")
+m.pose("Pensando", at=3.7, dur=0.3, ease="cubic_out")
+m.pose("Guino", at=4.3, dur=0.2, ease="back_out")
+m.pose("Picaro", at=4.9, dur=0.3, ease="cubic_out")
+m.pose("Estirar", at=5.5, dur=0.25, ease="back_out")
+m.pose("Aplastar", at=6.1, dur=0.2, ease="cubic_out")
+m.pose("Inclinar", at=6.7, dur=0.3, ease="sine_in_out")
+m.pose("Perspectiva", at=7.3, dur=0.3, ease="sine_in_out")
+m.pose("Giro 3D", at=7.9, dur=0.3, ease="sine_in_out")
+m.pose("Gelatina", at=8.5, dur=0.3, ease="elastic_out")
+m.pose("Torcido", at=9.1, dur=0.3, ease="sine_in_out")
+m.pose("Dormido", at=9.7, dur=0.4, ease="cubic_out")
+m.pose("Neutral", at=10.6, dur=0.35, ease="cubic_out")
+
+# The controller's two clips.
+m.play("salto", at=10.9, loops=1)
+m.play("giro", at=12.6, loops=1)
+
+# The state machine, driven by keys like any other property.
+m.mood.key(0.0, "calm")
+m.mood.key(13.4, "sad")
+m.mood.key(13.9, "happy")

@@ -99,7 +99,15 @@ pub(crate) struct Scene {
     tempo_explicit: bool,
     /// Scene windows by group, for `scene.t(offset)`.
     scenes: HashMap<NodeId, SceneWindow>,
+    /// Symbol instances by root node (prompt 16).
+    pub(crate) symbols: HashMap<NodeId, rigs::InstantiatedSymbol>,
+    /// Built rigs, in declaration order.
+    pub(crate) rigs: Vec<rigs::RigEntry>,
+    /// Rig root node to entry index.
+    pub(crate) rig_nodes: HashMap<NodeId, usize>,
 }
+
+mod rigs;
 
 /// The absolute window of a `scene(...)` group, in seconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,6 +129,9 @@ impl Scene {
             tempo: theme.tempo,
             tempo_explicit: false,
             scenes: HashMap::new(),
+            symbols: HashMap::new(),
+            rigs: Vec::new(),
+            rig_nodes: HashMap::new(),
         }
     }
 
@@ -134,9 +145,17 @@ impl Scene {
         self.origins.intern_name(name)
     }
 
-    /// The finished document, if `comp()` was called.
-    pub fn into_document(self) -> Option<Document> {
-        self.document
+    /// Bakes every rig, then returns the finished document if `comp()` ran.
+    ///
+    /// # Errors
+    ///
+    /// Returns a value error when a rig bake fails (a driver produced a
+    /// non-finite value or exceeded the write budget).
+    pub fn into_document(mut self) -> HostResult<Option<Document>> {
+        if self.document.is_some() {
+            self.bake_rigs()?;
+        }
+        Ok(self.document)
     }
 
     /// Records where a node property value came from, when the source is
@@ -191,6 +210,7 @@ impl Scene {
             Builtin::Grid => self.grid_layout(args, metrics),
             Builtin::Stack => self.stack_layout(args, metrics),
             Builtin::CompSize => self.comp_size(args),
+            Builtin::Rig => self.rig_component(args, site),
             Builtin::Stagger => self.stagger(args, site),
             Builtin::Group => {
                 bind("group", &[], 0, args)?;
@@ -1733,7 +1753,15 @@ impl Scene {
                 .map_or(Value::None, |name| Value::Str(Arc::from(name))),
             "blend" => Value::Str(Arc::from(node.blend().name())),
             "visible" => Value::Bool(node.is_visible()),
-            _ => content_value_of(node.content(), name).ok_or_else(|| unknown_attribute(name))?,
+            _ => {
+                if let Some(value) = content_value_of(node.content(), name) {
+                    value
+                } else if self.rig_nodes.contains_key(&id) {
+                    return self.rig_property(id, name);
+                } else {
+                    return Err(unknown_attribute(name));
+                }
+            }
         };
         Ok(value)
     }
@@ -1837,6 +1865,20 @@ impl Scene {
                 })?;
                 Ok(Value::Number(window.start + offset))
             }
+            NodeMethod::RigPart => self.rig_part(id, args),
+            NodeMethod::RigParts => self.rig_parts(id, args),
+            NodeMethod::RigProp => self.rig_prop(id, args),
+            NodeMethod::RigMirror => self.rig_mirror(id, args),
+            NodeMethod::RigDriver => self.rig_driver(id, args),
+            NodeMethod::RigPose => self.rig_pose(id, args),
+            NodeMethod::RigClip => self.rig_clip(id, args),
+            NodeMethod::RigPlay => self.rig_play(id, args),
+            NodeMethod::RigInput => self.rig_input(id, args),
+            NodeMethod::RigState => self.rig_state(id, args),
+            NodeMethod::RigTransition => self.rig_transition(id, args),
+            NodeMethod::RigFire => self.rig_fire(id, args),
+            NodeMethod::RigAim => self.rig_aim(id, args),
+            NodeMethod::RigBlink => self.rig_blink(id, args),
         }
     }
 
@@ -1934,7 +1976,7 @@ impl Scene {
     /// `node.wiggle(property, seed, frequency, amplitude, start, end)`.
     ///
     /// Emits one `sine_in_out` key per `1/frequency` seconds, with the value
-    /// `base ± amplitude` from a documented `SplitMix64` stream. The same seed
+    /// `base Â± amplitude` from a documented `SplitMix64` stream. The same seed
     /// always produces the same keys. `base` is the property's current static
     /// value (existing keyframes are not sampled).
     fn wiggle(&mut self, id: NodeId, args: CallArgs, site: &WriteSite) -> HostResult<Value> {

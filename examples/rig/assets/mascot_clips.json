@@ -1,0 +1,36 @@
+{
+  "source": "DailyAiRecap/mascot_controller.html",
+  "format": ["start", "duration", "ease", "partial pose"],
+  "note": "GSAP ease names are kept verbatim. The rig module maps power2.* to cubic_*, power3.* to quartic-like 'cubic_out' with the documented substitution in out/rigs/mascot/COMPARISON.md, because Motioner v0 has quad/cubic/back/elastic/bounce/expo/sine presets only.",
+  "clips": {
+    "salto": [
+      [0.0, 0.28, "power2.out", {"ay": 60, "sy": 0.58, "sx": 1.32, "lt": 0.3, "lb": 0.2, "ms": 5, "by": 2, "bgL": 4, "bgR": 4}],
+      [0.28, 0.22, "power2.out", {"sy": 1.32, "sx": 0.8, "ty": -60, "lt": 0, "lb": 0, "ew": 1.2, "eh": 1.2, "ps": 0.8, "mo": 14, "ms": 4, "mw": 26, "by": -7, "ba": -2, "bgL": 0, "bgR": 0, "spark": 1}],
+      [0.5, 0.25, "power2.out", {"ty": -95, "sy": 1.04, "sx": 0.98, "rot": -4}],
+      [0.75, 0.3, "power2.in", {"ty": 0, "sy": 1.28, "sx": 0.82, "rot": 3, "mo": 6, "ew": 1.1, "eh": 1.1}],
+      [1.05, 0.1, "power3.out", {"sy": 0.5, "sx": 1.5, "rot": 0, "lt": 0.5, "lb": 0.35, "mo": 0, "ms": 10, "mw": 36, "ew": 1, "eh": 1, "ps": 1, "by": 2, "bgL": 9, "bgR": 9, "bgT": -5, "spark": 0}],
+      [1.15, 0.2, "power2.out", {"sy": 1.14, "sx": 0.9, "ty": -14, "lt": 0, "lb": 0.1, "mo": 9, "mt": 5, "ms": 11, "by": -4, "bgL": 0, "bgR": 0, "bgT": 0}],
+      [1.35, 0.18, "power2.in", {"ty": 0, "sy": 0.8, "sx": 1.2, "lt": 0.2}],
+      [1.53, 0.7, "elastic.out(1,.4)", {"sy": 1, "sx": 1, "ty": 0, "lt": 0, "lb": 0, "mo": 0, "mt": 0, "ms": 2, "mw": 30, "by": 0, "ba": 0, "ps": 1, "ew": 1, "eh": 1, "rot": 0}],
+      [2.23, 0.01, "none", {"ay": 0}]
+    ],
+    "giro": [
+      [0.0, 0.3, "power2.out", {"ay": 60, "sy": 0.75, "q": 1.2, "lt": 0.3, "ms": 4}],
+      [0.3, 0.4, "power2.inOut", {"th": 3.141592653589793, "sy": 1.15, "q": 0.9, "lt": 0, "ew": 1.1, "eh": 1.1}],
+      [0.3, 0.2, "power2.out", {"ty": -48}],
+      [0.5, 0.2, "power2.in", {"ty": 0}],
+      [0.7, 0.12, "power3.out", {"sy": 0.78, "q": 1.2}],
+      [0.82, 0.3, "elastic.out(1,.5)", {"sy": 1, "q": 1}],
+      [1.2, 0.2, "sine.inOut", {"rot": -4}],
+      [1.4, 0.2, "sine.inOut", {"rot": 4}],
+      [1.6, 0.2, "sine.inOut", {"rot": 0}],
+      [1.9, 0.28, "power2.out", {"sy": 0.75, "q": 1.2}],
+      [2.18, 0.45, "power2.inOut", {"th": 6.283185307179586, "sy": 1.15, "q": 0.9, "ms": 9, "mo": 8, "mt": 4, "by": -4, "spark": 1}],
+      [2.18, 0.22, "power2.out", {"ty": -40}],
+      [2.4, 0.23, "power2.in", {"ty": 0}],
+      [2.63, 0.12, "power3.out", {"sy": 0.8, "q": 1.2}],
+      [2.75, 0.7, "elastic.out(1,.45)", {"sy": 1, "q": 1, "ms": 2, "mo": 0, "mt": 0, "by": 0, "spark": 0, "ew": 1, "eh": 1, "lt": 0}],
+      [3.45, 0.01, "none", {"ay": 0}]
+    ]
+  }
+}

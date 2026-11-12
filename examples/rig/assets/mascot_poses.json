@@ -1,0 +1,39 @@
+{
+  "source": "DailyAiRecap/mascot_controller.html",
+  "note": "Verbatim partial poses from the controller's PR table (neutral values omitted). Eye keys (lt, ew, ...) apply to both eyes through the MIR table; keys prefixed L or R target one side.",
+  "mirror": ["tilt", "bx", "br", "ox"],
+  "defaults": {
+    "sx": 1.0, "sy": 1.0, "rot": 0.0, "tx": 0.0, "ty": 0.0, "fx": 0.0, "fy": 0.0,
+    "sep": 0.0, "fv": 1.0, "ax": 0.0, "ay": 0.0, "skx": 0.0, "sky": 0.0,
+    "c1x": 0.0, "c1y": 0.0, "c2x": 0.0, "c2y": 0.0, "c3x": 0.0, "c3y": 0.0,
+    "c4x": 0.0, "c4y": 0.0,
+    "tpT": 0.0, "tpB": 0.0, "pvL": 0.0, "pvR": 0.0,
+    "shT": 0.0, "shB": 0.0, "shL": 0.0, "shR": 0.0,
+    "bgT": 0.0, "bgR": 0.0, "bgB": 0.0, "bgL": 0.0, "fol": 1.0,
+    "mw": 30.0, "ms": 2.0, "mo": 0.0, "mcl": 0.0, "mcr": 0.0, "mt": 0.0,
+    "my": 0.0, "mrot": 0.0, "glow": 0.0, "spark": 0.0,
+    "ox": 0.0, "oy": 0.0, "ew": 1.0, "eh": 1.0, "lt": 0.0, "tilt": 0.0,
+    "lb": 0.0, "px": 0.0, "py": 0.0, "ps": 1.0, "cb": 0.0,
+    "bx": 0.0, "by": 0.0, "br": 0.0, "ba": 0.0, "bl": 24.0, "bt": 4.0,
+    "th": 0.0, "q": 1.0
+  },
+  "presets": {
+    "Neutral": {},
+    "Feliz": {"ms": 10, "mo": 9, "mt": 5, "mw": 36, "lb": 0.3, "by": -3, "ba": -1, "cb": 0},
+    "Excitado": {"ew": 1.15, "eh": 1.15, "ps": 1.15, "ms": 12, "mo": 13, "mt": 6, "mw": 38, "by": -6, "ba": -2, "spark": 1, "glow": 0.8, "sy": 1.08, "sx": 0.95},
+    "Triste": {"ms": -9, "mw": 24, "br": -14, "by": 2, "lt": 0.3, "tilt": -10, "py": 3, "ps": 0.9},
+    "Enojado": {"ms": -6, "mo": 2, "mt": 3, "mw": 34, "br": 16, "by": 3, "lt": 0.2, "tilt": 18, "ps": 0.85},
+    "Sorpresa": {"ew": 1.3, "eh": 1.35, "ps": 0.65, "by": -9, "ba": -3, "mo": 18, "mw": 22, "ms": 0, "sy": 1.06, "sx": 0.95},
+    "Pensando": {"lt": 0.45, "py": -4, "px": 3, "mw": 22, "ms": 0, "Lba": -2, "Rby": -6, "Rba": -3, "Lby": 1},
+    "Guiño": {"ms": 8, "mo": 7, "mt": 4, "mw": 34, "Llt": 1, "Lcb": -3, "Lby": 2, "Rby": -3, "Rlb": 0.2},
+    "Pícaro": {"lt": 0.35, "tilt": 6, "px": 4, "ms": 4, "mcl": 2, "mcr": -6, "mw": 32, "Rby": -6, "Lby": 1, "Rtilt": -2},
+    "Estirar": {"sy": 1.3, "sx": 0.77, "ay": 60},
+    "Aplastar": {"sy": 0.65, "sx": 1.35, "ay": 60, "bgT": -3},
+    "Inclinar": {"skx": -16, "rot": -3},
+    "Perspectiva": {"tpT": 18, "tpB": -6, "pvL": 4, "pvR": -4},
+    "Giro 3D": {"pvL": -10, "pvR": 14, "c2x": -14, "c3x": -14, "fx": -3},
+    "Gelatina": {"bgT": 7, "bgR": -7, "bgB": 7, "bgL": -7, "sx": 1.12, "sy": 0.9, "ay": 60},
+    "Torcido": {"c1x": 12, "c3x": -12, "c2y": -6, "rot": 5},
+    "Dormido": {"lt": 1, "cb": 4, "sy": 0.62, "sx": 1.08, "ty": 23, "mw": 20, "ms": 2, "by": 3}
+  }
+}

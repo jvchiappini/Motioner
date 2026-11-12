@@ -21,7 +21,9 @@ mod images;
 mod media;
 mod png_writer;
 mod project;
+pub mod svg;
 mod traces;
+mod use_assets;
 mod video;
 
 pub use assets::{
@@ -48,7 +50,9 @@ pub use project::{
     RecentProject, WindowPlacement, ASSETS_DIR, BACKUPS_DIR, CACHE_DIR, COMPOSITIONS_DIR,
     EDITOR_FILE, FORMAT_VERSION, PROJECT_EXTENSION, PROJECT_FILE, TRACES_DIR,
 };
+pub use svg::{parse_svg, SvgError};
 pub use traces::{append as append_trace, read_all as read_traces, TraceRecord, TRACE_VERSION};
+pub use use_assets::ProjectAssets;
 pub use video::{
     decode_frame, decode_frames, make_proxy, probe as probe_video, FrameStream, VideoInfo,
 };

@@ -1,0 +1,16 @@
+[package]
+name = "motioner_rig"
+description = "Rig definitions, drivers, poses, clips and state machines evaluated headless."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+# The easing maths has one implementation, in the pure evaluator.
+motioner_eval.workspace = true
+
+[lints]
+workspace = true

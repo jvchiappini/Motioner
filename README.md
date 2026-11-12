@@ -277,3 +277,5 @@ carry rustdoc, and performance changes are measured. See
 
 Motioner is free and open source under the
 [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
+
+Rigs, SVG symbols and state machines are documented in [docs/rigs.md](docs/rigs.md); imports in [docs/imports.md](docs/imports.md).

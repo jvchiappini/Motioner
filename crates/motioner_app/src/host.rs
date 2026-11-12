@@ -797,7 +797,13 @@ fn used_keys(project: &Project) -> HashMap<String, usize> {
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(document) = motioner_dsl::run(&source, &motioner_dsl::Limits::default()) else {
+        let assets = motioner_io::ProjectAssets::new(project.root());
+        let Ok(document) = motioner_dsl::run_with_assets(
+            &source,
+            &motioner_dsl::Limits::default(),
+            &motioner_core::NoTextMetrics,
+            &assets,
+        ) else {
             continue;
         };
         for node in document.nodes() {

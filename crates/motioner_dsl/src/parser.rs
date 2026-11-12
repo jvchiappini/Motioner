@@ -776,10 +776,12 @@ impl Parser {
                 token.span,
                 "dict literals are deferred to MDF v0.1",
             )),
-            TokenKind::Keyword(Keyword::Use) => Err(unsupported(
-                token.span,
-                "'use' modules are deferred to MDF v0.1",
-            )),
+            // `use(path)` is a call whose callee is the `use` keyword; the
+            // postfix loop turns it into a call expression (D-0051).
+            TokenKind::Keyword(Keyword::Use) => {
+                self.advance();
+                literal(ExprKind::Name(Arc::from("use")))
+            }
             _ => Err(self.unexpected("an expression")),
         }
     }
@@ -1019,7 +1021,6 @@ x[0] = 1
                 13,
             ),
             ("while x:\n    pass", ErrorCategory::Unsupported, 1, 1),
-            ("m = use('a')", ErrorCategory::Unsupported, 1, 5),
             ("d = {}", ErrorCategory::Unsupported, 1, 5),
             ("a < b < c", ErrorCategory::Unsupported, 1, 7),
             ("    x = 1", ErrorCategory::Parse, 1, 1),

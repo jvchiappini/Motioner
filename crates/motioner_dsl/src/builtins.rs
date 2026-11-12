@@ -109,7 +109,9 @@ pub(crate) fn call(
         | Builtin::Column
         | Builtin::Grid
         | Builtin::Stack
-        | Builtin::CompSize => Err(HostError::type_error(format!(
+        | Builtin::CompSize
+        | Builtin::Use
+        | Builtin::Rig => Err(HostError::type_error(format!(
             "{}() is a scene constructor",
             builtin.name()
         ))),
