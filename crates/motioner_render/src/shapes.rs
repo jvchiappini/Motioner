@@ -348,23 +348,29 @@ fn draw_path(
             draws += meshes.fill.len() as u32;
         }
     }
-    if let Some(stroke) = path
-        .paint
-        .stroke
-        .filter(|stroke| stroke.width > 0.0 && !meshes.stroke.is_empty())
-    {
+    if let Some(stroke) = path.paint.stroke.filter(|stroke| stroke.width > 0.0) {
         let color = space::linear_rgba(paint_color(plan, stroke.paint), item.opacity);
         let z = space::z_for(*z_index, total);
-        for triangle in &meshes.stroke {
+        // A non-scaling stroke is stroked in composition space, so its
+        // triangles bypass the local cache and the item transform.
+        let world = stroke
+            .non_scaling
+            .is_some()
+            .then(|| paths::non_scaling_stroke(path, model));
+        let (triangles, transform) = match &world {
+            Some(triangles) => (triangles.as_slice(), Affine2::IDENTITY),
+            None => (meshes.stroke.as_slice(), model),
+        };
+        for triangle in triangles {
             canvas.shape(gradients::paint(
-                paths::instance(model, triangle, color, z),
+                paths::instance(transform, triangle, color, z),
                 gradients::base_of(gradients, stroke.paint),
             ));
         }
         *z_index += 1;
         #[allow(clippy::cast_possible_truncation)] // triangle counts fit u32
         {
-            draws += meshes.stroke.len() as u32;
+            draws += triangles.len() as u32;
         }
     }
     draws
@@ -512,6 +518,7 @@ mod tests {
             stroke: stroke.map(|stroke| ResolvedStroke {
                 paint: ResolvedFill::Solid(stroke.color),
                 width: stroke.width,
+                non_scaling: None,
             }),
         }
     }

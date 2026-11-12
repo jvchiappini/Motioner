@@ -266,6 +266,7 @@ mod tests {
         let _ = ResolvedStroke {
             paint: motioner_eval::ResolvedFill::Solid(Color::WHITE),
             width: 1.0,
+            non_scaling: None,
         };
     }
 }

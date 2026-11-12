@@ -803,11 +803,31 @@ impl Parsed {
     }
 }
 
-/// Parses `query <file> [--frame N] [--node ID]`.
+/// Parses `query <file> [--frame N] [--node ID] [--rig NAME]`, and the
+/// positional alias `query rig <file> <instance>`.
 fn parse_query(args: &[OsString]) -> Result<Command> {
-    let parsed = parse_flags("query", args, true, &["--frame", "--node"], &[])?;
+    if args.first().and_then(|arg| arg.to_str()) == Some("rig") {
+        if args.len() != 3 {
+            bail!("query rig needs a file and an instance: query rig <file> <instance>");
+        }
+        let instance = args[2]
+            .to_str()
+            .ok_or_else(|| anyhow!("the rig instance name must be valid UTF-8"))?;
+        return Ok(Command::Query(agent::QueryArgs {
+            input: PathBuf::from(&args[1]),
+            frame: None,
+            node: None,
+            rig: Some(instance.to_owned()),
+        }));
+    }
+    let parsed = parse_flags("query", args, true, &["--frame", "--node", "--rig"], &[])?;
     if !parsed.rest.is_empty() {
         bail!("query takes one input file");
+    }
+    let node = parsed.value("--node").map(str::to_owned);
+    let rig = parsed.value("--rig").map(str::to_owned);
+    if node.is_some() && rig.is_some() {
+        bail!("query takes --node or --rig, not both");
     }
     Ok(Command::Query(agent::QueryArgs {
         input: parsed
@@ -815,7 +835,8 @@ fn parse_query(args: &[OsString]) -> Result<Command> {
             .clone()
             .ok_or_else(|| anyhow!("query needs an input .motion file"))?,
         frame: parsed.frame()?,
-        node: parsed.value("--node").map(str::to_owned),
+        node,
+        rig,
     }))
 }
 
@@ -1218,6 +1239,16 @@ pub(crate) fn resolve_input(path: &Path) -> std::result::Result<InputTarget, Fai
     }
 }
 
+/// The `use()` resolver for a resolved input: the project root, or the
+/// working directory in single-file mode (the same rule as `load_document`).
+pub(crate) fn input_assets(target: &InputTarget) -> std::rc::Rc<dyn motioner_dsl::AssetResolver> {
+    let root = target.project.as_ref().map_or_else(
+        || target.root.clone(),
+        |project| project.root().to_path_buf(),
+    );
+    std::rc::Rc::new(motioner_io::ProjectAssets::new(root))
+}
+
 /// Opens the start screen with no project (double-clicking the binary).
 fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
     eprintln!("desktop: enter");
@@ -1275,6 +1306,7 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         fonts: Some(fonts),
         image_resolver: Some(resolver.clone()),
         video_resolver: Some(resolver),
+        asset_resolver: Some(input_assets(&target)),
         host: Some(std::rc::Rc::new(host::Host::new(
             std::env::current_dir().unwrap_or_default(),
         ))),
@@ -1491,9 +1523,10 @@ fn run_bake(args: &BakeArgs) -> std::result::Result<(), Failure> {
     let target = resolve_input(&args.input)?;
     let fonts = project_fonts(&target);
     let families = font_families(&fonts);
-    let mut editor = motioner_ui::Editor::open_with_metrics(
+    let mut editor = motioner_ui::Editor::open_with_assets(
         &target.composition,
         Arc::new(CpuTextMetrics::new(fonts)),
+        input_assets(&target),
     )
     .map_err(|error| match error.kind {
         motioner_ui::ErrorKind::NoDocument => Failure::Diagnostic(error.message),
@@ -2103,6 +2136,25 @@ mod tests {
                 input: PathBuf::from("a.motion"),
                 frame: Some(30),
                 node: Some("title".to_owned()),
+                rig: None,
+            })
+        );
+        assert_eq!(
+            parse(&args(&["query", "a.motion", "--rig", "mascot"])).unwrap(),
+            Command::Query(agent::QueryArgs {
+                input: PathBuf::from("a.motion"),
+                frame: None,
+                node: None,
+                rig: Some("mascot".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse(&args(&["query", "rig", "a.motion", "mascot"])).unwrap(),
+            Command::Query(agent::QueryArgs {
+                input: PathBuf::from("a.motion"),
+                frame: None,
+                node: None,
+                rig: Some("mascot".to_owned()),
             })
         );
         assert_eq!(

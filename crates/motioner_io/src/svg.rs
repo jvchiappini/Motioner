@@ -83,6 +83,9 @@ pub fn parse_svg(text: &str, name: &str) -> Result<Symbol, SvgError> {
         ),
     };
     let mut style = Style::default();
+    if let Some(value) = svg.attr("vector-effect") {
+        style.presentation("vector-effect", value);
+    }
     if let Some((min_x, min_y, width, height)) = view_box {
         let natural = (width, height);
         style.transform = root_transform(natural, (width, height), (min_x, min_y), &svg);
@@ -516,6 +519,9 @@ struct Style {
     fill_opacity: f64,
     stroke_opacity: f64,
     dash: Option<f64>,
+    /// `Some(true)` for `vector-effect="non-scaling-stroke"`; `Some(false)`
+    /// turns it off again and `None` inherits.
+    non_scaling_stroke: Option<bool>,
     root_view_box: Option<(f64, f64, f64, f64)>,
 }
 
@@ -536,6 +542,7 @@ impl Default for Style {
             fill_opacity: 1.0,
             stroke_opacity: 1.0,
             dash: None,
+            non_scaling_stroke: None,
             root_view_box: None,
         }
     }
@@ -570,6 +577,7 @@ impl Style {
             ("stroke-opacity", "stroke-opacity"),
             ("fill-opacity", "fill-opacity"),
             ("stroke-dasharray", "stroke-dasharray"),
+            ("vector-effect", "vector-effect"),
             ("opacity", "opacity"),
         ] {
             if let Some(value) = element.attr(key) {
@@ -641,6 +649,15 @@ impl Style {
                     .split(|c: char| c.is_whitespace() || c == ',')
                     .find_map(parse_number)
                     .filter(|dash| *dash > 0.0);
+            }
+            "vector-effect" => {
+                // Motioner extends SVG here: the value is inherited, so a
+                // group or the root can opt a whole symbol in.
+                self.non_scaling_stroke = match value.trim() {
+                    "non-scaling-stroke" => Some(true),
+                    "none" => Some(false),
+                    _ => self.non_scaling_stroke,
+                };
             }
             "opacity" => {
                 if let Some(opacity) = parse_number(value) {
@@ -993,6 +1010,7 @@ impl<'a> Reader<'a> {
                     0.0
                 },
             );
+            paint.non_scaling_stroke = style.non_scaling_stroke.unwrap_or(false).then_some(1.0);
             if style.fill_gradient.is_some() {
                 paint.fill_gradient.clone_from(&style.fill_gradient);
             }
@@ -1855,6 +1873,42 @@ mod tests {
             panic!("a path");
         };
         assert!(path.paint.fill_gradient.is_some());
+    }
+
+    #[test]
+    fn a_symbol_can_opt_in_to_non_scaling_strokes() {
+        let plain = svg(&wrapper(
+            "<path id=\"p\" d=\"M 0 0 L 10 0\" stroke=\"#000000\" stroke-width=\"3\"/>",
+        ));
+        let SymbolShape::Path(path) = &plain.part("p").expect("p").shape else {
+            panic!("a path");
+        };
+        assert!(path.paint.non_scaling_stroke.is_none());
+
+        let opted_in = parse_svg(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" \
+             vector-effect=\"non-scaling-stroke\">\
+             <g id=\"g\"><path id=\"p\" d=\"M 0 0 L 10 0\" stroke=\"#000000\" stroke-width=\"3\"/></g>\
+             </svg>",
+            "test",
+        )
+        .expect("a valid symbol");
+        let SymbolShape::Group(children) = &opted_in.part("g").expect("g").shape else {
+            panic!("a group");
+        };
+        let SymbolShape::Path(path) = &children[0].shape else {
+            panic!("a path");
+        };
+        assert_eq!(path.paint.non_scaling_stroke, Some(1.0));
+    }
+
+    #[test]
+    fn the_mascot_keeps_its_strokes_under_a_squash() {
+        let symbol = parse_svg(MASCOT, "mascot").expect("mascot.svg parses");
+        let SymbolShape::Path(path) = &symbol.part("mouth-line").expect("mouth-line").shape else {
+            panic!("a path");
+        };
+        assert_eq!(path.paint.non_scaling_stroke, Some(1.0));
     }
 
     #[test]

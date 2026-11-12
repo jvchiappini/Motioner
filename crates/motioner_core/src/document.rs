@@ -13,6 +13,7 @@ use crate::node::{
     BlendMode, ContentField, ContentValue, Node, NodeContent, NodeId, NodeIdentity, PaintSpec,
     Property, PropertyValue, TextAnimator, Transform,
 };
+use crate::rig_manifest::RigManifest;
 use crate::time::{frame_within_bounds, Frame, FrameRate};
 
 /// Largest accepted canvas side in pixels.
@@ -161,6 +162,8 @@ pub struct Document {
     /// editor. Inserts and removes only; never iterated, so evaluation stays
     /// deterministic.
     identities: HashMap<String, NodeId>,
+    /// What the compiler knows about every rig instance (D-0056).
+    rig_manifest: RigManifest,
 }
 
 /// Whether a property write sets the static value or adds a keyframe.
@@ -179,7 +182,22 @@ impl Document {
             nodes: Vec::new(),
             roots: Vec::new(),
             identities: HashMap::new(),
+            rig_manifest: RigManifest::default(),
         }
+    }
+
+    /// The rig manifest attached by the compiler (D-0056).
+    #[must_use]
+    pub fn rig_manifest(&self) -> &RigManifest {
+        &self.rig_manifest
+    }
+
+    /// Attaches the compiler's rig manifest.
+    ///
+    /// The DSL calls this after the bake; the manifest is descriptive data,
+    /// so it does not invalidate the node tree or the evaluator cache.
+    pub fn set_rig_manifest(&mut self, manifest: RigManifest) {
+        self.rig_manifest = manifest;
     }
 
     /// The composition settings.

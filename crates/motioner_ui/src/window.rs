@@ -65,6 +65,9 @@ pub struct PreviewOptions {
     pub image_resolver: Option<std::rc::Rc<dyn motioner_core::ImageResolver>>,
     /// Resolver for `video()` metadata.
     pub video_resolver: Option<std::rc::Rc<dyn motioner_core::VideoResolver>>,
+    /// Resolver for `use()` of SVG symbols and `.motion` modules (D-0051).
+    /// The application supplies the project-rooted one.
+    pub asset_resolver: Option<std::rc::Rc<dyn motioner_dsl::AssetResolver>>,
     /// Project services (D-0045); without one the start screen is read-only.
     pub host: Option<std::rc::Rc<dyn crate::ProjectHost>>,
     /// Open the window on the start screen with this state.
@@ -123,6 +126,9 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     }
     if let Some(resolver) = options.video_resolver.clone() {
         session.set_video_resolver(resolver);
+    }
+    if let Some(resolver) = options.asset_resolver.clone() {
+        session.set_asset_resolver(resolver);
     }
     match session.reload() {
         Ok(()) | Err(SessionError::Diagnostic(_)) => {}

@@ -15,10 +15,12 @@ mod graph;
 mod query;
 mod rebind;
 mod resolve;
+mod rig_json;
 mod view;
 
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,7 +28,7 @@ use motioner_core::{
     split_property, Document, Ease, Frame, NoTextMetrics, NodeId, OverrideAction, OverrideEntry,
     OverrideSet, OverrideValue, TextMetrics,
 };
-use motioner_dsl::{CodeEdit, Plan, Strategy, ValueOrigins};
+use motioner_dsl::{AssetResolver, CodeEdit, NoAssets, Plan, Strategy, ValueOrigins};
 
 use crate::command::{Command, CommandError, ErrorKind, Panel};
 use crate::edit::{self, EditCommand, KeyRef, UndoStack, UndoState};
@@ -350,8 +352,27 @@ impl Editor {
         path: &Path,
         metrics: Arc<dyn TextMetrics>,
     ) -> Result<Self, CommandError> {
+        Self::open_with_assets(path, metrics, Rc::new(NoAssets))
+    }
+
+    /// Opens a program with text metrics and the host's `use()` resolver.
+    ///
+    /// This is the constructor `query`, `edit`, `bake`, the tool host and the
+    /// tests use for a program that imports an SVG symbol or a `.motion`
+    /// module (D-0051/D-0056). There is no second resolution path: every
+    /// compile of this session uses the session's single `compile_source`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::open`].
+    pub fn open_with_assets(
+        path: &Path,
+        metrics: Arc<dyn TextMetrics>,
+        assets: Rc<dyn AssetResolver>,
+    ) -> Result<Self, CommandError> {
         let mut session = PreviewSession::new(path);
         session.set_text_metrics(metrics);
+        session.set_asset_resolver(assets);
         session.reload().map_err(|error| match error {
             crate::SessionError::Io { .. } => CommandError::new(ErrorKind::Io, error.to_string()),
             crate::SessionError::Diagnostic(_) => {

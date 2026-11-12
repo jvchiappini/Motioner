@@ -36,6 +36,11 @@ jobs:
       - name: Dependency boundaries
         run: python scripts/check_boundaries.py
 
+      - name: Text encoding
+        run: |
+          python scripts/check_encoding.py
+          python -m unittest discover -s scripts/tests
+
       - uses: taiki-e/install-action@cargo-machete
 
       - name: Unused dependencies

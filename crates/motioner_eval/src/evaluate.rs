@@ -388,10 +388,12 @@ fn resolved_paint(spec: &PaintSpec, time: f64, plan: &mut RenderPlan) -> Resolve
             Some(gradient) => Some(ResolvedStroke {
                 paint: resolve_gradient(gradient, time, plan),
                 width,
+                non_scaling: spec.non_scaling_stroke,
             }),
             None => sample_at(&spec.stroke, time).map(|color| ResolvedStroke {
                 paint: ResolvedFill::Solid(color),
                 width,
+                non_scaling: spec.non_scaling_stroke,
             }),
         }
     } else {

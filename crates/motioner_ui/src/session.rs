@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use motioner_core::{
     Composition, Document, FrameRate, NoTextMetrics, NodeId, OverrideSet, TextMetrics,
 };
-use motioner_dsl::{Compiled, Diagnostic, Limits, ValueOrigins};
+use motioner_dsl::{AssetResolver, Compiled, Diagnostic, Limits, NoAssets, ValueOrigins};
 use motioner_eval::{Evaluator, RenderPlan};
 
 use crate::file_watch::FileWatch;
@@ -175,6 +175,7 @@ pub struct PreviewSession {
     write_enabled: bool,
     images: Rc<dyn motioner_core::ImageResolver>,
     videos: Rc<dyn motioner_core::VideoResolver>,
+    assets: Rc<dyn AssetResolver>,
 }
 
 impl PreviewSession {
@@ -209,6 +210,7 @@ impl PreviewSession {
             write_enabled: true,
             images: Rc::new(motioner_core::NoImages),
             videos: Rc::new(motioner_core::NoVideos),
+            assets: Rc::new(NoAssets),
         }
     }
 
@@ -219,10 +221,43 @@ impl PreviewSession {
         self.text_metrics = Some(metrics);
     }
 
+    /// Installs the resolver used by `use()` of SVG symbols and `.motion`
+    /// modules (D-0051).
+    ///
+    /// The host injects the project-rooted resolver before [`Self::reload`];
+    /// there is no second resolution path and no fallback once a project is
+    /// open.
+    pub fn set_asset_resolver(&mut self, resolver: Rc<dyn AssetResolver>) {
+        self.assets = resolver;
+    }
+
+    /// The installed `use()` resolver.
+    #[must_use]
+    pub fn asset_resolver(&self) -> &Rc<dyn AssetResolver> {
+        &self.assets
+    }
+
     /// The text metrics the program is compiled with.
     #[must_use]
     pub fn text_metrics(&self) -> &dyn TextMetrics {
         self.text_metrics.as_deref().unwrap_or(&NoTextMetrics)
+    }
+
+    /// Compiles `source` and `overrides` with the installed metrics and the
+    /// injected `use()` resolver.
+    fn compile_source(
+        &self,
+        source: &str,
+        overrides_source: Option<&str>,
+    ) -> Result<Compiled, Diagnostic> {
+        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
+        motioner_dsl::run_with_overrides_and_metrics_and_assets(
+            source,
+            overrides_source,
+            &Limits::default(),
+            metrics,
+            self.assets.as_ref(),
+        )
     }
 
     /// The source path.
@@ -388,12 +423,9 @@ impl PreviewSession {
                 });
             }
         };
-        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
-        match motioner_dsl::run_with_overrides_and_metrics(
+        match self.compile_source(
             &source,
             (!overrides_text.trim().is_empty()).then_some(overrides_text.as_str()),
-            &Limits::default(),
-            metrics,
         ) {
             Ok(compiled) => {
                 self.last_program_text = source.clone();
@@ -450,13 +482,7 @@ impl PreviewSession {
             None => return false,
         };
         let text = set.to_mdf(rate);
-        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
-        match motioner_dsl::run_with_overrides_and_metrics(
-            &self.source,
-            Some(&text),
-            &Limits::default(),
-            metrics,
-        ) {
+        match self.compile_source(&self.source, Some(&text)) {
             Ok(compiled) => {
                 self.accept(compiled);
                 self.diagnostics.clear();
@@ -489,13 +515,7 @@ impl PreviewSession {
             .map_or_else(default_rate, Composition::frame_rate);
         let overrides_text = set.to_mdf(rate);
         let overrides_arg = (!overrides_text.trim().is_empty()).then_some(overrides_text.as_str());
-        let metrics: &dyn TextMetrics = self.text_metrics.as_deref().unwrap_or(&NoTextMetrics);
-        let compiled = match motioner_dsl::run_with_overrides_and_metrics(
-            source,
-            overrides_arg,
-            &Limits::default(),
-            metrics,
-        ) {
+        let compiled = match self.compile_source(source, overrides_arg) {
             Ok(compiled) => compiled,
             Err(diagnostic) => {
                 self.diagnostics = vec![DiagnosticInfo::from_diagnostic(&diagnostic)];

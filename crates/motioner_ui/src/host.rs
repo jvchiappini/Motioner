@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use motioner_core::ImageResolver;
+use motioner_dsl::AssetResolver;
 use motioner_render::FontSet;
 
 use crate::assets::AssetSummary;
@@ -113,6 +114,13 @@ pub trait ProjectHost {
         let _ = composition;
         None
     }
+
+    /// The `use()` resolver for SVG symbols and `.motion` modules.
+    ///
+    /// The host owns the file system; the editor session receives this before
+    /// its first compile and never falls back to an asset-free resolver for an
+    /// open project (D-0051).
+    fn asset_resolver(&self, composition: &Path) -> Rc<dyn AssetResolver>;
 
     /// The asset registry as the panel shows it, sorted by key.
     fn assets(&self, composition: &Path) -> Vec<AssetSummary>;

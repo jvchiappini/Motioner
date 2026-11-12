@@ -328,6 +328,29 @@ pub fn run_with_overrides_and_metrics(
     limits: &Limits,
     metrics: &dyn motioner_core::TextMetrics,
 ) -> Result<Compiled, Diagnostic> {
+    run_with_overrides_and_metrics_and_assets(source, overrides_source, limits, metrics, &NoAssets)
+}
+
+/// [`run_with_overrides_and_metrics`] with an asset resolver for `use()`.
+///
+/// The editor session uses this: `use()` of an SVG symbol or a `.motion`
+/// module must resolve through the same host resolver as `run_with_assets`,
+/// including while an override recompile runs.
+///
+/// # Errors
+///
+/// Same as [`run_with_overrides`].
+///
+/// # Panics
+///
+/// Re-raises a panic from the interpreter thread.
+pub fn run_with_overrides_and_metrics_and_assets(
+    source: &str,
+    overrides_source: Option<&str>,
+    limits: &Limits,
+    metrics: &dyn motioner_core::TextMetrics,
+    assets: &dyn AssetResolver,
+) -> Result<Compiled, Diagnostic> {
     let source = source.to_owned();
     let overrides_source = overrides_source.map(str::to_owned);
     let limits = limits.clone();
@@ -336,7 +359,13 @@ pub fn run_with_overrides_and_metrics(
             .name("mdf-interpreter".to_owned())
             .stack_size(INTERPRETER_STACK_BYTES)
             .spawn_scoped(scope, move || {
-                compile(&source, overrides_source.as_deref(), &limits, metrics)
+                compile(
+                    &source,
+                    overrides_source.as_deref(),
+                    &limits,
+                    metrics,
+                    assets,
+                )
             });
         let handle = match worker {
             Ok(handle) => handle,
@@ -359,11 +388,17 @@ fn compile(
     overrides_source: Option<&str>,
     limits: &Limits,
     metrics: &dyn motioner_core::TextMetrics,
+    assets: &dyn AssetResolver,
 ) -> Result<Compiled, Diagnostic> {
     let (program, library_len) = with_prelude(source)?;
-    let execution =
-        interpreter::execute_library_detailed_with_metrics(&program, library_len, limits, metrics)
-            .map_err(normalize_diagnostic)?;
+    let execution = interpreter::execute_library_detailed_with_assets(
+        &program,
+        library_len,
+        limits,
+        metrics,
+        assets,
+    )
+    .map_err(normalize_diagnostic)?;
     let mut document = execution.document;
     let bindings = execution.bindings;
     let origins = execution.origins;

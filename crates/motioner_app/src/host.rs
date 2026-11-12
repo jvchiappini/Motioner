@@ -310,6 +310,13 @@ impl ProjectHost for Host {
         }
     }
 
+    fn asset_resolver(&self, composition: &Path) -> Rc<dyn motioner_dsl::AssetResolver> {
+        // Same root rule as the CLI: the project root, or the application's
+        // working directory for a loose program.
+        let root = motioner_io::project_root(composition).unwrap_or_else(|| self.root.clone());
+        Rc::new(motioner_io::ProjectAssets::new(root))
+    }
+
     fn assets(&self, composition: &Path) -> Vec<AssetSummary> {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();

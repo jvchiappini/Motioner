@@ -2353,8 +2353,10 @@ dependencies = [
 name = "motioner_testkit"
 version = "0.1.0"
 dependencies = [
+ "motioner_core",
  "motioner_dsl",
  "motioner_eval",
+ "motioner_io",
  "motioner_render",
  "png 0.17.16",
  "sha2",

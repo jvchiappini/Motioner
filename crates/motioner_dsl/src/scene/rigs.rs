@@ -10,7 +10,11 @@ use std::sync::Arc;
 
 use motioner_core::{
     Animatable, Color, ContentField, ContentValue, Ease, NodeContent, NodeId, NodeIdentity,
-    Property, PropertyValue, Symbol, SymbolPart, SymbolShape, Vec2,
+    Property, PropertyValue, RigAimManifest, RigClipKeyManifest, RigClipManifest, RigEventManifest,
+    RigInputManifest, RigInstanceManifest, RigLayerManifest, RigMachineManifest, RigManifest,
+    RigMirrorManifest, RigMirrorSide, RigPartManifest, RigPlayManifest, RigPoseManifest,
+    RigPoseTrackManifest, RigPropertyManifest, RigPropertyValue, RigStateManifest,
+    RigTransitionManifest, RigValue, RigValueKind, Symbol, SymbolPart, SymbolShape, Vec2,
 };
 use motioner_rig as rig_rt;
 
@@ -178,6 +182,54 @@ fn flip_value(value: rig_rt::PropValue) -> rig_rt::PropValue {
     }
 }
 
+/// The placement scale of a symbol instance: the geometric mean of its axes.
+///
+/// The authored stroke width of a non-scaling-stroke part is in symbol space,
+/// so multiplying it by this factor yields its width in composition pixels
+/// even while a driver squashes the instance.
+fn placement_scale(scale: Vec2) -> f64 {
+    let factor = (scale.x * scale.y).abs().sqrt();
+    if factor.is_finite() {
+        factor
+    } else {
+        0.0
+    }
+}
+
+/// Converts a runtime property value into its manifest form.
+fn manifest_value(value: &rig_rt::PropValue) -> RigValue {
+    match value {
+        rig_rt::PropValue::Number(number) => RigValue::Number(*number),
+        rig_rt::PropValue::Bool(flag) => RigValue::Bool(*flag),
+        rig_rt::PropValue::Text(text) => RigValue::Text(text.clone()),
+        rig_rt::PropValue::Vector(vector) => RigValue::Vec2(*vector),
+        rig_rt::PropValue::Color(color) => RigValue::Color(*color),
+    }
+}
+
+/// Converts a runtime property kind into its manifest form.
+fn manifest_kind(kind: rig_rt::PropKind) -> RigValueKind {
+    match kind {
+        rig_rt::PropKind::Float => RigValueKind::Float,
+        rig_rt::PropKind::Int => RigValueKind::Int,
+        rig_rt::PropKind::Bool => RigValueKind::Bool,
+        rig_rt::PropKind::Enum => RigValueKind::Enum,
+        rig_rt::PropKind::Color => RigValueKind::Color,
+        rig_rt::PropKind::Vec2 => RigValueKind::Vec2,
+    }
+}
+
+/// The stable name of a transition comparison.
+fn compare_name(compare: rig_rt::Compare) -> &'static str {
+    match compare {
+        rig_rt::Compare::Equals => "equals",
+        rig_rt::Compare::NotEquals => "not_equals",
+        rig_rt::Compare::Greater => "greater",
+        rig_rt::Compare::Less => "less",
+        rig_rt::Compare::Trigger => "trigger",
+    }
+}
+
 impl Scene {
     fn fps(&self) -> HostResult<f64> {
         Ok(self.document()?.composition().frame_rate().as_f64())
@@ -214,9 +266,11 @@ impl Scene {
         let mut used = HashSet::new();
         let mut parts = Vec::new();
         let base = format!("{}/svg", site.key());
+        let placement = placement_scale(scale);
         let mut roots = Vec::new();
         for part in &symbol.parts {
-            let node = self.instantiate_part(part, &base, &mut used, &mut parts, site)?;
+            let node =
+                self.instantiate_part(part, &base, &mut used, &mut parts, site, placement)?;
             roots.push(node);
         }
         let root = if roots.len() == 1 {
@@ -271,6 +325,7 @@ impl Scene {
         used: &mut HashSet<String>,
         parts: &mut Vec<PartNode>,
         site: &CreationSite,
+        placement: f64,
     ) -> HostResult<NodeId> {
         let _ = site;
         let anchor = part.anchor;
@@ -297,9 +352,16 @@ impl Scene {
                         .map_err(|error| core_error(&error))?
                 }
                 SymbolShape::Path(path) => {
+                    // The authored width is in symbol space; the placement
+                    // scale converts it to composition pixels when the
+                    // renderer strokes a non-scaling outline.
+                    let mut paint = path.paint.clone();
+                    paint.non_scaling_stroke = paint
+                        .non_scaling_stroke
+                        .map(|reference| reference * placement);
                     let content = NodeContent::Path {
                         geometry: path.geometry.clone(),
-                        paint: path.paint.clone(),
+                        paint,
                         trim_start: Animatable::new(0.0),
                         trim_end: Animatable::new(1.0),
                         trim_offset: Animatable::new(0.0),
@@ -336,7 +398,7 @@ impl Scene {
             });
         }
         for child in children {
-            let child_node = self.instantiate_part(child, base, used, parts, site)?;
+            let child_node = self.instantiate_part(child, base, used, parts, site, placement)?;
             self.document_mut()?
                 .reparent(child_node, node)
                 .map_err(|error| core_error(&error))?;
@@ -356,7 +418,7 @@ impl Scene {
                 .reparent(clip_group, node)
                 .map_err(|error| core_error(&error))?;
             for clip in &part.clip {
-                let clip_node = self.instantiate_part(clip, base, used, parts, site)?;
+                let clip_node = self.instantiate_part(clip, base, used, parts, site, placement)?;
                 self.document_mut()?
                     .reparent(clip_node, clip_group)
                     .map_err(|error| core_error(&error))?;
@@ -1234,6 +1296,263 @@ impl Scene {
         Ok(Value::None)
     }
 
+    /// Describes every rig instance for editors and agents (D-0056).
+    ///
+    /// The order is the authoring order (rigs, properties, poses, states and
+    /// transitions), so two compiles of the same program produce equal
+    /// manifests. Missing indices are skipped instead of panicking: the
+    /// manifest is diagnostic data and must never break a load.
+    #[allow(clippy::too_many_lines)] // one straight map per manifest section
+    fn build_rig_manifest(&self) -> RigManifest {
+        let mut manifest = RigManifest::default();
+        let Some(document) = self.document.as_ref() else {
+            return manifest;
+        };
+        for entry in &self.rigs {
+            let rig = &entry.rig;
+            let root = document.node(entry.node);
+            let id = root
+                .map(|node| node.identity().as_str().to_owned())
+                .unwrap_or_default();
+            let name = root
+                .and_then(|node| node.name().map(str::to_owned))
+                .unwrap_or_else(|| rig.name.clone());
+            let parts = rig
+                .parts
+                .iter()
+                .zip(entry.part_nodes.iter())
+                .map(|(part, node)| RigPartManifest {
+                    id: part.name.clone(),
+                    node: document
+                        .node(*node)
+                        .map(|node| node.identity().as_str().to_owned())
+                        .unwrap_or_default(),
+                })
+                .collect();
+            let properties = rig
+                .properties
+                .iter()
+                .enumerate()
+                .map(|(index, property)| {
+                    let mirror = entry.mirrors.iter().find_map(|mirror| {
+                        if mirror.left == index {
+                            Some(RigMirrorManifest {
+                                group: mirror.name.clone(),
+                                side: RigMirrorSide::Left,
+                                flip: false,
+                            })
+                        } else if mirror.right == index {
+                            Some(RigMirrorManifest {
+                                group: mirror.name.clone(),
+                                side: RigMirrorSide::Right,
+                                flip: mirror.flip,
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    RigPropertyManifest {
+                        name: property.name.clone(),
+                        kind: manifest_kind(property.kind),
+                        angle: property.angle,
+                        default: manifest_value(&property.default),
+                        min: property.min,
+                        max: property.max,
+                        step: property.step,
+                        values: property.values.clone(),
+                        group: mirror.as_ref().map(|mirror| mirror.group.clone()),
+                        mirror,
+                    }
+                })
+                .collect();
+            let poses = rig
+                .poses
+                .iter()
+                .map(|pose| RigPoseManifest {
+                    name: pose.name.clone(),
+                    reset: pose.reset,
+                    values: pose
+                        .values
+                        .iter()
+                        .filter_map(|(index, value)| {
+                            rig.properties.get(*index).map(|property| RigPropertyValue {
+                                property: property.name.clone(),
+                                value: manifest_value(value),
+                            })
+                        })
+                        .collect(),
+                })
+                .collect();
+            let pose_tracks = rig
+                .tracks
+                .iter()
+                .filter_map(|track| {
+                    rig.poses.get(track.pose).map(|pose| RigPoseTrackManifest {
+                        pose: pose.name.clone(),
+                        start: track.start,
+                        duration: track.duration,
+                        ease: track.ease.name().to_owned(),
+                    })
+                })
+                .collect();
+            let clips = rig
+                .clips
+                .iter()
+                .map(|clip| RigClipManifest {
+                    name: clip.name.clone(),
+                    length: clip.length(),
+                    keys: clip
+                        .keys
+                        .iter()
+                        .filter_map(|key| {
+                            rig.properties
+                                .get(key.property)
+                                .map(|property| RigClipKeyManifest {
+                                    property: property.name.clone(),
+                                    frame: key.frame,
+                                    value: manifest_value(&key.value),
+                                    ease: key.ease.name().to_owned(),
+                                })
+                        })
+                        .collect(),
+                })
+                .collect();
+            let plays = rig
+                .plays
+                .iter()
+                .filter_map(|play| {
+                    rig.clips.get(play.clip).map(|clip| RigPlayManifest {
+                        clip: clip.name.clone(),
+                        start: play.start,
+                        loops: play.loops,
+                        speed: play.speed,
+                    })
+                })
+                .collect();
+            let layers = rig
+                .blinks
+                .iter()
+                .map(|blink| RigLayerManifest {
+                    kind: "blink".to_owned(),
+                    start: blink.start,
+                    period: blink.period,
+                    jitter: blink.jitter,
+                    duration: blink.duration,
+                    seed: blink.seed,
+                    values: blink
+                        .props
+                        .iter()
+                        .filter_map(|(index, value)| {
+                            rig.properties.get(*index).map(|property| RigPropertyValue {
+                                property: property.name.clone(),
+                                value: manifest_value(value),
+                            })
+                        })
+                        .collect(),
+                })
+                .collect();
+            let aims = rig
+                .aims
+                .iter()
+                .filter_map(|aim| {
+                    let part = rig.parts.get(aim.part)?;
+                    let property = rig.properties.get(aim.property)?;
+                    Some(RigAimManifest {
+                        part: part.name.clone(),
+                        property: property.name.clone(),
+                        radius: aim.radius,
+                    })
+                })
+                .collect();
+            let machine = rig.machine.as_ref().map(|machine| {
+                let state_name = |index: usize| {
+                    machine
+                        .states
+                        .get(index)
+                        .map(|state| state.name.clone())
+                        .unwrap_or_default()
+                };
+                let mut input_indices = Vec::new();
+                for transition in &machine.transitions {
+                    if !input_indices.contains(&transition.input) {
+                        input_indices.push(transition.input);
+                    }
+                }
+                let inputs = input_indices
+                    .into_iter()
+                    .filter_map(|index| {
+                        rig.properties.get(index).map(|property| RigInputManifest {
+                            name: property.name.clone(),
+                            kind: manifest_kind(property.kind),
+                            values: property.values.clone(),
+                        })
+                    })
+                    .collect();
+                let states = machine
+                    .states
+                    .iter()
+                    .map(|state| RigStateManifest {
+                        name: state.name.clone(),
+                        pose: state
+                            .pose
+                            .and_then(|index| rig.poses.get(index))
+                            .map(|pose| pose.name.clone()),
+                        clip: state
+                            .clip
+                            .and_then(|index| rig.clips.get(index))
+                            .map(|clip| clip.name.clone()),
+                        speed: state.speed,
+                        looping: state.looping,
+                    })
+                    .collect();
+                let transitions = machine
+                    .transitions
+                    .iter()
+                    .filter_map(|transition| {
+                        let property = rig.properties.get(transition.input)?;
+                        Some(RigTransitionManifest {
+                            from: transition.from.map(state_name),
+                            to: state_name(transition.to),
+                            input: property.name.clone(),
+                            compare: compare_name(transition.compare).to_owned(),
+                            value: manifest_value(&transition.value),
+                            duration: transition.duration,
+                        })
+                    })
+                    .collect();
+                let events = machine
+                    .transitions
+                    .iter()
+                    .map(|transition| RigEventManifest {
+                        from: transition.from.map(state_name),
+                        to: state_name(transition.to),
+                    })
+                    .collect();
+                RigMachineManifest {
+                    default: state_name(machine.default),
+                    inputs,
+                    states,
+                    transitions,
+                    events,
+                }
+            });
+            manifest.rigs.push(RigInstanceManifest {
+                id,
+                name,
+                parts,
+                properties,
+                poses,
+                pose_tracks,
+                clips,
+                plays,
+                layers,
+                aims,
+                machine,
+            });
+        }
+        manifest
+    }
+
     /// Evaluates every rig and writes the result as node keys (D-0052).
     #[allow(clippy::too_many_lines)] // one pass per rig over every composition frame
     pub(crate) fn bake_rigs(&mut self) -> HostResult<()> {
@@ -1329,6 +1648,10 @@ impl Scene {
                     }
                 }
             }
+        }
+        let manifest = self.build_rig_manifest();
+        if let Some(document) = self.document.as_mut() {
+            document.set_rig_manifest(manifest);
         }
         Ok(())
     }

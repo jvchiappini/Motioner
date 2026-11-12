@@ -20,6 +20,8 @@ pub struct QueryArgs {
     pub frame: Option<i64>,
     /// Only this node identity.
     pub node: Option<String>,
+    /// Print the manifest of this rig instance instead of the scene.
+    pub rig: Option<String>,
 }
 
 /// Arguments of `edit`.
@@ -77,9 +79,10 @@ fn open(input: &Path, frame: Option<i64>) -> Result<Editor, CommandError> {
     let target = crate::resolve_input(input)
         .map_err(|failure| CommandError::new(ErrorKind::Io, failure.to_string()))?;
     let fonts = crate::project_fonts(&target);
-    let mut editor = Editor::open_with_metrics(
+    let mut editor = Editor::open_with_assets(
         &target.composition,
         std::sync::Arc::new(motioner_render::CpuTextMetrics::new(fonts)),
+        crate::input_assets(&target),
     )?;
     let images = match &target.project {
         Some(project) => motioner_io::ProjectImages::new(project),
@@ -122,7 +125,11 @@ fn error_json(error: &CommandError, index: Option<usize>) -> String {
 
 /// `motioner query`: prints the scene at a frame.
 pub fn run_query(args: &QueryArgs) -> Status {
-    let result = open(&args.input, args.frame).and_then(|e| e.query_json(args.node.as_deref()));
+    let result = open(&args.input, args.frame).and_then(|e| match args.rig.as_deref() {
+        Some("all") => e.rig_manifest_json(None),
+        Some(rig) => e.rig_manifest_json(Some(rig)),
+        None => e.query_json(args.node.as_deref()),
+    });
     match result {
         Ok(json) => {
             println!("{json}");

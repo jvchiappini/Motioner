@@ -460,6 +460,15 @@ pub struct PaintSpec {
     pub stroke: Animatable<Option<Color>>,
     /// Outline width in pixels (`stroke_width`).
     pub stroke_width: Animatable<f64>,
+    /// Keep the authored stroke width when the node or an ancestor scales it.
+    ///
+    /// This is SVG's `vector-effect="non-scaling-stroke"`. The value is the
+    /// placement scale whose coordinate space the width is authored in: an
+    /// imported symbol starts at `1.0` and the symbol instantiation multiplies
+    /// it by its own scale, so a rig placed at `4.2` keeps its authored lines
+    /// while a squashed part no longer collapses them. The renderer strokes
+    /// the path in composition space; it is not an animatable channel.
+    pub non_scaling_stroke: Option<f64>,
     /// Interior gradient (D-0030); takes precedence over `fill` when present.
     pub fill_gradient: Option<Gradient>,
     /// Outline gradient (D-0030); takes precedence over `stroke` when present.
@@ -474,6 +483,7 @@ impl PaintSpec {
             fill: Animatable::new(fill),
             stroke: Animatable::new(stroke),
             stroke_width: Animatable::new(stroke_width),
+            non_scaling_stroke: None,
             fill_gradient: None,
             stroke_gradient: None,
         }
@@ -487,6 +497,7 @@ impl PaintSpec {
             fill: Animatable::new(paint.fill),
             stroke: Animatable::new(stroke.map(|stroke| stroke.color)),
             stroke_width: Animatable::new(stroke.map_or(0.0, |stroke| stroke.width)),
+            non_scaling_stroke: None,
             fill_gradient: None,
             stroke_gradient: None,
         }
@@ -1108,7 +1119,7 @@ impl ImageLayout {
     ///
     /// A zero `box_width` / `box_height` means "natural": both zero uses the
     /// image's pixel size, one zero keeps the aspect from the other.  An
-    /// unresolved image (no natural size) falls back to a 100×100 box so the
+    /// unresolved image (no natural size) falls back to a 100??100 box so the
     /// preview can draw a placeholder.
     #[must_use]
     pub fn compute(

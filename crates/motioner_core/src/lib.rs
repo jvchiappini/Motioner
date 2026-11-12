@@ -21,6 +21,7 @@ mod math;
 mod node;
 mod overrides;
 mod path;
+mod rig_manifest;
 mod symbol;
 mod text;
 mod time;
@@ -53,6 +54,13 @@ pub use overrides::{
 pub use path::{
     DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,
     FLATTEN_TOLERANCE,
+};
+pub use rig_manifest::{
+    RigAimManifest, RigClipKeyManifest, RigClipManifest, RigEventManifest, RigInputManifest,
+    RigInstanceManifest, RigLayerManifest, RigMachineManifest, RigManifest, RigMirrorManifest,
+    RigMirrorSide, RigPartManifest, RigPlayManifest, RigPoseManifest, RigPoseTrackManifest,
+    RigPropertyManifest, RigPropertyValue, RigStateManifest, RigTransitionManifest, RigValue,
+    RigValueKind, RIG_MANIFEST_VERSION,
 };
 pub use symbol::{Symbol, SymbolPart, SymbolPath, SymbolShape};
 pub use text::{NoTextMetrics, TextBounds, TextMeasurement, TextMetrics, TextRequest};

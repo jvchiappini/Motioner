@@ -237,7 +237,18 @@ fn check_file(path: &Path, frames: usize) -> FileReport {
         }
     };
     report.features = features(&program);
-    let compiled = match motioner_dsl::run_with_overrides(&source, None, &Limits::default()) {
+    let assets = motioner_io::ProjectAssets::new(
+        path.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf(),
+    );
+    let compiled = match motioner_dsl::run_with_overrides_and_metrics_and_assets(
+        &source,
+        None,
+        &Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets,
+    ) {
         Ok(compiled) => compiled,
         Err(diagnostic) => {
             "run".clone_into(&mut report.status);

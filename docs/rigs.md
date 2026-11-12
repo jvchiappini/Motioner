@@ -78,6 +78,9 @@ dependency; D-0054):
   geometry flattened to document coordinates at import;
 - fill/stroke colours, width, caps, joins, miter limit, dashes,
   opacity and fill/stroke opacity;
+- `vector-effect="non-scaling-stroke"`, inherited so the root or a group can
+  opt a whole symbol in: strokes keep their authored width when a rig driver
+  squashes the part (the mascot's mouth no longer collapses to a hairline);
 - linear and radial gradients, `defs`/`use`, `clipPath` as a D-0033
   mask, `viewBox`/`preserveAspectRatio`;
 - every element with an `id` (or an Inkscape/Figma label) is a part:
@@ -187,7 +190,31 @@ The machine is evaluated frame-exactly at bake time; because the output
 is keys, scrubbing backwards is exact by construction. If no input is
 keyed, the machine stays in its default state.
 
-## 7. Rive and Lottie comparison
+## 7. Manifest and query
+
+Every compile stores a typed, versioned description of the rigs in the
+document (`RigManifest`, D-0056): root identity and name, addressable parts
+with their node identities, properties with type/range/step/group/mirror,
+poses, pose tracks, clips, plays, procedural layers, aims and the machine
+(states, transitions, inputs and emitted events). It is descriptive data:
+evaluation always uses the baked keys.
+
+```text
+# the manifest of one instance (by name or root identity)
+motioner query examples/rig/mascot_demo.motion --rig mascot
+
+# the positional alias does the same
+motioner query rig examples/rig/mascot_demo.motion mascot
+
+# every rig in the document
+motioner query examples/rig/mascot_demo.motion --rig all
+```
+
+The JSON is `{"version":1,"rigs":[...]}` with fixed field order. The same
+shape is the `rig_manifest` result schema in `motioner tools --schema`,
+which agents use before editing a rig by property name.
+
+## 8. Rive and Lottie comparison
 
 The "Status" column is what this repository ships after prompt 16 and
 the backlog that remains.

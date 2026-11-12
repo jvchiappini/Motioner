@@ -5,8 +5,8 @@
 //! --schema` merges this list with the D-0024 command tools; it never builds a
 //! second one.
 //!
-//! The `family` field reserves room for prompt 16's rig tools (`properties`,
-//! `poses`, `clips`, `inputs`) without implementing them here.
+//! The `rig` family starts with `rig_manifest`; prompt 16b E2 adds the editing
+//! tools that share its result shape.
 
 use serde_json::{json, Value};
 
@@ -635,10 +635,24 @@ pub const TOOLS: &[ToolSpec] = &[
         ],
         example: "remember_preference(\"palette\", \"mono\")",
     },
+    // Rig.
+    ToolSpec {
+        name: "rig_manifest",
+        description: "Typed description of every rig instance: properties with type, range, step, group and mirror, poses, clips, layers, aims, addressable parts and the state machine. Read it before editing a rig by name. Cost: cheap.",
+        cost: Cost::Cheap,
+        family: "rig",
+        implemented: false,
+        params: &[param(
+            "instance",
+            "string",
+            false,
+            "Rig display name or root identity; every rig when omitted.",
+        )],
+        example: "rig_manifest(\"mascot\")",
+    },
     // Export.
     ToolSpec {
-        name: "render_preview",
-        description: "Low-quality MP4 preview plus one image of sampled frames. Cost: render.",
+        name: "render_preview",        description: "Low-quality MP4 preview plus one image of sampled frames. Cost: render.",
         cost: Cost::Render,
         family: "export",
         implemented: true,
@@ -842,6 +856,25 @@ pub fn result_schema(name: &str) -> Value {
         "brand_kit" => object(json!({"colors": {"type": "object"}, "fonts": {"type": "object"}})),
         "import_asset" => object(json!({"key": {"type": "string"}, "kind": {"type": "string"}})),
         "place_asset" => object(json!({"ids": {"type": "array"}})),
+        "rig_manifest" => object(json!({
+            "version": {"type": "integer"},
+            "rigs": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "parts": {"type": "array"},
+                    "properties": {"type": "array"},
+                    "poses": {"type": "array"},
+                    "pose_tracks": {"type": "array"},
+                    "clips": {"type": "array"},
+                    "plays": {"type": "array"},
+                    "layers": {"type": "array"},
+                    "aims": {"type": "array"},
+                    "machine": {"type": ["object", "null"]}
+                }
+            }}
+        })),
         "render_preview" => object(json!({
             "path": {"type": "string"},
             "duration": {"type": "number"},

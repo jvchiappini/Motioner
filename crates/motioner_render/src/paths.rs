@@ -19,8 +19,8 @@ use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex, LineCap, LineJoin,
     StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
 };
-use motioner_core::{DashSpec, NodeId, PathPiece, TrimSpec, Vec2};
-use motioner_eval::ResolvedPath;
+use motioner_core::{DashSpec, NodeId, PathGeometry, PathPiece, PathPoint, TrimSpec, Vec2};
+use motioner_eval::{Affine2, ResolvedPath};
 
 /// One triangle of a tessellated path, with its anti-aliasing edge mask.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -89,6 +89,13 @@ fn cache_key(path: &ResolvedPath) -> u64 {
         Some(stroke) => {
             true.hash(&mut hasher);
             hash_f64(&mut hasher, stroke.width);
+            match stroke.non_scaling {
+                Some(reference) => {
+                    true.hash(&mut hasher);
+                    hash_f64(&mut hasher, reference);
+                }
+                None => false.hash(&mut hasher),
+            }
         }
         None => false.hash(&mut hasher),
     }
@@ -120,7 +127,11 @@ fn tessellate(path: &ResolvedPath) -> PathMeshes {
         }
         meshes.fill = classify_edges(triangles);
     }
-    if let Some(stroke) = path.paint.stroke.filter(|stroke| stroke.width > 0.0) {
+    if let Some(stroke) = path
+        .paint
+        .stroke
+        .filter(|stroke| stroke.width > 0.0 && stroke.non_scaling.is_none())
+    {
         let mut triangles = Vec::new();
         for piece in &outline.strokes {
             stroke_piece(
@@ -134,6 +145,54 @@ fn tessellate(path: &ResolvedPath) -> PathMeshes {
         meshes.stroke = classify_edges(triangles);
     }
     meshes
+}
+
+/// Triangles of a non-scaling stroke, tessellated in composition space.
+///
+/// `vector-effect="non-scaling-stroke"` keeps the authored width when the node
+/// or an ancestor scales the path, including a non-uniform scale. Stroking in
+/// local space and transforming the triangles cannot do that: the scale would
+/// squash one side of the outline to a hairline. This transforms the path
+/// first, so the width stays in composition pixels; the caller submits the
+/// triangles with the identity transform. It is not cached because the result
+/// depends on the item's transform, which changes whenever the node animates.
+pub(crate) fn non_scaling_stroke(path: &ResolvedPath, model: Affine2) -> Vec<LocalTriangle> {
+    let Some(stroke) = path.paint.stroke.filter(|stroke| stroke.width > 0.0) else {
+        return Vec::new();
+    };
+    let points: Vec<PathPoint> = path
+        .geometry
+        .points()
+        .iter()
+        .map(|point| {
+            PathPoint::curved(
+                model.apply(point.position),
+                model.apply_vector(point.handle_in),
+                model.apply_vector(point.handle_out),
+            )
+        })
+        .collect();
+    let Ok(geometry) = PathGeometry::new(
+        points,
+        path.geometry.closed(),
+        path.geometry.cap(),
+        path.geometry.join(),
+    ) else {
+        return Vec::new();
+    };
+    let outline = geometry.outline(path.trim, path.dash);
+    let width = stroke.width * stroke.non_scaling.unwrap_or(1.0);
+    let mut triangles = Vec::new();
+    for piece in &outline.strokes {
+        stroke_piece(
+            piece,
+            width,
+            geometry.cap(),
+            geometry.join(),
+            &mut triangles,
+        );
+    }
+    classify_edges(triangles)
 }
 
 fn fill_piece(piece: &PathPiece, out: &mut Vec<[Vec2; 3]>) {
@@ -333,6 +392,7 @@ mod tests {
                 stroke: stroke.map(|width| ResolvedStroke {
                     paint: ResolvedFill::Solid(Color::WHITE),
                     width,
+                    non_scaling: None,
                 }),
             },
         }
@@ -415,5 +475,40 @@ mod tests {
         let meshes = tessellate(&resolved);
         assert!(meshes.fill.is_empty());
         assert!(meshes.stroke.is_empty());
+    }
+
+    #[test]
+    fn non_scaling_strokes_ignore_a_non_uniform_scale() {
+        let geometry = PathGeometry::new(
+            vec![
+                PathPoint::corner(Vec2::new(0.0, 0.0)),
+                PathPoint::corner(Vec2::new(100.0, 0.0)),
+            ],
+            false,
+            CoreCap::Butt,
+            CoreJoin::Miter,
+        )
+        .unwrap();
+        let mut resolved = path(geometry, false, Some(10.0));
+        resolved.paint.stroke.as_mut().unwrap().non_scaling = Some(1.0);
+        // A local stroke would come out 1 px thick under this scale.
+        let model = Affine2::scale(Vec2::new(2.0, 0.1));
+        let triangles = non_scaling_stroke(&resolved, model);
+        assert!(!triangles.is_empty());
+        let ys: Vec<f64> = triangles
+            .iter()
+            .flat_map(|triangle| triangle.vertices.iter().map(|point| point.y))
+            .collect();
+        let min = ys.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (max - min - 10.0).abs() < 0.5,
+            "the stroke keeps its width, got {}",
+            max - min
+        );
+        assert!(
+            tessellate(&resolved).stroke.is_empty(),
+            "the local stroke is not tessellated when it is drawn in world space"
+        );
     }
 }

@@ -48,8 +48,12 @@ impl AppHost {
         })?;
         let fonts = crate::project_fonts(&target);
         let metrics = Arc::new(CpuTextMetrics::new(fonts.clone()));
-        let mut editor = Editor::open_with_metrics(&target.composition, metrics.clone())
-            .map_err(|error| ToolError::Host(error.to_string()))?;
+        let mut editor = Editor::open_with_assets(
+            &target.composition,
+            metrics.clone(),
+            crate::input_assets(&target),
+        )
+        .map_err(|error| ToolError::Host(error.to_string()))?;
         let project_images = match &target.project {
             Some(project) => ProjectImages::new(project),
             None => ProjectImages::loose(&target.root),

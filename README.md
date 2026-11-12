@@ -261,7 +261,12 @@ cargo test --workspace
 cargo build --workspace
 cargo machete
 python scripts/check_boundaries.py
+python scripts/check_encoding.py
 ```
+
+Files are UTF-8 without a BOM and use LF line endings; the encoding check
+reads the Git index and the working tree of changed files, and fails on a BOM
+or CR outside `engine/`.
 
 The toolchain is pinned in `rust-toolchain.toml` (1.96.0). The same
 checks run in `.github/workflows/ci.yml` on Windows and Linux.

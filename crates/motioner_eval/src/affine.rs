@@ -97,6 +97,18 @@ impl Affine2 {
         )
     }
 
+    /// Transforms a vector, ignoring the translation.
+    ///
+    /// Path handles are vectors relative to their point, so this is what moves
+    /// a curved path into another space.
+    #[must_use]
+    pub fn apply_vector(self, vector: Vec2) -> Vec2 {
+        Vec2::new(
+            self.a * vector.x + self.c * vector.y,
+            self.b * vector.x + self.d * vector.y,
+        )
+    }
+
     /// The determinant; zero means the transform collapses area.
     #[must_use]
     pub fn determinant(self) -> f64 {
@@ -147,6 +159,16 @@ mod tests {
         assert!(close(
             outer.then(inner).apply(Vec2::new(1.0, 1.0)),
             Vec2::new(8.0, 3.0)
+        ));
+    }
+
+    #[test]
+    fn vectors_ignore_the_translation() {
+        let matrix =
+            Affine2::translation(Vec2::new(100.0, -40.0)).then(Affine2::scale(Vec2::new(2.0, 3.0)));
+        assert!(close(
+            matrix.apply_vector(Vec2::new(1.0, 2.0)),
+            Vec2::new(2.0, 6.0)
         ));
     }
 }

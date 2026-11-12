@@ -21,8 +21,11 @@ pub enum ResolvedFill {
 pub struct ResolvedStroke {
     /// Stroke colour or gradient.
     pub paint: ResolvedFill,
-    /// Width in local pixels.
+    /// Width in local pixels, unless [`Self::non_scaling`] is set.
     pub width: f64,
+    /// Stroke in composition space, keeping the width authored at this
+    /// placement scale (`vector-effect="non-scaling-stroke"`).
+    pub non_scaling: Option<f64>,
 }
 
 /// The fill and stroke of one item at one frame.

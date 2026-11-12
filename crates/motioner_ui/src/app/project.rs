@@ -70,6 +70,7 @@ impl PreviewApp {
         if let Some(videos) = host.videos(&composition) {
             session.set_video_resolver(videos);
         }
+        session.set_asset_resolver(host.asset_resolver(&composition));
         let _ = session.reload();
         let fonts = host.fonts(&composition);
         let mut families: Vec<String> =

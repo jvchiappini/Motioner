@@ -8,8 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dev-dependencies]
+motioner_core.workspace = true
 motioner_dsl.workspace = true
 motioner_eval.workspace = true
+motioner_io.workspace = true
 motioner_render.workspace = true
 png.workspace = true
 sha2.workspace = true
