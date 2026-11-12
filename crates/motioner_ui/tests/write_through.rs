@@ -245,10 +245,13 @@ fn the_write_through_corpus_matches_exactly() {
             std::fs::write(dir.join("strategy.txt"), &strategy).unwrap();
             continue;
         }
-        let before = std::fs::read_to_string(dir.join("before.motion"))
+        // Git stores every fixture with LF (`.gitattributes`), so a CRLF case
+        // is compared after restoring its line endings.
+        let crlf = case.before.contains("\r\n");
+        let before = read_fixture(&dir.join("before.motion"), crlf)
             .unwrap_or_else(|_| panic!("missing corpus case {} (run UPDATE_CORPUS=1)", case.name));
         let command = std::fs::read_to_string(dir.join("command.txt")).unwrap();
-        let expected_after = std::fs::read_to_string(dir.join("after.motion")).unwrap();
+        let expected_after = read_fixture(&dir.join("after.motion"), crlf).unwrap();
         let expected_strategy = std::fs::read_to_string(dir.join("strategy.txt")).unwrap();
         assert_eq!(before, case.before, "{}: before changed", case.name);
         assert_eq!(command, case.command, "{}: command changed", case.name);
@@ -450,4 +453,15 @@ fn random_command_sequences_keep_every_property() {
         let _ = std::fs::remove_dir_all(&code_dir);
         let _ = std::fs::remove_dir_all(&overrides_dir);
     }
+}
+
+/// Reads a corpus program with LF endings, or CRLF when `crlf` is set,
+/// whatever line endings the checkout produced.
+fn read_fixture(path: &std::path::Path, crlf: bool) -> std::io::Result<String> {
+    let text = std::fs::read_to_string(path)?.replace("\r\n", "\n");
+    Ok(if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text
+    })
 }
