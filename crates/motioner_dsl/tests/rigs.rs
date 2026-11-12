@@ -175,7 +175,7 @@ comp(name=\"Arc\", width=200, height=200, fps=60, duration=1.0)
 art = use(\"mascot.svg\")
 m = rig(art)
 def geometry():
-    return [[\"body\", \"geometry\", path_builder(move_to(0, 0), arc_to(5, 5, 0, 0, 1, 10, 0), close())]]
+    return [[\"body\", \"geometry\", path_builder(move_to(0, 0), arc_to(5, 5, 0, 0, 1, 10, 0, segments=2), close())]]
 m.driver(geometry)
 ";
     let document = run_with_assets(
@@ -213,6 +213,47 @@ p.key(\"geometry\", 1.0, [[0, 0], [10, 5], [10, 10]])
     let key = geometry.keys().first().expect("geometry key");
     assert_eq!(key.frame, 60);
     assert!((key.points[1].position.y - 5.0).abs() < 1e-9);
+}
+
+#[test]
+fn rig_deformers_and_constraints_author_and_bake() {
+    let source = "\
+comp(name=\"Deform\", width=200, height=200, fps=60, duration=1.0)
+art = use(\"mascot.svg\")
+m = rig(art)
+m.prop(\"tl\", (0.0, 0.0))
+m.prop(\"tr\", (0.0, 0.0))
+m.prop(\"br\", (0.0, 0.0))
+m.prop(\"bl\", (0.0, 0.0))
+m.prop(\"weight\", 0.0)
+m.prop(\"progress\", 0.0)
+m.prop(\"target\", (0.0, 0.0))
+m.bone(\"root\", at=(0, 0), length=10.0)
+m.bone(\"tip\", parent=\"root\", at=(10, 0), length=10.0)
+m.lattice(\"body\", corners=(\"tl\", \"tr\", \"br\", \"bl\"))
+m.skin(\"body\")
+m.blend(\"body\", points=[[0, 0], [10, 5], [10, 10]], weight=\"weight\", fit=True)
+m.follow(\"body\", \"body\", progress=\"progress\")
+m.copy(\"body\", \"body\")
+m.limit(\"body\", min=(-5, -5), max=(5, 5), rotation=(-30, 30))
+m.distance(\"body\", \"body\", distance=10.0)
+m.spring(\"body\", target=\"target\")
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("the program runs");
+    let body = document
+        .nodes()
+        .find(|node| node.name() == Some("body"))
+        .expect("body");
+    let motioner_core::NodeContent::Path { geometry, .. } = body.content() else {
+        panic!("body is a path");
+    };
+    assert_eq!(geometry.points().len(), 3);
 }
 
 #[test]

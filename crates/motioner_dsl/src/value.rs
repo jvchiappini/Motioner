@@ -189,6 +189,16 @@ pub(crate) enum NodeMethod {
     RigFire,
     RigAim,
     RigBlink,
+    RigLattice,
+    RigBone,
+    RigSkin,
+    RigBlend,
+    RigIk,
+    RigFollow,
+    RigCopy,
+    RigLimit,
+    RigDistance,
+    RigSpring,
 }
 
 impl NodeMethod {
@@ -221,6 +231,16 @@ impl NodeMethod {
             "fire" => Some(Self::RigFire),
             "aim" => Some(Self::RigAim),
             "blink" => Some(Self::RigBlink),
+            "lattice" => Some(Self::RigLattice),
+            "bone" => Some(Self::RigBone),
+            "skin" => Some(Self::RigSkin),
+            "blend" => Some(Self::RigBlend),
+            "ik" => Some(Self::RigIk),
+            "follow" => Some(Self::RigFollow),
+            "copy" => Some(Self::RigCopy),
+            "limit" => Some(Self::RigLimit),
+            "distance" => Some(Self::RigDistance),
+            "spring" => Some(Self::RigSpring),
             _ => None,
         }
     }
@@ -254,6 +274,16 @@ impl NodeMethod {
             Self::RigFire => "fire",
             Self::RigAim => "aim",
             Self::RigBlink => "blink",
+            Self::RigLattice => "lattice",
+            Self::RigBone => "bone",
+            Self::RigSkin => "skin",
+            Self::RigBlend => "blend",
+            Self::RigIk => "ik",
+            Self::RigFollow => "follow",
+            Self::RigCopy => "copy",
+            Self::RigLimit => "limit",
+            Self::RigDistance => "distance",
+            Self::RigSpring => "spring",
         }
     }
 }

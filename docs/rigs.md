@@ -142,17 +142,31 @@ Anything else is a typed compile error naming the driver.
 
 A `geometry` write is a sandboxed path expression:
 `path_builder(move_to(x, y), line_to(x, y), cubic_to(c1x, c1y, c2x, c2y,
-x, y), arc_to(rx, ry, rotation, large_arc, sweep, x, y), close())`,
-`ellipse_arc(cx, cy, rx, ry, start, end)`, `arc(radius, start, end)`,
-`rounded_rect(width, height, radius)` or `mirror(geometry, axis="x")`.
+x, y), arc_to(rx, ry, rotation, large_arc, sweep, x, y, segments=...),
+close())`, `ellipse_arc(cx, cy, rx, ry, start, end, segments=...)`,
+`arc(radius, start, end, segments=...)`, `rounded_rect(width, height,
+radius)` or `mirror(geometry, axis="x")`. Arcs default to four fixed cubic
+segments; the count keeps the point topology stable while the angle moves.
 Points interpolate with the part's fixed topology; a different point count
 or closure is a typed error. The bake writes ordinary geometry keys, so the
 runtime evaluator samples points exactly like transforms (D-0058).
 
-Evaluation order per frame: property values (keys and state machine) →
-poses and clips → drivers → constraints → writes to parts. Geometry drivers
-run in the same driver pass and append to that part's output; the first
-frame and every change become keys.
+Deformers run after drivers:
+
+- `r.lattice(part, corners=(tl, tr, br, bl), edges=(top, right, bottom,
+  left))` uses a 2x2 Coons patch over the part's local bounds. Corners and
+  edges are Vec2 properties; edges may be `None`.
+- `r.bone(name, parent=None, at=(x, y), rotation=0, length=0,
+  rotation_prop=None, position_prop=None)` plus `r.skin(part, weights=None)`.
+  Omit weights for deterministic distance weights, or pass one
+  `(bone, weight)` list per point.
+- `r.blend(part, points=..., weight="property", fit=True)` blends a target
+  point list; `fit=True` resamples it to the part topology.
+
+Constraints run after deformers in declaration order: `r.aim`, `r.ik`,
+`r.follow`, `r.copy`, `r.limit`, `r.distance`, `r.spring`. See the MDF spec
+section 7.9 for arguments. The full order is properties/machine → drivers →
+deformers → constraints → bake keys (D-0059, D-0060).
 
 Drivers are evaluated deterministically, frame by frame, at load time,
 and their output is written as keys (D-0052). The result is a document

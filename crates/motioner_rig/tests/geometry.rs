@@ -116,6 +116,7 @@ fn lid_arc_matches_the_html_formula_point_for_point() {
             sweep: Expr::Number(1.0),
             x: b_x,
             y: b_y,
+            segments: Expr::Number(4.0),
         },
         GeometryCommand::Close,
     ]);
@@ -125,7 +126,9 @@ fn lid_arc_matches_the_html_formula_point_for_point() {
         PathGeometry::new(
             vec![
                 PathPoint::corner(Vec2::new(61.0, 88.0)),
-                PathPoint::corner(Vec2::new(76.0, 103.0)),
+                PathPoint::corner(Vec2::new(65.393_398_282_201_79, 77.393_398_282_201_79)),
+                PathPoint::corner(Vec2::new(76.0, 73.0)),
+                PathPoint::corner(Vec2::new(86.606_601_717_798_21, 77.393_398_282_201_79)),
                 PathPoint::corner(Vec2::new(91.0, 88.0)),
             ],
             true,
@@ -153,13 +156,66 @@ fn lid_arc_matches_the_html_formula_point_for_point() {
         .iter()
         .map(|point| point.position)
         .collect::<Vec<_>>();
-    assert_eq!(points.len(), 3);
+    assert_eq!(points.len(), 5);
     assert!((points[0].x - 61.0).abs() < 1e-9);
     assert!((points[0].y - 88.0).abs() < 1e-9);
-    assert!((points[1].x - 76.0).abs() < 1e-9);
-    assert!((points[1].y - 73.0).abs() < 1e-9, "{points:?}");
-    assert!((points[2].x - 91.0).abs() < 1e-9);
-    assert!((points[2].y - 88.0).abs() < 1e-9);
+    assert!(
+        (points[1].x - 65.393_398_282_201_79).abs() < 1e-9,
+        "{points:?}"
+    );
+    assert!((points[1].y - 77.393_398_282_201_79).abs() < 1e-9);
+    assert!((points[2].x - 76.0).abs() < 1e-9);
+    assert!((points[2].y - 73.0).abs() < 1e-9);
+    assert!((points[3].x - 86.606_601_717_798_21).abs() < 1e-9);
+    assert!((points[3].y - 77.393_398_282_201_79).abs() < 1e-9);
+    assert!((points[4].x - 91.0).abs() < 1e-9);
+    assert!((points[4].y - 88.0).abs() < 1e-9);
+}
+
+#[test]
+fn fixed_segments_keep_the_same_topology_across_a_full_sweep() {
+    let expression = GeometryExpr::EllipseArc {
+        cx: Expr::Number(0.0),
+        cy: Expr::Number(0.0),
+        rx: Expr::Number(10.0),
+        ry: Expr::Number(10.0),
+        start: Expr::Number(0.0),
+        end: Expr::Property(0),
+        segments: Expr::Number(4.0),
+    };
+    for angle in 0..=360 {
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert(0, PropValue::Number(f64::from(angle)));
+        let geometry = expression.eval(&properties, "sweep").unwrap();
+        assert_eq!(geometry.points().len(), 5, "angle {angle}");
+    }
+
+    let arc_to = GeometryExpr::Builder(vec![
+        GeometryCommand::MoveTo {
+            x: Expr::Number(10.0),
+            y: Expr::Number(0.0),
+        },
+        GeometryCommand::ArcTo {
+            rx: Expr::Number(10.0),
+            ry: Expr::Number(10.0),
+            rotation: Expr::Number(0.0),
+            large_arc: Expr::Property(0),
+            sweep: Expr::Number(1.0),
+            x: Expr::Property(1),
+            y: Expr::Property(2),
+            segments: Expr::Number(4.0),
+        },
+        GeometryCommand::Close,
+    ]);
+    for angle in 1..360 {
+        let radians = f64::from(angle).to_radians();
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert(0, PropValue::Number(if angle > 180 { 1.0 } else { 0.0 }));
+        properties.insert(1, PropValue::Number(10.0 * radians.cos()));
+        properties.insert(2, PropValue::Number(10.0 * radians.sin()));
+        let geometry = arc_to.eval(&properties, "arc_to").unwrap();
+        assert_eq!(geometry.points().len(), 5, "angle {angle}");
+    }
 }
 
 #[test]

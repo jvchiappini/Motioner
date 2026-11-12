@@ -28,15 +28,23 @@
 //! The example above builds a rig by hand; the DSL does the same through
 //! `rig()` and is the normal entry point.
 
+mod constraint;
+mod deformer;
 mod driver;
 mod eval;
 mod geometry;
 mod machine;
 
+pub use constraint::{Constraint, SpringState, MAX_FOLLOW_POINTS};
+pub use deformer::{
+    compatible_points, BlendShape, BlendShapes, Bone, Deformer, Lattice, Skin, MAX_BLEND_SHAPES,
+    MAX_BONES, MAX_DEFORM_POINTS,
+};
 pub use driver::{Driver, DriverError, Expr, Field, GeometryWrite, Write};
 pub use eval::{bake, evaluate, FrameOutput, PartOutput, RigError, MAX_BAKE_FRAMES};
 pub use geometry::{
-    GeometryCommand, GeometryExpr, MirrorAxis, MAX_GEOMETRY_COMMANDS, MAX_GEOMETRY_POINTS,
+    GeometryCommand, GeometryExpr, MirrorAxis, DEFAULT_ARC_SEGMENTS, MAX_GEOMETRY_COMMANDS,
+    MAX_GEOMETRY_POINTS,
 };
 pub use machine::{Compare, Machine, MachineEvent, State, Transition};
 
@@ -505,6 +513,12 @@ pub struct Rig {
     pub mirrors: Vec<Mirror>,
     /// Expression drivers.
     pub drivers: Vec<driver::Driver>,
+    /// Native deformers, applied after drivers in declaration order.
+    pub deformers: Vec<deformer::Deformer>,
+    /// Constraints, applied after every deformer in declaration order.
+    pub constraints: Vec<constraint::Constraint>,
+    /// Bone declarations for m.skin.
+    pub bones: Vec<deformer::Bone>,
     /// Named poses.
     pub poses: Vec<Pose>,
     /// Pose applications.
@@ -532,6 +546,9 @@ impl Rig {
             channels: Vec::new(),
             mirrors: Vec::new(),
             drivers: Vec::new(),
+            deformers: Vec::new(),
+            constraints: Vec::new(),
+            bones: Vec::new(),
             poses: Vec::new(),
             tracks: Vec::new(),
             clips: Vec::new(),

@@ -5,6 +5,7 @@ use std::fmt;
 
 use motioner_core::Vec2;
 
+use crate::constraint::{self, Constraint, SpringState};
 use crate::driver::{Driver, Field, MAX_WRITES};
 use crate::machine::{MachineEvent, Runner};
 use crate::{PropValue, Rig};
@@ -22,6 +23,12 @@ pub struct RigError {
 }
 
 impl RigError {
+    pub(crate) fn message(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -111,6 +118,21 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
         )));
     }
     let mut runner = rig.machine.as_ref().map(Runner::new);
+    let mut constraints: Vec<Constraint> = rig
+        .aims
+        .iter()
+        .map(|aim| Constraint::Aim {
+            part: aim.part,
+            property: aim.property,
+            radius: aim.radius,
+        })
+        .collect();
+    constraints.extend(rig.constraints.iter().cloned());
+    let spring_count = constraints
+        .iter()
+        .filter(|constraint| matches!(constraint, Constraint::Spring { .. }))
+        .count();
+    let mut springs = vec![SpringState::default(); spring_count];
     let mut frames = Vec::with_capacity(count);
     for frame in first..=last {
         #[allow(clippy::cast_precision_loss)] // frames are bounded
@@ -146,7 +168,23 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
                 rig.name
             )));
         }
-        apply_aims(rig, &values, &mut parts);
+        for deformer in &rig.deformers {
+            let index = deformer.part();
+            let Some(part) = parts.get_mut(index) else {
+                return Err(RigError::new(format!(
+                    "rig '{}': deformer targets part {index}, which does not exist",
+                    rig.name
+                )));
+            };
+            let Some(base) = rig.parts.get(index) else {
+                return Err(RigError::new(format!(
+                    "rig '{}': deformer targets part {index}, which does not exist",
+                    rig.name
+                )));
+            };
+            deformer.apply(part, base, &values)?;
+        }
+        constraint::apply(&constraints, &rig.parts, &mut parts, &values, &mut springs)?;
         frames.push(FrameOutput {
             frame,
             parts,
@@ -251,18 +289,4 @@ fn apply_driver(
         *writes += 1;
     }
     Ok(())
-}
-
-fn apply_aims(rig: &Rig, values: &BTreeMap<usize, PropValue>, parts: &mut [PartOutput]) {
-    for aim in &rig.aims {
-        let Some(part) = parts.get_mut(aim.part) else {
-            continue;
-        };
-        let Some(look) = values.get(&aim.property).and_then(PropValue::vector) else {
-            continue;
-        };
-        let offset = look * aim.radius;
-        part.position = part.position + offset;
-        part.touched = true;
-    }
 }

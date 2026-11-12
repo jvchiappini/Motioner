@@ -1880,6 +1880,16 @@ impl Scene {
             NodeMethod::RigFire => self.rig_fire(id, args),
             NodeMethod::RigAim => self.rig_aim(id, args),
             NodeMethod::RigBlink => self.rig_blink(id, args),
+            NodeMethod::RigLattice => self.rig_lattice(id, args),
+            NodeMethod::RigBone => self.rig_bone(id, args),
+            NodeMethod::RigSkin => self.rig_skin(id, args),
+            NodeMethod::RigBlend => self.rig_blend(id, args),
+            NodeMethod::RigIk => self.rig_ik(id, args),
+            NodeMethod::RigFollow => self.rig_follow(id, args),
+            NodeMethod::RigCopy => self.rig_copy(id, args),
+            NodeMethod::RigLimit => self.rig_limit(id, args),
+            NodeMethod::RigDistance => self.rig_distance(id, args),
+            NodeMethod::RigSpring => self.rig_spring(id, args),
         }
     }
 

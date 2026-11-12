@@ -423,12 +423,42 @@ driver.
 
 A `geometry` value is a path builder or a whole path:
 `path_builder(move_to(x, y), line_to(x, y), cubic_to(c1x, c1y, c2x, c2y,
-x, y), arc_to(rx, ry, rotation, large_arc, sweep, x, y), close())`,
-`ellipse_arc(cx, cy, rx, ry, start, end)`, `arc(radius, start, end)`,
-`rounded_rect(width, height, radius)` or `mirror(geometry, axis="x"|"y")`.
-Its point count and closure must match the part's authored path; a mismatch
-is a typed error. The bake writes geometry keys like transform keys
-(D-0058).
+x, y), arc_to(rx, ry, rotation, large_arc, sweep, x, y, segments=...),
+close())`, `ellipse_arc(cx, cy, rx, ry, start, end, segments=...)`,
+`arc(radius, start, end, segments=...)`, `rounded_rect(width, height,
+radius)` or `mirror(geometry, axis="x"|"y")`. `segments` is a whole number
+`1..=64` and defaults to 4; a fixed count keeps the point topology stable
+while an angle animates. Its point count and closure must match the part's
+authored path; a mismatch is a typed error. The bake writes geometry keys
+like transform keys (D-0058).
+
+Deformers run after drivers and before constraints:
+
+- `m.lattice(part, corners=(tl, tr, br, bl), edges=(top, right, bottom,
+  left))` maps the part's local bounds through a 2x2 Coons patch; corner and
+  edge values are Vec2 properties. Edges may be `None`.
+- `m.bone(name, parent=None, at=(x, y), rotation=0, length=0,
+  rotation_prop=None, position_prop=None)` declares a bone;
+  `m.skin(part, weights=None)` skins the part with all declared bones. Omit
+  weights for deterministic distance weights, or pass one `(bone, weight)`
+  list per point.
+- `m.blend(part, points=..., weight="property", fit=True)` adds a blend
+  shape. `fit=True` resamples a differently sized target to the part's
+  topology; otherwise the mismatch is a typed error.
+
+Constraints run in declaration order after deformers:
+
+- `m.aim(part, property, radius=...)` (existing pupils route through it);
+- `m.ik(upper, lower, target="property", pole=None, tip=30)`;
+- `m.follow(part, path, progress="property", orient=True)`;
+- `m.copy(part, source, position=True, rotation=True, scale=True)`;
+- `m.limit(part, min=(x, y), max=(x, y), rotation=(min, max))`;
+- `m.distance(part, source, distance=...)`;
+- `m.spring(part, target="property", stiffness=0.4, damping=0.2, mass=1)`.
+
+The per-frame order is properties/machine → drivers → deformers →
+constraints → draw. Deformers and constraint targets are deterministic
+bakes; spring state is replayed from frame zero (D-0059, D-0060).
 
 Poses (`m.pose(name, prop=value, reset=False)` to declare;
 `m.pose(name, at=..., dur=..., ease=...)` to apply), clips

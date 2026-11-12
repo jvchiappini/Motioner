@@ -1,7 +1,7 @@
 //! Vector path geometry: authored points, flattening, trimming and dashing.
 //!
 //! A [`PathGeometry`] is the authored outline of a path node: a list of
-//! [`PathPoint`]s (a corner or a point with relative Bézier handles), a
+//! [`PathPoint`]s (a corner or a point with relative BÃ©zier handles), a
 //! closed flag and the stroke cap/join style. It is pure data: flattening,
 //! arc-length trimming and dashing live here so the renderer, the selection
 //! bounds, hit testing and the tests all share one implementation (D-0029).
@@ -13,6 +13,9 @@ use crate::animation::Ease;
 use crate::error::CoreError;
 use crate::math::Vec2;
 use crate::time::Frame;
+
+/// Maximum cubic segments one fixed arc may use.
+pub const MAX_ARC_SEGMENTS: u32 = 64;
 
 /// Maximum recursion depth when flattening one cubic segment.
 const MAX_SUBDIVISION_DEPTH: u32 = 12;
@@ -114,9 +117,9 @@ impl LineJoin {
 pub struct PathPoint {
     /// Position in the node's local space.
     pub position: Vec2,
-    /// Incoming Bézier handle offset.
+    /// Incoming BÃ©zier handle offset.
     pub handle_in: Vec2,
-    /// Outgoing Bézier handle offset.
+    /// Outgoing BÃ©zier handle offset.
     pub handle_out: Vec2,
 }
 
@@ -340,6 +343,29 @@ impl PathGeometry {
         start: f64,
         end: f64,
     ) -> Result<Self, CoreError> {
+        let sweep = arc_sweep(start, end)?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let segments = ((sweep.abs() / (PI / 2.0)).ceil() as u32).max(1);
+        Self::ellipse_arc_segments(center, radius_x, radius_y, start, end, segments)
+    }
+
+    /// An elliptical arc split into exactly `segments` cubic pieces.
+    ///
+    /// A fixed segment count keeps the point topology stable while the driver
+    /// animates the end angle; `1..=`[`MAX_ARC_SEGMENTS`] is enforced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidGeometry`] for invalid radii/angles or a
+    /// segment count outside `1..=MAX_ARC_SEGMENTS`.
+    pub fn ellipse_arc_segments(
+        center: Vec2,
+        radius_x: f64,
+        radius_y: f64,
+        start: f64,
+        end: f64,
+        segments: u32,
+    ) -> Result<Self, CoreError> {
         if !center.is_finite()
             || !radius_x.is_finite()
             || radius_x <= 0.0
@@ -347,30 +373,16 @@ impl PathGeometry {
             || radius_y <= 0.0
             || !start.is_finite()
             || !end.is_finite()
+            || !(1..=MAX_ARC_SEGMENTS).contains(&segments)
         {
             return Err(CoreError::InvalidGeometry { field: "arc" });
         }
-        let sweep = if (end - start).abs() < 1e-9 {
-            std::f64::consts::TAU
-        } else {
-            let raw = (end - start).to_radians();
-            let wrapped = raw.rem_euclid(std::f64::consts::TAU);
-            if wrapped < 1e-9 {
-                std::f64::consts::TAU
-            } else {
-                wrapped
-            }
-        };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let quarters = ((sweep.abs() / (PI / 2.0)).ceil() as u32).max(1);
-        let step = sweep / f64::from(quarters);
-        // One cubic per step; the handle length is the circular value scaled
-        // per axis.
+        let sweep = arc_sweep(start, end)?;
+        let step = sweep / f64::from(segments);
         let unit_handle = 4.0 / 3.0 * (step / 4.0).tan();
-
-        let mut points: Vec<PathPoint> = Vec::with_capacity(quarters as usize + 1);
+        let mut points: Vec<PathPoint> = Vec::with_capacity(segments as usize + 1);
         let start = start.to_radians();
-        for index in 0..quarters {
+        for index in 0..segments {
             let a = start + step * f64::from(index);
             let b = a + step;
             let p0 = Vec2::new(center.x + radius_x * a.cos(), center.y + radius_y * a.sin());
@@ -380,15 +392,12 @@ impl PathGeometry {
             if index == 0 {
                 points.push(PathPoint::curved(p0, Vec2::ZERO, out));
             } else if let Some(last) = points.last_mut() {
-                // This point already exists as the previous segment's end;
-                // give it the outgoing handle of the segment starting here.
                 last.handle_out = out;
             }
             points.push(PathPoint::curved(p3, incoming, Vec2::ZERO));
         }
         Self::new(points, false, LineCap::Round, LineJoin::Round)
     }
-
     /// The authored points.
     #[must_use]
     pub fn points(&self) -> &[PathPoint] {
@@ -836,6 +845,23 @@ impl Deref for GeometryChannel {
 
 fn cumulative_of(points: &[Vec2]) -> Vec<f64> {
     cumulative_lengths(points)
+}
+
+fn arc_sweep(start: f64, end: f64) -> Result<f64, CoreError> {
+    if !start.is_finite() || !end.is_finite() {
+        return Err(CoreError::InvalidGeometry { field: "arc" });
+    }
+    Ok(if (end - start).abs() < 1e-9 {
+        std::f64::consts::TAU
+    } else {
+        let raw = (end - start).to_radians();
+        let wrapped = raw.rem_euclid(std::f64::consts::TAU);
+        if wrapped < 1e-9 {
+            std::f64::consts::TAU
+        } else {
+            wrapped
+        }
+    })
 }
 
 #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31

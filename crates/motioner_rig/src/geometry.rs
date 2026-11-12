@@ -8,7 +8,6 @@
 //! driver.
 
 use std::collections::BTreeMap;
-use std::f64::consts::PI;
 
 use motioner_core::{LineCap, LineJoin, PathGeometry, PathPoint, Vec2};
 
@@ -21,6 +20,8 @@ pub const MAX_GEOMETRY_POINTS: usize = 4096;
 pub const MAX_GEOMETRY_COMMANDS: usize = 2048;
 /// Maximum nesting of `mirror` expressions.
 pub const MAX_GEOMETRY_DEPTH: usize = 16;
+/// Fixed cubic segments for an arc when the driver omits segments.
+pub const DEFAULT_ARC_SEGMENTS: u32 = 4;
 
 /// Which coordinate a mirror negates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +92,8 @@ pub enum GeometryCommand {
         x: Expr,
         /// Endpoint Y.
         y: Expr,
+        /// Cubic segment count.
+        segments: Expr,
     },
     /// Closes the contour.
     Close,
@@ -115,6 +118,8 @@ pub enum GeometryExpr {
         start: Expr,
         /// End angle in degrees.
         end: Expr,
+        /// Cubic segment count.
+        segments: Expr,
     },
     /// A circular arc centred on the origin.
     Arc {
@@ -124,6 +129,8 @@ pub enum GeometryExpr {
         start: Expr,
         /// End angle in degrees.
         end: Expr,
+        /// Cubic segment count.
+        segments: Expr,
     },
     /// A rounded rectangle centred on the origin.
     RoundedRect {
@@ -180,26 +187,39 @@ impl GeometryExpr {
                 ry,
                 start,
                 end,
+                segments,
             } => {
                 let center = Vec2::new(
                     number(cx, properties, driver)?,
                     number(cy, properties, driver)?,
                 );
-                let geometry = PathGeometry::ellipse_arc(
+                let geometry = PathGeometry::ellipse_arc_segments(
                     center,
                     number(rx, properties, driver)?,
                     number(ry, properties, driver)?,
                     number(start, properties, driver)?,
                     number(end, properties, driver)?,
+                    segment_count(segments, properties, driver)?,
                 );
                 geometry.map_err(|_| error(driver, "invalid ellipse_arc arguments"))
             }
-            Self::Arc { radius, start, end } => PathGeometry::arc(
-                number(radius, properties, driver)?,
-                number(start, properties, driver)?,
-                number(end, properties, driver)?,
-            )
-            .map_err(|_| error(driver, "invalid arc arguments")),
+            Self::Arc {
+                radius,
+                start,
+                end,
+                segments,
+            } => {
+                let radius = number(radius, properties, driver)?;
+                PathGeometry::ellipse_arc_segments(
+                    Vec2::ZERO,
+                    radius,
+                    radius,
+                    number(start, properties, driver)?,
+                    number(end, properties, driver)?,
+                    segment_count(segments, properties, driver)?,
+                )
+                .map_err(|_| error(driver, "invalid arc arguments"))
+            }
             Self::RoundedRect {
                 width,
                 height,
@@ -290,6 +310,7 @@ fn build(
                 sweep,
                 x,
                 y,
+                segments,
             } => {
                 require_start(&points, driver)?;
                 let end = Vec2::new(
@@ -304,6 +325,7 @@ fn build(
                     number(large_arc, properties, driver)? != 0.0,
                     number(sweep, properties, driver)? != 0.0,
                     end,
+                    segment_count(segments, properties, driver)?,
                     driver,
                 )?;
             }
@@ -346,6 +368,7 @@ fn push_arc(
     large_arc: bool,
     sweep: bool,
     end: Vec2,
+    segments: u32,
     driver: &str,
 ) -> Result<(), DriverError> {
     let start = points
@@ -403,8 +426,6 @@ fn push_arc(
     } else if sweep && delta < 0.0 {
         delta += std::f64::consts::TAU;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let segments = (((delta.abs() / (PI / 2.0)) - 1e-6).ceil() as u32).max(1);
     let step = delta / f64::from(segments);
     for index in 0..segments {
         let t0 = start_angle + step * f64::from(index);
@@ -533,6 +554,25 @@ fn number(
     expression.eval(properties, driver)
 }
 
+fn segment_count(
+    expression: &Expr,
+    properties: &BTreeMap<usize, PropValue>,
+    driver: &str,
+) -> Result<u32, DriverError> {
+    let value = number(expression, properties, driver)?.round();
+    if !(1.0..=f64::from(motioner_core::MAX_ARC_SEGMENTS)).contains(&value) {
+        return Err(error(
+            driver,
+            format!(
+                "arc segments must be a whole number from 1 to {}",
+                motioner_core::MAX_ARC_SEGMENTS
+            ),
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok(value as u32)
+}
+
 fn error(driver: &str, message: impl Into<String>) -> DriverError {
     DriverError {
         driver: driver.to_owned(),
@@ -614,10 +654,11 @@ mod tests {
             ry: expr(10.0),
             start: expr(0.0),
             end: expr(90.0),
+            segments: expr(2.0),
         }
         .eval(&BTreeMap::new(), "arc")
         .unwrap();
-        let arc = PathGeometry::arc(10.0, 0.0, 90.0).unwrap();
+        let arc = PathGeometry::ellipse_arc_segments(Vec2::ZERO, 10.0, 10.0, 0.0, 90.0, 2).unwrap();
         assert_eq!(ellipse, arc);
     }
 }

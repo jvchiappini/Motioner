@@ -23,7 +23,7 @@ use super::{core_error, CreationSite, Scene};
 use crate::ast::{
     BinaryOp, CompareOp, Expr as AstExpr, ExprKind, FunctionDef, LogicalOp, Stmt, StmtKind, UnaryOp,
 };
-use crate::host::{as_vec2, bind, CallArgs, HostError, HostResult};
+use crate::host::{as_vec2, bind, Bound, CallArgs, HostError, HostResult};
 use crate::origins::NodeOrigin;
 use crate::value::{RigMethod, Value};
 
@@ -162,6 +162,17 @@ fn number_of(value: &Value, what: &str) -> HostResult<f64> {
         Value::Number(number) => Ok(*number),
         other => Err(HostError::type_error(format!(
             "{what} must be a number, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+fn bool_arg(bound: &Bound<'_>, index: usize, default: bool) -> HostResult<bool> {
+    match bound.get(index) {
+        None | Some(Value::None) => Ok(default),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(other) => Err(HostError::type_error(format!(
+            "expected True or False, got {}",
             other.type_name()
         ))),
     }
@@ -1353,7 +1364,491 @@ impl Scene {
         Ok(Value::None)
     }
 
-    /// Describes every rig instance for editors and agents (D-0056).
+    /// `r.lattice("body", corners=("tl", "tr", "br", "bl"), edges=...)`.
+    pub(crate) fn rig_lattice(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("lattice", &["part", "corners", "edges"], 2, args)?;
+        let index = self.rig_index(node)?;
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "lattice")?;
+        let corners = self.rig_property_list(index, &bound, 1, "lattice")?;
+        let corners: [usize; 4] = corners.try_into().map_err(|_| {
+            HostError::value_error("lattice(): 'corners' must name exactly four vec2 properties")
+        })?;
+        let mut edges = [None; 4];
+        if let Some(value) = bound.get(2) {
+            if !matches!(value, Value::None) {
+                let items = list_items(value, "lattice(): 'edges' must be a list of four items")?;
+                if items.len() != 4 {
+                    return Err(HostError::value_error(
+                        "lattice(): 'edges' must be a list of four items",
+                    ));
+                }
+                for (slot, item) in edges.iter_mut().zip(items) {
+                    if matches!(item, Value::None) {
+                        continue;
+                    }
+                    let name = match item {
+                        Value::Str(name) => name,
+                        other => {
+                            return Err(HostError::type_error(format!(
+                                "lattice(): edge properties must be names or None, got {}",
+                                other.type_name()
+                            )))
+                        }
+                    };
+                    *slot = Some(self.rig_vec2_property(index, &name, "lattice")?);
+                }
+            }
+        }
+        self.rigs[index]
+            .rig
+            .deformers
+            .push(rig_rt::Deformer::Lattice(rig_rt::Lattice {
+                part,
+                corners,
+                edges,
+            }));
+        Ok(Value::None)
+    }
+
+    /// `r.bone("root", parent=None, at=(0, 0), rotation=0, length=40,
+    /// rotation_prop="rot")`.
+    pub(crate) fn rig_bone(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = [
+            "name",
+            "parent",
+            "at",
+            "rotation",
+            "length",
+            "rotation_prop",
+            "position_prop",
+        ];
+        let bound = bind("bone", &params, 1, args)?;
+        let name = bound.string_or(0, "")?;
+        if name.is_empty() {
+            return Err(HostError::value_error("bone(): 'name' cannot be empty"));
+        }
+        let index = self.rig_index(node)?;
+        if self.rigs[index]
+            .rig
+            .bones
+            .iter()
+            .any(|bone| bone.name == *name)
+        {
+            return Err(HostError::value_error(format!(
+                "bone(): the rig already has a bone named {name:?}"
+            )));
+        }
+        let parent = match bound.get(1) {
+            None | Some(Value::None) => None,
+            Some(Value::Str(parent)) => Some(
+                self.rigs[index]
+                    .rig
+                    .bones
+                    .iter()
+                    .position(|bone| bone.name == **parent)
+                    .ok_or_else(|| {
+                        HostError::value_error(format!("bone(): no parent bone {parent:?}"))
+                    })?,
+            ),
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "bone(): 'parent' must be a name or None, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let at = bound.get(2).and_then(as_vec2).unwrap_or(Vec2::ZERO);
+        let rotation = bound.number_or(3, 0.0)?;
+        let length = bound.number_or(4, 0.0)?;
+        let rotation_property =
+            self.rig_optional_property(index, &bound, 5, rig_rt::PropKind::Float, "bone")?;
+        let position_property =
+            self.rig_optional_property(index, &bound, 6, rig_rt::PropKind::Vec2, "bone")?;
+        self.rigs[index].rig.bones.push(rig_rt::Bone {
+            name: name.to_string(),
+            parent,
+            bind_position: at,
+            bind_rotation: rotation,
+            length,
+            rotation_property,
+            position_property,
+        });
+        Ok(Value::None)
+    }
+
+    /// `r.skin("body", weights=[[("root", 1.0), ...], ...])`.
+    pub(crate) fn rig_skin(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("skin", &["part", "weights"], 1, args)?;
+        let index = self.rig_index(node)?;
+        if self.rigs[index].rig.bones.is_empty() {
+            return Err(HostError::value_error("skin(): declare a bone first"));
+        }
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "skin")?;
+        let weights = match bound.get(1) {
+            None | Some(Value::None) => None,
+            Some(value) => {
+                let rows = list_items(value, "skin(): 'weights' must be a list of point rows")?;
+                let mut parsed = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let pairs = list_items(&row, "skin(): every point row must be a list")?;
+                    let mut points = Vec::with_capacity(pairs.len());
+                    for pair in pairs {
+                        let pair = list_items(&pair, "skin(): a weight is (bone, value)")?;
+                        if pair.len() != 2 {
+                            return Err(HostError::value_error(
+                                "skin(): a weight is (bone, value)",
+                            ));
+                        }
+                        let bone = match &pair[0] {
+                            Value::Str(name) => self.rigs[index]
+                                .rig
+                                .bones
+                                .iter()
+                                .position(|bone| bone.name == **name)
+                                .ok_or_else(|| {
+                                    HostError::value_error(format!(
+                                        "skin(): no bone named {name:?}"
+                                    ))
+                                })?,
+                            other => {
+                                return Err(HostError::type_error(format!(
+                                    "skin(): bone names must be strings, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        let weight = match &pair[1] {
+                            Value::Number(weight) => *weight,
+                            other => {
+                                return Err(HostError::type_error(format!(
+                                    "skin(): weights must be numbers, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        if !weight.is_finite() || weight < 0.0 {
+                            return Err(HostError::value_error(
+                                "skin(): weights must be finite and non-negative",
+                            ));
+                        }
+                        points.push((bone, weight));
+                    }
+                    parsed.push(points);
+                }
+                Some(parsed)
+            }
+        };
+        let bones = self.rigs[index].rig.bones.clone();
+        self.rigs[index]
+            .rig
+            .deformers
+            .push(rig_rt::Deformer::Skin(rig_rt::Skin {
+                part,
+                bones,
+                weights,
+            }));
+        Ok(Value::None)
+    }
+
+    /// `r.blend("body", points=[[...]], weight="smile", fit=True)`.
+    pub(crate) fn rig_blend(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = ["part", "points", "weight", "name", "fit"];
+        let bound = bind("blend", &params, 3, args)?;
+        let index = self.rig_index(node)?;
+        let part_name = bound.string_or(0, "")?;
+        let part = self.rig_part_index(index, &part_name, "blend")?;
+        let weight = self.rig_number_property(index, &bound.string_or(2, "")?, "blend")?;
+        let fit = bool_arg(&bound, 4, true)?;
+        let name = match bound.get(3) {
+            Some(Value::Str(name)) => name.to_string(),
+            None | Some(Value::None) => format!("blend{part}"),
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "blend(): 'name' must be a string, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let target_points = super::path_points(bound.get(1).unwrap_or(&Value::None))?;
+        let part_node = self.rigs[index].part_nodes[part];
+        let base = self
+            .document()?
+            .node(part_node)
+            .and_then(|node| match node.content() {
+                NodeContent::Path { geometry, .. } => Some(geometry.geometry().clone()),
+                _ => None,
+            })
+            .ok_or_else(|| HostError::value_error("blend(): the part has no path geometry"))?;
+        let points = if target_points.len() == base.points().len() {
+            target_points
+        } else if fit {
+            let target = motioner_core::PathGeometry::new(
+                target_points,
+                base.closed(),
+                base.cap(),
+                base.join(),
+            )
+            .map_err(|error| core_error(&error))?;
+            rig_rt::compatible_points(&target, base.points().len(), base.closed())
+        } else {
+            return Err(HostError::value_error(format!(
+                "blend(): topology mismatch ({} points, expected {}); pass fit=True",
+                target_points.len(),
+                base.points().len()
+            )));
+        };
+        let shape = rig_rt::BlendShape {
+            name,
+            points,
+            weight,
+        };
+        if let Some(rig_rt::Deformer::BlendShapes(shapes)) = self.rigs[index]
+            .rig
+            .deformers
+            .iter_mut()
+            .find(|deformer| deformer.part() == part)
+        {
+            shapes.shapes.push(shape);
+        } else {
+            self.rigs[index]
+                .rig
+                .deformers
+                .push(rig_rt::Deformer::BlendShapes(rig_rt::BlendShapes {
+                    part,
+                    shapes: vec![shape],
+                }));
+        }
+        Ok(Value::None)
+    }
+
+    /// `r.ik("upper", "lower", target="hand", pole="elbow", tip=30)`.
+    pub(crate) fn rig_ik(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("ik", &["upper", "lower", "target", "pole", "tip"], 3, args)?;
+        let index = self.rig_index(node)?;
+        let upper = self.rig_part_index(index, &bound.string_or(0, "")?, "ik")?;
+        let lower = self.rig_part_index(index, &bound.string_or(1, "")?, "ik")?;
+        let target = self.rig_vec2_property(index, &bound.string_or(2, "")?, "ik")?;
+        let pole = match bound.get(3) {
+            None | Some(Value::None) => None,
+            Some(Value::Str(name)) => Some(self.rig_vec2_property(index, name, "ik")?),
+            Some(other) => {
+                return Err(HostError::type_error(format!(
+                    "ik(): 'pole' must be a property name or None, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+        let tip_length = bound.number_or(4, 30.0)?;
+        self.rigs[index]
+            .rig
+            .constraints
+            .push(rig_rt::Constraint::TwoBoneIk {
+                upper,
+                lower,
+                target,
+                pole,
+                tip_length,
+            });
+        Ok(Value::None)
+    }
+
+    /// `r.follow("cursor", "path", progress="t", orient=True)`.
+    pub(crate) fn rig_follow(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("follow", &["part", "path", "progress", "orient"], 3, args)?;
+        let index = self.rig_index(node)?;
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "follow")?;
+        let path = self.rig_part_index(index, &bound.string_or(1, "")?, "follow")?;
+        let progress = self.rig_number_property(index, &bound.string_or(2, "")?, "follow")?;
+        let orient = bool_arg(&bound, 3, true)?;
+        self.rigs[index]
+            .rig
+            .constraints
+            .push(rig_rt::Constraint::FollowPath {
+                part,
+                path,
+                progress,
+                orient,
+            });
+        Ok(Value::None)
+    }
+
+    /// `r.copy("part", "source", position=True, rotation=True, scale=True)`.
+    pub(crate) fn rig_copy(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = ["part", "source", "position", "rotation", "scale"];
+        let bound = bind("copy", &params, 2, args)?;
+        let index = self.rig_index(node)?;
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "copy")?;
+        let source = self.rig_part_index(index, &bound.string_or(1, "")?, "copy")?;
+        self.rigs[index]
+            .rig
+            .constraints
+            .push(rig_rt::Constraint::Copy {
+                part,
+                source,
+                position: bool_arg(&bound, 2, true)?,
+                rotation: bool_arg(&bound, 3, true)?,
+                scale: bool_arg(&bound, 4, true)?,
+            });
+        Ok(Value::None)
+    }
+
+    /// `r.limit("part", min=(-5, -5), max=(5, 5), rotation=(-30, 30))`.
+    pub(crate) fn rig_limit(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("limit", &["part", "min", "max", "rotation"], 3, args)?;
+        let index = self.rig_index(node)?;
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "limit")?;
+        let min = bound
+            .get(1)
+            .and_then(as_vec2)
+            .ok_or_else(|| HostError::value_error("limit(): 'min' must be an (x, y) pair"))?;
+        let max = bound
+            .get(2)
+            .and_then(as_vec2)
+            .ok_or_else(|| HostError::value_error("limit(): 'max' must be an (x, y) pair"))?;
+        let rotation = bound
+            .get(3)
+            .and_then(as_vec2)
+            .map_or((-180.0, 180.0), |pair| (pair.x, pair.y));
+        self.rigs[index]
+            .rig
+            .constraints
+            .push(rig_rt::Constraint::Limit {
+                part,
+                min,
+                max,
+                rotation_min: rotation.0,
+                rotation_max: rotation.1,
+            });
+        Ok(Value::None)
+    }
+
+    /// `r.distance("part", "source", distance=40)`.
+    pub(crate) fn rig_distance(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("distance", &["part", "source", "distance"], 3, args)?;
+        let index = self.rig_index(node)?;
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "distance")?;
+        let source = self.rig_part_index(index, &bound.string_or(1, "")?, "distance")?;
+        self.rigs[index]
+            .rig
+            .constraints
+            .push(rig_rt::Constraint::Distance {
+                part,
+                source,
+                distance: bound.number_or(2, 0.0)?,
+            });
+        Ok(Value::None)
+    }
+
+    /// `r.spring("hair", target="look", stiffness=0.4, damping=0.2)`.
+    pub(crate) fn rig_spring(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let params = ["part", "target", "stiffness", "damping", "mass"];
+        let bound = bind("spring", &params, 2, args)?;
+        let index = self.rig_index(node)?;
+        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "spring")?;
+        let target = self.rig_vec2_property(index, &bound.string_or(1, "")?, "spring")?;
+        let stiffness = bound.number_or(2, 0.4)?;
+        let damping = bound.number_or(3, 0.2)?;
+        let mass = bound.number_or(4, 1.0)?;
+        self.rigs[index]
+            .rig
+            .constraints
+            .push(rig_rt::Constraint::Spring {
+                part,
+                target,
+                stiffness,
+                damping,
+                mass,
+            });
+        Ok(Value::None)
+    }
+
+    fn rig_part_index(&self, index: usize, name: &str, caller: &str) -> HostResult<usize> {
+        self.rigs[index]
+            .rig
+            .part(name)
+            .ok_or_else(|| HostError::value_error(format!("{caller}(): no part {name:?}")))
+    }
+
+    fn rig_vec2_property(&self, index: usize, name: &str, caller: &str) -> HostResult<usize> {
+        let property = self.rigs[index]
+            .rig
+            .property(name)
+            .ok_or_else(|| HostError::value_error(format!("{caller}(): no property {name:?}")))?;
+        if self.rigs[index].rig.properties[property].kind != rig_rt::PropKind::Vec2 {
+            return Err(HostError::value_error(format!(
+                "{caller}(): property {name:?} must be a vec2"
+            )));
+        }
+        Ok(property)
+    }
+
+    fn rig_number_property(&self, index: usize, name: &str, caller: &str) -> HostResult<usize> {
+        let property = self.rigs[index]
+            .rig
+            .property(name)
+            .ok_or_else(|| HostError::value_error(format!("{caller}(): no property {name:?}")))?;
+        if !matches!(
+            self.rigs[index].rig.properties[property].kind,
+            rig_rt::PropKind::Float | rig_rt::PropKind::Int
+        ) {
+            return Err(HostError::value_error(format!(
+                "{caller}(): property {name:?} must be a number"
+            )));
+        }
+        Ok(property)
+    }
+
+    fn rig_optional_property(
+        &self,
+        index: usize,
+        bound: &Bound<'_>,
+        at: usize,
+        kind: rig_rt::PropKind,
+        caller: &str,
+    ) -> HostResult<Option<usize>> {
+        match bound.get(at) {
+            None | Some(Value::None) => Ok(None),
+            Some(Value::Str(name)) => {
+                let property = self.rigs[index].rig.property(name).ok_or_else(|| {
+                    HostError::value_error(format!("{caller}(): no property {name:?}"))
+                })?;
+                if self.rigs[index].rig.properties[property].kind != kind {
+                    return Err(HostError::value_error(format!(
+                        "{caller}(): property {name:?} has the wrong type"
+                    )));
+                }
+                Ok(Some(property))
+            }
+            Some(other) => Err(HostError::type_error(format!(
+                "{caller}(): expected a property name or None, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn rig_property_list(
+        &self,
+        index: usize,
+        bound: &Bound<'_>,
+        at: usize,
+        caller: &str,
+    ) -> HostResult<Vec<usize>> {
+        let items = list_items(
+            bound.get(at).unwrap_or(&Value::None),
+            &format!("{caller}(): expected a list of property names"),
+        )?;
+        items
+            .iter()
+            .map(|item| match item {
+                Value::Str(name) => self.rig_vec2_property(index, name, caller),
+                other => Err(HostError::type_error(format!(
+                    "{caller}(): expected a property name, got {}",
+                    other.type_name()
+                ))),
+            })
+            .collect()
+    }
+
     ///
     /// The order is the authoring order (rigs, properties, poses, states and
     /// transitions), so two compiles of the same program produce equal
@@ -2057,6 +2552,7 @@ fn compile_driver(rig: &rig_rt::Rig, function: &FunctionDef) -> HostResult<rig_r
     })
 }
 
+#[allow(clippy::too_many_lines)] // one constructor per arc/path form
 fn compile_geometry_expr(
     rig: &rig_rt::Rig,
     driver: &str,
@@ -2094,19 +2590,41 @@ fn compile_geometry_expr(
                 .collect::<HostResult<Vec<_>>>()?;
             rig_rt::GeometryExpr::Builder(commands)
         }
-        "ellipse_arc" if positional.len() == 6 => rig_rt::GeometryExpr::EllipseArc {
-            cx: scalar(0)?,
-            cy: scalar(1)?,
-            rx: scalar(2)?,
-            ry: scalar(3)?,
-            start: scalar(4)?,
-            end: scalar(5)?,
-        },
-        "arc" if positional.len() == 3 => rig_rt::GeometryExpr::Arc {
-            radius: scalar(0)?,
-            start: scalar(1)?,
-            end: scalar(2)?,
-        },
+        "ellipse_arc" if positional.len() == 6 || positional.len() == 7 => {
+            let segments = args
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some("segments"))
+                .map(|argument| &argument.value)
+                .or_else(|| positional.get(6).copied());
+            rig_rt::GeometryExpr::EllipseArc {
+                cx: scalar(0)?,
+                cy: scalar(1)?,
+                rx: scalar(2)?,
+                ry: scalar(3)?,
+                start: scalar(4)?,
+                end: scalar(5)?,
+                segments: match segments {
+                    Some(expression) => compile_expr(rig, driver, expression)?,
+                    None => rig_rt::Expr::Number(f64::from(rig_rt::DEFAULT_ARC_SEGMENTS)),
+                },
+            }
+        }
+        "arc" if positional.len() == 3 || positional.len() == 4 => {
+            let segments = args
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some("segments"))
+                .map(|argument| &argument.value)
+                .or_else(|| positional.get(3).copied());
+            rig_rt::GeometryExpr::Arc {
+                radius: scalar(0)?,
+                start: scalar(1)?,
+                end: scalar(2)?,
+                segments: match segments {
+                    Some(expression) => compile_expr(rig, driver, expression)?,
+                    None => rig_rt::Expr::Number(f64::from(rig_rt::DEFAULT_ARC_SEGMENTS)),
+                },
+            }
+        }
         "rounded_rect" if positional.len() == 3 => rig_rt::GeometryExpr::RoundedRect {
             width: scalar(0)?,
             height: scalar(1)?,
@@ -2182,15 +2700,26 @@ fn compile_geometry_command(
             x: scalar(4)?,
             y: scalar(5)?,
         },
-        ("arc_to", 7) => rig_rt::GeometryCommand::ArcTo {
-            rx: scalar(0)?,
-            ry: scalar(1)?,
-            rotation: scalar(2)?,
-            large_arc: scalar(3)?,
-            sweep: scalar(4)?,
-            x: scalar(5)?,
-            y: scalar(6)?,
-        },
+        ("arc_to", 7 | 8) => {
+            let segments = args
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some("segments"))
+                .map(|argument| &argument.value)
+                .or_else(|| positional.get(7).copied());
+            rig_rt::GeometryCommand::ArcTo {
+                rx: scalar(0)?,
+                ry: scalar(1)?,
+                rotation: scalar(2)?,
+                large_arc: scalar(3)?,
+                sweep: scalar(4)?,
+                x: scalar(5)?,
+                y: scalar(6)?,
+                segments: match segments {
+                    Some(expression) => compile_expr(rig, driver, expression)?,
+                    None => rig_rt::Expr::Number(f64::from(rig_rt::DEFAULT_ARC_SEGMENTS)),
+                },
+            }
+        }
         ("close", 0) => rig_rt::GeometryCommand::Close,
         _ => {
             return Err(HostError::value_error(format!(

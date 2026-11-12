@@ -53,7 +53,7 @@ pub use overrides::{
 };
 pub use path::{
     DashSpec, GeometryChannel, GeometryKey, LineCap, LineJoin, PathGeometry, PathOutline,
-    PathPiece, PathPoint, TrimSpec, FLATTEN_TOLERANCE,
+    PathPiece, PathPoint, TrimSpec, FLATTEN_TOLERANCE, MAX_ARC_SEGMENTS,
 };
 pub use rig_manifest::{
     RigAimManifest, RigClipKeyManifest, RigClipManifest, RigEventManifest, RigInputManifest,
