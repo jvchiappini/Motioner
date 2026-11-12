@@ -135,16 +135,24 @@ r.driver(lids)
 ```
 
 Supported writes: `position.x`, `position.y`, `rotation`, `scale.x`,
-`scale.y`, `opacity`, `fill`, `stroke`, `stroke_width` and the aliases
-`x`, `y`. The expression subset is numbers, property names, `+ - * /`,
-comparisons, `and/or/not`, and the pure builtins `min`, `max`, `abs`,
-`sin`, `cos`, `clamp`, `lerp`. Anything else is a typed compile error
-naming the driver.
+`scale.y`, `opacity`, `stroke_width` and `geometry`. The expression subset
+is numbers, property names, `+ - * /`, comparisons, `and/or/not`, and the
+pure builtins `min`, `max`, `abs`, `sqrt`, `sin`, `cos`, `clamp`, `lerp`.
+Anything else is a typed compile error naming the driver.
 
-Evaluation order per frame: property values (keys and state machine) â†’
-poses and clips â†’ drivers â†’ constraints â†’ writes to parts. Driving a
-path's points or commands is not supported in v0; it needs a keyable
-geometry channel and is backlogged with the native deformers.
+A `geometry` write is a sandboxed path expression:
+`path_builder(move_to(x, y), line_to(x, y), cubic_to(c1x, c1y, c2x, c2y,
+x, y), arc_to(rx, ry, rotation, large_arc, sweep, x, y), close())`,
+`ellipse_arc(cx, cy, rx, ry, start, end)`, `arc(radius, start, end)`,
+`rounded_rect(width, height, radius)` or `mirror(geometry, axis="x")`.
+Points interpolate with the part's fixed topology; a different point count
+or closure is a typed error. The bake writes ordinary geometry keys, so the
+runtime evaluator samples points exactly like transforms (D-0058).
+
+Evaluation order per frame: property values (keys and state machine) →
+poses and clips → drivers → constraints → writes to parts. Geometry drivers
+run in the same driver pass and append to that part's output; the first
+frame and every change become keys.
 
 Drivers are evaluated deterministically, frame by frame, at load time,
 and their output is written as keys (D-0052). The result is a document

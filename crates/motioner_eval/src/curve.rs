@@ -216,6 +216,18 @@ pub fn sample<T: Interpolate>(value: &Animatable<T>, frame: Frame) -> T {
     sample_at(value, frame_time(frame))
 }
 
+/// Samples a geometry channel at a fractional frame time.
+///
+/// Returns `None` only if the channel's sampled points somehow lost the
+/// topology enforced at key insertion; callers skip that item.
+#[must_use]
+pub fn sample_geometry_at(
+    value: &motioner_core::GeometryChannel,
+    time: f64,
+) -> Option<motioner_core::PathGeometry> {
+    value.sample(time, ease)
+}
+
 /// Samples an animatable value at a fractional frame time.
 ///
 /// `time` is in composition frames and may be fractional. The result is

@@ -46,6 +46,15 @@ impl Vec2 {
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }
+
+    /// Linear interpolation towards `other` by `t`.
+    #[must_use]
+    pub fn lerp(self, other: Self, t: f64) -> Self {
+        Self::new(
+            self.x + (other.x - self.x) * t,
+            self.y + (other.y - self.y) * t,
+        )
+    }
 }
 
 impl Add for Vec2 {

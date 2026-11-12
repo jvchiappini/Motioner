@@ -1669,7 +1669,8 @@ pub fn content_number(
     match channel {
         motioner_core::ContentChannel::Number(value) => Some(sample(value, frame)),
         motioner_core::ContentChannel::Color(_)
-        | motioner_core::ContentChannel::OptionalColor(_) => None,
+        | motioner_core::ContentChannel::OptionalColor(_)
+        | motioner_core::ContentChannel::Geometry(_) => None,
     }
 }
 

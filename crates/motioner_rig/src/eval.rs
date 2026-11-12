@@ -52,6 +52,8 @@ pub struct PartOutput {
     pub opacity: f64,
     /// Absolute stroke width, when a driver writes it.
     pub stroke_width: Option<f64>,
+    /// Path points when a geometry driver writes this part.
+    pub geometry: Option<motioner_core::PathGeometry>,
     /// Whether a driver or constraint touched this part.
     pub touched: bool,
 }
@@ -130,12 +132,13 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
                 scale: Vec2::ONE,
                 opacity: part.opacity,
                 stroke_width: None,
+                geometry: None,
                 touched: false,
             })
             .collect();
         let mut writes = 0usize;
         for driver in &rig.drivers {
-            apply_driver(driver, &values, &mut parts, &mut writes)?;
+            apply_driver(driver, rig, &values, &mut parts, &mut writes)?;
         }
         if writes > MAX_FRAME_WRITES {
             return Err(RigError::new(format!(
@@ -169,11 +172,12 @@ pub fn evaluate(rig: &Rig, frame: f64) -> Result<FrameOutput, RigError> {
 
 fn apply_driver(
     driver: &Driver,
+    rig: &Rig,
     values: &BTreeMap<usize, PropValue>,
     parts: &mut [PartOutput],
     writes: &mut usize,
 ) -> Result<(), RigError> {
-    if driver.writes.len() > MAX_WRITES {
+    if driver.writes.len() + driver.geometries.len() > MAX_WRITES {
         return Err(RigError::new(format!(
             "driver '{}': {} writes exceed {MAX_WRITES}",
             driver.name,
@@ -200,6 +204,49 @@ fn apply_driver(
             Field::Opacity => part.opacity = value.clamp(0.0, 1.0),
             Field::StrokeWidth => part.stroke_width = Some(value.max(0.0)),
         }
+        part.touched = true;
+        *writes += 1;
+    }
+    for write in &driver.geometries {
+        let Some(part) = parts.get_mut(write.part) else {
+            return Err(RigError::new(format!(
+                "driver '{}': part {} does not exist",
+                driver.name, write.part
+            )));
+        };
+        let Some(base) = rig
+            .parts
+            .get(write.part)
+            .and_then(|part| part.geometry.as_ref())
+        else {
+            return Err(RigError::new(format!(
+                "driver '{}': part {} is not a path and cannot take geometry",
+                driver.name, write.part
+            )));
+        };
+        let geometry = write
+            .geometry
+            .eval(values, &driver.name)
+            .map_err(|error| RigError::new(error.to_string()))?;
+        if geometry.points().len() != base.points().len() || geometry.closed() != base.closed() {
+            return Err(RigError::new(format!(
+                "driver '{}': geometry topology mismatch: expected {} points ({}), got {} ({})",
+                driver.name,
+                base.points().len(),
+                if base.closed() { "closed" } else { "open" },
+                geometry.points().len(),
+                if geometry.closed() { "closed" } else { "open" }
+            )));
+        }
+        part.geometry = Some(
+            motioner_core::PathGeometry::new(
+                geometry.points().to_vec(),
+                base.closed(),
+                base.cap(),
+                base.join(),
+            )
+            .map_err(|error| RigError::new(error.to_string()))?,
+        );
         part.touched = true;
         *writes += 1;
     }

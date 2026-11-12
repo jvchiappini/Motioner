@@ -15,7 +15,9 @@ fn axis_value(vector: motioner_core::Vec2, axis: Option<Axis>) -> f64 {
 fn channel_number(channel: ContentChannel<'_>, frame: i64) -> Option<f64> {
     match channel {
         ContentChannel::Number(value) => Some(sample(value, frame)),
-        ContentChannel::Color(_) | ContentChannel::OptionalColor(_) => None,
+        ContentChannel::Color(_)
+        | ContentChannel::OptionalColor(_)
+        | ContentChannel::Geometry(_) => None,
     }
 }
 

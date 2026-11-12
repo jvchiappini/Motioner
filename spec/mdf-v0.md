@@ -197,6 +197,13 @@ the After Effects trim-path model, so `key("trim_end", 0.0, 0.0)` +
 local pixels (the gap is equal) and `dash_offset` shifts the pattern. Both
 are animatable. See D-0029.
 
+A path's points are also a keyable channel: `path.key("geometry", t, points)`
+or, on a rig part, `m.geometry("lid-L", t, points, ease=...)`. Every key must
+have the same point count and the path's closure, cap and join stay fixed;
+the point positions and handles interpolate point-wise with the arriving
+key's ease. A different topology is a typed error, never a silent reshape.
+Geometry drivers (section 7.9) are baked into these keys. See D-0058.
+
 ### 7.2 Gradients
 
 `linear_gradient(start, end, stops)` and `radial_gradient(center, radius,
@@ -409,9 +416,19 @@ one name write both sides.
 `m.driver(fn)` registers a pure expression function: its body must be
 exactly `return [ [part, field, value], ... ]`, and it may read property
 names and use numbers, `+ - * /`, comparisons, `and/or/not` and
-`min/max/abs/sin/cos/clamp/lerp`. Fields are `position.x`, `position.y`,
-`rotation`, `scale.x`, `scale.y`, `opacity` and `stroke_width`. Anything
-else is a typed error naming the driver.
+`min/max/abs/sqrt/sin/cos/clamp/lerp`. Fields are `position.x`,
+`position.y`, `rotation`, `scale.x`, `scale.y`, `opacity`,
+`stroke_width` and `geometry`. Anything else is a typed error naming the
+driver.
+
+A `geometry` value is a path builder or a whole path:
+`path_builder(move_to(x, y), line_to(x, y), cubic_to(c1x, c1y, c2x, c2y,
+x, y), arc_to(rx, ry, rotation, large_arc, sweep, x, y), close())`,
+`ellipse_arc(cx, cy, rx, ry, start, end)`, `arc(radius, start, end)`,
+`rounded_rect(width, height, radius)` or `mirror(geometry, axis="x"|"y")`.
+Its point count and closure must match the part's authored path; a mismatch
+is a typed error. The bake writes geometry keys like transform keys
+(D-0058).
 
 Poses (`m.pose(name, prop=value, reset=False)` to declare;
 `m.pose(name, at=..., dur=..., ease=...)` to apply), clips
@@ -481,7 +498,8 @@ their keyframes. Vector properties have independently keyable axes:
 Content fields are animatable channels with no axes (D-0028): `width`,
 `height`, `radius`, `fill`, `stroke`, `stroke_width` (rect/circle),
 `trim_start`, `trim_end`, `trim_offset`, `dash`, `dash_offset` (path),
-`size`, `color`, `tracking`, `line_height` (text), `width`, `height`
+`geometry` (path points, source keys only), `size`, `color`, `tracking`,
+`line_height` (text), `width`, `height`
 (image) and every gradient stop offset/colour plus every effect parameter.
 `key("fill", t, value)`, `override_key("id", "fill", t, value)` and
 `override_unkey("id", "fill", t)` work exactly like transform channels.

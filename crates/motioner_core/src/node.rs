@@ -7,7 +7,7 @@ use crate::color::Color;
 use crate::error::CoreError;
 use crate::gradient::{Gradient, PaintSlot, StopPart};
 use crate::math::Vec2;
-use crate::path::{LineCap, LineJoin, PathGeometry};
+use crate::path::{GeometryChannel, LineCap, LineJoin, PathGeometry};
 use crate::time::Frame;
 
 /// Persistent identity of a node within one document.
@@ -117,6 +117,8 @@ pub enum ContentField {
     Dash,
     /// Shifts the dash pattern along the path, in local pixels.
     DashOffset,
+    /// Keyable path points with a fixed topology (`geometry`, D-0058).
+    Geometry,
     /// Text characters.
     Text,
     /// Text em size in pixels.
@@ -171,7 +173,7 @@ impl ContentField {
     /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
     /// [`ContentField::from_name`] and describe them with
     /// [`ContentField::name`].
-    pub const ALL: [(Self, &'static str); 30] = [
+    pub const ALL: [(Self, &'static str); 31] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
@@ -183,6 +185,7 @@ impl ContentField {
         (Self::TrimOffset, "trim_offset"),
         (Self::Dash, "dash"),
         (Self::DashOffset, "dash_offset"),
+        (Self::Geometry, "geometry"),
         (Self::Text, "text"),
         (Self::Size, "size"),
         (Self::Weight, "weight"),
@@ -325,6 +328,8 @@ pub enum ContentValue {
     Join(LineJoin),
     /// Image fit for `fit`.
     Fit(ImageFit),
+    /// Path points for `geometry`; the channel keeps the closure and style.
+    GeometryPoints(Vec<crate::path::PathPoint>),
 }
 
 impl NodeId {
@@ -974,6 +979,8 @@ pub enum ContentChannel<'a> {
     Color(&'a Animatable<Color>),
     /// A colour channel that can also be absent (`fill`, `stroke`).
     OptionalColor(&'a Animatable<Option<Color>>),
+    /// Keyable path points with a fixed topology.
+    Geometry(&'a crate::path::GeometryChannel),
 }
 
 impl ContentChannel<'_> {
@@ -984,6 +991,7 @@ impl ContentChannel<'_> {
             Self::Number(value) => !value.keys().is_empty(),
             Self::Color(value) => !value.keys().is_empty(),
             Self::OptionalColor(value) => !value.keys().is_empty(),
+            Self::Geometry(value) => value.is_animated(),
         }
     }
 
@@ -994,6 +1002,7 @@ impl ContentChannel<'_> {
             Self::Number(value) => value.keys().iter().map(|key| key.frame).collect(),
             Self::Color(value) => value.keys().iter().map(|key| key.frame).collect(),
             Self::OptionalColor(value) => value.keys().iter().map(|key| key.frame).collect(),
+            Self::Geometry(value) => value.keys().iter().map(|key| key.frame).collect(),
         }
     }
 }
@@ -1444,10 +1453,10 @@ pub enum NodeContent {
         /// Fill and stroke channels.
         paint: PaintSpec,
     },
-    /// A vector path in the node's local space (D-0029).
+    /// A vector path in the node's local space (D-0029, D-0058).
     Path {
-        /// Authored points, closed flag, cap and join.
-        geometry: PathGeometry,
+        /// Keyable points plus the shared closed flag, cap and join.
+        geometry: GeometryChannel,
         /// Fill and stroke channels.
         paint: PaintSpec,
         /// Start of the drawn fraction (`trim_start`, `0.0..=1.0`).
@@ -1496,7 +1505,7 @@ impl NodeContent {
     #[must_use]
     pub fn path(geometry: PathGeometry, paint: Paint) -> Self {
         Self::Path {
-            geometry,
+            geometry: GeometryChannel::new(geometry),
             paint: PaintSpec::from_paint(paint),
             trim_start: Animatable::new(0.0),
             trim_end: Animatable::new(1.0),
@@ -1568,6 +1577,7 @@ impl NodeContent {
                         | ContentField::TrimOffset
                         | ContentField::Dash
                         | ContentField::DashOffset
+                        | ContentField::Geometry
                         | ContentField::Cap
                         | ContentField::Join
                 )
@@ -1703,6 +1713,10 @@ impl NodeContent {
                 ContentField::TrimOffset => number(trim_offset),
                 ContentField::Dash => number(dash),
                 ContentField::DashOffset => number(dash_offset),
+                ContentField::Geometry => match self {
+                    Self::Path { geometry, .. } => Some(ContentChannel::Geometry(geometry)),
+                    _ => None,
+                },
                 _ => paint.channel(field),
             },
             (Self::Text(text), ContentField::Size) => number(&text.size),
@@ -1786,6 +1800,9 @@ impl NodeContent {
                 ContentField::TrimOffset => Some(ContentValue::Number(trim_offset.value())),
                 ContentField::Dash => Some(ContentValue::Number(dash.value())),
                 ContentField::DashOffset => Some(ContentValue::Number(dash_offset.value())),
+                ContentField::Geometry => {
+                    Some(ContentValue::GeometryPoints(geometry.points().to_vec()))
+                }
                 ContentField::Cap => Some(ContentValue::Cap(geometry.cap())),
                 ContentField::Join => Some(ContentValue::Join(geometry.join())),
                 _ => None,

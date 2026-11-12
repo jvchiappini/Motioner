@@ -459,7 +459,11 @@ fn content_value(
         Some(motioner_core::ContentValue::Gradient(Some(gradient))) => {
             gradient_json(j, &gradient);
         }
-        Some(motioner_core::ContentValue::Gradient(None)) | None => {
+        Some(
+            motioner_core::ContentValue::GeometryPoints(_)
+            | motioner_core::ContentValue::Gradient(None),
+        )
+        | None => {
             j.null();
         }
     }

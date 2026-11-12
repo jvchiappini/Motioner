@@ -9,13 +9,13 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use motioner_core::{
-    Animatable, Color, ContentField, ContentValue, Ease, NodeContent, NodeId, NodeIdentity,
-    Property, PropertyValue, RigAimManifest, RigClipKeyManifest, RigClipManifest, RigEventManifest,
-    RigInputManifest, RigInstanceManifest, RigLayerManifest, RigMachineManifest, RigManifest,
-    RigMirrorManifest, RigMirrorSide, RigPartManifest, RigPlayManifest, RigPoseManifest,
-    RigPoseTrackManifest, RigPropertyKeyManifest, RigPropertyManifest, RigPropertyValue,
-    RigStateManifest, RigTransitionManifest, RigValue, RigValueKind, Symbol, SymbolPart,
-    SymbolShape, Vec2,
+    Animatable, Color, ContentField, ContentValue, Ease, GeometryChannel, NodeContent, NodeId,
+    NodeIdentity, Property, PropertyValue, RigAimManifest, RigClipKeyManifest, RigClipManifest,
+    RigEventManifest, RigInputManifest, RigInstanceManifest, RigLayerManifest, RigMachineManifest,
+    RigManifest, RigMirrorManifest, RigMirrorSide, RigPartManifest, RigPlayManifest,
+    RigPoseManifest, RigPoseTrackManifest, RigPropertyKeyManifest, RigPropertyManifest,
+    RigPropertyValue, RigStateManifest, RigTransitionManifest, RigValue, RigValueKind, Symbol,
+    SymbolPart, SymbolShape, Vec2,
 };
 use motioner_rig as rig_rt;
 
@@ -371,7 +371,7 @@ impl Scene {
                         .non_scaling_stroke
                         .map(|reference| reference * placement);
                     let content = NodeContent::Path {
-                        geometry: path.geometry.clone(),
+                        geometry: GeometryChannel::new(path.geometry.clone()),
                         paint,
                         trim_start: Animatable::new(0.0),
                         trim_end: Animatable::new(1.0),
@@ -519,6 +519,13 @@ impl Scene {
         let mut part_nodes = Vec::new();
         for part in &instance.parts {
             let (position, rotation, scale, anchor, opacity) = self.node_base(part.node)?;
+            let geometry = self
+                .document()?
+                .node(part.node)
+                .and_then(|node| match node.content() {
+                    NodeContent::Path { geometry, .. } => Some(geometry.geometry().clone()),
+                    _ => None,
+                });
             rig.add_part(rig_rt::PartBase {
                 name: part.name.clone(),
                 position,
@@ -529,6 +536,7 @@ impl Scene {
                 fill: None,
                 stroke: None,
                 stroke_width: 0.0,
+                geometry,
             });
             part_nodes.push(part.node);
         }
@@ -765,6 +773,10 @@ impl Scene {
     pub(crate) fn rig_part(&self, node: NodeId, args: CallArgs) -> HostResult<Value> {
         let bound = bind("part", &["name"], 1, args)?;
         let name = bound.string_or(0, "")?;
+        self.rig_part_node(node, &name).map(Value::Node)
+    }
+
+    fn rig_part_node(&self, node: NodeId, name: &str) -> HostResult<NodeId> {
         let index = self.rig_index(node)?;
         let parts = &self.symbols[&self.rigs[index].node].parts;
         parts.iter().find(|part| *part.name == *name).map_or_else(
@@ -778,7 +790,7 @@ impl Scene {
                         .join(", ")
                 )))
             },
-            |part| Ok(Value::Node(part.node)),
+            |part| Ok(part.node),
         )
     }
 
@@ -811,6 +823,32 @@ impl Scene {
         let index = self.rig_index(node)?;
         let driver = compile_driver(&self.rigs[index].rig, function)?;
         self.rigs[index].rig.drivers.push(driver);
+        Ok(Value::None)
+    }
+
+    /// `m.geometry("lid-L", 1.0, [[x, y], ...])`: keys a part's points
+    /// (D-0058). The part's closure and style stay fixed.
+    pub(crate) fn rig_geometry(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("geometry", &["part", "time", "points", "ease"], 3, args)?;
+        let part = bound.string_or(0, "")?;
+        let target = self.rig_part_node(node, &part)?;
+        let time = bound.number(1)?;
+        if !time.is_finite() {
+            return Err(HostError::value_error(
+                "geometry(): 'time' must be a finite number of seconds",
+            ));
+        }
+        let points = super::path_points(bound.get(2).unwrap_or(&Value::None))?;
+        let timing = self.key_timing(&bound, time)?;
+        self.document_mut()?
+            .add_content_keyframe(
+                target,
+                ContentField::Geometry,
+                timing.frame,
+                ContentValue::GeometryPoints(points),
+                timing.ease,
+            )
+            .map_err(|error| core_error(&error))?;
         Ok(Value::None)
     }
 
@@ -1678,6 +1716,15 @@ impl Scene {
                             &mut state.stroke_width,
                         )?;
                     }
+                    if let Some(geometry) = &output.geometry {
+                        write_content_geometry(
+                            document,
+                            node,
+                            frame.frame,
+                            geometry,
+                            &mut state.geometry,
+                        )?;
+                    }
                 }
             }
         }
@@ -1689,7 +1736,7 @@ impl Scene {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Written {
     x: ChannelWrite,
     y: ChannelWrite,
@@ -1698,6 +1745,13 @@ struct Written {
     scale_y: ChannelWrite,
     opacity: ChannelWrite,
     stroke_width: ChannelWrite,
+    geometry: GeometryWrite,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GeometryWrite {
+    points: Option<Vec<motioner_core::PathPoint>>,
+    frame: Option<motioner_core::Frame>,
 }
 
 /// The last key written for one channel, so a gap gets a hold key.
@@ -1827,6 +1881,46 @@ fn write_content_scalar(
     Ok(())
 }
 
+fn write_content_geometry(
+    document: &mut motioner_core::Document,
+    node: NodeId,
+    frame: motioner_core::Frame,
+    geometry: &motioner_core::PathGeometry,
+    last: &mut GeometryWrite,
+) -> HostResult<()> {
+    let points = geometry.points().to_vec();
+    if last.points.as_ref().is_some_and(|last| *last == points) {
+        return Ok(());
+    }
+    if let (Some(previous), Some(previous_frame)) = (&last.points, last.frame) {
+        if frame > previous_frame + 1 {
+            document
+                .add_content_keyframe(
+                    node,
+                    ContentField::Geometry,
+                    previous_frame + 1,
+                    ContentValue::GeometryPoints(previous.clone()),
+                    Ease::Linear,
+                )
+                .map_err(|error| core_error(&error))?;
+        }
+    }
+    document
+        .add_content_keyframe(
+            node,
+            ContentField::Geometry,
+            frame,
+            ContentValue::GeometryPoints(points.clone()),
+            Ease::Linear,
+        )
+        .map_err(|error| core_error(&error))?;
+    *last = GeometryWrite {
+        points: Some(points),
+        frame: Some(frame),
+    };
+    Ok(())
+}
+
 fn insert_key(channel: &mut rig_rt::Channel, frame: f64, value: rig_rt::PropValue, ease: Ease) {
     let key = rig_rt::Key::new(frame, value, ease);
     match channel
@@ -1857,6 +1951,7 @@ fn parse_range(value: Option<&Value>) -> HostResult<(Option<f64>, Option<f64>)> 
     }
 }
 
+#[allow(clippy::too_many_lines)] // scalar and geometry writes share one pass
 fn compile_driver(rig: &rig_rt::Rig, function: &FunctionDef) -> HostResult<rig_rt::Driver> {
     let name = function.name.to_string();
     let mut params = Vec::new();
@@ -1898,6 +1993,7 @@ fn compile_driver(rig: &rig_rt::Rig, function: &FunctionDef) -> HostResult<rig_r
         )));
     }
     let mut out = Vec::new();
+    let mut geometries = Vec::new();
     for entry in &writes {
         let parts = match &entry.kind {
             ExprKind::List(items) | ExprKind::Tuple(items) => items.clone(),
@@ -1933,19 +2029,176 @@ fn compile_driver(rig: &rig_rt::Rig, function: &FunctionDef) -> HostResult<rig_r
                 )))
             }
         };
+        if field_name == "geometry" {
+            let geometry = compile_geometry_expr(rig, &name, &parts[2])?;
+            geometries.push(rig_rt::GeometryWrite { part, geometry });
+            continue;
+        }
         let field = rig_rt::Field::from_name(&field_name).ok_or_else(|| {
             HostError::value_error(format!(
-                "driver '{name}': unknown field {field_name:?}; use {}",
+                "driver '{name}': unknown field {field_name:?}; use geometry or {}",
                 rig_rt::Field::NAMES.join(", ")
             ))
         })?;
         let value = compile_expr(rig, &name, &parts[2])?;
         out.push(rig_rt::Write { part, field, value });
     }
+    if out.len() + geometries.len() > rig_rt::driver_max_writes() {
+        return Err(HostError::limit(format!(
+            "driver '{name}': at most {} writes are allowed",
+            rig_rt::driver_max_writes()
+        )));
+    }
     Ok(rig_rt::Driver {
         name,
         params,
         writes: out,
+        geometries,
+    })
+}
+
+fn compile_geometry_expr(
+    rig: &rig_rt::Rig,
+    driver: &str,
+    expression: &AstExpr,
+) -> HostResult<rig_rt::GeometryExpr> {
+    let unsupported = || {
+        HostError::value_error(format!(
+            "driver '{driver}': a geometry value must be path_builder(...), ellipse_arc(...), \
+             arc(...), rounded_rect(...) or mirror(...)"
+        ))
+    };
+    let ExprKind::Call { callee, args } = &expression.kind else {
+        return Err(unsupported());
+    };
+    let ExprKind::Name(name) = &callee.kind else {
+        return Err(unsupported());
+    };
+    let positional: Vec<&AstExpr> = args
+        .iter()
+        .filter(|argument| argument.name.is_none())
+        .map(|argument| &argument.value)
+        .collect();
+    let scalar = |index: usize| compile_expr(rig, driver, positional[index]);
+    Ok(match name.as_ref() {
+        "path_builder" => {
+            if positional.len() > rig_rt::MAX_GEOMETRY_COMMANDS {
+                return Err(HostError::limit(format!(
+                    "driver '{driver}': path_builder has more than {} commands",
+                    rig_rt::MAX_GEOMETRY_COMMANDS
+                )));
+            }
+            let commands = positional
+                .iter()
+                .map(|command| compile_geometry_command(rig, driver, command))
+                .collect::<HostResult<Vec<_>>>()?;
+            rig_rt::GeometryExpr::Builder(commands)
+        }
+        "ellipse_arc" if positional.len() == 6 => rig_rt::GeometryExpr::EllipseArc {
+            cx: scalar(0)?,
+            cy: scalar(1)?,
+            rx: scalar(2)?,
+            ry: scalar(3)?,
+            start: scalar(4)?,
+            end: scalar(5)?,
+        },
+        "arc" if positional.len() == 3 => rig_rt::GeometryExpr::Arc {
+            radius: scalar(0)?,
+            start: scalar(1)?,
+            end: scalar(2)?,
+        },
+        "rounded_rect" if positional.len() == 3 => rig_rt::GeometryExpr::RoundedRect {
+            width: scalar(0)?,
+            height: scalar(1)?,
+            radius: scalar(2)?,
+        },
+        "mirror" if !positional.is_empty() => {
+            let geometry = Box::new(compile_geometry_expr(rig, driver, positional[0])?);
+            let axis = args
+                .iter()
+                .find(|argument| argument.name.as_deref() == Some("axis"))
+                .or_else(|| {
+                    args.iter()
+                        .filter(|argument| argument.name.is_none())
+                        .nth(1)
+                })
+                .map(|argument| &argument.value);
+            let axis = match axis.map(|value| &value.kind) {
+                None => rig_rt::MirrorAxis::X,
+                Some(ExprKind::Str(text)) => {
+                    rig_rt::MirrorAxis::from_name(text).ok_or_else(|| {
+                        HostError::value_error(format!(
+                            "driver '{driver}': mirror axis must be \"x\" or \"y\", got {text:?}"
+                        ))
+                    })?
+                }
+                Some(_) => {
+                    return Err(HostError::value_error(format!(
+                        "driver '{driver}': mirror axis must be \"x\" or \"y\""
+                    )))
+                }
+            };
+            rig_rt::GeometryExpr::Mirror { geometry, axis }
+        }
+        _ => return Err(unsupported()),
+    })
+}
+
+fn compile_geometry_command(
+    rig: &rig_rt::Rig,
+    driver: &str,
+    expression: &AstExpr,
+) -> HostResult<rig_rt::GeometryCommand> {
+    let ExprKind::Call { callee, args } = &expression.kind else {
+        return Err(HostError::value_error(format!(
+            "driver '{driver}': path_builder arguments must be move_to, line_to, cubic_to or close"
+        )));
+    };
+    let ExprKind::Name(name) = &callee.kind else {
+        return Err(HostError::value_error(format!(
+            "driver '{driver}': path_builder arguments must be move_to, line_to, cubic_to or close"
+        )));
+    };
+    let positional: Vec<&AstExpr> = args
+        .iter()
+        .filter(|argument| argument.name.is_none())
+        .map(|argument| &argument.value)
+        .collect();
+    let scalar = |index: usize| compile_expr(rig, driver, positional[index]);
+    Ok(match (name.as_ref(), positional.len()) {
+        ("move_to", 2) => rig_rt::GeometryCommand::MoveTo {
+            x: scalar(0)?,
+            y: scalar(1)?,
+        },
+        ("line_to", 2) => rig_rt::GeometryCommand::LineTo {
+            x: scalar(0)?,
+            y: scalar(1)?,
+        },
+        ("cubic_to", 6) => rig_rt::GeometryCommand::CubicTo {
+            c1x: scalar(0)?,
+            c1y: scalar(1)?,
+            c2x: scalar(2)?,
+            c2y: scalar(3)?,
+            x: scalar(4)?,
+            y: scalar(5)?,
+        },
+        ("arc_to", 7) => rig_rt::GeometryCommand::ArcTo {
+            rx: scalar(0)?,
+            ry: scalar(1)?,
+            rotation: scalar(2)?,
+            large_arc: scalar(3)?,
+            sweep: scalar(4)?,
+            x: scalar(5)?,
+            y: scalar(6)?,
+        },
+        ("close", 0) => rig_rt::GeometryCommand::Close,
+        _ => {
+            return Err(HostError::value_error(format!(
+                "driver '{driver}': unknown path_builder command; use move_to(x, y), \
+                 line_to(x, y), cubic_to(c1x, c1y, c2x, c2y, x, y), \
+                 arc_to(rx, ry, rotation, large_arc, sweep, x, y) or close()"
+            )))
+        }
     })
 }
 
@@ -1955,7 +2208,7 @@ fn compile_expr(rig: &rig_rt::Rig, driver: &str, expression: &AstExpr) -> HostRe
     let unsupported = || {
         HostError::value_error(format!(
             "driver '{driver}': unsupported expression; drivers may use numbers, property names, \
-             + - * /, comparisons, and, or, not, min, max, abs, sin, cos, clamp and lerp"
+             + - * /, comparisons, and, or, not, min, max, abs, sqrt, sin, cos, clamp and lerp"
         ))
     };
     Ok(match &expression.kind {
@@ -2014,6 +2267,7 @@ fn compile_expr(rig: &rig_rt::Rig, driver: &str, expression: &AstExpr) -> HostRe
                 ("abs", 1) => E::Abs(value(0)),
                 ("sin", 1) => E::Sin(value(0)),
                 ("cos", 1) => E::Cos(value(0)),
+                ("sqrt", 1) => E::Sqrt(value(0)),
                 ("clamp", 3) => E::Clamp(value(0), value(1), value(2)),
                 ("lerp", 3) => E::Lerp(value(0), value(1), value(2)),
                 _ => return Err(unsupported()),

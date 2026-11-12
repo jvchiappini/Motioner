@@ -4,13 +4,25 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use motioner_core::{Ease, NoTextMetrics, RigValue, Vec2};
+use motioner_core::{Ease, NoTextMetrics, PathPoint, RigValue, Vec2};
 use motioner_dsl::{RigCompare, RigEdit, RigSide};
 use motioner_io::ProjectAssets;
 use motioner_ui::Editor;
 
 fn close(left: f64, right: f64) -> bool {
     (left - right).abs() < 1e-6
+}
+
+fn points_close(left: &[motioner_core::PathPoint], right: &[motioner_core::PathPoint]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            close(left.position.x, right.position.x)
+                && close(left.position.y, right.position.y)
+                && close(left.handle_in.x, right.handle_in.x)
+                && close(left.handle_in.y, right.handle_in.y)
+                && close(left.handle_out.x, right.handle_out.x)
+                && close(left.handle_out.y, right.handle_out.y)
+        })
 }
 
 fn root() -> PathBuf {
@@ -267,6 +279,72 @@ fn undo_restores_the_exact_bytes() {
         })
         .unwrap();
     assert_ne!(editor.session().source(), before);
+    editor
+        .execute(&motioner_ui::Command::Undo, std::time::Duration::ZERO)
+        .unwrap();
+    assert_eq!(editor.session().source(), before);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn geometry_keys_write_through_and_undo() {
+    let dir = copy_project("geometry");
+    let mut editor = editor(&dir);
+    let before = editor.session().source().to_owned();
+    let base = {
+        let document = editor.session().document().unwrap();
+        let node = document
+            .nodes()
+            .find(|node| node.name() == Some("lid-top-left"))
+            .unwrap();
+        let motioner_core::NodeContent::Path { geometry, .. } = node.content() else {
+            panic!("lid-top-left is a path");
+        };
+        geometry.points().to_vec()
+    };
+    let mut points = base.clone();
+    points[0].position.y += 2.0;
+    editor
+        .apply_rig_edit(&RigEdit::GeometryKey {
+            rig: "mascot".to_owned(),
+            part: "lid-top-left".to_owned(),
+            time: 1.0,
+            points: points.clone(),
+            ease: Ease::Linear,
+        })
+        .unwrap();
+    assert!(editor
+        .session()
+        .source()
+        .contains("m.geometry(\"lid-top-left\", 1, ["));
+    let document = editor.session().document().unwrap();
+    let node = document
+        .nodes()
+        .find(|node| node.name() == Some("lid-top-left"))
+        .unwrap();
+    let motioner_core::NodeContent::Path { geometry, .. } = node.content() else {
+        panic!("lid-top-left is a path");
+    };
+    let key = geometry
+        .keys()
+        .iter()
+        .find(|key| key.frame == 60)
+        .expect("geometry key");
+    assert!(points_close(&key.points, &points));
+    editor
+        .apply_rig_edit(&RigEdit::GeometryUnkey {
+            rig: "mascot".to_owned(),
+            part: "lid-top-left".to_owned(),
+            time: 1.0,
+        })
+        .unwrap();
+    assert!(!editor
+        .session()
+        .source()
+        .contains("m.geometry(\"lid-top-left\""));
+    editor
+        .execute(&motioner_ui::Command::Undo, std::time::Duration::ZERO)
+        .unwrap();
     editor
         .execute(&motioner_ui::Command::Undo, std::time::Duration::ZERO)
         .unwrap();
@@ -607,6 +685,34 @@ fn rig_cases() -> Vec<RigCase> {
                 from: Some("calm".into()),
                 to: "sad".into(),
                 input: "mood".into(),
+            },
+        },
+        RigCase {
+            name: "rig_geometry_key",
+            edit: RigEdit::GeometryKey {
+                rig: "mascot".into(),
+                part: "lid-top-left".into(),
+                time: 1.0,
+                points: vec![
+                    PathPoint::curved(
+                        Vec2::new(61.0, 90.0),
+                        Vec2::ZERO,
+                        Vec2::new(0.0, -8.284_271_247_461_902),
+                    ),
+                    PathPoint::curved(
+                        Vec2::new(76.0, 73.0),
+                        Vec2::new(-8.284_271_247_461_902, 0.0),
+                        Vec2::new(8.284_271_247_461_902, 0.0),
+                    ),
+                    PathPoint::curved(
+                        Vec2::new(91.0, 88.0),
+                        Vec2::new(0.0, -8.284_271_247_461_902),
+                        Vec2::ZERO,
+                    ),
+                    PathPoint::corner(Vec2::new(91.0, 70.0)),
+                    PathPoint::corner(Vec2::new(61.0, 70.0)),
+                ],
+                ease: Ease::Linear,
             },
         },
         RigCase {

@@ -131,6 +131,91 @@ s = art(pos=(20, 30), scale=2)
 }
 
 #[test]
+fn a_geometry_driver_bakes_path_keys() {
+    let source = "\
+comp(name=\"Geometry\", width=200, height=200, fps=60, duration=2.0)
+art = use(\"mascot.svg\")
+m = rig(art)
+m.prop(\"lift\", 0.0, range=(0.0, 10.0))
+m.lift.key(0.0, 0.0)
+m.lift.key(1.0, 10.0)
+def geometry(lift):
+    return [[\"body\", \"geometry\", path_builder(move_to(0, 0), line_to(10, lift), line_to(10, 10), close())]]
+m.driver(geometry)
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("the program runs");
+    let body = document
+        .nodes()
+        .find(|node| node.name() == Some("body"))
+        .expect("body");
+    let motioner_core::NodeContent::Path { geometry, .. } = body.content() else {
+        panic!("body is a path");
+    };
+    assert!(!geometry.keys().is_empty());
+    let middle = geometry
+        .sample(30.0, motioner_eval::ease)
+        .expect("sampled geometry");
+    assert!((middle.points()[1].position.y - 5.0).abs() < 1e-9);
+    let end = geometry
+        .sample(60.0, motioner_eval::ease)
+        .expect("sampled geometry");
+    assert!((end.points()[1].position.y - 10.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_geometry_driver_accepts_arc_to() {
+    let source = "\
+comp(name=\"Arc\", width=200, height=200, fps=60, duration=1.0)
+art = use(\"mascot.svg\")
+m = rig(art)
+def geometry():
+    return [[\"body\", \"geometry\", path_builder(move_to(0, 0), arc_to(5, 5, 0, 0, 1, 10, 0), close())]]
+m.driver(geometry)
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("the program runs");
+    let body = document
+        .nodes()
+        .find(|node| node.name() == Some("body"))
+        .expect("body");
+    let motioner_core::NodeContent::Path { geometry, .. } = body.content() else {
+        panic!("body is a path");
+    };
+    assert!(!geometry.keys().is_empty());
+}
+
+#[test]
+fn a_path_geometry_key_uses_the_fixed_topology() {
+    let source = "\
+comp(name=\"Geometry\", width=200, height=200, fps=60, duration=2.0)
+p = path([[0, 0], [10, 0], [10, 10]])
+p.key(\"geometry\", 1.0, [[0, 0], [10, 5], [10, 10]])
+";
+    let document = motioner_dsl::run(source, &motioner_dsl::Limits::default()).unwrap();
+    let node = document
+        .nodes()
+        .find(|node| matches!(node.content(), motioner_core::NodeContent::Path { .. }))
+        .unwrap();
+    let motioner_core::NodeContent::Path { geometry, .. } = node.content() else {
+        panic!("path");
+    };
+    let key = geometry.keys().first().expect("geometry key");
+    assert_eq!(key.frame, 60);
+    assert!((key.points[1].position.y - 5.0).abs() < 1e-9);
+}
+
+#[test]
 fn a_rig_property_and_a_driver_bake_into_keys() {
     let source = "\
 comp(name=\"Rig\", width=200, height=200, fps=60, duration=2.0)

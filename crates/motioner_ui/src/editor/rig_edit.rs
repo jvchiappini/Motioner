@@ -87,6 +87,9 @@ impl Editor {
                 "the rig edit did not reproduce the expected manifest",
             ));
         }
+        if let Err(reason) = verify_geometry(&compiled.document, edit) {
+            return Err(CommandError::new(ErrorKind::Refused, reason));
+        }
         if shape(&document) != shape(&compiled.document) {
             return Err(CommandError::new(
                 ErrorKind::Refused,
@@ -130,6 +133,88 @@ impl Editor {
         )
         .map_err(|diagnostic| diagnostic.message)
     }
+}
+
+/// Verifies the geometry half of an edit against the compiled document.
+///
+/// The rig manifest does not carry path points (they are keyed content, not
+/// rig declarations), so a geometry edit checks the target node's channel
+/// directly. A key must exist with exactly the authored points; an unkey must
+/// leave no key at that frame.
+fn verify_geometry(document: &Document, edit: &RigEdit) -> Result<(), String> {
+    let (rig_name, part, time) = match edit {
+        RigEdit::GeometryKey {
+            rig, part, time, ..
+        }
+        | RigEdit::GeometryUnkey {
+            rig, part, time, ..
+        } => (rig, part, *time),
+        _ => return Ok(()),
+    };
+    let rig = document
+        .rig_manifest()
+        .rigs
+        .iter()
+        .find(|candidate| candidate.name == *rig_name || candidate.id == *rig_name)
+        .ok_or_else(|| format!("no rig named {rig_name:?}"))?;
+    let part = rig
+        .parts
+        .iter()
+        .find(|candidate| candidate.id == *part)
+        .ok_or_else(|| format!("no part named {part:?}"))?;
+    let node = document
+        .find(&part.node)
+        .ok_or_else(|| format!("the part {:?} is not in the document", part.node))?;
+    let NodeContent::Path { geometry, .. } = document
+        .node(node)
+        .ok_or_else(|| format!("the part {:?} is not in the document", part.node))?
+        .content()
+    else {
+        return Err(format!("the part {:?} is not a path", part.node));
+    };
+    let frame = document
+        .composition()
+        .frame_rate()
+        .seconds_to_frame(time)
+        .map_err(|error| error.to_string())?;
+    let existing = geometry.keys().iter().find(|key| key.frame == frame);
+    match edit {
+        RigEdit::GeometryKey { points, .. } => match existing {
+            Some(key) if points_close(&key.points, points) => Ok(()),
+            Some(_) => Err(format!(
+                "the geometry key on {:?} at {time} s has the wrong points",
+                part.id
+            )),
+            None => Err(format!(
+                "the geometry key on {:?} at {time} s is missing",
+                part.id
+            )),
+        },
+        RigEdit::GeometryUnkey { .. } => match existing {
+            None => Ok(()),
+            Some(_) => Err(format!(
+                "the geometry key on {:?} at {time} s was not removed",
+                part.id
+            )),
+        },
+        _ => Ok(()),
+    }
+}
+
+fn points_close(left: &[motioner_core::PathPoint], right: &[motioner_core::PathPoint]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            close(left.position.x, right.position.x)
+                && close(left.position.y, right.position.y)
+                && close(left.handle_in.x, right.handle_in.x)
+                && close(left.handle_in.y, right.handle_in.y)
+                && close(left.handle_out.x, right.handle_out.x)
+                && close(left.handle_out.y, right.handle_out.y)
+        })
+}
+
+fn close(left: f64, right: f64) -> bool {
+    (left - right).abs() < 1e-6
 }
 
 /// Composition settings plus every node outside the rig subtrees.

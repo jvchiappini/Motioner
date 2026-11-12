@@ -30,10 +30,14 @@
 
 mod driver;
 mod eval;
+mod geometry;
 mod machine;
 
-pub use driver::{Driver, DriverError, Expr, Field, Write};
+pub use driver::{Driver, DriverError, Expr, Field, GeometryWrite, Write};
 pub use eval::{bake, evaluate, FrameOutput, PartOutput, RigError, MAX_BAKE_FRAMES};
+pub use geometry::{
+    GeometryCommand, GeometryExpr, MirrorAxis, MAX_GEOMETRY_COMMANDS, MAX_GEOMETRY_POINTS,
+};
 pub use machine::{Compare, Machine, MachineEvent, State, Transition};
 
 /// Maximum writes one driver may declare, for the DSL compiler and tools.
@@ -311,6 +315,9 @@ pub struct PartBase {
     pub stroke: Option<Color>,
     /// Base stroke width.
     pub stroke_width: f64,
+    /// Base path points when the part is a vector node (D-0058); geometry
+    /// drivers validate their topology against this outline.
+    pub geometry: Option<motioner_core::PathGeometry>,
 }
 
 impl PartBase {
@@ -327,6 +334,7 @@ impl PartBase {
             fill: None,
             stroke: None,
             stroke_width: 0.0,
+            geometry: None,
         }
     }
 }

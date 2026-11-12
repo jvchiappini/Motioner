@@ -52,8 +52,8 @@ pub use overrides::{
     OverrideIssue, OverrideSet, OverrideValue, EFFECTS, LOCKED, MASK, NAME, VISIBLE,
 };
 pub use path::{
-    DashSpec, LineCap, LineJoin, PathGeometry, PathOutline, PathPiece, PathPoint, TrimSpec,
-    FLATTEN_TOLERANCE,
+    DashSpec, GeometryChannel, GeometryKey, LineCap, LineJoin, PathGeometry, PathOutline,
+    PathPiece, PathPoint, TrimSpec, FLATTEN_TOLERANCE,
 };
 pub use rig_manifest::{
     RigAimManifest, RigClipKeyManifest, RigClipManifest, RigEventManifest, RigInputManifest,

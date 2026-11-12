@@ -8,7 +8,7 @@ use motioner_core::{
 };
 
 use crate::affine::Affine2;
-use crate::curve::{sample_at, sample_vec2_at};
+use crate::curve::{sample_at, sample_geometry_at, sample_vec2_at};
 use crate::plan::{
     EffectValue, ItemShape, PlanLayer, PlanMask, RenderItem, RenderPlan, ResolvedFill,
     ResolvedGradient, ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
@@ -299,9 +299,10 @@ fn item_shape(
             dash_offset,
         } => {
             let resolved = resolved_paint(paint, time, plan);
+            let geometry = sample_geometry_at(geometry, time)?;
             let index = plan.paths.len();
             plan.paths.push(ResolvedPath {
-                geometry: geometry.clone(),
+                geometry,
                 trim: TrimSpec {
                     start: sample_at(trim_start, time),
                     end: sample_at(trim_end, time),

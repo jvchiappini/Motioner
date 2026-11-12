@@ -26,6 +26,7 @@ fn needle_rig() -> Rig {
             field: Field::Rotation,
             value: Expr::Property(0),
         }],
+        geometries: Vec::new(),
     });
     rig
 }
@@ -195,6 +196,7 @@ fn drivers_evaluate_the_expression_subset_and_are_bounded() {
                 )),
             ),
         }],
+        geometries: Vec::new(),
     });
     let frame = evaluate(&rig, 0.0).expect("evaluate");
     assert!((frame.parts[0].scale.x - 2.0).abs() < 1e-12);
@@ -241,6 +243,7 @@ fn a_driver_that_produces_a_non_finite_value_is_a_typed_error() {
                 )),
             ),
         }],
+        geometries: Vec::new(),
     });
     // Division by zero is defined as 0 by the IR, so this succeeds.
     let frame = evaluate(&rig, 0.0).expect("division by zero yields zero");

@@ -346,6 +346,7 @@ pub fn eases(document: &Document, node: NodeId, channel: Channel) -> Vec<Ease> {
                 ContentChannel::OptionalColor(value) => {
                     value.keys().iter().map(|k| k.ease).collect()
                 }
+                ContentChannel::Geometry(value) => value.keys().iter().map(|k| k.ease).collect(),
             }),
         Channel::Effect(channel) => {
             effect_channel(node, channel).map_or_else(Vec::new, |value| match value {
@@ -354,6 +355,7 @@ pub fn eases(document: &Document, node: NodeId, channel: Channel) -> Vec<Ease> {
                 ContentChannel::OptionalColor(value) => {
                     value.keys().iter().map(|k| k.ease).collect()
                 }
+                ContentChannel::Geometry(value) => value.keys().iter().map(|k| k.ease).collect(),
             })
         }
     }
@@ -391,6 +393,7 @@ pub fn sampled(
                 ContentChannel::OptionalColor(value) => {
                     colour_value(motioner_eval::sample(value, frame))
                 }
+                ContentChannel::Geometry(_) => return None,
             })
         }
         Channel::Effect(channel) => {
@@ -405,6 +408,7 @@ pub fn sampled(
                 ContentChannel::OptionalColor(value) => {
                     colour_value(motioner_eval::sample(value, frame))
                 }
+                ContentChannel::Geometry(_) => return None,
             })
         }
     }
@@ -427,7 +431,9 @@ pub fn sampled_number(
 ) -> Option<f64> {
     match document.node(node)?.content().channel(field)? {
         ContentChannel::Number(value) => Some(motioner_eval::sample(value, frame)),
-        ContentChannel::Color(_) | ContentChannel::OptionalColor(_) => None,
+        ContentChannel::Color(_)
+        | ContentChannel::OptionalColor(_)
+        | ContentChannel::Geometry(_) => None,
     }
 }
 
@@ -462,7 +468,7 @@ pub fn sampled_colour(
             Some(color) => SampledColour::Colour(color),
             None => SampledColour::Absent,
         },
-        ContentChannel::Number(_) => SampledColour::NotColour,
+        ContentChannel::Number(_) | ContentChannel::Geometry(_) => SampledColour::NotColour,
     }
 }
 
@@ -517,6 +523,7 @@ pub fn key_at(
                 .iter()
                 .find(|k| k.frame == frame)
                 .map(|k| (colour_value(k.value), k.ease)),
+            ContentChannel::Geometry(_) => None,
         },
         Channel::Effect(channel) => match effect_channel(node, channel)? {
             ContentChannel::Number(value) => value
@@ -534,6 +541,7 @@ pub fn key_at(
                 .iter()
                 .find(|k| k.frame == frame)
                 .map(|k| (colour_value(k.value), k.ease)),
+            ContentChannel::Geometry(_) => None,
         },
     }
 }

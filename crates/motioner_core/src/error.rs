@@ -64,6 +64,18 @@ pub enum CoreError {
         /// The offending constructor field.
         field: &'static str,
     },
+    /// A geometry key whose point count or closed flag differs from the
+    /// channel's fixed topology (D-0058).
+    GeometryTopologyMismatch {
+        /// Point count expected by the channel.
+        expected_points: usize,
+        /// Point count in the rejected geometry.
+        got_points: usize,
+        /// Closed flag expected by the channel.
+        expected_closed: bool,
+        /// Closed flag in the rejected geometry.
+        got_closed: bool,
+    },
     /// The document already holds `u32::MAX` nodes.
     TooManyNodes,
     /// A child added to a node that is not a group.
@@ -163,6 +175,7 @@ pub enum CoreError {
     },
 }
 
+#[allow(clippy::too_many_lines)] // one arm per typed error, kept together
 impl fmt::Display for CoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -208,6 +221,17 @@ impl fmt::Display for CoreError {
             Self::InvalidGeometry { field } => {
                 write!(f, "'{field}' must be a finite, non-negative number")
             }
+            Self::GeometryTopologyMismatch {
+                expected_points,
+                got_points,
+                expected_closed,
+                got_closed,
+            } => write!(
+                f,
+                "geometry topology mismatch: expected {expected_points} points ({}), got {got_points} ({})",
+                if *expected_closed { "closed" } else { "open" },
+                if *got_closed { "closed" } else { "open" }
+            ),
             Self::TooManyNodes => write!(f, "the document cannot hold more nodes"),
             Self::NotAGroup(id) => write!(f, "node {id} is not a group and cannot hold children"),
             Self::CyclicParent { child, parent } => {

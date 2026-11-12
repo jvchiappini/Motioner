@@ -7,9 +7,12 @@
 //! bounds, hit testing and the tests all share one implementation (D-0029).
 
 use std::f64::consts::PI;
+use std::ops::Deref;
 
+use crate::animation::Ease;
 use crate::error::CoreError;
 use crate::math::Vec2;
+use crate::time::Frame;
 
 /// Maximum recursion depth when flattening one cubic segment.
 const MAX_SUBDIVISION_DEPTH: u32 = 12;
@@ -135,6 +138,18 @@ impl PathPoint {
             position,
             handle_in,
             handle_out,
+        }
+    }
+
+    /// Linear interpolation between two points with the same topology.
+    ///
+    /// Handles are offsets, so they interpolate just like positions.
+    #[must_use]
+    pub fn lerp(self, other: Self, t: f64) -> Self {
+        Self {
+            position: self.position.lerp(other.position, t),
+            handle_in: self.handle_in.lerp(other.handle_in, t),
+            handle_out: self.handle_out.lerp(other.handle_out, t),
         }
     }
 
@@ -307,7 +322,32 @@ impl PathGeometry {
     /// Returns [`CoreError::InvalidGeometry`] when the radius is not a
     /// positive finite number or an angle is not finite.
     pub fn arc(radius: f64, start: f64, end: f64) -> Result<Self, CoreError> {
-        if !radius.is_finite() || radius <= 0.0 || !start.is_finite() || !end.is_finite() {
+        Self::ellipse_arc(Vec2::ZERO, radius, radius, start, end)
+    }
+
+    /// An elliptical arc from `start` to `end` degrees, clockwise on screen
+    /// (`0` is +x), centred on `center`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidGeometry`] when either radius is not a
+    /// positive finite number, the centre is not finite, or an angle is not
+    /// finite.
+    pub fn ellipse_arc(
+        center: Vec2,
+        radius_x: f64,
+        radius_y: f64,
+        start: f64,
+        end: f64,
+    ) -> Result<Self, CoreError> {
+        if !center.is_finite()
+            || !radius_x.is_finite()
+            || radius_x <= 0.0
+            || !radius_y.is_finite()
+            || radius_y <= 0.0
+            || !start.is_finite()
+            || !end.is_finite()
+        {
             return Err(CoreError::InvalidGeometry { field: "arc" });
         }
         let sweep = if (end - start).abs() < 1e-9 {
@@ -324,18 +364,19 @@ impl PathGeometry {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let quarters = ((sweep.abs() / (PI / 2.0)).ceil() as u32).max(1);
         let step = sweep / f64::from(quarters);
-        // Handle length for a circular arc expressed as one cubic per step.
-        let handle = 4.0 / 3.0 * (step / 4.0).tan() * radius;
+        // One cubic per step; the handle length is the circular value scaled
+        // per axis.
+        let unit_handle = 4.0 / 3.0 * (step / 4.0).tan();
 
         let mut points: Vec<PathPoint> = Vec::with_capacity(quarters as usize + 1);
         let start = start.to_radians();
         for index in 0..quarters {
             let a = start + step * f64::from(index);
             let b = a + step;
-            let p0 = Vec2::new(radius * a.cos(), radius * a.sin());
-            let p3 = Vec2::new(radius * b.cos(), radius * b.sin());
-            let out = Vec2::new(-a.sin(), a.cos()) * handle;
-            let incoming = Vec2::new(b.sin(), -b.cos()) * handle;
+            let p0 = Vec2::new(center.x + radius_x * a.cos(), center.y + radius_y * a.sin());
+            let p3 = Vec2::new(center.x + radius_x * b.cos(), center.y + radius_y * b.sin());
+            let out = Vec2::new(-radius_x * a.sin(), radius_y * a.cos()) * unit_handle;
+            let incoming = Vec2::new(radius_x * b.sin(), -radius_y * b.cos()) * unit_handle;
             if index == 0 {
                 points.push(PathPoint::curved(p0, Vec2::ZERO, out));
             } else if let Some(last) = points.last_mut() {
@@ -433,6 +474,54 @@ impl PathGeometry {
             MAX_SUBDIVISION_DEPTH,
             out,
         );
+    }
+
+    /// Replaces the points, keeping the closure, cap and join.
+    ///
+    /// Used by the geometry channel, whose keys keep a fixed point count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::GeometryTopologyMismatch`] when `points` has a
+    /// different length, or [`CoreError::InvalidGeometry`] when a coordinate
+    /// is not finite.
+    pub fn with_points(&self, points: Vec<PathPoint>) -> Result<Self, CoreError> {
+        if points.len() != self.points.len() {
+            return Err(CoreError::GeometryTopologyMismatch {
+                expected_points: self.points.len(),
+                got_points: points.len(),
+                expected_closed: self.closed,
+                got_closed: self.closed,
+            });
+        }
+        Self::new(points, self.closed, self.cap, self.join)
+    }
+
+    /// Interpolates two geometries point by point.
+    ///
+    /// `t` is already eased; callers own the easing curve so this stays a pure
+    /// geometry operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::GeometryTopologyMismatch`] when the point count or
+    /// the closed flag differs.
+    pub fn interpolate(&self, other: &Self, t: f64) -> Result<Self, CoreError> {
+        if self.points.len() != other.points.len() || self.closed != other.closed {
+            return Err(CoreError::GeometryTopologyMismatch {
+                expected_points: self.points.len(),
+                got_points: other.points.len(),
+                expected_closed: self.closed,
+                got_closed: other.closed,
+            });
+        }
+        let points = self
+            .points
+            .iter()
+            .zip(&other.points)
+            .map(|(a, b)| a.lerp(*b, t))
+            .collect();
+        Self::new(points, self.closed, self.cap, self.join)
     }
 
     /// Local-space `[x0, y0, x1, y1]` bounds of the flattened geometry.
@@ -584,10 +673,175 @@ impl PathGeometry {
     }
 }
 
+/// One keyed path outline: a frame, the authored points and the ease of the
+/// segment arriving at it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryKey {
+    /// Composition frame of the key.
+    pub frame: Frame,
+    /// Points at that frame; same length and order as every other key.
+    pub points: Vec<PathPoint>,
+    /// Ease of the segment from the previous key to this one.
+    pub ease: Ease,
+}
+
+/// A path outline whose points can be keyed with a fixed topology (D-0058).
+///
+/// The closure, cap and join are part of the outline, not of each key, so the
+/// point count is the only topology a key can violate. Keys are sorted by
+/// strictly increasing frame and a repeated frame replaces the old key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryChannel {
+    geometry: PathGeometry,
+    keys: Vec<GeometryKey>,
+}
+
+impl GeometryChannel {
+    /// Wraps a static outline with no keys.
+    #[must_use]
+    pub fn new(geometry: PathGeometry) -> Self {
+        Self {
+            geometry,
+            keys: Vec::new(),
+        }
+    }
+
+    /// The static outline. Its style and closure also apply to every key.
+    #[must_use]
+    pub fn geometry(&self) -> &PathGeometry {
+        &self.geometry
+    }
+
+    /// Replace the static points, keeping the closure, cap and join.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::GeometryTopologyMismatch`] when the point count
+    /// differs from the existing outline, or [`CoreError::InvalidGeometry`]
+    /// when a coordinate is not finite.
+    pub fn set_points(&mut self, points: Vec<PathPoint>) -> Result<(), CoreError> {
+        self.geometry = self.geometry.with_points(points)?;
+        Ok(())
+    }
+
+    /// Replaces the cap style shared by the static outline and every key.
+    pub fn set_cap(&mut self, cap: LineCap) {
+        self.geometry.set_cap(cap);
+    }
+
+    /// Replaces the join style shared by the static outline and every key.
+    pub fn set_join(&mut self, join: LineJoin) {
+        self.geometry.set_join(join);
+    }
+
+    /// The keyframes, sorted by strictly increasing frame.
+    #[must_use]
+    pub fn keys(&self) -> &[GeometryKey] {
+        &self.keys
+    }
+
+    /// Whether the channel has any keyframe.
+    #[must_use]
+    pub fn is_animated(&self) -> bool {
+        !self.keys.is_empty()
+    }
+
+    /// Inserts a keyframe, replacing one at the same frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::FrameOutOfRange`] when `frame` is outside the
+    /// allowed range and [`CoreError::GeometryTopologyMismatch`] when the
+    /// point count differs from the static outline.
+    pub fn insert_key(
+        &mut self,
+        frame: Frame,
+        points: Vec<PathPoint>,
+        ease: Ease,
+    ) -> Result<(), CoreError> {
+        if !crate::time::frame_within_bounds(frame) {
+            return Err(CoreError::FrameOutOfRange { frame });
+        }
+        self.geometry.with_points(points.clone())?;
+        let key = GeometryKey {
+            frame,
+            points,
+            ease,
+        };
+        match self
+            .keys
+            .binary_search_by_key(&frame, |existing| existing.frame)
+        {
+            Ok(index) => self.keys[index] = key,
+            Err(index) => self.keys.insert(index, key),
+        }
+        Ok(())
+    }
+
+    /// Removes the keyframe at `frame`, if there is one.
+    pub fn remove_key(&mut self, frame: Frame) -> bool {
+        match self.keys.binary_search_by_key(&frame, |key| key.frame) {
+            Ok(index) => {
+                self.keys.remove(index);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The points at a frame, or `None` when the keys do not share a topology.
+    ///
+    /// Easing is applied by the caller: `t` is the eased progress between the
+    /// two surrounding keys. Callers must pass a `t` in `0..=1`.
+    #[must_use]
+    pub fn sample(&self, time: f64, ease: impl FnOnce(Ease, f64) -> f64) -> Option<PathGeometry> {
+        let (Some(first), Some(last)) = (self.keys.first(), self.keys.last()) else {
+            return Some(self.geometry.clone());
+        };
+        let first_time = frame_time(first.frame);
+        let last_time = frame_time(last.frame);
+        if time <= first_time {
+            return self.build_points(&first.points);
+        }
+        if time >= last_time {
+            return self.build_points(&last.points);
+        }
+        let next = self
+            .keys
+            .partition_point(|key| frame_time(key.frame) <= time);
+        let (a, b) = (&self.keys[next - 1], &self.keys[next]);
+        let span = frame_time(b.frame - a.frame);
+        let t = ease(b.ease, (time - frame_time(a.frame)) / span);
+        let points: Vec<PathPoint> = a
+            .points
+            .iter()
+            .zip(&b.points)
+            .map(|(a, b)| a.lerp(*b, t))
+            .collect();
+        self.build_points(&points)
+    }
+
+    fn build_points(&self, points: &[PathPoint]) -> Option<PathGeometry> {
+        self.geometry.with_points(points.to_vec()).ok()
+    }
+}
+
+impl Deref for GeometryChannel {
+    type Target = PathGeometry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.geometry
+    }
+}
+
 fn cumulative_of(points: &[Vec2]) -> Vec<f64> {
     cumulative_lengths(points)
 }
 
+#[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
+fn frame_time(frame: Frame) -> f64 {
+    frame as f64
+}
 fn is_zero(value: Vec2) -> bool {
     value.x.abs() < 1e-9 && value.y.abs() < 1e-9
 }
@@ -973,5 +1227,52 @@ mod tests {
         assert!((bounds[1] + 100.0).abs() < 1e-6, "points up: {bounds:?}");
         let star = PathGeometry::star(5, 40.0, 100.0).unwrap();
         assert_eq!(star.points().len(), 10);
+    }
+
+    #[test]
+    fn geometry_channel_interpolates_points_and_holds_the_topology() {
+        let base = PathGeometry::new(
+            vec![
+                PathPoint::corner(Vec2::new(0.0, 0.0)),
+                PathPoint::corner(Vec2::new(10.0, 0.0)),
+            ],
+            false,
+            LineCap::Round,
+            LineJoin::Round,
+        )
+        .unwrap();
+        let mut channel = GeometryChannel::new(base);
+        channel
+            .insert_key(
+                0,
+                vec![
+                    PathPoint::corner(Vec2::new(0.0, 0.0)),
+                    PathPoint::corner(Vec2::new(10.0, 0.0)),
+                ],
+                Ease::Linear,
+            )
+            .unwrap();
+        channel
+            .insert_key(
+                10,
+                vec![
+                    PathPoint::corner(Vec2::new(0.0, 10.0)),
+                    PathPoint::corner(Vec2::new(10.0, 10.0)),
+                ],
+                Ease::Linear,
+            )
+            .unwrap();
+        let middle = channel.sample(5.0, |_curve, t| t).unwrap();
+        assert!((middle.points()[0].position.y - 5.0).abs() < 1e-9);
+        assert!((middle.points()[1].position.y - 5.0).abs() < 1e-9);
+        let wrong = channel.insert_key(
+            20,
+            vec![PathPoint::corner(Vec2::new(0.0, 0.0))],
+            Ease::Linear,
+        );
+        assert!(matches!(
+            wrong,
+            Err(CoreError::GeometryTopologyMismatch { .. })
+        ));
     }
 }

@@ -120,6 +120,8 @@ pub enum Expr {
     Sin(Box<Expr>),
     /// `cos(a)` (radians).
     Cos(Box<Expr>),
+    /// `sqrt(a)`; negative inputs yield 0.
+    Sqrt(Box<Expr>),
     /// `clamp(value, low, high)`.
     Clamp(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `lerp(a, b, t)`.
@@ -197,6 +199,7 @@ impl Expr {
             Self::Abs(a) => evaluate(a)?.abs(),
             Self::Sin(a) => evaluate(a)?.sin(),
             Self::Cos(a) => evaluate(a)?.cos(),
+            Self::Sqrt(a) => evaluate(a)?.max(0.0).sqrt(),
             Self::Clamp(value, low, high) => {
                 let (value, low, high) = (evaluate(value)?, evaluate(low)?, evaluate(high)?);
                 value.max(low).min(high.max(low))
@@ -230,6 +233,15 @@ fn number_of(value: Option<&PropValue>) -> f64 {
     }
 }
 
+/// One geometry write a driver performs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryWrite {
+    /// Part index.
+    pub part: usize,
+    /// Geometry expression evaluated per frame.
+    pub geometry: crate::geometry::GeometryExpr,
+}
+
 /// A compiled driver.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Driver {
@@ -237,6 +249,8 @@ pub struct Driver {
     pub name: String,
     /// Property indices bound to the function parameters, in order.
     pub params: Vec<usize>,
-    /// Writes, in order.
+    /// Scalar writes, in order.
     pub writes: Vec<Write>,
+    /// Geometry writes, in order. A later write to the same part wins.
+    pub geometries: Vec<GeometryWrite>,
 }

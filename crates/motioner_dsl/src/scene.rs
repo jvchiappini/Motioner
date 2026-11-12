@@ -1870,6 +1870,7 @@ impl Scene {
             NodeMethod::RigProp => self.rig_prop(id, args),
             NodeMethod::RigMirror => self.rig_mirror(id, args),
             NodeMethod::RigDriver => self.rig_driver(id, args),
+            NodeMethod::RigGeometry => self.rig_geometry(id, args),
             NodeMethod::RigPose => self.rig_pose(id, args),
             NodeMethod::RigClip => self.rig_clip(id, args),
             NodeMethod::RigPlay => self.rig_play(id, args),
@@ -2913,6 +2914,28 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
         ContentValue::Join(join) => Value::Str(Arc::from(join.name())),
         ContentValue::Fit(fit) => Value::Str(Arc::from(fit.name())),
         ContentValue::Gradient(Some(gradient)) => Value::Gradient(Arc::new(gradient)),
+        ContentValue::GeometryPoints(points) => Value::list(
+            points
+                .iter()
+                .map(|point| {
+                    if point.has_handles() {
+                        Value::list(vec![
+                            Value::Number(point.position.x),
+                            Value::Number(point.position.y),
+                            Value::Number(point.handle_in.x),
+                            Value::Number(point.handle_in.y),
+                            Value::Number(point.handle_out.x),
+                            Value::Number(point.handle_out.y),
+                        ])
+                    } else {
+                        Value::list(vec![
+                            Value::Number(point.position.x),
+                            Value::Number(point.position.y),
+                        ])
+                    }
+                })
+                .collect(),
+        ),
     })
 }
 
@@ -2988,6 +3011,7 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::Speed
         | ContentField::FillStopOffset(_)
         | ContentField::StrokeStopOffset(_) => number(value),
+        ContentField::Geometry => path_points(value).map(ContentValue::GeometryPoints),
         ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_) => match value {
             Value::Str(text) => Color::parse_hex(text)
                 .map(|color| ContentValue::Color(Some(color)))

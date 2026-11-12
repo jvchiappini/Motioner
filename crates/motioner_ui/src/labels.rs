@@ -50,6 +50,7 @@ pub fn content_label(field: ContentField) -> String {
         ContentField::TrimOffset => "Trim Offset",
         ContentField::Dash => "Dash",
         ContentField::DashOffset => "Dash Offset",
+        ContentField::Geometry => "Geometry",
         ContentField::Fill => "Fill",
         ContentField::Stroke => "Stroke",
         ContentField::Color => "Colour",

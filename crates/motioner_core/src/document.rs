@@ -1312,6 +1312,10 @@ fn content_static_write(
             }
             _ => Err(wrong_kind(content, field)),
         },
+        (ContentField::Geometry, ContentValue::GeometryPoints(points)) => match content {
+            NodeContent::Path { geometry, .. } => geometry.set_points(points),
+            _ => Err(wrong_kind(content, field)),
+        },
         (ContentField::Cap, ContentValue::Cap(cap)) => match content {
             NodeContent::Path { geometry, .. } => {
                 geometry.set_cap(cap);
@@ -1545,6 +1549,10 @@ fn content_key_write(
                 };
                 channel.insert_key(key(v, false)?);
             }
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Geometry, ContentValue::GeometryPoints(points)) => match content {
+            NodeContent::Path { geometry, .. } => geometry.insert_key(frame, points, ease)?,
             _ => return Err(wrong_kind(content, field)),
         },
         (ContentField::Fill, ContentValue::Color(color)) => match content {
@@ -1789,6 +1797,9 @@ fn content_key_remove(content: &mut NodeContent, field: ContentField, frame: Fra
                 _ => dash_offset,
             };
             remove(channel);
+        }
+        (NodeContent::Path { geometry, .. }, ContentField::Geometry) => {
+            geometry.remove_key(frame);
         }
         (
             NodeContent::Rect { paint, .. }

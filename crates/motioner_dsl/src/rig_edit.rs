@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use motioner_core::{
-    format_number, quote, Ease, NodeId, RigInstanceManifest, RigManifest, RigMirrorSide,
+    format_number, quote, Ease, NodeId, PathPoint, RigInstanceManifest, RigManifest, RigMirrorSide,
     RigPropertyKeyManifest, RigPropertyValue, RigValue, RigValueKind, Vec2,
 };
 
@@ -260,6 +260,28 @@ pub enum RigEdit {
         property: String,
         /// New default.
         value: RigValue,
+    },
+    /// Add or replace a geometry key on a part (D-0058).
+    GeometryKey {
+        /// Rig display name or root identity.
+        rig: String,
+        /// Part name.
+        part: String,
+        /// Composition time in seconds.
+        time: f64,
+        /// Points at the key; the part keeps its closure and style.
+        points: Vec<motioner_core::PathPoint>,
+        /// Ease of the arriving segment.
+        ease: Ease,
+    },
+    /// Remove a geometry key from a part.
+    GeometryUnkey {
+        /// Rig display name or root identity.
+        rig: String,
+        /// Part name.
+        part: String,
+        /// Composition time in seconds.
+        time: f64,
     },
 }
 
@@ -654,6 +676,11 @@ pub fn apply_to_manifest(
             let property = property_mut(instance, property)?;
             property.default = checked_value(property, value)?;
         }
+        RigEdit::GeometryKey { part, .. } | RigEdit::GeometryUnkey { part, .. } => {
+            if !instance.parts.iter().any(|item| item.id == *part) {
+                return Err(format!("no part named {part:?}"));
+            }
+        }
     }
     refresh_machine(instance);
     Ok(())
@@ -713,7 +740,9 @@ fn edit_rig(edit: &RigEdit) -> &str {
         | RigEdit::AddTransition { rig, .. }
         | RigEdit::RemoveTransition { rig, .. }
         | RigEdit::RetargetTransition { rig, .. }
-        | RigEdit::SetInput { rig, .. } => rig,
+        | RigEdit::SetInput { rig, .. }
+        | RigEdit::GeometryKey { rig, .. }
+        | RigEdit::GeometryUnkey { rig, .. } => rig,
     }
 }
 
@@ -1730,6 +1759,46 @@ fn plan_calls(
                 "set rig input",
             ))
         }
+        RigEdit::GeometryKey {
+            part,
+            time,
+            points,
+            ease,
+            ..
+        } => {
+            if !instance.parts.iter().any(|item| item.id == *part) {
+                return Err(format!("no part named {part:?}"));
+            }
+            let text = format!(
+                "{var}.geometry({}, {}, {}, ease={})",
+                quote(part),
+                format_number(*time),
+                points_text(points),
+                quote(ease.name())
+            );
+            Ok(key_geometry_call(
+                var,
+                part,
+                *time,
+                calls,
+                line_end,
+                &scope.indent,
+                &text,
+            ))
+        }
+        RigEdit::GeometryUnkey { part, time, .. } => {
+            let call = calls
+                .iter()
+                .find(|call| {
+                    call.method == "geometry"
+                        && call.text("part", 0).as_deref() == Some(part)
+                        && call
+                            .number("time", 1)
+                            .is_some_and(|value| (value - time).abs() < 1e-6)
+                })
+                .ok_or_else(|| format!("no geometry key on {part:?} at {time}"))?;
+            Ok(remove_line(call, "remove rig geometry key"))
+        }
     }
 }
 
@@ -1752,6 +1821,36 @@ fn pose_declaration(
         parts.push(format!("{property}={}", value_text(value)));
     }
     Ok(format!("{var}.pose({})", parts.join(", ")))
+}
+
+fn points_text(points: &[PathPoint]) -> String {
+    let mut out = String::from("[");
+    for (index, point) in points.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        if point.has_handles() {
+            let _ = write!(
+                out,
+                "[{}, {}, {}, {}, {}, {}]",
+                format_number(point.position.x),
+                format_number(point.position.y),
+                format_number(point.handle_in.x),
+                format_number(point.handle_in.y),
+                format_number(point.handle_out.x),
+                format_number(point.handle_out.y)
+            );
+        } else {
+            let _ = write!(
+                out,
+                "[{}, {}]",
+                format_number(point.position.x),
+                format_number(point.position.y)
+            );
+        }
+    }
+    out.push(']');
+    out
 }
 
 fn is_identifier(name: &str) -> bool {
@@ -1849,6 +1948,49 @@ fn key_property_call(
         },
     };
     code_edit(vec![replacement], "add rig property key")
+}
+
+fn key_geometry_call(
+    var: &str,
+    part: &str,
+    time: f64,
+    calls: &[CallSite],
+    line_end: usize,
+    indent: &str,
+    text: &str,
+) -> CodeEdit {
+    let mut geometry: Vec<&CallSite> = calls
+        .iter()
+        .filter(|call| call.method == "geometry" && call.var == var)
+        .collect();
+    geometry.sort_by_key(|call| call.stmt.start);
+    if let Some(call) = geometry.iter().find(|call| {
+        call.text("part", 0).as_deref() == Some(part)
+            && call
+                .number("time", 1)
+                .is_some_and(|value| (value - time).abs() < 1e-6)
+    }) {
+        return code_edit(
+            vec![Replacement::new(call.call.start, call.call.end, text)],
+            "edit rig geometry key",
+        );
+    }
+    let before = geometry.iter().find(|call| {
+        call.text("part", 0).as_deref() == Some(part)
+            && call.number("time", 1).is_some_and(|value| value > time)
+    });
+    let replacement = match before {
+        Some(call) => Replacement::new(
+            call.line_start,
+            call.line_start,
+            format!("{}{text}\n", call.indent),
+        ),
+        None => match geometry.last().copied() {
+            Some(call) => insertion(call.line_end, &call.indent, text),
+            None => insertion(line_end, indent, text),
+        },
+    };
+    code_edit(vec![replacement], "add rig geometry key")
 }
 
 fn unkey_property_call(target: &str, time: f64, calls: &[CallSite]) -> Result<CodeEdit, String> {
