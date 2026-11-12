@@ -42,6 +42,13 @@ only place that names engine types on the editor side (through
   summary diamonds: `crates/motioner_ui/src/timeline_model.rs:151-260`.
 - `editor::query` — the JSON scene, including content channels:
   `crates/motioner_ui/src/editor/query.rs:85-250`.
+- `PreviewSession::set_asset_resolver` - the host-injected `use()` resolver;
+  every reload and recompile of the session goes through `compile_source`,
+  which is also the resolver seam for `query`, `edit`, `bake` and the tool
+  host (E1): `crates/motioner_ui/src/session.rs:230-270`.
+- `editor::rig_json` - prints the document's `RigManifest`, filtered by rig
+  name or identity, with fixed field order (D-0056):
+  `crates/motioner_ui/src/editor/rig_json.rs:1-303`.
 - `inspect` — the inspector model and its pure layout; path layers get trim,
   Gradient stops get one offset row and one colour row each, with the same`n  stopwatch and diamonds; the timeline labels them `Stop <n> offset/colour``n  (D-0030): `crates/motioner_ui/src/inspect.rs:391-500` and`n  `crates/motioner_ui/src/timeline_model.rs:237-320`.
 - The inspector opens with a whole-node blend grid (seven tiles, four per

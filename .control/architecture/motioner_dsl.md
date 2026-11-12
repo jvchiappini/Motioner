@@ -101,4 +101,12 @@ partial — last verified: 2026-11-04
   and writes transform/opacity/stroke keys, inserting a hold key before a
   change so rest gaps never interpolate
   (`crates/motioner_dsl/src/scene/rigs.rs:1239-1380`).
+- Symbol instantiation turns the authored non-scaling stroke width into
+  composition units with the instance placement scale, so a driver squash
+  does not change it (E0): `crates/motioner_dsl/src/scene/rigs.rs:186-200`,
+  `315-330`.
+- `build_rig_manifest` projects the baked rigs into the core's versioned
+  `RigManifest` (properties, parts, poses, clips, layers, aims and machine)
+  after every bake and attaches it to the document (D-0056):
+  `crates/motioner_dsl/src/scene/rigs.rs:1305-1655`.
 

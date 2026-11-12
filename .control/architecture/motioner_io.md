@@ -22,6 +22,10 @@ parcial — ultima verificacion: 2026-11-11
   `motioner_core::Symbol` with flattened geometry and part anchors; the
   subset, the warnings and the arc tolerance are documented in D-0054:
   `crates/motioner_io/src/svg.rs:1-70`.
+- `vector-effect="non-scaling-stroke"` is honoured and inherited (the root
+  or a group opts a whole symbol in); the reader stores the reference scale
+  in `PaintSpec` (E0): `crates/motioner_io/src/svg.rs:86-90`, `653-663`,
+  `1008-1016`.
 - `use_assets::ProjectAssets` implements the DSL `AssetResolver`: sandboxed
   path joining, SVG parsing and `.motion` source loading
   (`crates/motioner_io/src/use_assets.rs:1-120`).

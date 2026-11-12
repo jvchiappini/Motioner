@@ -5,6 +5,61 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Prompt 16b status (finish prompt 16)
+
+Session `S-2026-11-11-002` (open). **E0 and E1 done; E2..E7 pending. No commit.**
+Reports: `out/reports/PHASE-16B-E0-REPORT.md` and
+`out/reports/PHASE-16B-E1-REPORT.md`.
+
+E1 (2026-11-11):
+
+- Resolver: `PreviewSession` owns one `Rc<dyn AssetResolver>`; all three
+  compile paths (reload, override edit, write-through apply) call
+  `compile_source`, which uses
+  `motioner_dsl::run_with_overrides_and_metrics_and_assets`. The host injects
+  it (`Editor::open_with_assets`, `PreviewOptions.asset_resolver`,
+  `ProjectHost::asset_resolver`); `query`, `edit`, `bake`, `corpus` and the
+  tool host pass `ProjectAssets`. No `motioner_io` dependency in
+  `motioner_ui`.
+- Manifest: `motioner_core::rig_manifest` (D-0056) is stored on `Document`;
+  the DSL builds it after the bake from the same `RigEntry` list. It covers
+  parts/nodes, properties (kind/angle/default/range/step/values/group/mirror),
+  poses, pose tracks, clips, plays, blink layers, aims and the machine
+  (states, transitions, inputs, events).
+- CLI: `motioner query <file> --rig NAME|all` and the positional alias
+  `query rig <file> <instance>` print `{"version":1,"rigs":[...]}`.
+  `motioner tools --schema` carries the `rig_manifest` result schema
+  (`implemented: false`; E2 wires execution).
+- Test: `crates/motioner_app/tests/rig_manifest.rs` opens
+  `examples/rig/mascot_demo.motion` through the headless editor session with
+  `ProjectAssets` and asserts the document and manifest equal a direct
+  `run_with_assets`, plus the query JSON and the unknown-rig error.
+- Gate green; C: free 10.2 GB at the E1 checkpoint.
+
+E0 (2026-11-11):
+
+- Encoding: `scripts/check_encoding.py` reads index blobs and the BOM of
+  changed files, excludes `engine/`, and is wired into the gate, README and
+  CI; tests in `scripts/tests/test_check_encoding.py`. Worktree CRLF is
+  normalised by `eol=lf` on commit, so only a committed CR is a failure.
+- Non-scaling stroke: `PaintSpec::non_scaling_stroke: Option<f64>` (the
+  placement scale the width is authored at), SVG `vector-effect` (inherited;
+  the mascot root opts in), and `motioner_render` strokes those paths in
+  composition space. The mouth no longer collapses under the 0.06 squash.
+- Measurements (release, reference machine): interpreter on
+  `showcase_pro.motion` (20 warm-up + 200 runs) median **1.205 ms**, p90
+  1.462 (no prelude); 1.208/1.526 with prelude. Prompt 12 baseline 1.2105,
+  budget +7 % = 1.2952: within budget. 50 mascots with a pose + clip +
+  look keys: build+bake **238.0 ms**, 2000 nodes, **48 600** transform keys,
+  **+8.9 MiB** RSS, preview **1.5 fps** at 1920x1080 (not the 60 fps target;
+  rendering scales with instance count; E7 owns the investigation).
+- Write-through latency: **pending E2**.
+- T-RIG-0011 acceptance text corrected: the `motioner rig run` CLI was not
+  delivered in prompt 16; E7 delivers it.
+- Disk: the gate drove C: to 2.4 GB; stale `target/debug` was purged and the
+  session closed at **20.7 GB free**. Keep `-j 1..2` and clean before big
+  release runs.
+
 ## Prompt 16 status (rigs, symbols, state machines)
 
 Session `S-2026-11-11-001`. **No commit**: the reviewer commits. Report
@@ -129,9 +184,7 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 ## Last session
 
-`S-2026-11-11-001` (prompt 16): imports, SVG symbols, rigs, drivers,
-poses/clips, state machines, `motioner_rig`, mascot demo, docs, report.
-Gate green (fmt, clippy workspace -D warnings, workspace tests, rustdoc
--D warnings, boundaries, machete, pctl validate, doc-check-refs); no
-commit.
+`S-2026-11-11-002` (prompt 16b, open): E0 review fixes, encoding gate,
+non-scaling stroke, measurements; E1 editor resolver and rig manifest.
+Gate green; no commit. Next: E2 write-through, undo and rig agent tools.
 

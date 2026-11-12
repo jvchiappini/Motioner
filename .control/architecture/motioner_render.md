@@ -41,8 +41,10 @@ documented `LivePainter` exception.
   `crates/motioner_render/src/space.rs:24-115`.
 - `paths` — tessellates fill and stroke pieces with `lyon_tessellation` into
   local triangles, classifies shared edges as hard, caches per node and
-  exposes `path_bounds` (D-0029):
-  `crates/motioner_render/src/paths.rs:30-320`.
+  exposes `path_bounds` (D-0029). Non-scaling strokes take the other path:
+  the points move to composition space first and are stroked there, so a
+  non-uniform node scale cannot squash one side of the outline (E0):
+  `crates/motioner_render/src/paths.rs:30-195`.
 - `text` — glyph models and missing-glyph counting:
   `crates/motioner_render/src/text.rs`.
 - `fonts` — `FontSet` lookup (project faces first, bundled Inter/Roboto last),

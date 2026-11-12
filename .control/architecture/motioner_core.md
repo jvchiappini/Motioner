@@ -42,6 +42,15 @@ in the workspace and never touches the file system or a GPU.
 - `BlendMode` - seven node blend modes (normal, add, multiply, screen,
   overlay, darken, lighten); a discrete node property, overridable, not
   keyable (D-0031): `crates/motioner_core/src/node.rs:296-375`.
+- `PaintSpec::non_scaling_stroke` - the optional placement scale that keeps
+  an SVG `vector-effect="non-scaling-stroke"` outline at its authored width
+  when a rig driver squashes the part; never keyed (E0):
+  `crates/motioner_core/src/node.rs:456-490`.
+- `RigManifest` - the compiler's versioned description of every rig instance
+  (parts, properties, poses, clips, layers, aims and machine), attached to
+  [`Document`] and read by `query`/agents (D-0056):
+  `crates/motioner_core/src/rig_manifest.rs:1-342`,
+  `crates/motioner_core/src/document.rs:176-215`.
 - `Effect` / `EffectChannel` - the ordered effect stack (drop shadow, blur,
   glow), one effect per kind, with every parameter an animatable channel
   named `<kind>.<param>` (D-0032): `crates/motioner_core/src/effect.rs:1-260`.

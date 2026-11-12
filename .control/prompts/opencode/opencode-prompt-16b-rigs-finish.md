@@ -199,14 +199,23 @@ where it changes the model, goldens, spec, docs and write-through:
    (thumbnail requests through the render tools), clip list, machine graph
    model with live state, timeline rows. Headless tests. Drawing waits for
    prompt 15 (Motioner on GUIMaker); keep it out of this prompt.
-3. Measurements (release): everything from E0.2 final values, mascot
+3. **50-instance preview performance (reviewer finding after E0).** E0
+   measured 1.5 fps at 1080p for 50 mascots (2 000 paths, 48 600 keys);
+   the target is 60 fps. Profile first (`mascot_scene_bench.rs`), report
+   where the time goes (evaluation, tessellation, uploads, draw calls),
+   then fix it: e.g. cache tessellation keyed by path geometry + stroke
+   (transform-only animation must not re-tessellate), batch draws per
+   material, reuse GPU buffers across frames; generic engine parts go to
+   the dev clone. Target ≥ 60 fps, or ≥ 30 fps with the remaining
+   bottleneck named and backlogged. Existing goldens byte-identical.
+4. Measurements (release): everything from E0.2 final values, mascot
    eval/frame before and after E3-E4, 50-instance preview fps, textured
    mesh cost, write-through latency per edit kind.
-4. Docs: `docs/rigs.md` (comparison table updated: what is now at Rive
+5. Docs: `docs/rigs.md` (comparison table updated: what is now at Rive
    parity or better), `docs/imports.md`, `docs/tools.md` rig tools, spec,
    README. Tasks closed with `pctl`, the rest backlogged with reasons,
    session log, CONTEXT updated.
-5. Final report **in Spanish** at `out/reports/PHASE-16B-REPORT.md`: per
+6. Final report **in Spanish** at `out/reports/PHASE-16B-REPORT.md`: per
    phase, the comparison matrix with screenshots, ADRs, dependencies,
    numbers, gate results, free space on C:, engine commits to push, and what
    is left (T-RIG-0009 drawing after prompt 15; T-RIG-0015).
