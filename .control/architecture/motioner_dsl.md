@@ -149,3 +149,22 @@ partial — last verified: 2026-11-04
   `crates/motioner_dsl/src/rig_edit.rs:200-260`, `1320-1430`,
   `crates/motioner_ui/src/editor/rig_edit.rs:100-205`.
 
+## Prompt 16b E4 additions (deformers and constraints)
+
+- `m.lattice`, `m.bone`, `m.skin` and `m.blend` compile corner/edge Vec2
+  properties, bone hierarchy and topology-fitted targets into
+  `motioner_rig::Deformer` declarations (D-0059):
+  `crates/motioner_dsl/src/scene/rigs.rs:1400-1650`.
+- `m.ik`, `m.follow`, `m.copy`, `m.limit`, `m.distance` and `m.spring`
+  compile part/property references into `motioner_rig::Constraint`
+  declarations; `m.aim` keeps its legacy list, which the bake folds into the
+  same constraint stage (D-0060):
+  `crates/motioner_dsl/src/scene/rigs.rs:1650-1900`.
+- The structural declarations are source-only; every continuous parameter
+  (corner/edge offsets, bone rotations/positions, blend weights, targets and
+  gains) is a rig property, so the existing property write-through edits it
+  without a second planner.
+- `arc_to`, `ellipse_arc` and `arc` accept `segments=` and default to four
+  fixed cubic segments, keeping topology stable across animated angles.
+
+

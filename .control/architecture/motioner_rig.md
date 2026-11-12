@@ -52,6 +52,8 @@ drivers, constraints).
 - D-0053 - poses, clips, layers and state machine semantics.
 - D-0055 - this crate, dependencies and the headless contract.
 - D-0058 - keyable geometry channel and the geometry driver IR.
+- D-0059 - native lattice, skinning and blend-shape deformers.
+- D-0060 - the ordered constraint stage, including spring state.
 
 ## Boundaries
 
