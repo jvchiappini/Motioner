@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 actualizado_por: agente
 version_schema: 1
 ---
@@ -7,9 +7,38 @@ version_schema: 1
 
 ## Prompt 16b status (finish prompt 16)
 
-Session `S-2026-11-11-002` (open). **E0 and E1 done; E2..E7 pending. No commit.**
-Reports: `out/reports/PHASE-16B-E0-REPORT.md` and
-`out/reports/PHASE-16B-E1-REPORT.md`.
+Session `S-2026-11-11-002` (open). **E0, E1 and E2 done; E3..E7 pending. No
+commit.** Reports: `out/reports/PHASE-16B-E0-REPORT.md`,
+`out/reports/PHASE-16B-E1-REPORT.md` and
+`out/reports/PHASE-16B-E2-REPORT.md`.
+
+E2 (2026-11-12):
+
+- `motioner_dsl::rig_edit` defines `RigEdit` and `plan_rig_edit`: property
+  set/key/unkey (mirror both/left/right), pose apply/save/delete, clip
+  key/remove/length/play, state/transition/input edits. It finds the
+  assignment that binds the rig root in the open program and walks only that
+  block; declarations inside a used `.motion` module are refused with a
+  reason (D-0057).
+- `RigManifest` schema is **v2**: each property now carries its authored
+  `keys` (frame/value/ease). `build_rig_manifest` populates them; JSON and
+  the tool schema include them.
+- `Editor::apply_rig_edit` plans, compiles once, compares the manifest with
+  `apply_to_manifest`, checks that every node outside the rig subtree is
+  unchanged and installs the program with `PreviewSession::install_compiled`
+  as one undo step (`Strategy::RigEdit`).
+- Eight `rig` tools are implemented: `rig_list`, `rig_manifest`, `rig_set`,
+  `rig_key`, `rig_key_input`, `rig_apply_pose`, `rig_play_clip`,
+  `rig_save_pose`. `Host::rig_edit` + `AppHost` route them to the editor.
+- Corpus: 15 fixtures under
+  `crates/motioner_dsl/tests/write_through/rig_*`, driven by
+  `crates/motioner_app/tests/rig_edit.rs`; the tool contract test is in
+  `crates/motioner_app/src/toolhost.rs`.
+- Latency (release): property write-through **10.70 / 11.48 ms**
+  (median/p90, 30 runs, showcase_pro); rig write-through **36.04 / 37.98 ms**
+  (20 runs, mascot demo, one compile).
+- T-RIG-0014 is closed. Gate green; C: free 7.2 GB at the E2 checkpoint
+  (purge `target/debug` before the next heavy build).
 
 E1 (2026-11-11):
 
@@ -185,6 +214,7 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 ## Last session
 
 `S-2026-11-11-002` (prompt 16b, open): E0 review fixes, encoding gate,
-non-scaling stroke, measurements; E1 editor resolver and rig manifest.
-Gate green; no commit. Next: E2 write-through, undo and rig agent tools.
+non-scaling stroke, measurements; E1 resolver and manifest; E2 rig
+write-through, manifest v2, 15-case corpus and eight rig tools. Gate green;
+no commit. Next: E3 keyable geometry.
 

@@ -137,3 +137,14 @@ partial — last verified: 2026-11-01
   (`restart_audio`, `crates/motioner_ui/src/app/mod.rs:783`), so the playhead
   never sticks on the last frame. `AudioOutput::ended`
   (`crates/motioner_app/src/audio_out.rs:117`) reports the consumed range.
+
+## Prompt 16b E2 additions (rig write-through)
+
+- `Editor::apply_rig_edit` is the one sink for rig tools and the future rig
+  panel: plan with `motioner_dsl::plan_rig_edit`, compile the candidate with
+  the session's resolver/metrics, compare the rig manifest with
+  `apply_to_manifest`, check that nodes outside the rig subtree are unchanged,
+  then install the program as one undo step (`Strategy::RigEdit`):
+  `crates/motioner_ui/src/editor/rig_edit.rs:1-176`.
+- `editor::rig_json` prints the v2 manifest, including each property's
+  authored keys: `crates/motioner_ui/src/editor/rig_json.rs:1-313`.

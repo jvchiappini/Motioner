@@ -110,3 +110,20 @@ partial — last verified: 2026-11-04
   after every bake and attaches it to the document (D-0056):
   `crates/motioner_dsl/src/scene/rigs.rs:1305-1655`.
 
+## Prompt 16b E2 additions (rig write-through)
+
+- `rig_edit` plans a `RigEdit` as a byte-range edit on the calls that bind the
+  rig root: property set/key/unkey, pose apply/save/delete, clip key/remove/
+  length/play, state/transition/input edits and mirror sides. It finds the
+  binding block from the interpreter origins and never guesses when the
+  declaration lives in another file (D-0057):
+  `crates/motioner_dsl/src/rig_edit.rs:1-1600`.
+- `apply_to_manifest` is the exact expectation the editor compares after the
+  edit compiles; it mirrors runtime order (pose tracks and plays stay in
+  authoring order) and refreshes the machine's derived `inputs`/`events`:
+  `crates/motioner_dsl/src/rig_edit.rs:250-720`.
+- `Strategy::RigEdit` labels the commit in reports and traces:
+  `crates/motioner_dsl/src/code_edit.rs:38-56`.
+- The corpus fixtures `crates/motioner_dsl/tests/write_through/rig_*` are
+  driven by `crates/motioner_app/tests/rig_edit.rs` through the real editor.
+

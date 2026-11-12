@@ -47,9 +47,10 @@ in the workspace and never touches the file system or a GPU.
   when a rig driver squashes the part; never keyed (E0):
   `crates/motioner_core/src/node.rs:456-490`.
 - `RigManifest` - the compiler's versioned description of every rig instance
-  (parts, properties, poses, clips, layers, aims and machine), attached to
-  [`Document`] and read by `query`/agents (D-0056):
-  `crates/motioner_core/src/rig_manifest.rs:1-342`,
+  (parts, properties with their authored keys, poses, clips, layers, aims
+  and machine), attached to [`Document`] and read by `query`/agents
+  (D-0056; schema v2 adds `keys` and backs E2 verification):
+  `crates/motioner_core/src/rig_manifest.rs:1-340`,
   `crates/motioner_core/src/document.rs:176-215`.
 - `Effect` / `EffectChannel` - the ordered effect stack (drop shadow, blur,
   glow), one effect per kind, with every parameter an animatable channel

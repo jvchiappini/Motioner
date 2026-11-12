@@ -45,3 +45,18 @@ in `motioner_app`.
 `crates/motioner_tools/src/catalogue.rs` unit tests (completeness, unique
 names, user tools) and `crates/motioner_tools/tests/contracts.rs` (result
 schemas, dispatch coverage, typed harness errors, GPU render tools).
+
+## Prompt 16b E2 additions (rig family)
+
+- Eight `rig` tools share the manifest: `rig_list`, `rig_manifest`, `rig_set`,
+  `rig_key`, `rig_key_input`, `rig_apply_pose`, `rig_play_clip` and
+  `rig_save_pose` (D-0057):
+  `crates/motioner_tools/src/catalogue.rs:640-755`.
+- Read tools build the manifest JSON from `Document::rig_manifest`; editing
+  tools parse typed values (`number`, `bool`, enum string, `#rrggbb`,
+  `[x, y]`) and call `Host::rig_edit`, which `AppHost` routes to
+  `Editor::apply_rig_edit` and flushes:
+  `crates/motioner_tools/src/exec.rs:910-1090`,
+  `crates/motioner_app/src/toolhost.rs:280-310`.
+- `AppHost`'s unit test calls every tool on a copy of the mascot demo:
+  `crates/motioner_app/src/toolhost.rs:535-690`.

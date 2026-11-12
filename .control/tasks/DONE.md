@@ -67,6 +67,7 @@
 - **T-RIG-0010** — Phase 9: mascot rig acceptance example and demo `[alta]` (actualizado 2026-11-11)
 - **T-RIG-0011** — Phase 10: motioner_rig headless runtime crate and rig CLI `[alta]` (actualizado 2026-11-11)
 - **T-RIG-0012** — Phase 11: docs, measurements and Spanish session report `[alta]` (actualizado 2026-11-11)
+- **T-RIG-0014** — Editor use() wiring, rig manifest and rig write-through corpus `[alta]` (actualizado 2026-11-12)
 - **T-UI-0001** — First editor window: motioner preview with live viewport, transport, timeline, outline, hot reload `[alta]` (actualizado 2026-10-31)
 - **T-UI-0002** — Professional editor chrome: tokens, painter, icons, layers, canvas, inspector, timeline `[alta]` (actualizado 2026-11-01)
 - **T-UI-0003** — Editing in the editor: overrides, inspector, gizmos, keyframes and undo `[alta]` (actualizado 2026-11-01)
