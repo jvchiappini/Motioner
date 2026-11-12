@@ -170,6 +170,14 @@ where it changes the model, goldens, spec, docs and write-through:
 - Motioner: lattice, bones/skinning and blend shapes apply to `image()` and
   `video()` nodes through that mesh. Goldens for an image bent by a lattice
   and a video frame skinned by two bones. Existing goldens byte-identical.
+- **Bone constraints (reviewer finding after E4).** D-0060 runs IK, copy
+  and limit on part transforms after the deform stage, so a skinned limb
+  cannot be bent by IK. Let IK/copy/limit/aim target `m.bone` joints too:
+  order becomes properties → machine → drivers → bone constraints →
+  skinning/lattice/blend → part constraints → draw (addendum to D-0060,
+  one implementation, no second skeleton). Golden: an image arm skinned by
+  two bones whose IK target is keyed, the elbow bends and the texture
+  follows.
 
 ## Phase E6 — Exact mascot, goldens and comparison matrix (T-RIG-0016)
 
