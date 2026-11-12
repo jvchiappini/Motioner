@@ -35,6 +35,11 @@ accumulates opacity down the hierarchy and resolves paints.
   owns the sampled geometry, trim, dash and paint; items stay `Copy`
   (D-0029): `crates/motioner_eval/src/plan.rs:41-62` and
   `crates/motioner_eval/src/evaluate.rs:145-180`.
+- `sample_geometry_at` - samples a `GeometryChannel` point by point with the
+  arriving key's ease and keeps the channel's closure/cap/join; a topology
+  mismatch is impossible after key insertion (D-0058):
+  `crates/motioner_eval/src/curve.rs:215-235`,
+  `crates/motioner_eval/src/evaluate.rs:300-320`.
 
 ## Diagram
 

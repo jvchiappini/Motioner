@@ -122,8 +122,20 @@ partial — last verified: 2026-11-01
   host (`crates/motioner_ui/src/app/canvas.rs:210`,
   `crates/motioner_ui/src/app/mod.rs:730`).
 
-## Audio (D-0048)
+## Geometry keys (E3)
 
+- `Editor::apply_rig_edit` verifies `RigEdit::GeometryKey` / `GeometryUnkey`
+  directly on the compiled part channel: path points are keyed content, not
+  rig declarations, so the manifest comparison alone cannot see them. The
+  check compares every position and handle with a 1e-6 tolerance for source
+  round-trip and still installs one undo step
+  (`crates/motioner_ui/src/editor/rig_edit.rs:100-230`).
+- Content channels expose `ContentField::Geometry` for key counts and rows;
+  sampled values are not numbers or colours, so the inspector/timeline show
+  the row with `n/a` while keeping its keys
+  (`crates/motioner_ui/src/editor/channels.rs:330-530`).
+
+## Audio (D-0048)
 - The timeline draws a waveform bar for `NodeKind::Audio` rows
   (`crates/motioner_ui/src/panels/timeline.rs:690`) and clip edges
   move/trim through `Edit` commands. Gain and Pan are ordinary expanded

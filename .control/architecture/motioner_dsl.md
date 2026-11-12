@@ -127,3 +127,25 @@ partial — last verified: 2026-11-04
 - The corpus fixtures `crates/motioner_dsl/tests/write_through/rig_*` are
   driven by `crates/motioner_app/tests/rig_edit.rs` through the real editor.
 
+## Prompt 16b E3 additions (geometry channel)
+
+- `path()` wraps its points in a `GeometryChannel`; `key("geometry", t,
+  points)` keys points and `m.geometry(part, t, points, ease=...)` does the
+  same on a rig part while keeping the part's closure and style (D-0058):
+  `crates/motioner_dsl/src/scene.rs:1499-1545`,
+  `crates/motioner_dsl/src/scene/rigs.rs:820-860`.
+- `compile_geometry_expr` compiles `path_builder`, `move_to`, `line_to`,
+  `cubic_to`, `arc_to`, `close`, `ellipse_arc`, `arc`, `rounded_rect` and
+  `mirror` into `motioner_rig::GeometryExpr`; `Sqrt` joins the scalar subset
+  so the HTML lid formula is expressible:
+  `crates/motioner_dsl/src/scene/rigs.rs:2000-2210`.
+- `bake_rigs` writes `PartOutput::geometry` as `ContentField::Geometry` keys,
+  including a hold key before a rest gap, exactly like transform keys:
+  `crates/motioner_dsl/src/scene/rigs.rs:1600-1740`.
+- `RigEdit::GeometryKey` / `GeometryUnkey` plan `m.geometry(...)` calls,
+  replace a key at the same part/time, sort insertions by time and remove the
+  call on unkey; the editor verifies the compiled key directly because path
+  points are content, not rig declarations:
+  `crates/motioner_dsl/src/rig_edit.rs:200-260`, `1320-1430`,
+  `crates/motioner_ui/src/editor/rig_edit.rs:100-205`.
+

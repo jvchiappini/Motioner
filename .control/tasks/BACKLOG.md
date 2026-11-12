@@ -13,7 +13,6 @@
 - **T-RENDER-0014** — 3D layers: glTF, cameras, lights, per-object shading (unlit, PBR, path traced) composited with 2D `[alta]` (actualizado 2026-11-04)
 - **T-RENDER-0017** — Finishing effects and colour: grading, LUT, grain, vignette, chromatic aberration, adjustment layers `[alta]` (actualizado 2026-11-04)
 - **T-RIG-0009** — Phase 8: editor rig mode panels and graph view `[alta]` (actualizado 2026-11-11)
-- **T-RIG-0013** — Backlog: bones, skinning, mesh, blend shapes, IK and path drivers `[alta]` (actualizado 2026-11-11)
 - **T-RIG-0015** — Backlog: Lottie import/export, wasm player and auto-rigging `[alta]` (actualizado 2026-11-11)
 - **T-RIG-0016** — Backlog: mascot demo goldens, corpus check and visual comparison matrix `[alta]` (actualizado 2026-11-11)
 - **T-AI-0001** — In-app agent panel: conversation, provider routing, tool runtime and traces `[media]` (actualizado 2026-11-06)

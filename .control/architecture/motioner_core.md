@@ -33,6 +33,11 @@ in the workspace and never touches the file system or a GPU.
   containment and local bounds; the one geometry implementation shared by
   render, bounds and tests (D-0029):
   `crates/motioner_core/src/path.rs:150-560`.
+- `GeometryChannel` - keyable path points with a fixed point count; the
+  closure, cap and join are shared by every key. `insert_key` rejects a
+  different topology with `CoreError::GeometryTopologyMismatch`, and `sample`
+  interpolates positions and handles with the arriving key's ease (D-0058):
+  `crates/motioner_core/src/path.rs:652-840`.
 - `Gradient` / `PaintSpec` - linear and radial geometry plus stops whose
   offset and colour are `Animatable` channels; paint stores an optional
   gradient per fill/stroke and `ContentField` exposes one offset and one

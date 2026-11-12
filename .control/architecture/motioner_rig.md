@@ -25,7 +25,14 @@ no clock, no GPU and no editor dependency.
   start order (each blend starts from the previous tracks' value), then clip
   plays: `crates/motioner_rig/src/lib.rs:592-660`.
 - `Expr` / `Driver` / `Field` - the sandboxed per-frame IR:
-  `crates/motioner_rig/src/driver.rs:34-242`.
+  `crates/motioner_rig/src/driver.rs:34-256`.
+- `geometry::GeometryExpr` / `GeometryCommand` - sandboxed path builders
+  (`move_to`, `line_to`, `cubic_to`, `arc_to`, `close`, `ellipse_arc`, `arc`,
+  `rounded_rect`, `mirror`) with point/command budgets and typed errors;
+  `PartOutput::geometry` carries the evaluated outline and `PartBase::geometry`
+  is the fixed topology it must match (D-0058):
+  `crates/motioner_rig/src/geometry.rs:1-420`,
+  `crates/motioner_rig/src/eval.rs:120-250`.
 - `machine::Runner` - sequential state stepping, blend progress, trigger
   edges and events: `crates/motioner_rig/src/machine.rs:135-235`.
 - `bake` - one pass per integer frame: stateless properties, machine,
@@ -44,6 +51,7 @@ drivers, constraints).
 - D-0052 - bake-on-build; the rig is evaluated at load and written as keys.
 - D-0053 - poses, clips, layers and state machine semantics.
 - D-0055 - this crate, dependencies and the headless contract.
+- D-0058 - keyable geometry channel and the geometry driver IR.
 
 ## Boundaries
 
@@ -52,7 +60,7 @@ Must not depend on the DSL, I/O, renderer, UI, tools or the application.
 
 ## Known gaps
 
-Bones/skinning/mesh/blend shapes/IK/path drivers, blend states 1D/2D and the
+Bones/skinning/mesh/blend shapes/IK, blend states 1D/2D and the
 wasm/binary player format are backlogged (T-RIG-0013, T-RIG-0015).
 
 

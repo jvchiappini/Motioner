@@ -7,10 +7,37 @@ version_schema: 1
 
 ## Prompt 16b status (finish prompt 16)
 
-Session `S-2026-11-11-002` (open). **E0, E1 and E2 done; E3..E7 pending. No
-commit.** Reports: `out/reports/PHASE-16B-E0-REPORT.md`,
-`out/reports/PHASE-16B-E1-REPORT.md` and
-`out/reports/PHASE-16B-E2-REPORT.md`.
+Session `S-2026-11-11-002` (open). **E0, E1, E2 and E3 done; E4..E7
+pending. No commit.** Reports: `out/reports/PHASE-16B-E0-REPORT.md`,
+`out/reports/PHASE-16B-E1-REPORT.md`,
+`out/reports/PHASE-16B-E2-REPORT.md` and
+`out/reports/PHASE-16B-E3-REPORT.md`.
+
+E3 (2026-11-12):
+
+- `GeometryChannel` (D-0058) keys path points with a fixed point count;
+  closure, cap and join are shared. `CoreError::GeometryTopologyMismatch`
+  refuses a resize, and `sample` interpolates positions/handles with the
+  arriving key's ease. `ContentField::Geometry` is a normal content channel;
+  `key("geometry", t, points)` and `m.geometry(part, t, points, ease=...)`
+  key it.
+- `motioner_rig::geometry` is the driver IR: `path_builder` with
+  `move_to`/`line_to`/`cubic_to`/`arc_to`/`close`, plus `ellipse_arc`, `arc`,
+  `rounded_rect` and `mirror`. `arc_to` is the SVG endpoint-to-centre arc
+  and emits cubics; `sqrt` joined the scalar expression subset so the HTML
+  lid formula is expressible. `Driver.geometries` + `PartOutput.geometry` +
+  `PartBase.geometry` carry and validate it.
+- The DSL bakes geometry drivers into ordinary `ContentField::Geometry`
+  keys, with a hold key before a gap. `RigEdit::GeometryKey/GeometryUnkey`
+  plan `m.geometry(...)` calls; the editor verifies the compiled channel
+  directly with a 1e-6 source round-trip tolerance and one undo step. The
+  corpus now has 16 cases (`rig_geometry_key`).
+- Golden: `crates/motioner_rig/tests/geometry.rs` reproduces the HTML lid
+  formula (`d = -r + 2*r*lt`, `h = sqrt(r*r-d*d)`, `a/b` and the arc flags)
+  point-for-point at `lt=0.5`; `arc_to` is also exercised through the DSL.
+- Microbench (`geometry_bench`): bake 121 driven frames **0.056 ms
+  (0.5 us/frame)**, sampling 121 keys **14.7 us (0.12 us/frame)**.
+- Gate green; C: free 20.1 GB after the release bench (debug purged once).
 
 E2 (2026-11-12):
 
@@ -215,6 +242,7 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 `S-2026-11-11-002` (prompt 16b, open): E0 review fixes, encoding gate,
 non-scaling stroke, measurements; E1 resolver and manifest; E2 rig
-write-through, manifest v2, 15-case corpus and eight rig tools. Gate green;
-no commit. Next: E3 keyable geometry.
+write-through, manifest v2, 15-case corpus and eight rig tools; E3 keyable
+geometry channel, geometry driver IR, arc-to, write-through and lid golden.
+Gate green; no commit. Next: E4 deformers and constraints.
 
