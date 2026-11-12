@@ -82,3 +82,23 @@ the only bridge.
 ## Documentation status
 
 partial — last verified: 2026-11-04
+
+
+## Prompt 16 additions (imports and rigs)
+
+- `use()` is a builtin whose module execution and namespace values live in
+  the interpreter; assets are dispatched by extension in the DSL and only
+  SVG/modules call the injected `AssetResolver` (D-0051):
+  `crates/motioner_dsl/src/assets.rs:1-59`, `crates/motioner_dsl/src/interpreter.rs:1070-1160`.
+- Symbols, rig builders, properties, drivers, poses, clips, state machines
+  and the bake are a child module of the scene so they share the document
+  without widening it: `crates/motioner_dsl/src/scene/rigs.rs:1-120`.
+- `rig_prop` and `rig_property_key` declare and key properties
+  (`crates/motioner_dsl/src/scene/rigs.rs:492-680`); drivers are compiled to
+  `motioner_rig::Expr` at registration
+  (`crates/motioner_dsl/src/scene/rigs.rs:1420-1600`).
+- `bake_rigs` runs `motioner_rig::bake` for every rig at `into_document`
+  and writes transform/opacity/stroke keys, inserting a hold key before a
+  change so rest gaps never interpolate
+  (`crates/motioner_dsl/src/scene/rigs.rs:1239-1380`).
+

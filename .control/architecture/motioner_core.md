@@ -95,3 +95,11 @@ partial — last verified: 2026-11-01
   `fade_in` and `fade_out` (`crates/motioner_core/src/node.rs:97`); only
   gain and pan are keyable. Audio nodes carry no draw content, so the
   evaluator skips them.
+
+
+## Prompt 16 additions (symbols)
+
+- `symbol::Symbol` / `SymbolPart` / `SymbolShape` / `SymbolPath` are the
+  importer-to-DSL contract: addressable ids, pivots, opacity, clip geometry
+  and path paint, pure data with no I/O
+  (`crates/motioner_core/src/symbol.rs:20-110`).
