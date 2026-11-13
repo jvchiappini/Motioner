@@ -244,6 +244,7 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 non-scaling stroke, measurements; E1 resolver and manifest; E2 rig
 write-through, manifest v2, 15-case corpus and eight rig tools; E3 keyable
 geometry channel, geometry driver IR, arc-to, write-through and lid golden;
-E4 lattice/skin/blend, ordered constraints, fixed arc segments.
-Gate green; no commit. Next: E5 textured mesh in FerrousEngine + images/video.
+E4 lattice/skin/blend, ordered constraints, fixed arc segments; E5a bone
+constraints before skinning. Gate green; no commit. Next: E5b textured mesh
+in FerrousEngine + images/video.
 

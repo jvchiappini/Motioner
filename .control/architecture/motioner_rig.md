@@ -53,7 +53,8 @@ drivers, constraints).
 - D-0055 - this crate, dependencies and the headless contract.
 - D-0058 - keyable geometry channel and the geometry driver IR.
 - D-0059 - native lattice, skinning and blend-shape deformers.
-- D-0060 - the ordered constraint stage, including spring state.
+- D-0060 - the ordered constraint stage, including spring state and the
+  E5 bone-constraint addendum.
 
 ## Boundaries
 
@@ -62,7 +63,8 @@ Must not depend on the DSL, I/O, renderer, UI, tools or the application.
 
 ## Known gaps
 
-Bones/skinning/mesh/blend shapes/IK, blend states 1D/2D and the
-wasm/binary player format are backlogged (T-RIG-0013, T-RIG-0015).
+Textured image/video mesh, blend states 1D/2D and the wasm/binary player
+format are backlogged (T-RIG-0013, T-RIG-0015). Bone constraints run before
+skinning via BoneConstraint and the one: prefix.
 
 
