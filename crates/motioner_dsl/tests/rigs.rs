@@ -261,6 +261,33 @@ m.spring(\"body\", target=\"target\")
 }
 
 #[test]
+fn skin_declared_before_a_late_bone_still_bakes() {
+    let source = "\
+comp(name=\"Late\", width=200, height=200, fps=60, duration=1.0)
+art = use(\"mascot.svg\")
+m = rig(art)
+m.bone(\"root\", at=(0, 0), length=10.0)
+m.skin(\"body\")
+m.bone(\"late\", parent=\"root\", at=(10, 0), length=10.0)
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("a bone declared after skin still bakes");
+    let body = document
+        .nodes()
+        .find(|node| node.name() == Some("body"))
+        .expect("body");
+    let motioner_core::NodeContent::Path { geometry, .. } = body.content() else {
+        panic!("body is a path");
+    };
+    assert_eq!(geometry.points().len(), 3);
+}
+
+#[test]
 fn a_rig_property_and_a_driver_bake_into_keys() {
     let source = "\
 comp(name=\"Rig\", width=200, height=200, fps=60, duration=2.0)

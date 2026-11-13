@@ -159,7 +159,9 @@ Deformers run after drivers:
 - `r.bone(name, parent=None, at=(x, y), rotation=0, length=0,
   rotation_prop=None, position_prop=None)` plus `r.skin(part, weights=None)`.
   Omit weights for deterministic distance weights, or pass one
-  `(bone, weight)` list per point.
+  `(bone, weight)` list per point. A skin stores indices into `r.bones`, so
+  bind pose and hierarchy always come from the rig; declaring a bone after
+  `r.skin` cannot leave a stale copy.
 - `r.blend(part, points=..., weight="property", fit=True)` blends a target
   point list; `fit=True` resamples it to the part topology.
 

@@ -1551,7 +1551,7 @@ impl Scene {
                 Some(parsed)
             }
         };
-        let bones = self.rigs[index].rig.bones.clone();
+        let bones: Vec<usize> = (0..self.rigs[index].rig.bones.len()).collect();
         self.rigs[index]
             .rig
             .deformers

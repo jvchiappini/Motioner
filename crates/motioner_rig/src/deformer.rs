@@ -56,8 +56,9 @@ pub struct Bone {
 pub struct Skin {
     /// Part index.
     pub part: usize,
-    /// Bone hierarchy.
-    pub bones: Vec<Bone>,
+    /// Indices into [`Rig::bones`](crate::Rig::bones). Bind pose and hierarchy
+    /// always come from the rig, never from a copy.
+    pub bones: Vec<usize>,
     /// Per-point `(bone, weight)` pairs. `None` uses distance weights.
     pub weights: Option<Vec<Vec<(usize, f64)>>>,
 }
@@ -115,6 +116,7 @@ impl Deformer {
         part: &mut PartOutput,
         base: &PartBase,
         values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
         bones: Option<&[BonePose]>,
     ) -> Result<(), RigError> {
         let source = part
@@ -127,7 +129,7 @@ impl Deformer {
             })?;
         let deformed = match self {
             Self::Lattice(lattice) => lattice.apply(&source, values)?,
-            Self::Skin(skin) => skin.apply(&source, values, bones)?,
+            Self::Skin(skin) => skin.apply(&source, values, rig_bones, bones)?,
             Self::BlendShapes(shapes) => shapes.apply(&source, values)?,
         };
         part.geometry = Some(deformed);
@@ -221,8 +223,12 @@ impl Skin {
         &self,
         geometry: &PathGeometry,
         values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
         bones: Option<&[BonePose]>,
     ) -> Result<PathGeometry, RigError> {
+        if self.bones.is_empty() {
+            return Err(RigError::message("skin has no bones"));
+        }
         if self.bones.len() > MAX_BONES {
             return Err(RigError::message(format!(
                 "skin has more than {MAX_BONES} bones"
@@ -233,31 +239,36 @@ impl Skin {
                 "skin touches more than {MAX_DEFORM_POINTS} points"
             )));
         }
-        for (index, bone) in self.bones.iter().enumerate() {
-            if bone.parent.is_some_and(|parent| parent >= index) {
+        for (position, &bone) in self.bones.iter().enumerate() {
+            if bone >= rig_bones.len() {
                 return Err(RigError::message(format!(
-                    "bone '{}' has a parent after it",
-                    bone.name
+                    "skin bone index {bone} does not exist in the rig"
                 )));
+            }
+            if self.bones[..position].contains(&bone) {
+                return Err(RigError::message(format!("skin repeats bone index {bone}")));
             }
         }
         let owned;
         let bone_poses_ref = if let Some(poses) = bones {
             poses
         } else {
-            owned = bone_poses(&self.bones, values);
+            owned = bone_poses(rig_bones, values);
             &owned
         };
-        let mut bind = Vec::with_capacity(self.bones.len());
-        let mut posed = Vec::with_capacity(self.bones.len());
-        for (index, _) in self.bones.iter().enumerate() {
-            bind.push(bone_world(&self.bones, index, None, true)?);
-            posed.push(posed_world(&self.bones, bone_poses_ref, index)?);
+        if bone_poses_ref.len() != rig_bones.len() {
+            return Err(RigError::message("bone pose count does not match the rig"));
+        }
+        let mut bind = Vec::with_capacity(rig_bones.len());
+        let mut posed = Vec::with_capacity(rig_bones.len());
+        for index in 0..rig_bones.len() {
+            bind.push(bone_world(rig_bones, index, None, true)?);
+            posed.push(posed_world(rig_bones, bone_poses_ref, index)?);
         }
         let weights = self
             .weights
             .clone()
-            .unwrap_or_else(|| auto_weights(self, &bind, geometry));
+            .unwrap_or_else(|| auto_weights(self, rig_bones, &bind, geometry));
         if weights.len() != geometry.points().len() {
             return Err(RigError::message(format!(
                 "skin weights cover {} points but the path has {}",
@@ -272,7 +283,7 @@ impl Skin {
             let mut outgoing = Vec2::ZERO;
             let mut total = 0.0;
             for &(bone, weight) in weights {
-                if bone >= self.bones.len() || !weight.is_finite() || weight < 0.0 {
+                if bone >= rig_bones.len() || !weight.is_finite() || weight < 0.0 {
                     return Err(RigError::message("skin has an invalid weight"));
                 }
                 if weight == 0.0 {
@@ -407,6 +418,7 @@ fn rotate(value: Vec2, degrees: f64) -> Vec2 {
 
 fn auto_weights(
     skin: &Skin,
+    rig_bones: &[Bone],
     bind: &[BoneWorld],
     geometry: &PathGeometry,
 ) -> Vec<Vec<(usize, f64)>> {
@@ -414,13 +426,14 @@ fn auto_weights(
         .points()
         .iter()
         .map(|point| {
-            let mut weights: Vec<(usize, f64)> = bind
+            let mut weights: Vec<(usize, f64)> = skin
+                .bones
                 .iter()
-                .enumerate()
-                .map(|(index, bone)| {
+                .map(|&index| {
+                    let bone = &bind[index];
                     let start = bone.position;
                     let end =
-                        start + rotate(Vec2::new(skin.bones[index].length, 0.0), bone.rotation);
+                        start + rotate(Vec2::new(rig_bones[index].length, 0.0), bone.rotation);
                     let distance = distance_to_segment(point.position, start, end);
                     (index, 1.0 / (distance + 1.0).powi(2))
                 })

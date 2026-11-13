@@ -86,7 +86,7 @@ fn skin_rotates_points_around_a_bone() {
     });
     rig.deformers.push(Deformer::Skin(Skin {
         part: 0,
-        bones: rig.bones.clone(),
+        bones: (0..rig.bones.len()).collect(),
         weights: None,
     }));
     let frame = bake(&rig, 0.0, 0.0).unwrap();
@@ -94,6 +94,54 @@ fn skin_rotates_points_around_a_bone() {
     assert!(geometry.points()[0].position.length() < 1e-6);
     assert!((geometry.points()[1].position.x).abs() < 1e-6);
     assert!((geometry.points()[1].position.y - 10.0).abs() < 1e-6);
+}
+
+#[test]
+fn skin_references_rig_bones_after_a_late_declaration() {
+    let mut rig = Rig::new("late-bone");
+    rig.add_part(part(
+        "arm",
+        Vec2::ZERO,
+        open_path(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)]),
+    ));
+    rig.bones.push(Bone {
+        name: "root".to_owned(),
+        parent: None,
+        bind_position: Vec2::ZERO,
+        bind_rotation: 0.0,
+        length: 10.0,
+        rotation_property: None,
+        position_property: None,
+    });
+    rig.deformers.push(Deformer::Skin(Skin {
+        part: 0,
+        bones: vec![0],
+        weights: None,
+    }));
+    rig.bones.push(Bone {
+        name: "late".to_owned(),
+        parent: Some(0),
+        bind_position: Vec2::new(10.0, 0.0),
+        bind_rotation: 0.0,
+        length: 10.0,
+        rotation_property: None,
+        position_property: None,
+    });
+    // The skin must read this property from the rig, not from a bone copy
+    // taken when `m.skin` ran.
+    rig.add_property(PropertyDef::number("turn", 0.0, -180.0, 180.0));
+    rig.bones[0].rotation_property = Some(0);
+    rig.channels[0]
+        .keys
+        .push(Key::new(0.0, PropValue::Number(90.0), Ease::Linear));
+    let frame = bake(&rig, 0.0, 0.0).unwrap();
+    let geometry = frame[0].part(0).unwrap().geometry.as_ref().unwrap();
+    assert_close(
+        geometry.points()[1].position,
+        Vec2::new(0.0, 10.0),
+        1e-7,
+        "skin follows the rig bone after a late declaration",
+    );
 }
 
 #[test]
@@ -353,7 +401,7 @@ fn bone_ik_runs_before_skinning() {
     });
     rig.deformers.push(Deformer::Skin(Skin {
         part: 0,
-        bones: rig.bones.clone(),
+        bones: (0..rig.bones.len()).collect(),
         weights: None,
     }));
     rig.bone_constraints.push(BoneConstraint::TwoBoneIk {
@@ -365,7 +413,75 @@ fn bone_ik_runs_before_skinning() {
     });
     let frame = bake(&rig, 0.0, 0.0).unwrap();
     let geometry = frame[0].part(0).unwrap().geometry.as_ref().unwrap();
-    assert!(geometry.points().iter().any(|point| point.position.y > 0.5));
+    let target = Vec2::new(20.0, 15.0);
+    let along = (20.0_f64 * 20.0 - 20.0 * 20.0 + 25.0 * 25.0) / (2.0 * 25.0);
+    let height = (20.0_f64 * 20.0 - along * along).sqrt();
+    let direction = Vec2::new(0.8, 0.6);
+    let perpendicular = Vec2::new(-direction.y, direction.x);
+    let elbow = direction * along + perpendicular * height;
+    let upper_angle = elbow.y.atan2(elbow.x);
+    let lower_angle = (target.y - elbow.y).atan2(target.x - elbow.x);
+    let tip = elbow + rotate(Vec2::new(20.0, 0.0), lower_angle);
+    assert_close(tip, target, 1e-6, "tip reaches target");
+    assert_close(
+        geometry.points()[2].position,
+        elbow,
+        1e-6,
+        "elbow follows the cosine law",
+    );
+    let bind = [(Vec2::ZERO, 0.0), (Vec2::new(20.0, 0.0), 0.0)];
+    let posed = [(Vec2::ZERO, upper_angle), (elbow, lower_angle)];
+    for (index, point) in geometry.points().iter().enumerate() {
+        let source = Vec2::new([0.0, 10.0, 20.0, 30.0][index], 0.0);
+        let mut weights: Vec<(usize, f64)> = (0..2)
+            .map(|bone| {
+                let (start, _) = bind[bone];
+                let end = start + Vec2::new(20.0, 0.0);
+                let distance = distance_to_segment(source, start, end);
+                (bone, 1.0 / (distance + 1.0).powi(2))
+            })
+            .collect();
+        weights.sort_by(|a, b| b.1.total_cmp(&a.1));
+        weights.truncate(2);
+        let total: f64 = weights.iter().map(|(_, weight)| weight).sum();
+        let expected = weights.iter().fold(Vec2::ZERO, |sum, (bone, weight)| {
+            let local = source - bind[*bone].0;
+            let mapped = rotate(local, posed[*bone].1 - bind[*bone].1) + posed[*bone].0;
+            sum + mapped * (*weight / total)
+        });
+        assert_close(
+            point.position,
+            expected,
+            1e-6,
+            &format!("skinned point {index} matches both bones"),
+        );
+    }
+}
+
+fn rotate(value: Vec2, radians: f64) -> Vec2 {
+    let (sin, cos) = radians.sin_cos();
+    Vec2::new(value.x * cos - value.y * sin, value.x * sin + value.y * cos)
+}
+
+fn distance_to_segment(point: Vec2, start: Vec2, end: Vec2) -> f64 {
+    let delta = end - start;
+    let length = delta.length_squared();
+    if length <= 1e-12 {
+        return (point - start).length();
+    }
+    let t = ((point - start).x * delta.x + (point - start).y * delta.y) / length;
+    (point - (start + delta * t.clamp(0.0, 1.0))).length()
+}
+
+fn assert_close(actual: Vec2, expected: Vec2, tolerance: f64, what: &str) {
+    assert!(
+        (actual.x - expected.x).abs() <= tolerance && (actual.y - expected.y).abs() <= tolerance,
+        "{what}: expected ({}, {}), got ({}, {})",
+        expected.x,
+        expected.y,
+        actual.x,
+        actual.y
+    );
 }
 
 #[test]
@@ -396,7 +512,7 @@ fn bone_limit_and_copy_edit_poses_before_skin() {
     });
     rig.deformers.push(Deformer::Skin(Skin {
         part: 0,
-        bones: rig.bones.clone(),
+        bones: (0..rig.bones.len()).collect(),
         weights: None,
     }));
     rig.bone_constraints.push(BoneConstraint::Copy {

@@ -185,7 +185,7 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
                     rig.name
                 )));
             };
-            deformer.apply(part, base, &values, Some(&poses))?;
+            deformer.apply(part, base, &values, &rig.bones, Some(&poses))?;
         }
         constraint::apply(&constraints, &rig.parts, &mut parts, &values, &mut springs)?;
         frames.push(FrameOutput {
