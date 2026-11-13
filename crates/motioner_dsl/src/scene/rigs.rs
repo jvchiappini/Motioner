@@ -1293,6 +1293,19 @@ impl Scene {
         let property = bound.string_or(1, "")?;
         let radius = bound.number_or(2, 6.0)?;
         let index = self.rig_index(node)?;
+        if let Some(bone) = part.strip_prefix("bone:") {
+            let bone = self.rig_bone_index(index, bone, "aim")?;
+            let property = self.rig_vec2_property(index, &property, "aim")?;
+            self.rigs[index]
+                .rig
+                .bone_constraints
+                .push(rig_rt::BoneConstraint::Aim {
+                    bone,
+                    property,
+                    radius,
+                });
+            return Ok(Value::None);
+        }
         let part = self.rigs[index]
             .rig
             .part(&part)
@@ -1625,8 +1638,8 @@ impl Scene {
     pub(crate) fn rig_ik(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
         let bound = bind("ik", &["upper", "lower", "target", "pole", "tip"], 3, args)?;
         let index = self.rig_index(node)?;
-        let upper = self.rig_part_index(index, &bound.string_or(0, "")?, "ik")?;
-        let lower = self.rig_part_index(index, &bound.string_or(1, "")?, "ik")?;
+        let upper_name = bound.string_or(0, "")?;
+        let lower_name = bound.string_or(1, "")?;
         let target = self.rig_vec2_property(index, &bound.string_or(2, "")?, "ik")?;
         let pole = match bound.get(3) {
             None | Some(Value::None) => None,
@@ -1639,16 +1652,40 @@ impl Scene {
             }
         };
         let tip_length = bound.number_or(4, 30.0)?;
-        self.rigs[index]
-            .rig
-            .constraints
-            .push(rig_rt::Constraint::TwoBoneIk {
-                upper,
-                lower,
-                target,
-                pole,
-                tip_length,
-            });
+        if let (Some(upper), Some(lower)) = (
+            upper_name.strip_prefix("bone:"),
+            lower_name.strip_prefix("bone:"),
+        ) {
+            let upper = self.rig_bone_index(index, upper, "ik")?;
+            let lower = self.rig_bone_index(index, lower, "ik")?;
+            self.rigs[index]
+                .rig
+                .bone_constraints
+                .push(rig_rt::BoneConstraint::TwoBoneIk {
+                    upper,
+                    lower,
+                    target,
+                    pole,
+                    tip_length,
+                });
+        } else if upper_name.starts_with("bone:") || lower_name.starts_with("bone:") {
+            return Err(HostError::value_error(
+                "ik(): upper and lower must both be parts or both be bones",
+            ));
+        } else {
+            let upper = self.rig_part_index(index, &upper_name, "ik")?;
+            let lower = self.rig_part_index(index, &lower_name, "ik")?;
+            self.rigs[index]
+                .rig
+                .constraints
+                .push(rig_rt::Constraint::TwoBoneIk {
+                    upper,
+                    lower,
+                    target,
+                    pole,
+                    tip_length,
+                });
+        }
         Ok(Value::None)
     }
 
@@ -1677,26 +1714,69 @@ impl Scene {
         let params = ["part", "source", "position", "rotation", "scale"];
         let bound = bind("copy", &params, 2, args)?;
         let index = self.rig_index(node)?;
-        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "copy")?;
-        let source = self.rig_part_index(index, &bound.string_or(1, "")?, "copy")?;
-        self.rigs[index]
-            .rig
-            .constraints
-            .push(rig_rt::Constraint::Copy {
-                part,
-                source,
-                position: bool_arg(&bound, 2, true)?,
-                rotation: bool_arg(&bound, 3, true)?,
-                scale: bool_arg(&bound, 4, true)?,
-            });
+        let part_name = bound.string_or(0, "")?;
+        let source_name = bound.string_or(1, "")?;
+        let position = bool_arg(&bound, 2, true)?;
+        let rotation = bool_arg(&bound, 3, true)?;
+        let scale = bool_arg(&bound, 4, true)?;
+        if let (Some(part), Some(source)) = (
+            part_name.strip_prefix("bone:"),
+            source_name.strip_prefix("bone:"),
+        ) {
+            let bone = self.rig_bone_index(index, part, "copy")?;
+            let source = self.rig_bone_index(index, source, "copy")?;
+            self.rigs[index]
+                .rig
+                .bone_constraints
+                .push(rig_rt::BoneConstraint::Copy {
+                    bone,
+                    source,
+                    position,
+                    rotation,
+                });
+        } else if part_name.starts_with("bone:") || source_name.starts_with("bone:") {
+            return Err(HostError::value_error(
+                "copy(): part and source must both be parts or both be bones",
+            ));
+        } else {
+            let part = self.rig_part_index(index, &part_name, "copy")?;
+            let source = self.rig_part_index(index, &source_name, "copy")?;
+            self.rigs[index]
+                .rig
+                .constraints
+                .push(rig_rt::Constraint::Copy {
+                    part,
+                    source,
+                    position,
+                    rotation,
+                    scale,
+                });
+        }
         Ok(Value::None)
     }
 
     /// `r.limit("part", min=(-5, -5), max=(5, 5), rotation=(-30, 30))`.
     pub(crate) fn rig_limit(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
-        let bound = bind("limit", &["part", "min", "max", "rotation"], 3, args)?;
+        let bound = bind("limit", &["part", "min", "max", "rotation"], 1, args)?;
         let index = self.rig_index(node)?;
-        let part = self.rig_part_index(index, &bound.string_or(0, "")?, "limit")?;
+        let part_name = bound.string_or(0, "")?;
+        if let Some(bone) = part_name.strip_prefix("bone:") {
+            let bone = self.rig_bone_index(index, bone, "limit")?;
+            let rotation = bound
+                .get(3)
+                .and_then(as_vec2)
+                .map_or((-180.0, 180.0), |pair| (pair.x, pair.y));
+            self.rigs[index]
+                .rig
+                .bone_constraints
+                .push(rig_rt::BoneConstraint::Limit {
+                    bone,
+                    rotation_min: rotation.0,
+                    rotation_max: rotation.1,
+                });
+            return Ok(Value::None);
+        }
+        let part = self.rig_part_index(index, &part_name, "limit")?;
         let min = bound
             .get(1)
             .and_then(as_vec2)
@@ -1767,6 +1847,15 @@ impl Scene {
             .rig
             .part(name)
             .ok_or_else(|| HostError::value_error(format!("{caller}(): no part {name:?}")))
+    }
+
+    fn rig_bone_index(&self, index: usize, name: &str, caller: &str) -> HostResult<usize> {
+        self.rigs[index]
+            .rig
+            .bones
+            .iter()
+            .position(|bone| bone.name == name)
+            .ok_or_else(|| HostError::value_error(format!("{caller}(): no bone {name:?}")))
     }
 
     fn rig_vec2_property(&self, index: usize, name: &str, caller: &str) -> HostResult<usize> {

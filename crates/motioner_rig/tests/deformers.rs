@@ -2,9 +2,9 @@
 
 use motioner_core::{Ease, LineCap, LineJoin, PathGeometry, PathPoint, Vec2};
 use motioner_rig::{
-    bake, BlendShape, BlendShapes, Bone, Constraint, Deformer, Driver, Expr, GeometryCommand,
-    GeometryExpr, GeometryWrite, Key, Lattice, PartBase, PropKind, PropValue, PropertyDef, Rig,
-    Skin,
+    bake, BlendShape, BlendShapes, Bone, BoneConstraint, Constraint, Deformer, Driver, Expr,
+    GeometryCommand, GeometryExpr, GeometryWrite, Key, Lattice, PartBase, PropKind, PropValue,
+    PropertyDef, Rig, Skin,
 };
 
 fn open_path(points: &[Vec2]) -> PathGeometry {
@@ -312,4 +312,105 @@ fn copy_constraint_writes_offsets() {
     });
     let frame = bake(&rig, 0.0, 0.0).unwrap();
     assert!((frame[0].part(1).unwrap().position.x - 3.0).abs() < 1e-9);
+}
+
+#[test]
+fn bone_ik_runs_before_skinning() {
+    let mut rig = Rig::new("bone-ik");
+    rig.add_part(part(
+        "arm",
+        Vec2::ZERO,
+        open_path(&[
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(20.0, 0.0),
+            Vec2::new(30.0, 0.0),
+        ]),
+    ));
+    rig.add_property(vec_prop("target"));
+    rig.channels[0].keys.push(Key::new(
+        0.0,
+        PropValue::Vector(Vec2::new(20.0, 15.0)),
+        Ease::Linear,
+    ));
+    rig.bones.push(Bone {
+        name: "upper".to_owned(),
+        parent: None,
+        bind_position: Vec2::ZERO,
+        bind_rotation: 0.0,
+        length: 20.0,
+        rotation_property: None,
+        position_property: None,
+    });
+    rig.bones.push(Bone {
+        name: "lower".to_owned(),
+        parent: Some(0),
+        bind_position: Vec2::new(20.0, 0.0),
+        bind_rotation: 0.0,
+        length: 20.0,
+        rotation_property: None,
+        position_property: None,
+    });
+    rig.deformers.push(Deformer::Skin(Skin {
+        part: 0,
+        bones: rig.bones.clone(),
+        weights: None,
+    }));
+    rig.bone_constraints.push(BoneConstraint::TwoBoneIk {
+        upper: 0,
+        lower: 1,
+        target: 0,
+        pole: None,
+        tip_length: 20.0,
+    });
+    let frame = bake(&rig, 0.0, 0.0).unwrap();
+    let geometry = frame[0].part(0).unwrap().geometry.as_ref().unwrap();
+    assert!(geometry.points().iter().any(|point| point.position.y > 0.5));
+}
+
+#[test]
+fn bone_limit_and_copy_edit_poses_before_skin() {
+    let mut rig = Rig::new("bone-limits");
+    rig.add_part(part(
+        "arm",
+        Vec2::ZERO,
+        open_path(&[Vec2::ZERO, Vec2::new(1.0, 0.0)]),
+    ));
+    rig.bones.push(Bone {
+        name: "a".to_owned(),
+        parent: None,
+        bind_position: Vec2::ZERO,
+        bind_rotation: 0.0,
+        length: 1.0,
+        rotation_property: None,
+        position_property: None,
+    });
+    rig.bones.push(Bone {
+        name: "b".to_owned(),
+        parent: None,
+        bind_position: Vec2::ZERO,
+        bind_rotation: 0.0,
+        length: 1.0,
+        rotation_property: None,
+        position_property: None,
+    });
+    rig.deformers.push(Deformer::Skin(Skin {
+        part: 0,
+        bones: rig.bones.clone(),
+        weights: None,
+    }));
+    rig.bone_constraints.push(BoneConstraint::Copy {
+        bone: 1,
+        source: 0,
+        position: false,
+        rotation: true,
+    });
+    rig.bone_constraints.push(BoneConstraint::Limit {
+        bone: 1,
+        rotation_min: -10.0,
+        rotation_max: 10.0,
+    });
+    let first = bake(&rig, 0.0, 0.0).unwrap();
+    let second = bake(&rig, 0.0, 0.0).unwrap();
+    assert_eq!(first, second);
 }

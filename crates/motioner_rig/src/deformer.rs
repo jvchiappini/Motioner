@@ -115,6 +115,7 @@ impl Deformer {
         part: &mut PartOutput,
         base: &PartBase,
         values: &BTreeMap<usize, PropValue>,
+        bones: Option<&[BonePose]>,
     ) -> Result<(), RigError> {
         let source = part
             .geometry
@@ -126,7 +127,7 @@ impl Deformer {
             })?;
         let deformed = match self {
             Self::Lattice(lattice) => lattice.apply(&source, values)?,
-            Self::Skin(skin) => skin.apply(&source, values)?,
+            Self::Skin(skin) => skin.apply(&source, values, bones)?,
             Self::BlendShapes(shapes) => shapes.apply(&source, values)?,
         };
         part.geometry = Some(deformed);
@@ -220,6 +221,7 @@ impl Skin {
         &self,
         geometry: &PathGeometry,
         values: &BTreeMap<usize, PropValue>,
+        bones: Option<&[BonePose]>,
     ) -> Result<PathGeometry, RigError> {
         if self.bones.len() > MAX_BONES {
             return Err(RigError::message(format!(
@@ -239,11 +241,18 @@ impl Skin {
                 )));
             }
         }
+        let owned;
+        let bone_poses_ref = if let Some(poses) = bones {
+            poses
+        } else {
+            owned = bone_poses(&self.bones, values);
+            &owned
+        };
         let mut bind = Vec::with_capacity(self.bones.len());
         let mut posed = Vec::with_capacity(self.bones.len());
         for (index, _) in self.bones.iter().enumerate() {
             bind.push(bone_world(&self.bones, index, None, true)?);
-            posed.push(bone_world(&self.bones, index, Some(values), false)?);
+            posed.push(posed_world(&self.bones, bone_poses_ref, index)?);
         }
         let weights = self
             .weights
@@ -290,6 +299,55 @@ impl Skin {
         }
         PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
             .map_err(|error| RigError::message(error.to_string()))
+    }
+}
+
+/// A bone's local transform after properties and bone constraints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BonePose {
+    /// Local position.
+    pub position: Vec2,
+    /// Local rotation in degrees.
+    pub rotation: f64,
+}
+
+/// Builds the default local bone poses from bind values and properties.
+#[must_use]
+pub fn bone_poses(bones: &[Bone], values: &BTreeMap<usize, PropValue>) -> Vec<BonePose> {
+    bones
+        .iter()
+        .map(|bone| BonePose {
+            position: bone.bind_position
+                + bone
+                    .position_property
+                    .and_then(|property| values.get(&property))
+                    .and_then(PropValue::vector)
+                    .unwrap_or(Vec2::ZERO),
+            rotation: bone.bind_rotation
+                + bone
+                    .rotation_property
+                    .and_then(|property| values.get(&property))
+                    .and_then(PropValue::number)
+                    .unwrap_or(0.0),
+        })
+        .collect()
+}
+
+fn posed_world(bones: &[Bone], poses: &[BonePose], index: usize) -> Result<BoneWorld, RigError> {
+    let Some(pose) = poses.get(index) else {
+        return Err(RigError::message(format!("bone {index} has no pose")));
+    };
+    if let Some(parent) = bones[index].parent {
+        let parent = posed_world(bones, poses, parent)?;
+        Ok(BoneWorld {
+            position: parent.position + rotate(pose.position, parent.rotation),
+            rotation: parent.rotation + pose.rotation,
+        })
+    } else {
+        Ok(BoneWorld {
+            position: pose.position,
+            rotation: pose.rotation,
+        })
     }
 }
 

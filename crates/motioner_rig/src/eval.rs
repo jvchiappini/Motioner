@@ -6,6 +6,7 @@ use std::fmt;
 use motioner_core::Vec2;
 
 use crate::constraint::{self, Constraint, SpringState};
+use crate::deformer::{bone_poses, BonePose};
 use crate::driver::{Driver, Field, MAX_WRITES};
 use crate::machine::{MachineEvent, Runner};
 use crate::{PropValue, Rig};
@@ -168,6 +169,8 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
                 rig.name
             )));
         }
+        let mut poses: Vec<BonePose> = bone_poses(&rig.bones, &values);
+        constraint::apply_bone_constraints(&rig.bone_constraints, &rig.bones, &mut poses, &values)?;
         for deformer in &rig.deformers {
             let index = deformer.part();
             let Some(part) = parts.get_mut(index) else {
@@ -182,7 +185,7 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
                     rig.name
                 )));
             };
-            deformer.apply(part, base, &values)?;
+            deformer.apply(part, base, &values, Some(&poses))?;
         }
         constraint::apply(&constraints, &rig.parts, &mut parts, &values, &mut springs)?;
         frames.push(FrameOutput {

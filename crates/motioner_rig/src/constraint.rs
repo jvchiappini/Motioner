@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use motioner_core::{PathGeometry, Vec2};
 
+use crate::deformer::{Bone, BonePose};
 use crate::eval::RigError;
 use crate::{PartBase, PartOutput, PropValue};
 
@@ -102,6 +103,53 @@ pub enum Constraint {
     },
 }
 
+/// A constraint that runs on bones before skinning (D-0060 addendum).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BoneConstraint {
+    /// Moves a bone by a Vec2 property scaled by `radius`.
+    Aim {
+        /// Bone index.
+        bone: usize,
+        /// Vec2 property.
+        property: usize,
+        /// Maximum offset in pixels.
+        radius: f64,
+    },
+    /// Two-bone IK on a bone chain.
+    TwoBoneIk {
+        /// Upper bone.
+        upper: usize,
+        /// Lower bone.
+        lower: usize,
+        /// Vec2 target property.
+        target: usize,
+        /// Optional Vec2 pole property.
+        pole: Option<usize>,
+        /// Length from the lower joint to the tip.
+        tip_length: f64,
+    },
+    /// Copies local bone transform values.
+    Copy {
+        /// Bone written.
+        bone: usize,
+        /// Source bone.
+        source: usize,
+        /// Copy the local position.
+        position: bool,
+        /// Copy the local rotation.
+        rotation: bool,
+    },
+    /// Clamps a bone's rotation offset from its bind rotation.
+    Limit {
+        /// Bone index.
+        bone: usize,
+        /// Minimum rotation offset in degrees.
+        rotation_min: f64,
+        /// Maximum rotation offset in degrees.
+        rotation_max: f64,
+    },
+}
+
 /// Mutable spring state, one entry per spring constraint.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SpringState {
@@ -111,6 +159,181 @@ pub struct SpringState {
     pub velocity: Vec2,
     /// Whether the first frame initialised the state.
     pub initialized: bool,
+}
+
+/// Applies bone constraints in order, before skinning.
+///
+/// # Errors
+///
+/// Returns [`RigError`] for a missing bone, a missing pose, an invalid target
+/// or a bad pole.
+pub fn apply_bone_constraints(
+    constraints: &[BoneConstraint],
+    bones: &[Bone],
+    poses: &mut [BonePose],
+    values: &BTreeMap<usize, PropValue>,
+) -> Result<(), RigError> {
+    if bones.len() != poses.len() {
+        return Err(RigError::message("bone pose count does not match the rig"));
+    }
+    for constraint in constraints {
+        match constraint {
+            BoneConstraint::Aim {
+                bone,
+                property,
+                radius,
+            } => {
+                let Some(pose) = poses.get_mut(*bone) else {
+                    return Err(RigError::message(format!(
+                        "bone aim: bone {bone} does not exist"
+                    )));
+                };
+                if let Some(value) = values.get(property).and_then(PropValue::vector) {
+                    pose.position = pose.position + value * *radius;
+                }
+            }
+            BoneConstraint::TwoBoneIk {
+                upper,
+                lower,
+                target,
+                pole,
+                tip_length,
+            } => {
+                bone_ik(
+                    bones,
+                    poses,
+                    *upper,
+                    *lower,
+                    *target,
+                    *pole,
+                    *tip_length,
+                    values,
+                )?;
+            }
+            BoneConstraint::Copy {
+                bone,
+                source,
+                position,
+                rotation,
+            } => {
+                let Some(source_pose) = poses.get(*source).copied() else {
+                    return Err(RigError::message(format!(
+                        "bone copy: source {source} does not exist"
+                    )));
+                };
+                let Some(pose) = poses.get_mut(*bone) else {
+                    return Err(RigError::message(format!(
+                        "bone copy: bone {bone} does not exist"
+                    )));
+                };
+                if *position {
+                    pose.position = source_pose.position;
+                }
+                if *rotation {
+                    pose.rotation = source_pose.rotation;
+                }
+            }
+            BoneConstraint::Limit {
+                bone,
+                rotation_min,
+                rotation_max,
+            } => {
+                let Some(source) = bones.get(*bone) else {
+                    return Err(RigError::message(format!(
+                        "bone limit: bone {bone} does not exist"
+                    )));
+                };
+                let bind = source.bind_rotation;
+                let Some(pose) = poses.get_mut(*bone) else {
+                    return Err(RigError::message(format!(
+                        "bone limit: bone {bone} does not exist"
+                    )));
+                };
+                let offset = (pose.rotation - bind).clamp(*rotation_min, *rotation_max);
+                pose.rotation = bind + offset;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bone_world(bones: &[Bone], poses: &[BonePose], index: usize) -> Result<(Vec2, f64), RigError> {
+    let Some(pose) = poses.get(index) else {
+        return Err(RigError::message(format!("bone {index} has no pose")));
+    };
+    if let Some(parent) = bones[index].parent {
+        let (position, rotation) = bone_world(bones, poses, parent)?;
+        Ok((
+            position + rotate(pose.position, rotation),
+            rotation + pose.rotation,
+        ))
+    } else {
+        Ok((pose.position, pose.rotation))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bone_ik(
+    bones: &[Bone],
+    poses: &mut [BonePose],
+    upper: usize,
+    lower: usize,
+    target: usize,
+    pole: Option<usize>,
+    tip_length: f64,
+    values: &BTreeMap<usize, PropValue>,
+) -> Result<(), RigError> {
+    let (root, _) = bone_world(bones, poses, upper)?;
+    let (mid, _) = bone_world(bones, poses, lower)?;
+    let Some(goal) = values.get(&target).and_then(PropValue::vector) else {
+        return Ok(());
+    };
+    let length1 = (mid - root).length();
+    let length2 = tip_length.max(0.0);
+    if !goal.is_finite() || length1 <= 1e-9 || length2 <= 1e-9 {
+        return Err(RigError::message("bone ik: invalid target or bone length"));
+    }
+    let delta = goal - root;
+    let distance = delta
+        .length()
+        .clamp((length1 - length2).abs(), length1 + length2);
+    let direction = if delta.length() <= 1e-9 {
+        Vec2::new(1.0, 0.0)
+    } else {
+        delta * (1.0 / delta.length())
+    };
+    if distance <= 1e-9 {
+        return Ok(());
+    }
+    let along = (length1 * length1 - length2 * length2 + distance * distance) / (2.0 * distance);
+    let height = (length1 * length1 - along * along).max(0.0).sqrt();
+    let perpendicular = Vec2::new(-direction.y, direction.x);
+    let sign = pole
+        .and_then(|property| values.get(&property).and_then(PropValue::vector))
+        .map_or(1.0, |pole| {
+            if (pole - root).x * perpendicular.x + (pole - root).y * perpendicular.y >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            }
+        });
+    let elbow = root + direction * along + perpendicular * (height * sign);
+    let delta_angle = angle_of(elbow - root) - angle_of(mid - root);
+    poses[upper].rotation += delta_angle.to_degrees();
+    let (mid, lower_rotation) = bone_world(bones, poses, lower)?;
+    let delta_angle =
+        angle_of(goal - mid) - angle_of(Vec2::new(1.0, 0.0)) - lower_rotation.to_radians();
+    poses[lower].rotation += delta_angle.to_degrees();
+    Ok(())
+}
+
+fn angle_of(vector: Vec2) -> f64 {
+    vector.y.atan2(vector.x)
+}
+
+fn rotate(value: Vec2, degrees: f64) -> Vec2 {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    Vec2::new(value.x * cos - value.y * sin, value.x * sin + value.y * cos)
 }
 
 /// Evaluates every constraint in order.
@@ -329,6 +552,9 @@ fn two_bone_ik(
     } else {
         delta * (1.0 / delta.length())
     };
+    if distance <= 1e-9 {
+        return Ok(());
+    }
     let along = (length1 * length1 - length2 * length2 + distance * distance) / (2.0 * distance);
     let height = (length1 * length1 - along * along).max(0.0).sqrt();
     let perpendicular = Vec2::new(-direction.y, direction.x);

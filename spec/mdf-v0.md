@@ -460,6 +460,13 @@ The per-frame order is properties/machine → drivers → deformers →
 constraints → draw. Deformers and constraint targets are deterministic
 bakes; spring state is replayed from frame zero (D-0059, D-0060).
 
+Constraints also accept bones. Prefix a part name with `bone:` in `aim`,
+`ik`, `copy` or `limit` to run on the bone pose before skinning:
+`m.ik("bone:upper", "bone:lower", target="hand", tip=30)`. Bone
+constraints run before the deformers; part constraints run after them.
+Deformers and constraint targets are deterministic bakes; spring state is
+replayed from frame zero (D-0059, D-0060 and its E5 addendum).
+
 Poses (`m.pose(name, prop=value, reset=False)` to declare;
 `m.pose(name, at=..., dur=..., ease=...)` to apply), clips
 (`cl = m.clip(name, length=...)`, `cl.key(prop, time, value, ease=...)`,

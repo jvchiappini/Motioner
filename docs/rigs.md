@@ -168,6 +168,11 @@ Constraints run after deformers in declaration order: `r.aim`, `r.ik`,
 section 7.9 for arguments. The full order is properties/machine → drivers →
 deformers → constraints → bake keys (D-0059, D-0060).
 
+Prefix a bone name with `bone:` in `aim`, `ik`, `copy` or `limit` to constrain
+that bone before skinning: `r.ik("bone:upper", "bone:lower", target="hand",
+tip=30)`. Bone constraints run before lattice/skin/blend; part constraints run
+after them.
+
 Drivers are evaluated deterministically, frame by frame, at load time,
 and their output is written as keys (D-0052). The result is a document
 that renders through the one evaluator, so scrubbing, motion blur,

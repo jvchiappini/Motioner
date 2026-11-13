@@ -35,7 +35,9 @@ mod eval;
 mod geometry;
 mod machine;
 
-pub use constraint::{Constraint, SpringState, MAX_FOLLOW_POINTS};
+pub use constraint::{
+    apply_bone_constraints, BoneConstraint, Constraint, SpringState, MAX_FOLLOW_POINTS,
+};
 pub use deformer::{
     compatible_points, BlendShape, BlendShapes, Bone, Deformer, Lattice, Skin, MAX_BLEND_SHAPES,
     MAX_BONES, MAX_DEFORM_POINTS,
@@ -519,6 +521,8 @@ pub struct Rig {
     pub constraints: Vec<constraint::Constraint>,
     /// Bone declarations for m.skin.
     pub bones: Vec<deformer::Bone>,
+    /// Constraints that run on bones before skinning (D-0060 addendum).
+    pub bone_constraints: Vec<constraint::BoneConstraint>,
     /// Named poses.
     pub poses: Vec<Pose>,
     /// Pose applications.
@@ -549,6 +553,7 @@ impl Rig {
             deformers: Vec::new(),
             constraints: Vec::new(),
             bones: Vec::new(),
+            bone_constraints: Vec::new(),
             poses: Vec::new(),
             tracks: Vec::new(),
             clips: Vec::new(),
