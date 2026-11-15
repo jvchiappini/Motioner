@@ -57,8 +57,16 @@ documented `LivePainter` exception.
 - Image and video textures carry a `revision`; the painter rewrites a
   same-size frame with `Renderer::update_sprite_texture` and only frees and
   re-registers when a proxy/original size changes
-  (`crates/motioner_render/src/shapes.rs:207-245`,
+  (`crates/motioner_render/src/shapes.rs:213-262`,
   `crates/motioner_render/src/frame.rs:64-90`).
+- Deformed image/video meshes (D-0061) leave the sprite path: the painter
+  builds MeshVertex2d from the plan's MeshSample, remaps the [0, 1] mesh UVs
+  into the node crop and draws through the engine's generic textured triangle
+  mesh in the same painter depth (`crates/motioner_render/src/shapes.rs:260-296`,
+  `crates/motioner_render/src/lib.rs:194-206`). The default 2x2 mesh stays on
+  the sprite quad, so existing goldens are byte-identical; the mesh goldens
+  and the crop equivalence live in
+  `crates/motioner_render/tests/golden_meshes.rs:259-330`.
 
 ## Diagram
 
@@ -79,10 +87,13 @@ Not needed: the plan is a flat list and the painter walks it twice.
   `crates/motioner_render/tests/render.rs`).
 - D-0034 — Inter 400/600/700, project-first font lookup, CPU measurement via
   `TextMetrics`, and per-character animators (rendered since pin 06a8adf).
+- D-0061 — an image/video mesh is a rig-compatible point set; the painter
+  draws `mesh: Some(i)` through the engine textured triangle mesh and keeps
+  the default 2x2 quad on the sprite path.
 
 ## Documentation status
 
-partial — last verified: 2026-11-03
+partial — last verified: 2026-11-15
 
 ## Images (D-0035)
 

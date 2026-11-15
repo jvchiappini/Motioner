@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-12
+actualizado: 2026-11-15
 actualizado_por: agente
 version_schema: 1
 ---
@@ -7,11 +7,36 @@ version_schema: 1
 
 ## Prompt 16b status (finish prompt 16)
 
-Session `S-2026-11-11-002` (open). **E0–E4, E5a and the E5b model are
-done; engine mesh + goldens and E6–E7 pending. No commit.** Reports:
-`out/reports/PHASE-16B-E0-REPORT.md` through
-`PHASE-16B-E4-REPORT.md`, plus `PHASE-16B-E5A-REPORT.md` and
-`PHASE-16B-E5B-MODEL-REPORT.md`.
+Session `S-2026-11-11-002` (open). **E0–E4 and E5a/E5b are done; E6–E7
+pending. No commit.** Reports: `out/reports/PHASE-16B-E0-REPORT.md` through
+`PHASE-16B-E4-REPORT.md`, plus `PHASE-16B-E5A-REPORT.md`,
+`PHASE-16B-E5B-MODEL-REPORT.md` and `PHASE-16B-E5B-ENGINE-REPORT.md`.
+
+E5b engine/render/goldens (2026-11-15):
+
+- FerrousEngine dev clone `cab7035..6d1bc7a`: `draw_textured_mesh_2d` on
+  `Renderer`, `RenderContext` and `Pure2dHarness`; `MeshVertex2d`
+  (position/uv/alpha, premultiplied flag), `MeshBatcher2d`, grow-only GPU
+  vertex/index buffers, batching by texture+blend, the same texture registry
+  (in-place updates/mips), painter depth, layers, masks, blend modes.
+  Rustdoc, `crates/ferrous_renderer/docs/textured-meshes.md` + mkdocs nav,
+  `examples/textured_mesh_2d`, 8 headless tests.
+- Motioner: `motioner_render` draws `ItemShape::Image { mesh: Some(i) }`
+  through `Canvas2d::draw_mesh`, remapping the [0,1] mesh UVs into the node
+  crop; the 2x2 default stays on the sprite path. Existing goldens
+  byte-identical.
+- Goldens: `mesh_lattice_f030`, `mesh_video_skin_f030`, `mesh_arm_ik_f030`
+  (inside a `screen` layer), `mesh_blend_f030`, plus a cropped-mesh vs sprite
+  equivalence test.
+- Release (1280x720, RTX 4050): mesh 8x8 x1 0.080 ms / x50 0.116 ms
+  (0.0023 ms/item), 32x32 x1 0.102 ms / x50 0.470 ms (0.0094 ms/item),
+  sprite x1 0.088 ms / x50 0.088 ms (0.0018 ms/item).
+- Built with a temporary `../FerrousEngine` path override, restored to
+  `engine/ferrous` before stopping; the tree will not build until the
+  reviewer pushes 6d1bc7a and bumps the pin.
+- Engine caveat: the clone baseline is not fmt/clippy/rustdoc-clean under
+  Rust 1.96 (unrelated files); the touched crates and files are clean and
+  `pure2d_meshes` passes.
 
 E5b model (2026-11-13):
 
@@ -231,8 +256,8 @@ Claude is architect/auditor; the user speaks Spanish.
 ## Engine
 
 Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone `6a30e7d`,
-`e482b3c`, `cab7035`. **No pin bump in this session.** Never edit
-`engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes from
+`e482b3c`, `cab7035`, **`6d1bc7a`** (textured mesh, awaiting push and pin
+bump). **No pin bump in this session.** Never edit `engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes from
 the engine and predates this work.
 
 ## Goldens
@@ -240,7 +265,10 @@ the engine and predates this work.
 All previous goldens unchanged and green. Prompt 16 deliberately did not
 touch `motioner_eval`, `motioner_render` or `motioner_core` rendering paths,
 so goldens could not move. Mascot screenshots are report artefacts, not
-goldens (T-RIG-0016).
+goldens (T-RIG-0016). E5b added `mesh_lattice_f030`, `mesh_video_skin_f030`,
+`mesh_arm_ik_f030` and `mesh_blend_f030` under
+`crates/motioner_testkit/golden/`; the default 2x2 quad remains on the sprite
+path, so the older goldens are byte-identical.
 
 ## Reference machine
 
@@ -254,6 +282,7 @@ non-scaling stroke, measurements; E1 resolver and manifest; E2 rig
 write-through, manifest v2, 15-case corpus and eight rig tools; E3 keyable
 geometry channel, geometry driver IR, arc-to, write-through and lid golden;
 E4 lattice/skin/blend, ordered constraints, fixed arc segments; E5a bone
-constraints before skinning; E5b model (media meshes). Gate green; no commit.
-Next: E5b engine textured mesh + goldens.
+constraints before skinning; E5b model (media meshes) and E5b engine +
+render + goldens (engine 6d1bc7a). Gate green against the clone override;
+no commit. Next: E6 exact mascot, reference rasters and comparison matrix.
 
