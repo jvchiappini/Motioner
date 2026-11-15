@@ -5,6 +5,52 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Prompt 17 status (startup performance)
+
+Session `S-2026-11-15-001` (open). **S0 done; S1–S6 pending.** No commit in
+Motioner. Engine work is in the dev clone, uncommitted, on top of the
+6d1bc7a pin. Report: `out/reports/PHASE-17-S0-REPORT.md` (Spanish).
+
+S0 (2026-11-15):
+
+- Engine: `ferrous_core::startup` (marks, spans, `begin`/`begin_from_env`,
+  `span`/`span_with`, `trace`, `first_frame_presented`, `teardown`; enabled
+  with `FERROUS_TRACE_STARTUP=1` or `AppConfig::with_startup_trace`;
+  `FERROUS_TRACE_STARTUP_JSON=1` adds one JSON line per report; 8 tests;
+  disabled cost is one relaxed atomic load and computed labels are not
+  formatted). Runner marks: entry, event loop, window created, instance,
+  adapter, device, surface configured, renderer built, fonts ready, app setup
+  done, first frame presented, close requested, window hidden, event loop
+  exited, teardown done. `EngineContext` exposes `request_adapter` +
+  `from_adapter` (`new_with_instance` composes them). Closing now hides the
+  window before exiting the loop (the S5 mechanism, needed for the mark).
+  Docs: `crates/ferrous_engine/docs/startup.md` + mkdocs nav.
+- Motioner: `motioner_ui::startup` re-export; `motioner_render` depends on
+  `ferrous_core` for the per-face marks. Spans: `motioner: host`,
+  `bundled fonts`, `recents`, `examples`, `resolve input`, `project fonts`,
+  `document load`, one per font face in `LivePainter::with_fonts`; mark
+  `motioner: main`.
+- `scripts/startup_bench.py` (20 warm runs, median/p90 per mark/span, close
+  rows, wall time, `--cold`, `--scenario`, `--json-out`, `--markdown`);
+  optional tool, not in the gate; README documents it.
+- **Baseline** (release, 20 warm runs, RTX 4050, 1600x900):
+  `--start --exit-after-frames 1` first present **1616.3 / 1651.7 ms**
+  median/p90, wall 1818.0. Phase deltas: window 37.8, instance 224.5,
+  adapter 261.2, device 30.4, surface 185.8, renderer 68.2, engine font
+  134.7, setup 642.6, first frame 31.2. Fonts Inter 400/600/700
+  178.4/174.1/166.4 ms, Roboto 400 108.0 (Roboto is baked twice). Pre-window
+  2.0 ms. `preview examples/demo.motioner` first present
+  **2633.4 / 2650.1**, document load 27.1, first composition frame +1034,
+  pre-window 30.9. Close: requested->hidden 5.2, hidden->teardown 82.3;
+  ~98 ms of untraced process exit.
+- The prompt's reference table is reproduced phase by phase (<=15 % spread);
+  the floors are the GPU driver plus `Renderer::new` up to `renderer built`
+  (~810 ms from process start) and our font bake (~620 ms).
+- Gate green against the dev clone with a temporary `../FerrousEngine` path
+  override, removed afterwards; **the tree will not build until the reviewer
+  pushes the engine commits and bumps the pin**. C: 9.3 GB free after
+  purging `target/debug` and `target/release`.
+
 ## Prompt 16b status (finish prompt 16)
 
 Session `S-2026-11-11-002` (open). **E0–E4 and E5a/E5b are done; E6–E7
@@ -277,12 +323,8 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 ## Last session
 
-`S-2026-11-11-002` (prompt 16b, open): E0 review fixes, encoding gate,
-non-scaling stroke, measurements; E1 resolver and manifest; E2 rig
-write-through, manifest v2, 15-case corpus and eight rig tools; E3 keyable
-geometry channel, geometry driver IR, arc-to, write-through and lid golden;
-E4 lattice/skin/blend, ordered constraints, fixed arc segments; E5a bone
-constraints before skinning; E5b model (media meshes) and E5b engine +
-render + goldens (engine 6d1bc7a). Gate green against the clone override;
-no commit. Next: E6 exact mascot, reference rasters and comparison matrix.
+`S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench, gate green
+against the dev clone; engine commits (startup module, adapter/device split,
+hide-before-teardown, docs) await the reviewer's push and pin bump. Next:
+S1 font atlas cache in `ferrous_font`.
 
