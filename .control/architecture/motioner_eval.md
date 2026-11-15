@@ -40,6 +40,11 @@ accumulates opacity down the hierarchy and resolves paints.
   mismatch is impossible after key insertion (D-0058):
   `crates/motioner_eval/src/curve.rs:215-235`,
   `crates/motioner_eval/src/evaluate.rs:300-320`.
+- `RenderPlan::meshes` - image/video mesh samples travel in a plan arena;
+  `ItemShape::Image { mesh: Option<usize> }` keeps items `Copy`, and the
+  default 2x2 quad stays `None` (D-0061):
+  `crates/motioner_eval/src/plan.rs:110-170`,
+  `crates/motioner_eval/src/evaluate.rs:340-410`.
 
 ## Diagram
 

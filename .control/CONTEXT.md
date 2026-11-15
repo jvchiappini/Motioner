@@ -7,11 +7,20 @@ version_schema: 1
 
 ## Prompt 16b status (finish prompt 16)
 
-Session `S-2026-11-11-002` (open). **E0, E1, E2 and E3 done; E4..E7
-pending. No commit.** Reports: `out/reports/PHASE-16B-E0-REPORT.md`,
-`out/reports/PHASE-16B-E1-REPORT.md`,
-`out/reports/PHASE-16B-E2-REPORT.md` and
-`out/reports/PHASE-16B-E3-REPORT.md`.
+Session `S-2026-11-11-002` (open). **E0–E4, E5a and the E5b model are
+done; engine mesh + goldens and E6–E7 pending. No commit.** Reports:
+`out/reports/PHASE-16B-E0-REPORT.md` through
+`PHASE-16B-E4-REPORT.md`, plus `PHASE-16B-E5A-REPORT.md` and
+`PHASE-16B-E5B-MODEL-REPORT.md`.
+
+E5b model (2026-11-13):
+
+- `Mesh` channel on image/video (D-0061), default 2x2; `mesh=(N, M)`,
+  `key("mesh", ...)` and `RenderPlan::meshes`; default quad stays on the
+  sprite path.
+- `m.part("name", node)` attaches image/video as a rig media part; shared
+  `apply_points` deformers; bake writes normalized mesh keys.
+- Pending: FerrousEngine textured triangle mesh and the three E5b goldens.
 
 E3 (2026-11-12):
 
@@ -245,6 +254,6 @@ non-scaling stroke, measurements; E1 resolver and manifest; E2 rig
 write-through, manifest v2, 15-case corpus and eight rig tools; E3 keyable
 geometry channel, geometry driver IR, arc-to, write-through and lid golden;
 E4 lattice/skin/blend, ordered constraints, fixed arc segments; E5a bone
-constraints before skinning. Gate green; no commit. Next: E5b textured mesh
-in FerrousEngine + images/video.
+constraints before skinning; E5b model (media meshes). Gate green; no commit.
+Next: E5b engine textured mesh + goldens.
 

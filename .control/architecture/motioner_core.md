@@ -38,6 +38,10 @@ in the workspace and never touches the file system or a GPU.
   different topology with `CoreError::GeometryTopologyMismatch`, and `sample`
   interpolates positions and handles with the arriving key's ease (D-0058):
   `crates/motioner_core/src/path.rs:652-840`.
+- `Mesh` / `MeshSample` - a fixed `columns x rows` grid with uniform UVs and a
+  keyable position channel. Keys use the same topology mismatch error as
+  geometry, positions interpolate per vertex, and the 2x2 default is the
+  sprite quad (D-0061): `crates/motioner_core/src/mesh.rs:1-260`.
 - `Gradient` / `PaintSpec` - linear and radial geometry plus stops whose
   offset and colour are `Animatable` channels; paint stores an optional
   gradient per fill/stroke and `ContentField` exposes one offset and one

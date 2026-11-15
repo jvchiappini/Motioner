@@ -167,4 +167,17 @@ partial — last verified: 2026-11-04
 - `arc_to`, `ellipse_arc` and `arc` accept `segments=` and default to four
   fixed cubic segments, keeping topology stable across animated angles.
 
+## Prompt 16b E5b model additions (media meshes)
+
+- `image()` and `video()` accept `mesh=(columns, rows)`, defaulting to the 2x2
+  sprite quad; `key("mesh", t, points)` writes the fixed-topology mesh channel
+  (D-0061): `crates/motioner_dsl/src/scene.rs:1290-1470`.
+- `m.part("name", node)` attaches an image/video node as a rig part. The part
+  carries `MediaPart` (base mesh in local pixels) and shares `m.lattice`,
+  `m.bone`/`m.skin` and `m.blend` with vector paths:
+  `crates/motioner_dsl/src/scene/rigs.rs:780-900`, `1600-1720`.
+- `bake_rigs` writes `PartOutput::mesh` back as normalized `mesh` keys,
+  including a hold key before a rest gap:
+  `crates/motioner_dsl/src/scene/rigs.rs:2500-2640`.
+
 

@@ -33,6 +33,10 @@ no clock, no GPU and no editor dependency.
   is the fixed topology it must match (D-0058):
   `crates/motioner_rig/src/geometry.rs:1-420`,
   `crates/motioner_rig/src/eval.rs:120-250`.
+- `PartBase::media` / `PartOutput::mesh` - image and video parts carry a
+  `MeshSample` in local pixels. `Deformer::apply_points` runs the same
+  lattice, skin and blend implementations on paths and mesh vertices
+  (D-0061): `crates/motioner_rig/src/deformer.rs:100-230`.
 - `machine::Runner` - sequential state stepping, blend progress, trigger
   edges and events: `crates/motioner_rig/src/machine.rs:135-235`.
 - `bake` - one pass per integer frame: stateless properties, machine,
@@ -55,6 +59,7 @@ drivers, constraints).
 - D-0059 - native lattice, skinning and blend-shape deformers.
 - D-0060 - the ordered constraint stage, including spring state and the
   E5 bone-constraint addendum.
+- D-0061 - image/video meshes and media parts share the deformer pipeline.
 
 ## Boundaries
 
@@ -63,8 +68,9 @@ Must not depend on the DSL, I/O, renderer, UI, tools or the application.
 
 ## Known gaps
 
-Textured image/video mesh, blend states 1D/2D and the wasm/binary player
-format are backlogged (T-RIG-0013, T-RIG-0015). Bone constraints run before
-skinning via BoneConstraint and the one: prefix.
+Textured engine rendering of image/video meshes, blend states 1D/2D and the
+wasm/binary player format are backlogged (T-RIG-0013, T-RIG-0015). Bone
+constraints run before skinning via `BoneConstraint` and the `bone:` prefix.
+The model path (mesh channel, media parts and shared deformers) is D-0061.
 
 
