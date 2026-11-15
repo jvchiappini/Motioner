@@ -62,6 +62,8 @@ pub struct PartOutput {
     pub stroke_width: Option<f64>,
     /// Path points when a geometry driver writes this part.
     pub geometry: Option<motioner_core::PathGeometry>,
+    /// Mesh points when a mesh deformer writes this part (D-0061).
+    pub mesh: Option<motioner_core::MeshSample>,
     /// Whether a driver or constraint touched this part.
     pub touched: bool,
 }
@@ -156,6 +158,7 @@ pub fn bake(rig: &Rig, first: f64, last: f64) -> Result<Vec<FrameOutput>, RigErr
                 opacity: part.opacity,
                 stroke_width: None,
                 geometry: None,
+                mesh: None,
                 touched: false,
             })
             .collect();

@@ -165,6 +165,16 @@ Deformers run after drivers:
 - `r.blend(part, points=..., weight="property", fit=True)` blends a target
   point list; `fit=True` resamples it to the part topology.
 
+An image or video can join a rig as a mesh part:
+
+- `r.part("photo", node)` attaches an `image()` or `video()` node. Its grid is
+  the part's point set; `r.lattice`, `r.skin` and `r.blend` then use the same
+  deformer implementations as vector paths (D-0061).
+- The mesh is `columns x rows` vertices with fixed UVs. The default 2x2 grid
+  keeps the existing sprite output; non-default or deformed grids travel as
+  textured meshes. Positions are keyable with `key("mesh", t, points)` and a
+  different vertex count is a typed topology error.
+
 Constraints run after deformers in declaration order: `r.aim`, `r.ik`,
 `r.follow`, `r.copy`, `r.limit`, `r.distance`, `r.spring`. See the MDF spec
 section 7.9 for arguments. The full order is properties/machine → drivers →

@@ -129,8 +129,8 @@ The v0 surface:
 | `radial_gradient(center=(0, 0), radius=100, stops=[(0, "#ffffff"), (1, "#000000")])` | Radial paint |
 | `text(content, font="Roboto", size=48, color="#ffffff", align="left", weight=400, tracking=0.0, line_height=1.0)` | Text |
 | `latex(expression, size=48, color="#ffffff", display=False)` | LaTeX math |
-| `image(source, width=None, height=None, fit="contain")` | Image |
-| `video(source, in_point=0.0, out_point=None, start=0, speed=1.0, width=None, height=None, fit="contain", gain=1.0)` | Video clip |
+| `image(source, width=None, height=None, fit="contain", mesh=(2, 2))` | Image |
+| `video(source, in_point=0.0, out_point=None, start=0, speed=1.0, width=None, height=None, fit="contain", gain=1.0, mesh=(2, 2))` | Video clip |
 | `audio(source, in_point=0.0, out_point=None, gain=1.0, start=0, pan=0.0, fade_in=0, fade_out=0)` | Audio clip (D-0048) |
 | `camera(pos=(0, 0, 8), target=(0, 0, 0), fov=45)` | 3D camera |
 | `light(kind="directional", intensity=1.0, color="#ffffff")` | 3D light |
@@ -337,11 +337,22 @@ Animators are deterministic and bakeable.
 
 ### 7.6 Images (D-0035)
 
-`image(source, width=None, height=None, fit="contain")` loads a
+`image(source, width=None, height=None, fit="contain", mesh=(2, 2))` loads a
 project-relative PNG. `source` is resolved against the program's project root;
 absolute paths and `..` are rejected. `width`/`height` are the destination box
 in composition pixels; `None` or `0` means the natural size and one dimension
 keeps the aspect. `fit` is `contain`, `cover` or `fill`.
+
+`mesh` is a `columns x rows` grid with at least 2 vertices per edge. The
+default 2x2 grid is the sprite quad and renders byte-identically to earlier
+versions. Mesh positions are normalised to local space (`[-0.5, 0.5]` for the
+default quad) and are keyable through `key("mesh", t, points)`: every key must
+keep the same vertex count, otherwise the write fails with
+`CoreError::GeometryTopologyMismatch`. UVs and topology are fixed; changing
+the grid is a structural edit. An image or video is attached to a rig with
+`m.part("name", node)` and then runs through the normal drivers, bone
+constraints, deformers and part constraints over its mesh points. `video()`
+accepts the same `mesh` argument.
 
 The image key is the SHA-256 of the file bytes. `width`, `height`, `source`
 and `fit` are ordinary content fields (`key`/`edit`/`set` work by name);

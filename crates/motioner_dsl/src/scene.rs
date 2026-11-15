@@ -1288,13 +1288,14 @@ impl Scene {
         Ok(node)
     }
 
-    /// `image(source, width=None, height=None, fit="contain")` (D-0035).
+    /// `image(source, width=None, height=None, fit="contain", mesh=(2, 2))`
+    /// (D-0035, D-0061).
     ///
     /// `source` is a project-relative path; the loader resolves its key and
     /// natural size after the program runs.  `width`/`height` are the
     /// destination box in pixels; `None` or `0` keeps the natural size/aspect.
     fn image(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
-        let params = ["source", "width", "height", "fit"];
+        let params = ["source", "width", "height", "fit", "mesh"];
         let bound = bind("image", &params, 1, args)?;
         let source = bound.string_or(0, "")?;
         if source.is_empty() {
@@ -1322,6 +1323,7 @@ impl Scene {
         };
         content.width = motioner_core::Animatable::new(dimension(1, "width")?);
         content.height = motioner_core::Animatable::new(dimension(2, "height")?);
+        content.mesh = mesh_grid(bound.get(4), "image")?;
         let node = self.create(NodeContent::Image(content), site)?;
         if let Value::Node(id) = node {
             for (index, property) in [(0, "source"), (1, "width"), (2, "height"), (3, "fit")] {
@@ -1411,7 +1413,8 @@ impl Scene {
     }
 
     /// `video(source, in_point=0.0, out_point=None, start=0, speed=1.0,
-    /// width=None, height=None, fit="contain", gain=1.0)` (Phase 6).
+    /// width=None, height=None, fit="contain", gain=1.0, mesh=(2, 2))`
+    /// (Phase 6, D-0061).
     fn video(&mut self, args: CallArgs, site: &CreationSite) -> HostResult<Value> {
         let params = [
             "source",
@@ -1423,6 +1426,7 @@ impl Scene {
             "height",
             "fit",
             "gain",
+            "mesh",
         ];
         let bound = bind("video", &params, 1, args)?;
         let source = bound.string_or(0, "")?;
@@ -1467,6 +1471,7 @@ impl Scene {
         content.height = motioner_core::Animatable::new(optional(6, "height")?);
         content.fit = fit;
         content.gain = motioner_core::Animatable::new(bound.number_or(8, 1.0)?);
+        content.mesh = mesh_grid(bound.get(9), "video")?;
         let node = self.create(NodeContent::Video(content), site)?;
         if let Value::Node(id) = node {
             for (index, property) in [
@@ -2819,6 +2824,77 @@ fn path_points(value: &Value) -> HostResult<Vec<PathPoint>> {
         .collect()
 }
 
+/// Reads a `mesh=(columns, rows)` creation argument; absent means the 2x2 quad.
+fn mesh_grid(value: Option<&Value>, caller: &str) -> HostResult<motioner_core::Mesh> {
+    let Some(value) = value else {
+        return Ok(motioner_core::Mesh::quad());
+    };
+    match value {
+        Value::None => Ok(motioner_core::Mesh::quad()),
+        Value::List(values) | Value::Tuple(values) => {
+            let values = values.borrow();
+            let [Value::Number(columns), Value::Number(rows)] = &values[..] else {
+                return Err(HostError::value_error(format!(
+                    "{caller}(): 'mesh' must be a (columns, rows) pair"
+                )));
+            };
+            if !columns.is_finite()
+                || !rows.is_finite()
+                || columns.fract() != 0.0
+                || rows.fract() != 0.0
+                || *columns < 2.0
+                || *rows < 2.0
+            {
+                return Err(HostError::value_error(format!(
+                    "{caller}(): 'mesh' needs integer edges of at least 2"
+                )));
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            motioner_core::Mesh::grid(*columns as u32, *rows as u32)
+                .map_err(|error| HostError::value_error(error.to_string()))
+        }
+        other => Err(HostError::type_error(format!(
+            "{caller}(): 'mesh' must be a (columns, rows) pair, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Reads `mesh` vertices: a list of `(x, y)` points.
+fn mesh_points(value: &Value) -> HostResult<Vec<Vec2>> {
+    let items: Vec<Value> = match value {
+        Value::List(items) | Value::Tuple(items) => items.borrow().clone(),
+        other => {
+            return Err(HostError::type_error(format!(
+                "mesh(): 'points' must be a list of (x, y) points, got {}",
+                other.type_name()
+            )))
+        }
+    };
+    items
+        .iter()
+        .map(|item| {
+            let numbers: Vec<f64> = match item {
+                Value::List(values) | Value::Tuple(values) => values
+                    .borrow()
+                    .iter()
+                    .map_while(|value| match value {
+                        Value::Number(number) => Some(*number),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            match numbers.as_slice() {
+                [x, y] if x.is_finite() && y.is_finite() => Ok(Vec2::new(*x, *y)),
+                _ => Err(HostError::value_error(
+                    "mesh(): a vertex is a finite (x, y) pair",
+                )),
+            }
+        })
+        .collect()
+}
+
 /// The main axis of `row` / `column`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Axis2 {
@@ -2923,6 +2999,12 @@ fn content_value_of(content: &NodeContent, name: &str) -> Option<Value> {
         ContentValue::Cap(cap) => Value::Str(Arc::from(cap.name())),
         ContentValue::Join(join) => Value::Str(Arc::from(join.name())),
         ContentValue::Fit(fit) => Value::Str(Arc::from(fit.name())),
+        ContentValue::MeshPoints(points) => Value::list(
+            points
+                .iter()
+                .map(|point| Value::list(vec![Value::Number(point.x), Value::Number(point.y)]))
+                .collect(),
+        ),
         ContentValue::Gradient(Some(gradient)) => Value::Gradient(Arc::new(gradient)),
         ContentValue::GeometryPoints(points) => Value::list(
             points
@@ -3022,6 +3104,7 @@ fn content_value(field: ContentField, value: &Value) -> HostResult<ContentValue>
         | ContentField::FillStopOffset(_)
         | ContentField::StrokeStopOffset(_) => number(value),
         ContentField::Geometry => path_points(value).map(ContentValue::GeometryPoints),
+        ContentField::Mesh => mesh_points(value).map(ContentValue::MeshPoints),
         ContentField::FillStopColor(_) | ContentField::StrokeStopColor(_) => match value {
             Value::Str(text) => Color::parse_hex(text)
                 .map(|color| ContentValue::Color(Some(color)))

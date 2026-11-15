@@ -548,6 +548,7 @@ impl Scene {
                 stroke: None,
                 stroke_width: 0.0,
                 geometry,
+                media: None,
             });
             part_nodes.push(part.node);
         }
@@ -780,29 +781,110 @@ impl Scene {
         }
     }
 
-    /// `m.part("eye-L")`.
-    pub(crate) fn rig_part(&self, node: NodeId, args: CallArgs) -> HostResult<Value> {
-        let bound = bind("part", &["name"], 1, args)?;
+    /// `m.part("eye-L")` reads an imported part. `m.part("photo", img)`
+    /// attaches an image or video node as a rig part (D-0061).
+    pub(crate) fn rig_part(&mut self, node: NodeId, args: CallArgs) -> HostResult<Value> {
+        let bound = bind("part", &["name", "node"], 1, args)?;
         let name = bound.string_or(0, "")?;
-        self.rig_part_node(node, &name).map(Value::Node)
+        let Some(target) = bound.get(1) else {
+            return self.rig_part_node(node, &name).map(Value::Node);
+        };
+        let Value::Node(target) = target else {
+            return Err(HostError::type_error(format!(
+                "part(): 'node' must be an image or video node, got {}",
+                target.type_name()
+            )));
+        };
+        self.attach_media_part(node, &name, *target)?;
+        Ok(Value::Node(*target))
+    }
+
+    fn attach_media_part(&mut self, node: NodeId, name: &str, target: NodeId) -> HostResult<()> {
+        let index = self.rig_index(node)?;
+        if self.rigs[index].rig.part(name).is_some() {
+            return Err(HostError::value_error(format!(
+                "part(): the rig already has a part named {name:?}"
+            )));
+        }
+        let (mesh, fit, asset_size) = {
+            let document = self.document()?;
+            let target_node = document
+                .node(target)
+                .ok_or_else(|| HostError::value_error(format!("unknown node {target}")))?;
+            match target_node.content() {
+                NodeContent::Image(image) => (
+                    image.mesh.clone(),
+                    image.fit,
+                    image.asset.map(|asset| (asset.width, asset.height)),
+                ),
+                NodeContent::Video(video) => (
+                    video.mesh.clone(),
+                    video.fit,
+                    video.asset.map(|asset| (asset.width, asset.height)),
+                ),
+                _ => {
+                    return Err(HostError::value_error(
+                        "part(): the attached node must be an image or video",
+                    ))
+                }
+            }
+        };
+        let (width, height) = {
+            let document = self.document()?;
+            let target_node = document.node(target).expect("checked above");
+            let (width, height) = match target_node.content() {
+                NodeContent::Image(image) => (image.width.value(), image.height.value()),
+                NodeContent::Video(video) => (video.width.value(), video.height.value()),
+                _ => unreachable!("checked above"),
+            };
+            let layout = motioner_core::ImageLayout::compute(width, height, fit, asset_size);
+            (layout.width, layout.height)
+        };
+        let mesh = mesh
+            .sample_pixels(0.0, width, height, |_, t| t)
+            .ok_or_else(|| HostError::value_error("part(): the mesh lost its topology"))?;
+        let (position, rotation, scale, anchor, opacity) = self.node_base(target)?;
+        let entry = &mut self.rigs[index];
+        entry.rig.parts.push(rig_rt::PartBase {
+            name: name.to_owned(),
+            position,
+            rotation,
+            scale,
+            anchor,
+            opacity,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            geometry: None,
+            media: Some(rig_rt::MediaPart {
+                mesh,
+                width,
+                height,
+            }),
+        });
+        entry.part_nodes.push(target);
+        Ok(())
     }
 
     fn rig_part_node(&self, node: NodeId, name: &str) -> HostResult<NodeId> {
         let index = self.rig_index(node)?;
         let parts = &self.symbols[&self.rigs[index].node].parts;
-        parts.iter().find(|part| *part.name == *name).map_or_else(
-            || {
-                Err(HostError::value_error(format!(
-                    "part(): no part {name:?}; parts are {}",
-                    parts
-                        .iter()
-                        .map(|part| part.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )))
-            },
-            |part| Ok(part.node),
-        )
+        if let Some(part) = parts.iter().find(|part| *part.name == *name) {
+            return Ok(part.node);
+        }
+        let part = self.rigs[index].rig.part(name).ok_or_else(|| {
+            HostError::value_error(format!(
+                "part(): no part {name:?}; parts are {}",
+                self.rigs[index]
+                    .rig
+                    .parts
+                    .iter()
+                    .map(|part| part.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+        Ok(self.rigs[index].part_nodes[part])
     }
 
     pub(crate) fn rig_parts(&self, node: NodeId, args: CallArgs) -> HostResult<Value> {
@@ -1583,26 +1665,49 @@ impl Scene {
             }
         };
         let target_points = super::path_points(bound.get(1).unwrap_or(&Value::None))?;
-        let part_node = self.rigs[index].part_nodes[part];
-        let base = self
-            .document()?
-            .node(part_node)
-            .and_then(|node| match node.content() {
-                NodeContent::Path { geometry, .. } => Some(geometry.geometry().clone()),
-                _ => None,
-            })
-            .ok_or_else(|| HostError::value_error("blend(): the part has no path geometry"))?;
+        let entry = &self.rigs[index];
+        let part_base = &entry.rig.parts[part];
+        let (base, closed, cap, join) = if let Some(media) = &part_base.media {
+            let points = media
+                .mesh
+                .points
+                .iter()
+                .map(|point| motioner_core::PathPoint::corner(*point))
+                .collect::<Vec<_>>();
+            let geometry = motioner_core::PathGeometry::new(
+                points,
+                false,
+                motioner_core::LineCap::Round,
+                motioner_core::LineJoin::Round,
+            )
+            .map_err(|error| core_error(&error))?;
+            (
+                geometry,
+                false,
+                motioner_core::LineCap::Round,
+                motioner_core::LineJoin::Round,
+            )
+        } else {
+            let part_node = entry.part_nodes[part];
+            let geometry = self
+                .document()?
+                .node(part_node)
+                .and_then(|node| match node.content() {
+                    NodeContent::Path { geometry, .. } => Some(geometry.geometry().clone()),
+                    _ => None,
+                })
+                .ok_or_else(|| HostError::value_error("blend(): the part has no geometry"))?;
+            let closed = geometry.closed();
+            let cap = geometry.cap();
+            let join = geometry.join();
+            (geometry, closed, cap, join)
+        };
         let points = if target_points.len() == base.points().len() {
             target_points
         } else if fit {
-            let target = motioner_core::PathGeometry::new(
-                target_points,
-                base.closed(),
-                base.cap(),
-                base.join(),
-            )
-            .map_err(|error| core_error(&error))?;
-            rig_rt::compatible_points(&target, base.points().len(), base.closed())
+            let target = motioner_core::PathGeometry::new(target_points, closed, cap, join)
+                .map_err(|error| core_error(&error))?;
+            rig_rt::compatible_points(&target, base.points().len(), closed)
         } else {
             return Err(HostError::value_error(format!(
                 "blend(): topology mismatch ({} points, expected {}); pass fit=True",
@@ -2309,6 +2414,16 @@ impl Scene {
                             &mut state.geometry,
                         )?;
                     }
+                    if let Some(mesh) = &output.mesh {
+                        write_content_mesh(
+                            document,
+                            node,
+                            frame.frame,
+                            &mesh.points,
+                            base.media.as_ref().map(|media| (media.width, media.height)),
+                            &mut state.mesh,
+                        )?;
+                    }
                 }
             }
         }
@@ -2330,11 +2445,18 @@ struct Written {
     opacity: ChannelWrite,
     stroke_width: ChannelWrite,
     geometry: GeometryWrite,
+    mesh: MeshWrite,
 }
 
 #[derive(Debug, Clone, Default)]
 struct GeometryWrite {
     points: Option<Vec<motioner_core::PathPoint>>,
+    frame: Option<motioner_core::Frame>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MeshWrite {
+    points: Option<Vec<motioner_core::Vec2>>,
     frame: Option<motioner_core::Frame>,
 }
 
@@ -2500,6 +2622,55 @@ fn write_content_geometry(
         .map_err(|error| core_error(&error))?;
     *last = GeometryWrite {
         points: Some(points),
+        frame: Some(frame),
+    };
+    Ok(())
+}
+
+fn write_content_mesh(
+    document: &mut motioner_core::Document,
+    node: NodeId,
+    frame: motioner_core::Frame,
+    points: &[motioner_core::Vec2],
+    scale: Option<(f64, f64)>,
+    last: &mut MeshWrite,
+) -> HostResult<()> {
+    let points = points
+        .iter()
+        .map(|point| match scale {
+            Some((width, height)) if width.abs() > 1e-9 && height.abs() > 1e-9 => {
+                motioner_core::Vec2::new(point.x / width, point.y / height)
+            }
+            _ => *point,
+        })
+        .collect::<Vec<_>>();
+    if last.points.as_ref().is_some_and(|last| *last == points) {
+        return Ok(());
+    }
+    if let (Some(previous), Some(previous_frame)) = (&last.points, last.frame) {
+        if frame > previous_frame + 1 {
+            document
+                .add_content_keyframe(
+                    node,
+                    ContentField::Mesh,
+                    previous_frame + 1,
+                    ContentValue::MeshPoints(previous.clone()),
+                    Ease::Linear,
+                )
+                .map_err(|error| core_error(&error))?;
+        }
+    }
+    document
+        .add_content_keyframe(
+            node,
+            ContentField::Mesh,
+            frame,
+            ContentValue::MeshPoints(points.clone()),
+            Ease::Linear,
+        )
+        .map_err(|error| core_error(&error))?;
+    *last = MeshWrite {
+        points: Some(points.clone()),
         frame: Some(frame),
     };
     Ok(())

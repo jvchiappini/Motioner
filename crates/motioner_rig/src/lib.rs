@@ -328,6 +328,20 @@ pub struct PartBase {
     /// Base path points when the part is a vector node (D-0058); geometry
     /// drivers validate their topology against this outline.
     pub geometry: Option<motioner_core::PathGeometry>,
+    /// Texture mesh when the part is an image or video (D-0061).
+    pub media: Option<MediaPart>,
+}
+
+/// The media payload of a rig part. Positions are in local pixels; UVs and
+/// topology come from the authored image/video mesh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaPart {
+    /// Base mesh sampled at the part's creation, in local pixels.
+    pub mesh: motioner_core::MeshSample,
+    /// Pixel width used to build the base mesh.
+    pub width: f64,
+    /// Pixel height used to build the base mesh.
+    pub height: f64,
 }
 
 impl PartBase {
@@ -345,6 +359,7 @@ impl PartBase {
             stroke: None,
             stroke_width: 0.0,
             geometry: None,
+            media: None,
         }
     }
 }

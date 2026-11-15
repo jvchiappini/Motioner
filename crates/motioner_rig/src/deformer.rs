@@ -119,6 +119,23 @@ impl Deformer {
         rig_bones: &[Bone],
         bones: Option<&[BonePose]>,
     ) -> Result<(), RigError> {
+        if let Some(media) = &base.media {
+            let source = part.mesh.as_ref().unwrap_or(&media.mesh);
+            let points: Vec<PathPoint> = source
+                .points
+                .iter()
+                .map(|point| PathPoint::corner(*point))
+                .collect();
+            let points = self.apply_points(&points, values, rig_bones, bones)?;
+            part.mesh = Some(motioner_core::MeshSample {
+                columns: source.columns,
+                rows: source.rows,
+                uvs: source.uvs.clone(),
+                points: points.into_iter().map(|point| point.position).collect(),
+            });
+            part.touched = true;
+            return Ok(());
+        }
         let source = part
             .geometry
             .as_ref()
@@ -136,6 +153,26 @@ impl Deformer {
         part.touched = true;
         Ok(())
     }
+
+    /// Applies one deformer to an arbitrary point set. Paths and image/video
+    /// mesh vertices share this entry point (D-0061).
+    ///
+    /// # Errors
+    ///
+    /// The same errors as the concrete deformer.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
+        bones: Option<&[BonePose]>,
+    ) -> Result<Vec<PathPoint>, RigError> {
+        match self {
+            Self::Lattice(lattice) => lattice.apply_points(points, values),
+            Self::Skin(skin) => skin.apply_points(points, values, rig_bones, bones),
+            Self::BlendShapes(shapes) => shapes.apply_points(points, values),
+        }
+    }
 }
 
 impl Lattice {
@@ -147,11 +184,38 @@ impl Lattice {
         let bounds = geometry
             .local_bounds()
             .ok_or_else(|| RigError::message("lattice source has no finite bounds"))?;
+        let points = self.apply_points_with_bounds(geometry.points(), bounds, values);
+        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
+            .map_err(|error| RigError::message(error.to_string()))
+    }
+
+    /// Applies the Coons patch to any point set. Image/video meshes and vector
+    /// paths share this implementation; only the bounds source differs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] when the points have no finite bounds.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Result<Vec<PathPoint>, RigError> {
+        let bounds = point_bounds(points)
+            .ok_or_else(|| RigError::message("lattice source has no finite bounds"))?;
+        Ok(self.apply_points_with_bounds(points, bounds, values))
+    }
+
+    fn apply_points_with_bounds(
+        &self,
+        points: &[PathPoint],
+        bounds: [f64; 4],
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Vec<PathPoint> {
         let [left, top, right, bottom] = bounds;
         let width = right - left;
         let height = bottom - top;
         if width.abs() < 1e-9 || height.abs() < 1e-9 {
-            return Ok(geometry.clone());
+            return points.to_vec();
         }
         let source = [
             Vec2::new(left, top),
@@ -175,8 +239,8 @@ impl Lattice {
                     midpoints[index] + vector(values, *property).unwrap_or(Vec2::ZERO);
             }
         }
-        let mut points = Vec::with_capacity(geometry.points().len());
-        for point in geometry.points() {
+        let mut deformed = Vec::with_capacity(points.len());
+        for point in points {
             let u = ((point.position.x - left) / width).clamp(0.0, 1.0);
             let v = ((point.position.y - top) / height).clamp(0.0, 1.0);
             let position = map_lattice(corners, midpoints, u, v);
@@ -192,15 +256,40 @@ impl Lattice {
                 ((point.position.x + point.handle_in.x - left) / width).clamp(0.0, 1.0),
                 ((point.position.y + point.handle_in.y - top) / height).clamp(0.0, 1.0),
             );
-            points.push(PathPoint::curved(
+            deformed.push(PathPoint::curved(
                 position,
                 incoming - position,
                 end - position,
             ));
         }
-        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
-            .map_err(|error| RigError::message(error.to_string()))
+        deformed
     }
+}
+
+fn point_bounds(points: &[PathPoint]) -> Option<[f64; 4]> {
+    let first = points.first()?;
+    let mut bounds = [
+        first.position.x,
+        first.position.y,
+        first.position.x,
+        first.position.y,
+    ];
+    for point in points {
+        for value in [
+            point.position,
+            point.position + point.handle_in,
+            point.position + point.handle_out,
+        ] {
+            if !value.is_finite() {
+                return None;
+            }
+            bounds[0] = bounds[0].min(value.x);
+            bounds[1] = bounds[1].min(value.y);
+            bounds[2] = bounds[2].max(value.x);
+            bounds[3] = bounds[3].max(value.y);
+        }
+    }
+    Some(bounds)
 }
 
 fn map_lattice(corners: [Vec2; 4], midpoints: [Vec2; 4], u: f64, v: f64) -> Vec2 {
@@ -226,6 +315,25 @@ impl Skin {
         rig_bones: &[Bone],
         bones: Option<&[BonePose]>,
     ) -> Result<PathGeometry, RigError> {
+        let points = self.apply_points(geometry.points(), values, rig_bones, bones)?;
+        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
+            .map_err(|error| RigError::message(error.to_string()))
+    }
+
+    /// Skins any point set, with or without handles. This is the shared path
+    /// for vector outlines and image/video mesh vertices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] for a missing/duplicate bone, a bad pose count or
+    /// invalid weights.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
+        bones: Option<&[BonePose]>,
+    ) -> Result<Vec<PathPoint>, RigError> {
         if self.bones.is_empty() {
             return Err(RigError::message("skin has no bones"));
         }
@@ -234,7 +342,7 @@ impl Skin {
                 "skin has more than {MAX_BONES} bones"
             )));
         }
-        if geometry.points().len() > MAX_DEFORM_POINTS {
+        if points.len() > MAX_DEFORM_POINTS {
             return Err(RigError::message(format!(
                 "skin touches more than {MAX_DEFORM_POINTS} points"
             )));
@@ -268,16 +376,16 @@ impl Skin {
         let weights = self
             .weights
             .clone()
-            .unwrap_or_else(|| auto_weights(self, rig_bones, &bind, geometry));
-        if weights.len() != geometry.points().len() {
+            .unwrap_or_else(|| auto_weights(self, rig_bones, &bind, points));
+        if weights.len() != points.len() {
             return Err(RigError::message(format!(
-                "skin weights cover {} points but the path has {}",
+                "skin weights cover {} points but the set has {}",
                 weights.len(),
-                geometry.points().len()
+                points.len()
             )));
         }
-        let mut points = Vec::with_capacity(geometry.points().len());
-        for (point, weights) in geometry.points().iter().zip(&weights) {
+        let mut deformed = Vec::with_capacity(points.len());
+        for (point, weights) in points.iter().zip(&weights) {
             let mut position = Vec2::ZERO;
             let mut incoming = Vec2::ZERO;
             let mut outgoing = Vec2::ZERO;
@@ -306,10 +414,9 @@ impl Skin {
                 incoming = point.handle_in;
                 outgoing = point.handle_out;
             }
-            points.push(PathPoint::curved(position, incoming, outgoing));
+            deformed.push(PathPoint::curved(position, incoming, outgoing));
         }
-        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
-            .map_err(|error| RigError::message(error.to_string()))
+        Ok(deformed)
     }
 }
 
@@ -420,10 +527,9 @@ fn auto_weights(
     skin: &Skin,
     rig_bones: &[Bone],
     bind: &[BoneWorld],
-    geometry: &PathGeometry,
+    points: &[PathPoint],
 ) -> Vec<Vec<(usize, f64)>> {
-    geometry
-        .points()
+    points
         .iter()
         .map(|point| {
             let mut weights: Vec<(usize, f64)> = skin
@@ -468,19 +574,36 @@ impl BlendShapes {
         geometry: &PathGeometry,
         values: &BTreeMap<usize, PropValue>,
     ) -> Result<PathGeometry, RigError> {
+        let points = self.apply_points(geometry.points(), values)?;
+        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
+            .map_err(|error| RigError::message(error.to_string()))
+    }
+
+    /// Blends any point set. Handles blend as offsets, so mesh vertices with
+    /// no handles and curved paths use the same implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] for too many shapes or a shape whose point count
+    /// does not match the input.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Result<Vec<PathPoint>, RigError> {
         if self.shapes.len() > MAX_BLEND_SHAPES {
             return Err(RigError::message(format!(
                 "part has more than {MAX_BLEND_SHAPES} blend shapes"
             )));
         }
-        let mut points = geometry.points().to_vec();
+        let mut deformed = points.to_vec();
         for shape in &self.shapes {
-            if shape.points.len() != points.len() {
+            if shape.points.len() != deformed.len() {
                 return Err(RigError::message(format!(
                     "blend shape '{}' has {} points, expected {}",
                     shape.name,
                     shape.points.len(),
-                    points.len()
+                    deformed.len()
                 )));
             }
             let weight = values
@@ -491,7 +614,7 @@ impl BlendShapes {
             if weight == 0.0 {
                 continue;
             }
-            for (point, target) in points.iter_mut().zip(&shape.points) {
+            for (point, target) in deformed.iter_mut().zip(&shape.points) {
                 *point = PathPoint::curved(
                     point.position.lerp(target.position, weight),
                     point.handle_in.lerp(target.handle_in, weight),
@@ -499,8 +622,7 @@ impl BlendShapes {
                 );
             }
         }
-        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
-            .map_err(|error| RigError::message(error.to_string()))
+        Ok(deformed)
     }
 }
 

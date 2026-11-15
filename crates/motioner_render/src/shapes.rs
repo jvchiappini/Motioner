@@ -168,6 +168,7 @@ pub(crate) fn draw_item(
             width,
             height,
             uv,
+            mesh,
         } => draw_image(
             canvas,
             images,
@@ -179,6 +180,7 @@ pub(crate) fn draw_item(
             width,
             height,
             uv,
+            mesh,
             z_index,
             total,
         ),
@@ -198,6 +200,7 @@ fn draw_image(
     width: f64,
     height: f64,
     uv: [f64; 4],
+    mesh: Option<usize>,
     z_index: &mut u32,
     total: u32,
 ) -> u32 {
@@ -207,6 +210,7 @@ fn draw_image(
     let Some(image) = images.get(&key) else {
         return 0;
     };
+    let _ = mesh;
     let texture_id = match image_textures.get(&key) {
         Some(&id) => {
             if image_revisions

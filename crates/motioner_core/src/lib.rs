@@ -18,6 +18,7 @@ mod error;
 mod gradient;
 mod mask;
 mod math;
+mod mesh;
 mod node;
 mod overrides;
 mod path;
@@ -40,6 +41,7 @@ pub use error::CoreError;
 pub use gradient::{Gradient, GradientKind, GradientStop, PaintSlot, StopPart, MAX_GRADIENT_STOPS};
 pub use mask::{MaskMode, MaskSpec};
 pub use math::Vec2;
+pub use mesh::{sample_mesh_at, Mesh, MeshKey, MeshSample, MAX_MESH_EDGE};
 pub use node::{
     is_valid_identity_name, AudioContent, BlendMode, CharOrder, CharProperty, CharValue,
     ContentChannel, ContentField, ContentValue, DecodedImage, ImageAsset, ImageContent, ImageFit,

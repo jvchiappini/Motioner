@@ -1316,6 +1316,11 @@ fn content_static_write(
             NodeContent::Path { geometry, .. } => geometry.set_points(points),
             _ => Err(wrong_kind(content, field)),
         },
+        (ContentField::Mesh, ContentValue::MeshPoints(points)) => match content {
+            NodeContent::Image(image) => image.mesh.set_points(points),
+            NodeContent::Video(video) => video.mesh.set_points(points),
+            _ => Err(wrong_kind(content, field)),
+        },
         (ContentField::Cap, ContentValue::Cap(cap)) => match content {
             NodeContent::Path { geometry, .. } => {
                 geometry.set_cap(cap);
@@ -1553,6 +1558,11 @@ fn content_key_write(
         },
         (ContentField::Geometry, ContentValue::GeometryPoints(points)) => match content {
             NodeContent::Path { geometry, .. } => geometry.insert_key(frame, points, ease)?,
+            _ => return Err(wrong_kind(content, field)),
+        },
+        (ContentField::Mesh, ContentValue::MeshPoints(points)) => match content {
+            NodeContent::Image(image) => image.mesh.insert_key(frame, points, ease)?,
+            NodeContent::Video(video) => video.mesh.insert_key(frame, points, ease)?,
             _ => return Err(wrong_kind(content, field)),
         },
         (ContentField::Fill, ContentValue::Color(color)) => match content {
@@ -1800,6 +1810,12 @@ fn content_key_remove(content: &mut NodeContent, field: ContentField, frame: Fra
         }
         (NodeContent::Path { geometry, .. }, ContentField::Geometry) => {
             geometry.remove_key(frame);
+        }
+        (NodeContent::Image(image), ContentField::Mesh) => {
+            image.mesh.remove_key(frame);
+        }
+        (NodeContent::Video(video), ContentField::Mesh) => {
+            video.mesh.remove_key(frame);
         }
         (
             NodeContent::Rect { paint, .. }

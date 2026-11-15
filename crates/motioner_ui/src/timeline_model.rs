@@ -387,6 +387,7 @@ pub fn write_content_text(
         | ContentField::Dash
         | ContentField::DashOffset
         | ContentField::Geometry
+        | ContentField::Mesh
         | ContentField::InPoint
         | ContentField::OutPoint
         | ContentField::Gain

@@ -461,6 +461,7 @@ fn content_value(
         }
         Some(
             motioner_core::ContentValue::GeometryPoints(_)
+            | motioner_core::ContentValue::MeshPoints(_)
             | motioner_core::ContentValue::Gradient(None),
         )
         | None => {

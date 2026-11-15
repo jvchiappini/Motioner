@@ -119,6 +119,8 @@ pub enum ContentField {
     DashOffset,
     /// Keyable path points with a fixed topology (`geometry`, D-0058).
     Geometry,
+    /// Keyable image/video mesh positions with fixed topology (`mesh`, D-0061).
+    Mesh,
     /// Text characters.
     Text,
     /// Text em size in pixels.
@@ -173,7 +175,7 @@ impl ContentField {
     /// Gradient stops are dynamic (`fill_stop3_color`); parse them with
     /// [`ContentField::from_name`] and describe them with
     /// [`ContentField::name`].
-    pub const ALL: [(Self, &'static str); 31] = [
+    pub const ALL: [(Self, &'static str); 32] = [
         (Self::Width, "width"),
         (Self::Height, "height"),
         (Self::Radius, "radius"),
@@ -186,6 +188,7 @@ impl ContentField {
         (Self::Dash, "dash"),
         (Self::DashOffset, "dash_offset"),
         (Self::Geometry, "geometry"),
+        (Self::Mesh, "mesh"),
         (Self::Text, "text"),
         (Self::Size, "size"),
         (Self::Weight, "weight"),
@@ -330,6 +333,8 @@ pub enum ContentValue {
     Fit(ImageFit),
     /// Path points for `geometry`; the channel keeps the closure and style.
     GeometryPoints(Vec<crate::path::PathPoint>),
+    /// Row-major mesh positions for `mesh`; UVs and topology stay fixed.
+    MeshPoints(Vec<Vec2>),
 }
 
 impl NodeId {
@@ -1203,6 +1208,8 @@ pub struct ImageContent {
     pub height: Animatable<f64>,
     /// How the image fills its box.
     pub fit: ImageFit,
+    /// Fixed-topology deformation grid (D-0061).
+    pub mesh: crate::mesh::Mesh,
 }
 
 impl ImageContent {
@@ -1215,6 +1222,7 @@ impl ImageContent {
             width: Animatable::new(0.0),
             height: Animatable::new(0.0),
             fit: ImageFit::Contain,
+            mesh: crate::mesh::Mesh::quad(),
         }
     }
 }
@@ -1376,6 +1384,8 @@ pub struct VideoContent {
     pub height: Animatable<f64>,
     /// How the frame fills its box.
     pub fit: ImageFit,
+    /// Fixed-topology deformation grid (D-0061).
+    pub mesh: crate::mesh::Mesh,
 }
 
 impl VideoContent {
@@ -1393,6 +1403,7 @@ impl VideoContent {
             width: Animatable::new(0.0),
             height: Animatable::new(0.0),
             fit: ImageFit::Contain,
+            mesh: crate::mesh::Mesh::quad(),
         }
     }
 
@@ -1603,6 +1614,7 @@ impl NodeContent {
                     | ContentField::Height
                     | ContentField::Source
                     | ContentField::Fit
+                    | ContentField::Mesh
             ),
             Self::Audio(_) => matches!(
                 field,
@@ -1621,6 +1633,7 @@ impl NodeContent {
                     | ContentField::Height
                     | ContentField::Source
                     | ContentField::Fit
+                    | ContentField::Mesh
                     | ContentField::InPoint
                     | ContentField::OutPoint
                     | ContentField::Gain
@@ -1833,6 +1846,9 @@ impl NodeContent {
                 Some(ContentValue::Text(image.source.clone()))
             }
             (Self::Image(image), ContentField::Fit) => Some(ContentValue::Fit(image.fit)),
+            (Self::Image(image), ContentField::Mesh) => {
+                Some(ContentValue::MeshPoints(image.mesh.points().to_vec()))
+            }
             (Self::Audio(audio), ContentField::Source) => {
                 Some(ContentValue::Text(audio.source.clone()))
             }
@@ -1867,6 +1883,9 @@ impl NodeContent {
                 Some(ContentValue::Text(video.source.clone()))
             }
             (Self::Video(video), ContentField::Fit) => Some(ContentValue::Fit(video.fit)),
+            (Self::Video(video), ContentField::Mesh) => {
+                Some(ContentValue::MeshPoints(video.mesh.points().to_vec()))
+            }
             (Self::Video(video), ContentField::InPoint) => {
                 Some(ContentValue::Number(video.in_point.value()))
             }

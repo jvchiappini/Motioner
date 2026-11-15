@@ -120,6 +120,8 @@ pub enum ItemShape {
         height: f64,
         /// Source crop `[u0, v0, u1, v1]` in UV space.
         uv: [f64; 4],
+        /// Index into [`RenderPlan::meshes`], or `None` for the plain quad.
+        mesh: Option<usize>,
     },
 }
 
@@ -259,6 +261,8 @@ pub struct RenderPlan {
     pub(crate) layers: Vec<PlanLayer>,
     /// Path geometry referenced by [`ItemShape::Path`] items.
     pub(crate) paths: Vec<ResolvedPath>,
+    /// Mesh geometry referenced by [`ItemShape::Image`] items (D-0061).
+    pub(crate) meshes: Vec<motioner_core::MeshSample>,
     /// Gradients referenced by [`ResolvedFill::Gradient`] values.
     pub(crate) gradients: Vec<ResolvedGradient>,
     /// Per-character animator lists referenced by [`ItemShape::Text`] items.
@@ -350,6 +354,25 @@ impl RenderPlan {
     #[must_use]
     pub fn paths(&self) -> &[ResolvedPath] {
         &self.paths
+    }
+
+    /// The resolved mesh at index, when an image item references one.
+    #[must_use]
+    pub fn mesh(&self, index: usize) -> Option<&motioner_core::MeshSample> {
+        self.meshes.get(index)
+    }
+
+    /// Every resolved mesh of the frame.
+    #[must_use]
+    pub fn meshes(&self) -> &[motioner_core::MeshSample] {
+        &self.meshes
+    }
+
+    /// Adds a sampled mesh and returns its arena index.
+    pub fn push_mesh(&mut self, mesh: motioner_core::MeshSample) -> usize {
+        let index = self.meshes.len();
+        self.meshes.push(mesh);
+        index
     }
 
     /// The resolved gradient at index, when an item references one.

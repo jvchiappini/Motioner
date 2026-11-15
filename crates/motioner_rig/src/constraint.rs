@@ -670,6 +670,7 @@ mod tests {
             opacity: 1.0,
             stroke_width: None,
             geometry: None,
+            mesh: None,
             touched: false,
         }];
         let constraints = [Constraint::Limit {
@@ -696,6 +697,7 @@ mod tests {
             opacity: 1.0,
             stroke_width: None,
             geometry: None,
+            mesh: None,
             touched: false,
         }];
         let mut values = BTreeMap::new();

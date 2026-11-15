@@ -288,6 +288,128 @@ m.bone(\"late\", parent=\"root\", at=(10, 0), length=10.0)
 }
 
 #[test]
+fn an_image_part_runs_through_lattice_and_writes_its_mesh() {
+    let source = "\
+comp(name=\"Media\", width=200, height=200, fps=60, duration=1.0)
+art = use(\"mascot.svg\")
+photo = image(\"photo.png\", width=100, height=100, mesh=(3, 3))
+m = rig(art)
+m.prop(\"tl\", (0.0, 0.0))
+m.prop(\"tr\", (0.0, 0.0))
+m.prop(\"br\", (0.0, 0.0))
+m.prop(\"bl\", (0.0, 0.0))
+m.part(\"photo\", photo)
+m.lattice(\"photo\", corners=(\"tl\", \"tr\", \"br\", \"bl\"))
+m.tl.key(0.0, (10.0, 0.0))
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("the image part bakes");
+    let photo = document
+        .nodes()
+        .find(|node| node.name() == Some("photo"))
+        .expect("photo");
+    let motioner_core::NodeContent::Image(image) = photo.content() else {
+        panic!("photo is an image");
+    };
+    assert!(image.mesh.is_animated());
+    let sampled = image.mesh.sample(0.0, |_, t| t).expect("mesh topology");
+    assert!((sampled.points[0].x + 0.4).abs() < 1e-9);
+}
+
+#[test]
+fn a_video_part_skins_its_mesh() {
+    let source = "\
+comp(name=\"MediaSkin\", width=200, height=200, fps=60, duration=1.0)
+art = use(\"mascot.svg\")
+clip = video(\"clip.mp4\", width=100, height=100, mesh=(3, 3))
+m = rig(art)
+m.prop(\"turn\", 0.0)
+m.part(\"clip\", clip)
+m.bone(\"root\", at=(0, 0), length=50, rotation_prop=\"turn\")
+m.skin(\"clip\")
+m.turn.key(0.0, 90.0)
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("the video part skins");
+    let clip = document
+        .nodes()
+        .find(|node| node.name() == Some("clip"))
+        .expect("clip");
+    let motioner_core::NodeContent::Video(video) = clip.content() else {
+        panic!("clip is a video");
+    };
+    let sampled = video.mesh.sample(0.0, |_, t| t).expect("mesh topology");
+    assert!(
+        (sampled.points[0].x - 0.5).abs() < 1e-9,
+        "x={} y={}",
+        sampled.points[0].x,
+        sampled.points[0].y
+    );
+    assert!((sampled.points[0].y + 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn an_image_mesh_channel_keys_outside_a_rig() {
+    let source = "\
+comp(name=\"Mesh\", width=200, height=200, fps=60, duration=2.0)
+photo = image(\"photo.png\", width=100, height=100, mesh=(3, 3))
+photo.key(\"mesh\", 1.0, [[-40, -50], [10, -50], [60, -50], [-40, 0], [10, 0], [60, 0], [-40, 50], [10, 50], [60, 50]])
+";
+    let document =
+        motioner_dsl::run(source, &motioner_dsl::Limits::default()).expect("the mesh channel keys");
+    let photo = document
+        .nodes()
+        .find(|node| node.name() == Some("photo"))
+        .expect("photo");
+    let motioner_core::NodeContent::Image(image) = photo.content() else {
+        panic!("photo is an image");
+    };
+    assert!(image.mesh.is_animated());
+    let sampled = image.mesh.sample(60.0, |_, t| t).expect("mesh topology");
+    assert!((sampled.points[0].x + 40.0).abs() < 1e-9);
+}
+
+#[test]
+fn an_image_part_blends_its_mesh() {
+    let source = "\
+comp(name=\"MediaBlend\", width=200, height=200, fps=60, duration=1.0)
+art = use(\"mascot.svg\")
+photo = image(\"photo.png\", width=100, height=100, mesh=(3, 3))
+m = rig(art)
+m.prop(\"smile\", 0.0)
+m.part(\"photo\", photo)
+m.blend(\"photo\", points=[[-40, -50], [10, -50], [60, -50], [-40, 0], [10, 0], [60, 0], [-40, 50], [10, 50], [60, 50]], weight=\"smile\", fit=False)
+m.smile.key(0.0, 1.0)
+";
+    let document = run_with_assets(
+        source,
+        &motioner_dsl::Limits::default(),
+        &motioner_core::NoTextMetrics,
+        &assets(),
+    )
+    .expect("the image part blends");
+    let photo = document
+        .nodes()
+        .find(|node| node.name() == Some("photo"))
+        .expect("photo");
+    let motioner_core::NodeContent::Image(image) = photo.content() else {
+        panic!("photo is an image");
+    };
+    let sampled = image.mesh.sample(0.0, |_, t| t).expect("mesh topology");
+    assert!((sampled.points[0].x + 0.4).abs() < 1e-9);
+}
+
+#[test]
 fn a_rig_property_and_a_driver_bake_into_keys() {
     let source = "\
 comp(name=\"Rig\", width=200, height=200, fps=60, duration=2.0)

@@ -8,7 +8,7 @@ use motioner_core::{
 };
 
 use crate::affine::Affine2;
-use crate::curve::{sample_at, sample_geometry_at, sample_vec2_at};
+use crate::curve::{ease, sample_at, sample_geometry_at, sample_vec2_at};
 use crate::plan::{
     EffectValue, ItemShape, PlanLayer, PlanMask, RenderItem, RenderPlan, ResolvedFill,
     ResolvedGradient, ResolvedPaint, ResolvedPath, ResolvedStop, ResolvedStroke,
@@ -266,6 +266,7 @@ fn resolved_effects(node: &Node, time: f64) -> Vec<EffectValue> {
         .collect()
 }
 
+#[allow(clippy::too_many_lines)] // one arm per content kind, kept together
 fn item_shape(
     node: motioner_core::NodeId,
     content: &NodeContent,
@@ -350,11 +351,23 @@ fn item_shape(
                 image.fit,
                 image.asset.map(|asset| (asset.width, asset.height)),
             );
+            let mesh = if image.mesh.is_default_quad() {
+                None
+            } else {
+                image.mesh.sample(time, ease).map(|mut mesh| {
+                    for point in &mut mesh.points {
+                        point.x *= layout.width;
+                        point.y *= layout.height;
+                    }
+                    plan.push_mesh(mesh)
+                })
+            };
             Some(ItemShape::Image {
                 key: image.asset.map(|asset| asset.key),
                 width: layout.width,
                 height: layout.height,
                 uv: layout.uv,
+                mesh,
             })
         }
         NodeContent::Video(video) => {
@@ -364,11 +377,23 @@ fn item_shape(
                 video.fit,
                 video.asset.map(|asset| (asset.width, asset.height)),
             );
+            let mesh = if video.mesh.is_default_quad() {
+                None
+            } else {
+                video.mesh.sample(time, ease).map(|mut mesh| {
+                    for point in &mut mesh.points {
+                        point.x *= layout.width;
+                        point.y *= layout.height;
+                    }
+                    plan.push_mesh(mesh)
+                })
+            };
             Some(ItemShape::Image {
                 key: video.texture_key(node),
                 width: layout.width,
                 height: layout.height,
                 uv: layout.uv,
+                mesh,
             })
         }
     }
