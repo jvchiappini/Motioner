@@ -216,6 +216,10 @@ where it changes the model, goldens, spec, docs and write-through:
    material, reuse GPU buffers across frames; generic engine parts go to
    the dev clone. Target ≥ 60 fps, or ≥ 30 fps with the remaining
    bottleneck named and backlogged. Existing goldens byte-identical.
+   Reviewer finding after E5b: `motioner_render::shapes::draw_image`
+   allocates the mesh `vertices` and `indices` Vecs on every frame and
+   recomputes `MeshSample::indices()` although the topology is fixed;
+   reuse scratch buffers and cache indices per (columns, rows).
 4. Measurements (release): everything from E0.2 final values, mascot
    eval/frame before and after E3-E4, 50-instance preview fps, textured
    mesh cost, write-through latency per edit kind.
