@@ -11,6 +11,8 @@ repository.workspace = true
 motioner_core.workspace = true
 motioner_eval.workspace = true
 ferrous_2d.workspace = true
+# Startup marks for the font registration the preview pays for.
+ferrous_core.workspace = true
 ferrous_font.workspace = true
 ferrous_renderer.workspace = true
 wgpu.workspace = true

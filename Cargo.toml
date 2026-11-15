@@ -44,6 +44,7 @@ motioner_rig = { path = "crates/motioner_rig" }
 # `motioner_render` must still build alone with `default-features = false`,
 # which is why that entry stays explicit (D-0019/D-0020).
 ferrous_2d = { path = "engine/ferrous/crates/ferrous_2d" }
+ferrous_core = { path = "engine/ferrous/crates/ferrous_core" }
 ferrous_font = { path = "engine/ferrous/crates/ferrous_font" }
 ferrous_renderer = { path = "engine/ferrous/crates/ferrous_renderer", default-features = false }
 ferrous_engine = { path = "engine/ferrous/crates/ferrous_engine" }

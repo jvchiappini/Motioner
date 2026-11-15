@@ -2327,6 +2327,7 @@ name = "motioner_render"
 version = "0.1.0"
 dependencies = [
  "ferrous_2d",
+ "ferrous_core",
  "ferrous_font",
  "ferrous_renderer",
  "glam 0.29.3",

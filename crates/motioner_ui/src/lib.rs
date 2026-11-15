@@ -99,6 +99,11 @@ pub use layout::{
     Hit, Layout, LeftTab, MenuAction, PanelSizes, Rect, Splitter, TopBarToggle, TransportButton,
 };
 pub use motioner_dsl::structural::{LayerKind, StructuralCommand};
+
+/// The engine's startup trace, so the application binary can mark its own
+/// pre-window phases without depending on the engine directly.
+pub use ferrous_engine::startup;
+
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use overrides_panel::{command_text as override_command_text, OverrideRow};
 pub use properties::PropertySet;

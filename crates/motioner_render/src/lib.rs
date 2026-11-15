@@ -922,6 +922,11 @@ impl LivePainter {
     ) -> Result<Self, RenderError> {
         let mut font_ids = Vec::new();
         for face in fonts.all() {
+            // One span per face: the MSDF bake is the single most expensive
+            // thing the preview does before its first frame (prompt 17 S0/S1).
+            let _span = ferrous_core::startup::span_with(|| {
+                format!("motioner: font {} {}", face.family, face.weight)
+            });
             let id = renderer
                 .register_font_2d(&face.bytes, ferrous_font::charset::latin_western())
                 .map_err(|error| RenderError::Font {

@@ -325,6 +325,10 @@ impl fmt::Display for Failure {
 }
 
 fn main() -> ExitCode {
+    // Prompt 17 S0: start the engine's startup trace before anything else so
+    // the origin is the application's first instruction, not `App::run`.
+    motioner_ui::startup::begin_from_env();
+    motioner_ui::startup::mark("motioner: main");
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(true) => ExitCode::SUCCESS,
@@ -1253,10 +1257,17 @@ pub(crate) fn input_assets(target: &InputTarget) -> std::rc::Rc<dyn motioner_dsl
 fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
     eprintln!("desktop: enter");
     let root = std::env::current_dir().unwrap_or_default();
-    let services = host::Host::new(root);
+    let services = {
+        // Prompt 17 S0: pre-window work; the start-screen budget is 10 ms.
+        let _span = motioner_ui::startup::span("motioner: host");
+        host::Host::new(root)
+    };
     let placement = services.state().window;
     let services: std::rc::Rc<dyn motioner_ui::ProjectHost> = std::rc::Rc::new(services);
-    let fonts = FontSet::bundled();
+    let fonts = {
+        let _span = motioner_ui::startup::span("motioner: bundled fonts");
+        FontSet::bundled()
+    };
     let options = motioner_ui::PreviewOptions {
         host: Some(std::rc::Rc::clone(&services)),
         start: None,
@@ -1285,8 +1296,14 @@ fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
 
 /// Opens the live preview window.
 fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
-    let target = resolve_input(&args.input)?;
-    let fonts = project_fonts(&target);
+    let target = {
+        let _span = motioner_ui::startup::span("motioner: resolve input");
+        resolve_input(&args.input)?
+    };
+    let fonts = {
+        let _span = motioner_ui::startup::span("motioner: project fonts");
+        project_fonts(&target)
+    };
     let resolver = std::rc::Rc::new(match &target.project {
         Some(project) => ProjectImages::new(project),
         None => ProjectImages::loose(&target.root),

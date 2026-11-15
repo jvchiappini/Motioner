@@ -130,9 +130,14 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     if let Some(resolver) = options.asset_resolver.clone() {
         session.set_asset_resolver(resolver);
     }
-    match session.reload() {
-        Ok(()) | Err(SessionError::Diagnostic(_)) => {}
-        Err(error @ SessionError::Io { .. }) => return Err(UiError::Load(error)),
+    {
+        // Prompt 17 S0: the build+bake of the opened document, measured from
+        // the session reload through the first document the window can draw.
+        let _span = ferrous_engine::startup::span("motioner: document load");
+        match session.reload() {
+            Ok(()) | Err(SessionError::Diagnostic(_)) => {}
+            Err(error @ SessionError::Io { .. }) => return Err(UiError::Load(error)),
+        }
     }
 
     let (rate, duration) = session
@@ -212,7 +217,19 @@ pub fn run_app(options: PreviewOptions) -> Result<(), UiError> {
     if options.start.is_none() {
         let (recents, examples) = options.host.as_ref().map_or_else(
             || (Vec::new(), Vec::new()),
-            |host| (host.recents(), host.examples()),
+            |host| {
+                // Prompt 17 S0: the start screen is the pre-window work that
+                // must stay under 10 ms, so each list gets its own span.
+                let recents = {
+                    let _span = ferrous_engine::startup::span("motioner: recents");
+                    host.recents()
+                };
+                let examples = {
+                    let _span = ferrous_engine::startup::span("motioner: examples");
+                    host.examples()
+                };
+                (recents, examples)
+            },
         );
         options.start = Some(crate::StartScreen::new(recents, examples));
     }

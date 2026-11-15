@@ -271,6 +271,19 @@ or CR outside `engine/`.
 The toolchain is pinned in `rust-toolchain.toml` (1.96.0). The same
 checks run in `.github/workflows/ci.yml` on Windows and Linux.
 
+Startup is measured separately from the gate, with the engine's startup
+trace (`FERROUS_TRACE_STARTUP=1`; see
+`engine/ferrous/crates/ferrous_engine/docs/startup.md`):
+
+```
+cargo build --release -p motioner_app
+python scripts/startup_bench.py --runs 20
+```
+
+`scripts/startup_bench.py` runs `--start --exit-after-frames 1` and
+`preview examples/demo.motioner --exit-after-frames 1`, parses the JSON
+trace and prints median/p90 per mark, per span and for the closing path.
+
 ## Conventions
 
 All code, identifiers, comments, tests, messages and documentation are
