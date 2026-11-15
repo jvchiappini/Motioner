@@ -1,4 +1,4 @@
-# opencode prompt 17 — Startup performance: Motioner and FerrousEngine open in milliseconds (startup trace, font atlas cache, GPU init policy, lazy 3D, budgets)
+# opencode prompt 17 — Startup performance: Motioner and FerrousEngine open in milliseconds (startup trace, font atlas cache, GPU init policy, launch snapshot, lazy 3D, budgets)
 
 You are the orchestrator of a long, multi-phase job in the Motioner
 repository at `C:\Users\jvchi\CARPETAS\Motioner` (branch
