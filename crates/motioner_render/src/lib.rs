@@ -186,6 +186,19 @@ trait Canvas2d {
     /// Queues one sprite quad for an image texture.
     fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance);
 
+    /// Queues one textured triangle mesh for an image texture.
+    ///
+    /// `vertices` are in the node's local pixel space (the same space the
+    /// sprite's `width x height` box scales) and `transform` places them in
+    /// world space; the mesh samples `texture_id` exactly like a sprite.
+    fn draw_mesh(
+        &mut self,
+        texture_id: u32,
+        vertices: &[ferrous_2d::render::MeshVertex2d],
+        indices: &[u32],
+        transform: glam::Mat4,
+    );
+
     /// Opens an offscreen layer for a group of draws (D-0031, D-0032).
     ///
     /// `blend` selects how the finished layer composites into its parent and
@@ -321,6 +334,22 @@ impl Canvas2d for Pure2dHarness {
         self.draw_sprite(texture_id, instance);
     }
 
+    fn draw_mesh(
+        &mut self,
+        texture_id: u32,
+        vertices: &[ferrous_2d::render::MeshVertex2d],
+        indices: &[u32],
+        transform: glam::Mat4,
+    ) {
+        self.draw_textured_mesh(
+            texture_id,
+            vertices,
+            indices,
+            transform,
+            ferrous_2d::render::BlendMode2d::Normal,
+        );
+    }
+
     fn push_layer(
         &mut self,
         opacity: f64,
@@ -437,6 +466,23 @@ impl Canvas2d for ferrous_renderer::Renderer {
 
     fn draw_image(&mut self, texture_id: u32, instance: ferrous_2d::render::SpriteInstance) {
         ferrous_renderer::Renderer::draw_sprite_2d(self, texture_id, instance);
+    }
+
+    fn draw_mesh(
+        &mut self,
+        texture_id: u32,
+        vertices: &[ferrous_2d::render::MeshVertex2d],
+        indices: &[u32],
+        transform: glam::Mat4,
+    ) {
+        ferrous_renderer::Renderer::draw_textured_mesh_2d(
+            self,
+            texture_id,
+            vertices,
+            indices,
+            transform,
+            ferrous_2d::render::BlendMode2d::Normal,
+        );
     }
 
     fn push_layer(

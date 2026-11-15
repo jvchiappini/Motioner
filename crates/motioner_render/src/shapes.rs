@@ -171,6 +171,7 @@ pub(crate) fn draw_item(
             mesh,
         } => draw_image(
             canvas,
+            plan,
             images,
             image_textures,
             image_revisions,
@@ -191,6 +192,7 @@ pub(crate) fn draw_item(
 #[allow(clippy::too_many_arguments)] // the item's resolved state, kept flat
 fn draw_image(
     canvas: &mut impl Canvas2d,
+    plan: &RenderPlan,
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
@@ -210,7 +212,6 @@ fn draw_image(
     let Some(image) = images.get(&key) else {
         return 0;
     };
-    let _ = mesh;
     let texture_id = match image_textures.get(&key) {
         Some(&id) => {
             if image_revisions
@@ -250,8 +251,40 @@ fn draw_image(
             Err(_) => return draw_placeholder(canvas, item, model, width, height, z_index, total),
         },
     };
-    let transform = space::model_mat4(model, width, height, space::z_for(*z_index, total));
+    let z = space::z_for(*z_index, total);
     *z_index += 1;
+    // A deformed mesh replaces the sprite quad.  Its points are already in
+    // local pixels and its UVs span [0, 1] over the node, so the crop is
+    // mapped exactly like the sprite's `uv_rect`.  The default 2x2 mesh stays
+    // on the sprite path (`mesh` is `None` for it).
+    if let Some(index) = mesh {
+        if let Some(sample) = plan.mesh(index) {
+            let alpha = space::to_f32(item.opacity);
+            let vertices: Vec<ferrous_2d::render::MeshVertex2d> = sample
+                .points
+                .iter()
+                .zip(&sample.uvs)
+                .map(|(point, mesh_uv)| ferrous_2d::render::MeshVertex2d {
+                    position: [space::to_f32(point.x), space::to_f32(point.y), 0.0],
+                    // The mesh UVs are [0, 1] over the node; remap them into
+                    // the resolved crop exactly like the sprite path does.
+                    uv: [
+                        space::to_f32(mesh_uv[0] * (uv[2] - uv[0])) + space::to_f32(uv[0]),
+                        space::to_f32(mesh_uv[1] * (uv[3] - uv[1])) + space::to_f32(uv[1]),
+                    ],
+                    alpha,
+                    premultiplied: 0.0,
+                })
+                .collect();
+            let indices = sample.indices();
+            // Mesh points are pixels, so the transform carries no extra box
+            // scale (the sprite path folds `width`/`height` into its matrix).
+            let transform = space::model_mat4(model, 1.0, 1.0, z);
+            canvas.draw_mesh(texture_id, &vertices, &indices, transform);
+            return 1;
+        }
+    }
+    let transform = space::model_mat4(model, width, height, z);
     canvas.draw_image(
         texture_id,
         ferrous_2d::render::SpriteInstance {
