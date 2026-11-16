@@ -1038,6 +1038,7 @@ dependencies = [
  "half",
  "image 0.24.9",
  "js-sys",
+ "log",
  "notify",
  "rayon",
  "wasm-bindgen",
@@ -1257,6 +1258,7 @@ dependencies = [
  "ferrous_svg",
  "ferrous_ui_core",
  "glam 0.29.3",
+ "log",
  "wgpu",
 ]
 
