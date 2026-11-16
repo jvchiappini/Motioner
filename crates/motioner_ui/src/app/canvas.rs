@@ -91,6 +91,7 @@ impl PreviewApp {
 
     /// Paints the composition, computes the selection and hover bounds, and
     /// resolves a pending pick ([`Pick`]).
+    #[allow(clippy::too_many_lines)] // evaluate, paint, bounds and pick in one pass
     fn canvas_overlays(
         &mut self,
         renderer: &mut Renderer,
@@ -112,6 +113,9 @@ impl PreviewApp {
         let overrides = pick.map(|_| self.editor.session().overrides().clone());
         let generation = self.editor.session().generation();
         if self.painter_generation != Some(generation) {
+            // Prompt 17 S2: decoding the composition's images is first-frame
+            // work; it is measured here until S5 moves it off the path.
+            let _span = ferrous_engine::startup::span("motioner: decode images");
             let images = self.editor.session().decoded_images();
             let set = image_set(images);
             if let Some(painter) = self.painter.as_mut() {
@@ -122,7 +126,10 @@ impl PreviewApp {
             self.blur_generation = Some(generation);
         }
         let playing = self.editor.transport().is_playing();
-        self.update_video_images(frame, playing);
+        {
+            let _span = ferrous_engine::startup::span("motioner: video frame");
+            self.update_video_images(frame, playing);
+        }
         let blur_on = self.editor.motion_blur_preview()
             && self
                 .editor
@@ -133,41 +140,54 @@ impl PreviewApp {
             .editor
             .has_preview_filter()
             .then(|| self.editor.preview_hidden());
-        let Some((document, plan)) = self.editor.session_mut().evaluate(frame) else {
+        let Some((document, plan)) = ({
+            let _span = ferrous_engine::startup::span("motioner: evaluate");
+            self.editor.session_mut().evaluate(frame)
+        }) else {
             return (out, None);
         };
         if stale {
             self.eval_ms = started.elapsed().as_secs_f32() * 1000.0;
         }
         let comp = document.composition();
-        if blur_on
-            && hidden.is_none()
-            && self.blur.paint(
-                renderer,
-                document,
-                frame,
-                rect,
-                (layout.window.w, layout.window.h),
-                playing,
-                generation,
-            )
+        let mut paint_error = None;
         {
-            // The accumulated frame is on screen; the selection overlays below
-            // still run against the same document and plan.
-        } else if let Some(painter) = self.painter.as_mut() {
-            let fit = ViewFit::contain(
-                f64::from(comp.width()),
-                f64::from(comp.height()),
-                rect.to_f64(),
-                f64::from(layout.window.w),
-                f64::from(layout.window.h),
-            );
-            if let Some(hidden) = &hidden {
-                painter.paint_visible(renderer, document, plan, fit, hidden);
-            } else {
-                painter.paint(renderer, document, plan, fit);
+            let _span = ferrous_engine::startup::span("motioner: paint composition");
+            if blur_on
+                && hidden.is_none()
+                && self.blur.paint(
+                    renderer,
+                    document,
+                    frame,
+                    rect,
+                    (layout.window.w, layout.window.h),
+                    playing,
+                    generation,
+                )
+            {
+                // The accumulated frame is on screen; the selection overlays below
+                // still run against the same document and plan.
+            } else if let Some(painter) = self.painter.as_mut() {
+                let fit = ViewFit::contain(
+                    f64::from(comp.width()),
+                    f64::from(comp.height()),
+                    rect.to_f64(),
+                    f64::from(layout.window.w),
+                    f64::from(layout.window.h),
+                );
+                let painted = if let Some(hidden) = &hidden {
+                    painter.paint_visible(renderer, document, plan, fit, hidden)
+                } else {
+                    painter.paint(renderer, document, plan, fit)
+                };
+                if let Err(error) = painted {
+                    // A face the font set has but the engine could not
+                    // register: report it instead of drawing a substitute.
+                    paint_error = Some(error.to_string());
+                }
             }
         }
+        let _bounds_span = ferrous_engine::startup::span("motioner: selection bounds");
         let painter = self.painter.as_ref();
         let renderer_ref = &*renderer;
         let measure = |text: &str, size: f64| -> Option<TextExtent> {
@@ -198,6 +218,9 @@ impl PreviewApp {
             bounds::hit_node_where(document, plan, point, &measure, |node| !locked(node))
                 .map_or(Pick::Nothing, Pick::Node)
         });
+        if let Some(message) = paint_error {
+            self.report(&message);
+        }
         (out, picked)
     }
 

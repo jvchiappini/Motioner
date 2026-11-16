@@ -83,7 +83,9 @@ fn paint(frame: &Frame, width: u32, height: u32, fit: ViewFit) -> Option<Vec<u8>
         Err(other) => panic!("painter creation failed: {other}"),
     };
     harness.begin_frame();
-    painter.paint(harness.renderer_mut(), &frame.document, &frame.plan, fit);
+    painter
+        .paint(harness.renderer_mut(), &frame.document, &frame.plan, fit)
+        .expect("the plan paints");
     harness.render_frame();
     Some(harness.read_pixels())
 }

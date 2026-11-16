@@ -64,15 +64,19 @@ impl PreviewApp {
                 return;
             }
         };
+        // Prompt 17 S2: the document's faces (and the measurer that parses
+        // them lazily) exist only once a document is open.
+        let fonts = host.fonts(&composition);
+        let metrics: Arc<dyn motioner_core::TextMetrics> =
+            Arc::new(motioner_render::CpuTextMetrics::new(fonts.clone()));
         let mut session = PreviewSession::new(&composition);
-        session.set_text_metrics(self.metrics());
+        session.set_text_metrics(Arc::clone(&metrics));
         session.set_image_resolver(host.images(&composition));
         if let Some(videos) = host.videos(&composition) {
             session.set_video_resolver(videos);
         }
         session.set_asset_resolver(host.asset_resolver(&composition));
         let _ = session.reload();
-        let fonts = host.fonts(&composition);
         let mut families: Vec<String> =
             fonts.faces().map(|(family, _)| family.to_owned()).collect();
         families.sort();
@@ -89,7 +93,11 @@ impl PreviewApp {
         });
         // Offer the one-time conversion when the file already has overrides.
         self.bake_offer = !self.editor.session().overrides().is_empty();
-        self.fonts = Some(fonts);
+        self.fonts = Some(fonts.clone());
+        if let Some(painter) = self.painter.as_mut() {
+            painter.set_fonts(fonts.clone());
+        }
+        self.blur.set_fonts(fonts);
         self.watch = FileWatch::new(&composition);
         self.program_writes = self.editor.session().program_writes();
         self.painter_generation = None;
@@ -100,6 +108,9 @@ impl PreviewApp {
         }
         self.start = None;
         self.menu_open = false;
+        // Prompt 17 S2: bake the new document's faces now; the first paint
+        // uploads whatever is ready and registers the rest.
+        self.start_font_bakes();
         if let Some(host) = self.host() {
             self.recovery = host.recovery(&composition);
             host.begin_session(&composition);
@@ -193,6 +204,7 @@ impl PreviewApp {
         );
         self.start = Some(StartScreen::new(recents, examples));
         self.menu_open = false;
+        self.font_bakes = None;
         self.editor = Editor::blank(self.metrics());
         self.program_writes = 0;
         self.asset_generation = self.asset_generation.saturating_add(1);
@@ -254,7 +266,7 @@ impl PreviewApp {
     }
 
     /// Shows a message in the status bar (or the start screen error line).
-    fn report(&mut self, message: &str) {
+    pub(crate) fn report(&mut self, message: &str) {
         if let Some(start) = self.start.as_mut() {
             start.error = Some(message.to_owned());
         } else {

@@ -51,6 +51,19 @@ impl BlurPreview {
         }
     }
 
+    /// Replaces the face set the offscreen renderer registers (prompt 17 S2).
+    ///
+    /// The offscreen renderer is dropped, so the next blur frame rebuilds it
+    /// with the new document's faces.
+    pub(super) fn set_fonts(&mut self, fonts: FontSet) {
+        if self.fonts.faces().eq(fonts.faces()) {
+            return;
+        }
+        self.fonts = fonts;
+        self.renderer = None;
+        self.last = None;
+    }
+
     pub(super) fn last_ms(&self) -> f32 {
         self.last_ms
     }

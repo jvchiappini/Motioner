@@ -167,6 +167,14 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     run_inner(editor, options, title)
 }
 
+/// The on-disk font atlas cache Motioner uses (prompt 17 S1/S2).
+///
+/// It lives in the per-OS local cache directory, never inside a project: it
+/// holds only MSDF atlases of the bundled and project faces, no user content.
+pub(crate) fn font_cache_config() -> ferrous_font::FontCacheConfig {
+    ferrous_font::FontCacheConfig::for_app("Motioner")
+}
+
 /// Runs the window for an already loaded editor.
 #[allow(clippy::needless_pass_by_value)] // cloned into the app and borrowed by the builder
 fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(), UiError> {
@@ -187,7 +195,11 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
     // `App::run` consumes the app and returns `()`, so a fatal error raised
     // inside the event loop is handed back through this shared slot.
     let fatal = Rc::new(RefCell::new(None));
-    let app = PreviewApp::new(editor, options, control, Rc::clone(&fatal), title.clone());
+    let app = {
+        // Prompt 17 S2: work the window does before the first frame.
+        let _span = ferrous_engine::startup::span("motioner: app new");
+        PreviewApp::new(editor, options, control, Rc::clone(&fatal), title.clone())
+    };
     App::new(app)
         .with_title(&title)
         .with_size(width.max(320), height.max(240))
@@ -199,7 +211,7 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         // Prompt 17 S1: the MSDF bake is the largest cost the window pays
         // before its first frame; cache it per face so only the first launch
         // of a build pays it.
-        .with_font_cache(ferrous_font::FontCacheConfig::for_app("Motioner"))
+        .with_font_cache(font_cache_config())
         .run();
     let error = fatal.borrow_mut().take();
     error.map_or(Ok(()), Err)

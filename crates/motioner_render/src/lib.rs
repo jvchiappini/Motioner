@@ -31,7 +31,9 @@ mod text;
 pub mod tools;
 
 pub use fit::ViewFit;
-pub use fonts::{CpuTextMetrics, FontFace, FontFamilyError, FontSet, FontWarning, ResolvedFace};
+pub use fonts::{
+    document_faces, CpuTextMetrics, FontFace, FontFamilyError, FontSet, FontWarning, ResolvedFace,
+};
 pub use paths::path_bounds;
 pub use space::{linear_rgba, srgb_to_linear};
 
@@ -913,6 +915,9 @@ impl LivePainter {
 
     /// [`Self::new`] with extra project faces (D-0034).
     ///
+    /// Registers **every** face up front. Callers that want to pay for faces
+    /// only when a document uses them should use [`Self::lazy`].
+    ///
     /// # Errors
     ///
     /// Returns [`RenderError::Font`] when a face cannot be registered.
@@ -920,35 +925,50 @@ impl LivePainter {
         renderer: &mut ferrous_renderer::Renderer,
         fonts: FontSet,
     ) -> Result<Self, RenderError> {
-        let mut font_ids = Vec::new();
-        for face in fonts.all() {
+        let mut painter = Self::with_fallback(renderer, fonts)?;
+        for face in painter.fonts.all() {
             // One span per face: the MSDF bake is the single most expensive
             // thing the preview does before its first frame (prompt 17 S0/S1).
             let _span = ferrous_core::startup::span_with(|| {
                 format!("motioner: font {} {}", face.family, face.weight)
             });
-            let id = renderer
-                .register_font_2d(&face.bytes, ferrous_font::charset::latin_western())
-                .map_err(|error| RenderError::Font {
-                    message: error.to_string(),
-                })?;
-            font_ids.push(((face.family.clone(), face.weight), id));
+            let id = register_face(renderer, &face.family, face.weight, face.bytes.as_ref())?;
+            painter
+                .font_ids
+                .push(((face.family.clone(), face.weight), id));
         }
-        let font = match font_ids
-            .iter()
-            .find(|((family, weight), _)| *weight == 400 && family.eq_ignore_ascii_case("Roboto"))
-        {
-            Some((_, id)) => *id,
-            None => renderer
-                .register_font_2d(ROBOTO, ferrous_font::charset::latin_western())
-                .map_err(|error| RenderError::Font {
-                    message: error.to_string(),
-                })?,
-        };
+        Ok(painter)
+    }
+
+    /// A painter that registers only its fallback face (prompt 17 S2).
+    ///
+    /// Composition faces stay unresolved until [`Self::paint`] meets a text
+    /// node that uses them: [`Self::paint`] registers every face the visible
+    /// text needs before it draws, so no frame can render with a substituted
+    /// font. On a warm cache that registration is the atlas upload (a few
+    /// milliseconds); a worker that already baked the face can skip the bake
+    /// with [`Self::add_baked_face`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Font`] when the fallback face cannot be
+    /// registered.
+    pub fn lazy(
+        renderer: &mut ferrous_renderer::Renderer,
+        fonts: FontSet,
+    ) -> Result<Self, RenderError> {
+        Self::with_fallback(renderer, fonts)
+    }
+
+    /// Builds the painter with no composition face registered yet.
+    fn with_fallback(
+        renderer: &mut ferrous_renderer::Renderer,
+        fonts: FontSet,
+    ) -> Result<Self, RenderError> {
         Ok(Self {
-            font,
+            font: register_face(renderer, "Roboto", 400, ROBOTO)?,
             fonts,
-            font_ids,
+            font_ids: Vec::new(),
             missing_glyphs: HashMap::new(),
             path_cache: paths::PathCache::default(),
             images: ImageSet::new(),
@@ -961,6 +981,94 @@ impl LivePainter {
     #[must_use]
     pub fn font_set(&self) -> &FontSet {
         &self.fonts
+    }
+
+    /// Replaces the face set faces are resolved from (a newly opened document).
+    ///
+    /// Already registered atlases stay: the next paint registers whatever the
+    /// new set resolves to and is still missing, so switching documents never
+    /// re-uploads a face the engine already has.
+    pub fn set_fonts(&mut self, fonts: FontSet) {
+        self.fonts = fonts;
+    }
+
+    /// Whether a resolved face is registered with the engine.
+    #[must_use]
+    pub fn face_registered(&self, family: &str, weight: u16) -> bool {
+        self.font_ids
+            .iter()
+            .any(|((name, w), _)| *w == weight && name.eq_ignore_ascii_case(family))
+    }
+
+    /// The engine handle of a registered face.
+    #[must_use]
+    pub fn font_id(&self, family: &str, weight: u16) -> Option<ferrous_2d::render::FontId2d> {
+        self.font_ids
+            .iter()
+            .find(|((name, w), _)| *w == weight && name.eq_ignore_ascii_case(family))
+            .map(|(_, id)| *id)
+    }
+
+    /// Registers a face that was baked elsewhere (usually on a worker).
+    ///
+    /// The atlas is uploaded here, on the frame thread, and becomes the face
+    /// the plan uses. Registering the same face twice is a no-op: the engine
+    /// shares one atlas per [`ferrous_font::FontKey`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Font`] when the atlas cannot be uploaded.
+    pub fn add_baked_face(
+        &mut self,
+        renderer: &mut ferrous_renderer::Renderer,
+        family: &str,
+        weight: u16,
+        baked: ferrous_font::BakedAtlas,
+    ) -> Result<(), RenderError> {
+        if self.face_registered(family, weight) {
+            return Ok(());
+        }
+        let id = renderer
+            .register_baked_font_2d(baked)
+            .map_err(|error| RenderError::Font {
+                message: error.to_string(),
+            })?;
+        self.font_ids.push(((family.to_owned(), weight), id));
+        Ok(())
+    }
+
+    /// Registers the project faces the document needs but are not on the GPU
+    /// yet, before anything is drawn.
+    ///
+    /// A family the font set does not have keeps the documented fallback to
+    /// Roboto; a face the set *does* have is always registered first, which is
+    /// what makes a wrong-face frame impossible.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Font`] when a face cannot be registered.
+    pub fn ensure_faces(
+        &mut self,
+        renderer: &mut ferrous_renderer::Renderer,
+        document: &Document,
+        plan: &RenderPlan,
+    ) -> Result<(), RenderError> {
+        for (family, weight) in frame::resolved_faces(document, plan, &self.fonts) {
+            if self.face_registered(&family, weight) {
+                continue;
+            }
+            let _span = ferrous_core::startup::span_with(|| {
+                format!("motioner: font on demand {family} {weight}")
+            });
+            let face = self
+                .fonts
+                .resolve(&family, weight)
+                .map_err(RenderError::FontFamily)?;
+            let id = register_face(renderer, face.family, face.weight, face.bytes)?;
+            self.font_ids
+                .push(((face.family.to_owned(), face.weight), id));
+        }
+        Ok(())
     }
 
     /// Replaces the decoded images the preview may draw.
@@ -1011,20 +1119,34 @@ impl LivePainter {
     ///
     /// A fit that draws nothing (for example a zero-size viewport) returns
     /// zeroed [`PaintStats`] without touching the renderer.
+    ///
+    /// Every face the plan's text uses is registered first (see
+    /// [`Self::ensure_faces`]), so a lazily built painter never draws a
+    /// substituted font, not even on its first frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Font`] / [`RenderError::FontFamily`] when a face
+    /// cannot be registered.
     pub fn paint(
         &mut self,
         renderer: &mut ferrous_renderer::Renderer,
         document: &Document,
         plan: &RenderPlan,
         fit: ViewFit,
-    ) -> PaintStats {
+    ) -> Result<PaintStats, RenderError> {
         if !fit.is_drawable() {
-            return PaintStats::default();
+            return Ok(PaintStats::default());
         }
+        self.ensure_faces(renderer, document, plan)?;
         let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
-        let gradients = gradients::GradientTable::build(plan, flip);
-        renderer.set_2d_gradient_table(gradients.slots());
-        frame::paint_plan(
+        let gradients = {
+            let _span = ferrous_core::startup::span("motioner: gradients");
+            let gradients = gradients::GradientTable::build(plan, flip);
+            renderer.set_2d_gradient_table(gradients.slots());
+            gradients
+        };
+        Ok(frame::paint_plan(
             renderer,
             document,
             plan,
@@ -1038,13 +1160,17 @@ impl LivePainter {
             &mut self.image_textures,
             &mut self.image_revisions,
             None,
-        )
+        ))
     }
 
     /// [`Self::paint`] that skips the given nodes and their subtrees.
     ///
     /// Used by the editor's solo/shy preview (D-0044). The render and still
     /// paths never call it, so editor state cannot change exported pixels.
+    ///
+    /// # Errors
+    ///
+    /// The same conditions as [`Self::paint`].
     pub fn paint_visible(
         &mut self,
         renderer: &mut ferrous_renderer::Renderer,
@@ -1052,14 +1178,19 @@ impl LivePainter {
         plan: &RenderPlan,
         fit: ViewFit,
         hidden: &std::collections::BTreeSet<motioner_core::NodeId>,
-    ) -> PaintStats {
+    ) -> Result<PaintStats, RenderError> {
         if !fit.is_drawable() {
-            return PaintStats::default();
+            return Ok(PaintStats::default());
         }
+        self.ensure_faces(renderer, document, plan)?;
         let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
-        let gradients = gradients::GradientTable::build(plan, flip);
-        renderer.set_2d_gradient_table(gradients.slots());
-        frame::paint_plan(
+        let gradients = {
+            let _span = ferrous_core::startup::span("motioner: gradients");
+            let gradients = gradients::GradientTable::build(plan, flip);
+            renderer.set_2d_gradient_table(gradients.slots());
+            gradients
+        };
+        Ok(frame::paint_plan(
             renderer,
             document,
             plan,
@@ -1073,6 +1204,21 @@ impl LivePainter {
             &mut self.image_textures,
             &mut self.image_revisions,
             Some(hidden),
-        )
+        ))
     }
+}
+
+/// Registers one face with the engine, mapping its error to [`RenderError`].
+#[cfg(feature = "live")]
+fn register_face(
+    renderer: &mut ferrous_renderer::Renderer,
+    _family: &str,
+    _weight: u16,
+    bytes: &[u8],
+) -> Result<ferrous_2d::render::FontId2d, RenderError> {
+    renderer
+        .register_font_2d(bytes, ferrous_font::charset::latin_western())
+        .map_err(|error| RenderError::Font {
+            message: error.to_string(),
+        })
 }

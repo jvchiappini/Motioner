@@ -61,15 +61,21 @@ impl AudioOutput {
             count = (u128::from(SAMPLE_RATE) * 60) / 1000; // 60 ms grain
         }
         let count = usize::try_from(count).map_err(|_| "the audio range is too long")?;
-        let store = store_for(project, document);
+        let store = {
+            let _span = motioner_ui::startup::span("motioner: audio decode");
+            store_for(project, document)
+        };
         let muted: HashSet<String> = muted.iter().cloned().collect();
-        let samples = mix_document(
-            document,
-            &store,
-            u64::try_from(from_sample).unwrap_or(0),
-            count,
-            &muted,
-        );
+        let samples = {
+            let _span = motioner_ui::startup::span("motioner: audio mix");
+            mix_document(
+                document,
+                &store,
+                u64::try_from(from_sample).unwrap_or(0),
+                count,
+                &muted,
+            )
+        };
         let silent = !samples.iter().any(|sample| *sample != 0.0);
         let frames = count;
         let playback = Arc::new(Mutex::new(Playback {
@@ -80,6 +86,7 @@ impl AudioOutput {
         let stream = if silent {
             None
         } else {
+            let _span = motioner_ui::startup::span("motioner: audio stream");
             let stream = build_stream(Arc::clone(&playback))?;
             stream.play().map_err(|error| error.to_string())?;
             Some(stream)

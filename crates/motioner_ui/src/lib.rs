@@ -40,6 +40,7 @@ mod diff;
 mod edit;
 mod editor;
 mod file_watch;
+mod font_jobs;
 mod gizmo;
 mod graph;
 mod host;

@@ -259,7 +259,9 @@ fn a_hidden_layer_is_not_painted() {
         let mut painter =
             LivePainter::new(harness.renderer_mut()).expect("font registration must work");
         harness.begin_frame();
-        painter.paint(harness.renderer_mut(), document, &plan, ViewFit::IDENTITY);
+        painter
+            .paint(harness.renderer_mut(), document, &plan, ViewFit::IDENTITY)
+            .expect("the plan paints");
         harness.render_frame();
         harness.read_pixels()
     };

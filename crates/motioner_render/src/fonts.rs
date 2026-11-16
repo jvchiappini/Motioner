@@ -7,6 +7,7 @@
 //! built from, so measurement (including GPOS kerning) can never drift from
 //! what is drawn.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,10 @@ pub(crate) const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/I
 pub(crate) const INTER_BOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-Bold.ttf");
 
 /// One static font face: a family name, a weight and the file bytes.
+///
+/// Bundled faces borrow the embedded files; project faces own the bytes read
+/// from disk. That keeps [`FontSet::bundled`] from copying ~640 KB of fonts at
+/// every launch (prompt 17 S2).
 #[derive(Clone)]
 pub struct FontFace {
     /// Family name as written in MDF (`"Inter"`).
@@ -28,7 +33,7 @@ pub struct FontFace {
     /// Weight in 100..=900.
     pub weight: u16,
     /// TTF/OTF bytes.
-    pub bytes: Vec<u8>,
+    pub bytes: Cow<'static, [u8]>,
 }
 
 /// A font family missing from both the project and the bundled set.
@@ -89,13 +94,15 @@ pub struct FontSet {
 
 impl FontSet {
     /// The faces every renderer ships: Inter 400/600/700 and Roboto 400.
+    ///
+    /// The bytes stay borrowed from the binary; only the family names allocate.
     #[must_use]
     pub fn bundled() -> Self {
         let mut set = Self::default();
-        set.push_face("Inter", 400, INTER_REGULAR.to_vec());
-        set.push_face("Inter", 600, INTER_SEMIBOLD.to_vec());
-        set.push_face("Inter", 700, INTER_BOLD.to_vec());
-        set.push_face("Roboto", 400, crate::ROBOTO.to_vec());
+        set.push_borrowed_face("Inter", 400, INTER_REGULAR);
+        set.push_borrowed_face("Inter", 600, INTER_SEMIBOLD);
+        set.push_borrowed_face("Inter", 700, INTER_BOLD);
+        set.push_borrowed_face("Roboto", 400, crate::ROBOTO);
         set
     }
 
@@ -105,7 +112,16 @@ impl FontSet {
         self.faces.push(FontFace {
             family: family.into(),
             weight,
-            bytes,
+            bytes: Cow::Owned(bytes),
+        });
+    }
+
+    /// Adds one face whose bytes are embedded in the binary.
+    fn push_borrowed_face(&mut self, family: &str, weight: u16, bytes: &'static [u8]) {
+        self.faces.push(FontFace {
+            family: family.to_owned(),
+            weight,
+            bytes: Cow::Borrowed(bytes),
         });
     }
 
@@ -146,7 +162,7 @@ impl FontSet {
             return Ok(ResolvedFace {
                 family: &face.family,
                 weight: face.weight,
-                bytes: &face.bytes,
+                bytes: face.bytes.as_ref(),
                 warning: None,
             });
         }
@@ -160,7 +176,7 @@ impl FontSet {
             Some(face) => Ok(ResolvedFace {
                 family: &face.family,
                 weight: face.weight,
-                bytes: &face.bytes,
+                bytes: face.bytes.as_ref(),
                 warning: Some(FontWarning::NearestWeight {
                     requested: weight,
                     used: face.weight,
@@ -192,6 +208,35 @@ impl FontSet {
         out.push(format!("(requested weight {weight})"));
         out
     }
+}
+
+/// The faces a document's text nodes use, resolved through `fonts`.
+///
+/// One entry per distinct resolved `(family, weight)`; a family the set does
+/// not have is skipped, because layout falls back to Roboto for it (the
+/// documented behaviour for a missing family). This is the list a caller bakes
+/// on a worker before the first frame that shows the text.
+#[must_use]
+pub fn document_faces(document: &motioner_core::Document, fonts: &FontSet) -> Vec<(String, u16)> {
+    use motioner_core::NodeContent;
+    let mut faces: Vec<(String, u16)> = Vec::new();
+    for node in document.nodes() {
+        let NodeContent::Text(content) = node.content() else {
+            continue;
+        };
+        let Ok(resolved) = fonts.resolve(&content.font, content.weight) else {
+            continue;
+        };
+        let key = (resolved.family.to_owned(), resolved.weight);
+        if faces
+            .iter()
+            .any(|(family, weight)| *weight == key.1 && family.eq_ignore_ascii_case(&key.0))
+        {
+            continue;
+        }
+        faces.push(key);
+    }
+    faces
 }
 
 /// One cached layout table per resolved `(family, weight)`.
@@ -300,4 +345,59 @@ fn align_to_engine(align: TextAlign) -> ferrous_font::TextAlign {
 #[allow(clippy::cast_possible_truncation)] // deliberate f64 -> f32 engine boundary
 fn to_f32(value: f64) -> f32 {
     value as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use motioner_core::{
+        Color, Composition, Document, FrameRate, NodeContent, TextAlign, TextContent,
+    };
+
+    fn document(fonts: &[(&str, u16)]) -> Document {
+        let rate = FrameRate::new(60, 1).unwrap();
+        let mut document =
+            Document::new(Composition::new("Test", 320, 180, rate, 10, Color::BLACK).unwrap());
+        for (font, weight) in fonts {
+            let mut content = TextContent::new("Text", *font, 24.0, Color::WHITE, TextAlign::Left);
+            content.weight = *weight;
+            document.add_node(NodeContent::Text(content)).unwrap();
+        }
+        document
+    }
+
+    #[test]
+    fn document_faces_resolves_and_deduplicates() {
+        let document = document(&[("Inter", 700), ("Inter", 700), ("Roboto", 400)]);
+        let faces = document_faces(&document, &FontSet::bundled());
+        assert_eq!(
+            faces,
+            vec![("Inter".to_owned(), 700), ("Roboto".to_owned(), 400)]
+        );
+    }
+
+    #[test]
+    fn document_faces_skips_unknown_families() {
+        let document = document(&[("No Such Face", 400)]);
+        assert!(document_faces(&document, &FontSet::bundled()).is_empty());
+    }
+
+    #[test]
+    fn document_faces_maps_a_missing_weight_to_the_nearest_face() {
+        // The bundled set has Inter 400/600/700: 650 resolves to 600.
+        let document = document(&[("Inter", 650)]);
+        assert_eq!(
+            document_faces(&document, &FontSet::bundled()),
+            vec![("Inter".to_owned(), 600)]
+        );
+    }
+
+    #[test]
+    fn bundled_faces_borrow_the_embedded_bytes() {
+        let fonts = FontSet::bundled();
+        assert_eq!(fonts.faces().count(), 4);
+        assert!(fonts
+            .all()
+            .all(|face| matches!(face.bytes, std::borrow::Cow::Borrowed(_))));
+    }
 }

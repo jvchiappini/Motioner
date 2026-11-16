@@ -192,9 +192,14 @@ pub(crate) struct PreviewApp {
     audio_started: bool,
     /// Last frame that played a scrub grain.
     last_scrub_audio: Option<Frame>,
+    /// On-disk atlas cache the font workers bake through (prompt 17 S2).
+    font_cache: Option<ferrous_font::AtlasCache>,
+    /// Faces a worker is baking for the open document, when any.
+    font_bakes: Option<crate::font_jobs::FontBakes>,
 }
 
 impl PreviewApp {
+    #[allow(clippy::too_many_lines)] // one struct literal; the fields are the window's state
     pub(crate) fn new(
         editor: Editor,
         options: PreviewOptions,
@@ -220,10 +225,11 @@ impl PreviewApp {
             None
         };
         let fonts = options.fonts.clone();
-        let blur_fonts = fonts
-            .clone()
-            .unwrap_or_else(motioner_render::FontSet::bundled);
-        Self {
+        // The start screen opens without a document, so it starts with no
+        // composition faces; opening a project replaces both sets (prompt 17
+        // S2). An empty set allocates nothing.
+        let blur_fonts = fonts.clone().unwrap_or_default();
+        let mut app = Self {
             editor,
             watch,
             program_writes,
@@ -301,6 +307,59 @@ impl PreviewApp {
             last_snapshot: Instant::now(),
             audio_started: false,
             last_scrub_audio: None,
+            font_cache: ferrous_font::AtlasCache::from_config(&crate::window::font_cache_config()),
+            font_bakes: None,
+        };
+        app.start_font_bakes();
+        app
+    }
+
+    /// Starts baking the faces the open document uses (prompt 17 S2).
+    ///
+    /// The worker runs while the engine initialises the device; every face it
+    /// finishes is uploaded on the next frame. A face the frame needs before
+    /// the worker is done is registered by `paint` instead, so this is only a
+    /// latency optimisation.
+    fn start_font_bakes(&mut self) {
+        self.font_bakes = None;
+        let Some(fonts) = self.fonts.as_ref() else {
+            return;
+        };
+        let Some(document) = self.editor.session().document() else {
+            return;
+        };
+        self.font_bakes =
+            crate::font_jobs::FontBakes::spawn(document, fonts, self.font_cache.clone());
+    }
+
+    /// Uploads the atlases the worker finished, on the frame thread.
+    fn poll_font_bakes(&mut self, ctx: &mut AppContext<'_>) {
+        let done = match self.font_bakes.as_ref() {
+            Some(bakes) => bakes.poll(),
+            None => return,
+        };
+        if done.is_empty() {
+            return;
+        }
+        let renderer = ctx.render.renderer_mut();
+        let mut errors = Vec::new();
+        {
+            let Some(painter) = self.painter.as_mut() else {
+                return;
+            };
+            for face in done {
+                let _span = ferrous_engine::startup::span_with(|| {
+                    format!("motioner: font upload {} {}", face.family, face.weight)
+                });
+                if let Err(error) =
+                    painter.add_baked_face(renderer, &face.family, face.weight, face.atlas)
+                {
+                    errors.push(error.to_string());
+                }
+            }
+        }
+        for message in errors {
+            self.report(&message);
         }
     }
 
@@ -364,6 +423,8 @@ impl PreviewApp {
         if let Some(painter) = self.painter.as_mut() {
             painter.clear_cache();
         }
+        // Prompt 17 S2: the new document may use other faces.
+        self.start_font_bakes();
         self.last_reload = Some(Instant::now());
         self.last_bounds = None;
     }
@@ -748,6 +809,8 @@ impl PreviewApp {
             && self.start.is_none()
             && self.editor.session().document().is_some()
         {
+            // Prompt 17 S2: first-frame cost (asset scan/hash), measured.
+            let _span = ferrous_engine::startup::span("motioner: refresh assets");
             self.refresh_assets();
         }
         if self.start.is_some() {
@@ -759,6 +822,9 @@ impl PreviewApp {
             }
             return;
         }
+        // Prompt 17 S2: upload the atlases the font worker finished before
+        // this frame paints.
+        self.poll_font_bakes(ctx);
         let layout = self.relayout(ctx);
         self.editor.view_mut().fit_zoom = canvas::fit_zoom(self.editor.session(), &layout);
 
@@ -823,7 +889,12 @@ impl PreviewApp {
 
         self.handle_pointer(ctx, &layout);
         self.poll_proxy_status();
-        self.sync_audio();
+        {
+            // Prompt 17 S2: starting device audio mixes the document's audio
+            // on the first frame; measured so it does not hide elsewhere.
+            let _span = ferrous_engine::startup::span("motioner: audio start");
+            self.sync_audio();
+        }
         self.reveal(&layout);
         self.editor.session_mut().flush_overrides(Instant::now());
         self.relayout(ctx);
@@ -1199,7 +1270,11 @@ impl PreviewApp {
         } else {
             self.chrome.clear();
         }
-        let canvas = self.paint_canvas(ctx.render.renderer_mut(), &layout, frame);
+        let canvas = {
+            // Prompt 17 S2: composition paint (evaluate + paint), measured.
+            let _span = ferrous_engine::startup::span("motioner: canvas");
+            self.paint_canvas(ctx.render.renderer_mut(), &layout, frame)
+        };
         let file_name = self
             .editor
             .session()
@@ -1306,25 +1381,29 @@ impl PreviewApp {
         };
 
         let mut p = Painter::new(dc.gui, dc.font, &self.theme, layout.metrics);
-        panels::canvas::draw_overlays(&mut p, &view, self.started.elapsed().as_secs_f32());
-        p.layer();
-        panels::top_bar::draw(&mut p, &view);
-        // The counter covers exactly the outline (layers panel) and timeline
-        // chrome, not the inspector, the composition paint or the GUI batch.
-        let outline_before = crate::alloc::allocations();
-        match self.left_tab {
-            crate::LeftTab::Layers => panels::layers::draw(&mut p, &view),
-            crate::LeftTab::Assets => panels::assets::draw(&mut p, &view),
+        {
+            // Prompt 17 S2: the chrome's first-frame layout and text, measured.
+            let _span = ferrous_engine::startup::span("motioner: panels");
+            panels::canvas::draw_overlays(&mut p, &view, self.started.elapsed().as_secs_f32());
+            p.layer();
+            panels::top_bar::draw(&mut p, &view);
+            // The counter covers exactly the outline (layers panel) and timeline
+            // chrome, not the inspector, the composition paint or the GUI batch.
+            let outline_before = crate::alloc::allocations();
+            match self.left_tab {
+                crate::LeftTab::Layers => panels::layers::draw(&mut p, &view),
+                crate::LeftTab::Assets => panels::assets::draw(&mut p, &view),
+            }
+            let outline_after = crate::alloc::allocations();
+            panels::inspector::draw(&mut p, &view);
+            let timeline_before = crate::alloc::allocations();
+            panels::timeline::draw(&mut p, &view);
+            let timeline_after = crate::alloc::allocations();
+            view.stats.allocations = outline_after
+                .saturating_sub(outline_before)
+                .saturating_add(timeline_after.saturating_sub(timeline_before));
+            panels::status::draw(&mut p, &view);
         }
-        let outline_after = crate::alloc::allocations();
-        panels::inspector::draw(&mut p, &view);
-        let timeline_before = crate::alloc::allocations();
-        panels::timeline::draw(&mut p, &view);
-        let timeline_after = crate::alloc::allocations();
-        view.stats.allocations = outline_after
-            .saturating_sub(outline_before)
-            .saturating_add(timeline_after.saturating_sub(timeline_before));
-        panels::status::draw(&mut p, &view);
         if self.file_drop_hover {
             draw_drop_hover(&mut p, &layout, mouse_x, mouse_y);
         }
@@ -1374,9 +1453,13 @@ impl FerrousApp for PreviewApp {
             pasteboard[1],
             pasteboard[2],
         ));
-        let painter = match self.fonts.clone() {
-            Some(fonts) => LivePainter::with_fonts(ctx.render.renderer_mut(), fonts),
-            None => LivePainter::new(ctx.render.renderer_mut()),
+        let painter = {
+            // Prompt 17 S2: only the fallback face is registered here. The
+            // faces a document's text uses are registered when the document
+            // needs them (a worker pre-bakes them, `paint` registers any the
+            // frame still misses), so the start screen pays for none of them.
+            let fonts = self.fonts.clone().unwrap_or_default();
+            LivePainter::lazy(ctx.render.renderer_mut(), fonts)
         };
         match painter {
             Ok(painter) => self.painter = Some(painter),
@@ -1388,10 +1471,12 @@ impl FerrousApp for PreviewApp {
     }
 
     fn update(&mut self, ctx: &mut AppContext<'_>) {
+        let _span = ferrous_engine::startup::span("motioner: update");
         self.run_update(ctx);
     }
 
     fn draw_ui(&mut self, dc: &mut DrawContext<'_, '_>) {
+        let _span = ferrous_engine::startup::span("motioner: draw ui");
         self.run_draw_ui(dc);
     }
 

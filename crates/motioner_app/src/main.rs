@@ -1264,10 +1264,9 @@ fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
     };
     let placement = services.state().window;
     let services: std::rc::Rc<dyn motioner_ui::ProjectHost> = std::rc::Rc::new(services);
-    let fonts = {
-        let _span = motioner_ui::startup::span("motioner: bundled fonts");
-        FontSet::bundled()
-    };
+    // Prompt 17 S2: the start screen needs only the engine's UI font. The
+    // composition faces (and the measurer that parses them) are built when a
+    // project opens, so this path no longer copies the bundled set.
     let options = motioner_ui::PreviewOptions {
         host: Some(std::rc::Rc::clone(&services)),
         start: None,
@@ -1280,8 +1279,8 @@ fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
         ui_scale: args.ui_scale_milli.map(|milli| milli as f32 / 1000.0),
         screenshot: args.screenshot.clone(),
         png_writer: Some(write_screenshot),
-        text_metrics: Some(Arc::new(CpuTextMetrics::new(fonts.clone()))),
-        fonts: Some(fonts),
+        text_metrics: None,
+        fonts: None,
         ..motioner_ui::PreviewOptions::default()
     };
     if let Some(path) = &args.screenshot {

@@ -294,6 +294,51 @@ pub(crate) fn render_motion_blur_samples(
     Ok(last)
 }
 
+/// One font request per text item in `plan`, in plan order.
+fn text_faces<'a>(
+    document: &'a Document,
+    plan: &'a RenderPlan,
+) -> impl Iterator<Item = (&'a str, u16)> + 'a {
+    plan.items().iter().filter_map(move |item| {
+        if !matches!(item.shape, ItemShape::Text { .. }) {
+            return None;
+        }
+        let NodeContent::Text(content) = document.node(item.node)?.content() else {
+            return None;
+        };
+        Some((content.font.as_str(), content.weight))
+    })
+}
+
+/// The faces `plan`'s text uses, resolved through `fonts` and deduplicated.
+///
+/// A family `fonts` does not have is skipped: layout falls back to Roboto for
+/// it, which is the documented behaviour for an unknown family, so there is no
+/// face to register. A family the set *does* have is always listed, which is
+/// what the live painter uses to register it before drawing.
+#[cfg(feature = "live")]
+pub(crate) fn resolved_faces(
+    document: &Document,
+    plan: &RenderPlan,
+    fonts: &FontSet,
+) -> Vec<(String, u16)> {
+    let mut faces: Vec<(String, u16)> = Vec::new();
+    for (family, weight) in text_faces(document, plan) {
+        let Ok(resolved) = fonts.resolve(family, weight) else {
+            continue;
+        };
+        let key = (resolved.family.to_owned(), resolved.weight);
+        if faces
+            .iter()
+            .any(|(name, w)| *w == key.1 && name.eq_ignore_ascii_case(&key.0))
+        {
+            continue;
+        }
+        faces.push(key);
+    }
+    faces
+}
+
 /// Registers one atlas per resolved `(family, weight)` the plan uses.
 ///
 /// A missing family is a typed error naming the family and what was searched;
@@ -305,17 +350,9 @@ fn prepare_fonts(
     fonts: &FontSet,
     font_ids: &mut Vec<((String, u16), FontId2d)>,
 ) -> Result<(), RenderError> {
-    for item in plan.items() {
-        if !matches!(item.shape, ItemShape::Text { .. }) {
-            continue;
-        }
-        let Some(NodeContent::Text(content)) =
-            document.node(item.node).map(motioner_core::Node::content)
-        else {
-            continue;
-        };
+    for (family, weight) in text_faces(document, plan) {
         let resolved = fonts
-            .resolve(&content.font, content.weight)
+            .resolve(family, weight)
             .map_err(RenderError::FontFamily)?;
         let key = (resolved.family.to_owned(), resolved.weight);
         if font_ids
@@ -379,9 +416,14 @@ pub(crate) fn paint_plan(
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
 ) -> PaintStats {
     let mut total = 0u32;
-    for item in plan.items() {
-        total += shapes::draw_layers(plan, &item.shape);
+    {
+        // Prompt 17 S2: first-frame composition paint, split shapes/items.
+        let _span = ferrous_core::startup::span("motioner: paint shapes");
+        for item in plan.items() {
+            total += shapes::draw_layers(plan, &item.shape);
+        }
     }
+    let _items_span = ferrous_core::startup::span("motioner: paint items");
 
     let mut z_index = 0u32;
     let mut stats = PaintStats {
@@ -458,6 +500,7 @@ pub(crate) fn paint_plan(
                 animations,
                 ..
             } => {
+                let _text_span = ferrous_core::startup::span("motioner: paint text");
                 if let Some(missing) = draw_text(
                     canvas,
                     document,
@@ -483,6 +526,7 @@ pub(crate) fn paint_plan(
                 }
             }
             _ => {
+                let _shape_span = ferrous_core::startup::span("motioner: paint images and shapes");
                 stats.shape_draws += shapes::draw_item(
                     canvas,
                     plan,

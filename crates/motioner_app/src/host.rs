@@ -321,7 +321,11 @@ impl ProjectHost for Host {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();
         };
-        let used = used_keys(&project);
+        let used = {
+            let _span = motioner_ui::startup::span("motioner: assets used keys");
+            used_keys(&project)
+        };
+        let _span = motioner_ui::startup::span("motioner: asset summaries");
         project
             .assets()
             .iter()
