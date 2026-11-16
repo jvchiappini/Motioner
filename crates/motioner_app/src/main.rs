@@ -1,3 +1,4 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! Motioner application entry point.
 //!
 //! Wires the document, evaluator, renderer and export crates into a small
@@ -22,6 +23,7 @@
 
 mod agent;
 mod audio_out;
+mod console;
 mod corpus;
 mod host;
 mod toolcmd;
@@ -325,6 +327,11 @@ impl fmt::Display for Failure {
 }
 
 fn main() -> ExitCode {
+    // Prompt 17 S4: the binary is a GUI-subsystem executable so a double-click
+    // never opens a console; attaching the parent console first keeps the CLI
+    // output and exit codes working from a terminal (pipes and redirection
+    // included).
+    console::attach_parent_console();
     // Prompt 17 S0: start the engine's startup trace before anything else so
     // the origin is the application's first instruction, not `App::run`.
     motioner_ui::startup::begin_from_env();
@@ -1255,7 +1262,6 @@ pub(crate) fn input_assets(target: &InputTarget) -> std::rc::Rc<dyn motioner_dsl
 
 /// Opens the start screen with no project (double-clicking the binary).
 fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
-    eprintln!("desktop: enter");
     let root = std::env::current_dir().unwrap_or_default();
     let services = {
         // Prompt 17 S0: pre-window work; the start-screen budget is 10 ms.

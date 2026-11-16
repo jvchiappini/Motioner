@@ -58,6 +58,12 @@ SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 WM_NULL = 0x0000
 SMTO_ABORTIFHUNG = 0x0002
+SW_RESTORE = 9
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_SHOWWINDOW = 0x0040
+HWND_TOPMOST = ctypes.c_void_p(-1)
+HWND_NOTOPMOST = ctypes.c_void_p(-2)
 
 # Without argument types ctypes truncates HWND values to 32 bits and every call
 # below silently fails.
@@ -73,6 +79,17 @@ USER32.GetWindowRect.argtypes = [wt.HWND, ctypes.c_void_p]
 USER32.GetClientRect.argtypes = [wt.HWND, ctypes.c_void_p]
 USER32.ClientToScreen.argtypes = [wt.HWND, ctypes.c_void_p]
 USER32.SetForegroundWindow.argtypes = [wt.HWND]
+USER32.BringWindowToTop.argtypes = [wt.HWND]
+USER32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+USER32.SetWindowPos.argtypes = [
+    wt.HWND,
+    ctypes.c_void_p,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wt.UINT,
+]
 USER32.IsHungAppWindow.argtypes = [wt.HWND]
 USER32.IsHungAppWindow.restype = wt.BOOL
 USER32.SendMessageTimeoutW.argtypes = [
@@ -194,6 +211,34 @@ def responsive(hwnd: int) -> bool:
     return bool(status)
 
 
+def raise_window(hwnd: int) -> None:
+    """Bring the app above other windows before capturing the desktop.
+
+    `SetForegroundWindow` alone is refused while another app owns the
+    foreground (Windows focus stealing rules), and a window covered by another
+    application would make the capture compare the wrong pixels.  A short
+    topmost round-trip forces the app into view; the flag is removed after the
+    reference capture.
+    """
+    USER32.ShowWindow(hwnd, SW_RESTORE)
+    USER32.SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW,
+    )
+    USER32.SetForegroundWindow(hwnd)
+    USER32.BringWindowToTop(hwnd)
+
+
+def lower_window(hwnd: int) -> None:
+    """Removes the temporary topmost flag set by [`raise_window`]."""
+    USER32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
+
+
 def distinct_colours(image, size=(200, 120)) -> int:
     small = image.convert("RGB").resize(size)
     return len(set(small.getdata()))
@@ -259,7 +304,7 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
         box = client_box(hwnd)
         if box is None:
             return {"run": index, "pass": False, "error": "empty client area"}
-        USER32.SetForegroundWindow(hwnd)
+        raise_window(hwnd)
 
         shots = []
         for delay in (0, 16, 50, 150):
@@ -279,6 +324,7 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
         if remaining > 0:
             time.sleep(remaining)
         reference = ImageGrab.grab(bbox=box, all_screens=True)
+        lower_window(hwnd)
 
         prefix = f"run{index + 1}"
         first = shots[0][1]
@@ -331,14 +377,28 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
             fraction = uniform_fraction(composed, expected_rgb)
             result["background_fraction"] = round(fraction, 3)
             result["composed_vs_first"] = round(mean_difference(composed, first), 2)
-            if fraction < 0.9:
+            # The timeout path is valid in two shapes: the background is shown
+            # while the first frame is not ready, or the first frame already
+            # beat the timeout and is on screen. Anything else (a stale window,
+            # white/black) fails.
+            drawn_already = result["composed_vs_reference"] <= args.tolerance
+            if fraction < 0.9 and not drawn_already:
                 problems.append(
-                    f"the first composed capture is not the app background "
-                    f"{expected} ({fraction:.0%} of the client area)"
+                    f"the first composed capture is neither the app background "
+                    f"{expected} ({fraction:.0%} of the client area) nor the drawn "
+                    f"screen (difference {result['composed_vs_reference']})"
                 )
-            if result["composed_colours"] <= 3:
+            if result["composed_colours"] <= 3 and not drawn_already and fraction < 0.9:
                 problems.append("the first composed capture is a uniform colour")
-            if args.reference_delay >= 1000 and result["composed_vs_reference"] < args.tolerance:
+            if result["reference_colours"] <= 3:
+                problems.append("the reference capture is a uniform colour")
+            if (
+                args.reference_delay >= 1000
+                and result["composed_vs_reference"] < args.tolerance
+                and fraction >= 0.9
+            ):
+                # Close to the reference *and* the background: the reference is
+                # the plain background, so the first frame never arrived.
                 problems.append(
                     "the reference capture still shows the background: the first "
                     "frame never arrived"
