@@ -7,12 +7,47 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0–S2 done; S3–S6 pending.** No commit in
+Session `S-2026-11-15-001` (open). **S0-S3 done; S4-S6 pending.** No commit in
 Motioner. S0 is committed and pinned, S1 is committed in the engine clone as
-`5873863..a078f80` (pinned), S2 as `a078f80..4582c42`, **not pushed**: the
-Motioner tree does not build until the reviewer bumps the pin. Reports:
-`out/reports/PHASE-17-S0-REPORT.md`, `PHASE-17-S1-REPORT.md` and
-`PHASE-17-S2-REPORT.md` (Spanish).
+`5873863..a078f80` (pinned), S2 as `a078f80..4582c42` (pinned), S3 as
+`4582c42..5687d18`, **not pushed**: the Motioner tree does not build until the
+reviewer bumps the pin. Reports: `out/reports/PHASE-17-S0-REPORT.md` through
+`PHASE-17-S3-REPORT.md` (Spanish).
+
+S3 (2026-11-15) — engine `cf7ddb9` + `5687d18`:
+
+- `AppConfig::backends` is an ordered list (Vulkan, DX12, GL on Windows; Metal
+  on macOS; Vulkan, GL elsewhere), one instance per entry; `WGPU_BACKEND`
+  replaces it. An adapter that lacks `TEXTURE_BINDING_ARRAY |
+  SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING` (GUI images)
+  is skipped with a warning: GL no longer panics in wgpu validation and, if
+  requested alone, fails with a clear message (wgpu 23 GL has no texture
+  binding arrays).
+- `AppConfig::power_preference` (default `HighPerformance`) + `WGPU_POWER_PREF`.
+  `EngineContext::request_adapter_with` and `from_adapter_with_cache` (seeds
+  the wgpu pipeline cache); WebGL2 limits now only on wasm.
+- `App::run` starts a GPU probe (instance + surface-less adapter, re-checked
+  with `is_surface_supported`) and the UI font bake on workers while winit
+  creates the window; both joined at upload.
+- `AppConfig::pipeline_cache` / `App::with_pipeline_cache`:
+  `%LOCALAPPDATA%\<app>\cache\pipelines\<key>.bin`, key = backend/vendor/device/
+  driver/driver_info + format version, magic+version+key header, atomic write,
+  saved after the first frame and at exit; loaded at device creation.
+  Vulkan-only in wgpu 23 (DX12/Metal ignore it).
+- Window created hidden; on Windows the class background brush is set to
+  `background_color` and `WM_ERASEBKGND` forced (winit's class has no brush -
+  the white flash); elsewhere shown after a clear-only frame presented as soon
+  as the swapchain is configured.
+- **Measured** (release, 20 warm / 5 cold): `--start` first present
+  **497.4 / 508.0** warm (S2 854.8), 503.6 cold fonts, 526.2 cold pipelines;
+  **window visible with the correct colour at 50.7 ms** (p90 54.1; before, the
+  first painted frame was ~855). Driver floor 432 ms (instance 186.6 + device
+  41.9 + swapchain 189.7); our critical path ~64 ms (renderer 46.9 with cache,
+  67.6 without; fonts 5.2; setup+frame 11.9). `preview` first present 1553.6
+  (S2 1874.2). iGPU (Radeon 760M): 485.3 ms, swapchain delta 143.8, renderer
+  delta 71.2. DX12: `Renderer::new` 7284.5 ms, no cache -> fallback only.
+- Tests: 7 new engine tests (backend order, cache key, cache file roundtrip and
+  corruption). Gate green, goldens byte-identical. C: 7.3 GB free.
 
 S2 (2026-11-15):
 
@@ -393,11 +428,11 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 ## Last session
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
-pinned), S1 font atlases (BakedAtlas split, versioned binary form, persistent
-LRU cache, renderer dedupe, 16x faster MSDF bake; pinned), S2 lazy fonts in
-Motioner: lazy painter + ensure-before-paint + font worker + borrowed bundled
-faces, and the first-frame diagnosis of `preview` (audio device open and asset
-summaries, not fonts). Engine commits `a078f80..4582c42` await the reviewer's
-push and pin bump; no Motioner commit. Gate green against the clone with a
-temporary path override. Next: S3, GPU init policy in the engine.
+pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the
+first-frame diagnosis of `preview`, and S3 GPU startup: Vulkan-first ordered
+backends, overlapped GPU/font probes, persisted pipeline cache and a window
+painted with the background colour at ~50 ms. First present 497 ms (was 1616 at
+S0); driver floor named at 432 ms. Engine commits `4582c42..5687d18` await the
+reviewer's push and pin bump; no Motioner commit. Gate green against the clone
+with a temporary path override. Next: S4, lazy 3D resources in Flat2D.
 
