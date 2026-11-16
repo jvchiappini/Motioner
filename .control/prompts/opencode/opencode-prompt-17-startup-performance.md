@@ -1,4 +1,4 @@
-# opencode prompt 17 — Startup performance: Motioner and FerrousEngine open in milliseconds (startup trace, font atlas cache, GPU init policy, launch snapshot, lazy 3D, budgets)
+# opencode prompt 17 — Startup performance: Motioner and FerrousEngine open in milliseconds (startup trace, font atlas cache, GPU init policy, show when ready, lazy 3D, budgets)
 
 You are the orchestrator of a long, multi-phase job in the Motioner
 repository at `C:\Users\jvchi\CARPETAS\Motioner` (branch
@@ -6,14 +6,15 @@ repository at `C:\Users\jvchi\CARPETAS\Motioner` (branch
 `C:\Users\jvchi\CARPETAS\FerrousEngine`. Run this prompt **after prompt 16b
 is finished and committed**. Do not touch `C:\Users\jvchi\CARPETAS\GUIMaker`.
 
-Goal: opening Motioner must feel instant: the user sees the real start
-screen within 50 ms of launching it. Today the window takes ~1.3 s to
+Goal: opening Motioner must feel instant and never look half-loaded: the
+window appears only when its first real frame is ready (≈ 500 ms on the
+reference machine), complete, with no white/black flash. Today the window takes ~1.3 s to
 show its first frame and the process ~1.8 s to finish a one-frame smoke run.
 Most of that time is ours (font atlas baking) or avoidable (backend
 enumeration, eager 3D resources), and the remaining GPU driver cost can be
-overlapped with CPU work and hidden behind a **launch snapshot**: the last
-rendered start screen, painted by the CPU into the window while the GPU
-starts (phase S3b).
+overlapped with CPU work. The window stays hidden until the first frame is
+presented (phase S3b, "show when ready"), with a safety timeout for slow
+cold starts.
 
 Engine work goes to the dev clone as **generic** engine features (no
 Motioner/MDF concepts): rustdoc, `crates/<crate>/docs` pages, `mkdocs.yml`
@@ -48,7 +49,7 @@ Order:
 ```
 S0 trace + bench ─► S1 font atlas cache (engine) ─► S2 lazy fonts (Motioner)
    ─► S3 GPU init policy + overlap + instant window (engine)
-   ─► S3b launch snapshot (engine + Motioner)
+   ─► S3b show when ready (engine + Motioner; replaces the launch snapshot)
    ─► S4 lazy 3D in Flat2D (engine) ─► S5 Motioner open/close paths
    ─► S6 budgets, docs, report
 ```
@@ -95,11 +96,11 @@ Other facts:
 
 ## Targets (this machine, warm, release)
 
-- **Launch snapshot visible ≤ 50 ms** from process start when a valid
-  snapshot exists (the normal case for an installed app after its first
-  run), and the switch to the live GPU frame is invisible (no flash, no
-  black or white frame, no shift).
-- Without a valid snapshot (first run, size/DPI/theme change): window, painted with the app background colour, **no white
+- **The window appears only with its first real frame** (start screen
+  fully drawn), on a real screen capture: never white, black or partially
+  drawn. Safety timeout: if the first frame is not presented by ~800 ms,
+  show the window with the start-screen background colour.
+- When the timeout fires (cold driver start): window, painted with the app background colour, **no white
   flash**: ≤ 100 ms from process start.
 - First presented frame with the start screen fully drawn: ≤ 500 ms, of
   which our own CPU work on the critical path ≤ 50 ms; the rest must be the
@@ -206,55 +207,56 @@ numbers and what the floor is; do not fake it.
 6. Tests where possible (backend order logic, cache key, corrupt cache
    file); the rest measured with S0.
 
-## Phase S3b — Launch snapshot (engine generic + Motioner)
+## Phase S3b — Show the window when it is ready (replaces the launch snapshot)
 
-The GPU driver needs ~400 ms per process (measured above) and nothing about
-it can be cached. The user must still see the real UI at once: show a
-snapshot of the last rendered frame, painted by the CPU, until the GPU
-takes over.
+Decision (user, 2026-11-16): at ~500 ms to the first frame, the app must
+not show anything until it is complete. The CPU-painted launch snapshot
+committed in the engine as a3ee934 is **removed**: it failed on the real
+screen (white client area: the boxed paint state was passed as
+CreateWindowExW lpParam but never stored in GWLP_USERDATA, so WM_PAINT drew
+nothing and WM_NCDESTROY leaked it) and it adds unsafe Win32 code, a
+5.5 MB write per launch and stale-screen risk for little gain.
 
-1. **Engine (generic API, no Motioner concepts):** opt-in on the app
-   config, e.g. `AppConfig::with_launch_snapshot(LaunchSnapshot { dir,
-   key })`. The app supplies a content key (its version plus a hash of
-   whatever the snapshotted screen shows); the engine adds window physical
-   size, scale factor, monitor, surface format and its own format version.
-2. **Capture:** the app asks for a capture when the screen is in a stable
-   state worth showing at launch (reuse the existing screenshot path; no
-   extra frame cost on normal frames). Encode off the main thread in a
-   format chosen by measurement for **decode speed** at 1080p-1600p (e.g.
-   QOI or LZ4-compressed raw BGRA; PNG only if it decodes fast enough).
-   Atomic write, bounded size, ignored and replaced when corrupt.
-3. **Launch:** before any GPU work, read the file (mapped or read on a
-   worker started at `App::run`), restore the window placement that
-   matches the key, create the window and paint the snapshot by the CPU
-   path (e.g. `softbuffer`, or a small Win32 `StretchDIBits` blit in
-   `WM_PAINT`). Any `unsafe` stays inside the engine, encapsulated, with a
-   `// SAFETY:` comment; the Motioner workspace keeps `unsafe_code = deny`.
-   Verify that the CPU-painted window and the later wgpu swapchain on the
-   same window cooperate on Windows (Vulkan and DX12), and document the
-   chosen mechanism and why.
-4. **Handoff:** keep the snapshot on screen until the first GPU frame is
-   presented, then switch in the same vsync with no intermediate frame.
-   When the key matched, the first GPU frame must be pixel-identical to the
-   snapshot (screenshot diff test, tolerance documented if the encoder is
-   lossy). Input during the snapshot (clicks, keys, wheel, resize, close)
-   is queued and delivered after the handoff in order; closing during the
-   snapshot closes at once. A resize during the snapshot drops the
-   snapshot and falls back to the S3 background-colour window.
-5. **Invalidation:** key mismatch, missing or corrupt file means no
-   snapshot (S3 path). Never show a stale screen: a changed recents list,
-   theme, language, app version or DPI changes the key.
-6. **Motioner:** snapshot the **start screen** only (that is what a
-   no-argument launch shows), captured after it is fully drawn and again
-   when its content changes (recents, examples, theme); the key hashes that
-   content. Stored in the local app cache dir, never inside a project.
-   `preview <project>` launches do not use it in this prompt (per-project
-   snapshots go to the backlog with the privacy note that they contain
-   user content).
-7. Tests: key derivation, encode/decode roundtrip, corrupt file, mismatch
-   falls back, queued input order, handoff equality. Measure with S0:
-   time to visible snapshot (median/p90, ≥ 20 runs), handoff time, file
-   size, capture cost.
+1. **Remove the snapshot** from the engine (child window, file format,
+   capture/request API, key, docs, tests) and from Motioner (start-screen
+   key, cache dir use). Delete the `%LOCALAPPDATA%\<app>\cache\launch`
+   folder on first run of the new build (best effort). Keep what is still
+   useful from S3b (queued input during startup only if it is needed for 3).
+2. **Show when ready (engine, generic, default on):** the window is created
+   hidden; GPU init, renderer, fonts, app setup and the first frame run
+   while it is hidden; the window is shown right after the first frame is
+   presented, so its first visible content is that frame. Verify on
+   Windows that a swapchain on a hidden window presents correctly and that
+   DWM shows the presented frame on `ShowWindow` (no stale, white or black
+   frame); otherwise present the first frame again right after showing,
+   and measure. Same idea on the other platforms.
+3. **Safety timeout:** configurable (`AppConfig`, default ~800 ms from
+   process start); if the first frame is not presented by then, show the
+   window with the S3 background (brush + clear) so the user knows the app
+   opened. Input that arrives before the first frame is delivered in order
+   afterwards, and close works at any time.
+4. **Background colour:** Motioner passes `with_background_color(black)`
+   while the start screen paints the theme pasteboard colour; use the
+   start-screen background colour for the brush and the clear so the
+   timeout path does not switch colours either. Review the S3 GDI brush
+   (one brush per colour, no leak).
+5. **Real screen verification:** move the reviewer's
+   `out/reports/phase17/reviewer_screen_check.py` to `scripts/` (or a
+   `--screen-check` mode of `startup_bench.py`, outside the gate):
+   launch, find the largest visible top-level window of the PID, capture
+   the desktop (PIL ImageGrab, a real desktop capture, not a readback) at
+   the moment the window first becomes visible and at +16/+50/+150 ms.
+   Pass: the first visible capture already shows the drawn start screen
+   (matches a capture taken 1 s later within a documented tolerance), never
+   a uniform white/black client area. Also run it with the timeout forced
+   low (e.g. 50 ms) to verify the background-colour path, and with
+   `WGPU_BACKEND=dx12` (shader compile: the window must appear at the
+   timeout and must not be marked "Not Responding"; keep pumping messages
+   or document the limit with numbers).
+6. Measure with S0: time to window visible (= first frame), timeout path,
+   process time, before/after S3. Update docs (`startup.md`), CONTEXT and
+   the S3b report (rewrite `out/reports/PHASE-17-S3B-REPORT.md`, saying
+   what the earlier pixel check actually captured).
 
 ## Phase S4 — Lazy 3D resources in Flat2D (engine, `ferrous_renderer`)
 
@@ -284,13 +286,15 @@ takes over.
 ## Phase S6 — Budgets, docs, report
 
 1. Regression guard: a smoke test (or `scripts/startup_bench.py --check`)
-   that fails when the launch snapshot is not shown, or when our own
-   critical-path marks exceed a generous budget
+   that fails when the window becomes visible before its first frame (outside
+   the timeout path), or when our own critical-path marks exceed a generous
+   budget
    (e.g. 2× the S6 measured value), independent of the driver floor.
    Document how the reviewer runs it.
 2. Decision record (D-0062, startup budget and policy: backend order,
-   caches, launch snapshot, what may run before the first frame). Engine docs page
-   `startup.md` (trace, caches, backend policy, launch snapshot, how
+   caches, show-when-ready and its timeout, what may run before the first
+   frame). Engine docs page
+   `startup.md` (trace, caches, backend policy, show when ready, how
    apps keep startup fast) in `mkdocs.yml` nav. Motioner docs and CONTEXT numbers updated.
 3. Reviewer findings to fix here: (a) after S3, `show_with_background`
    creates a new GDI brush on every window creation and replaces the class
@@ -300,6 +304,6 @@ takes over.
    atlas is 10 ms warm, 37 ms cold).
 4. Final report **in Spanish** at `out/reports/PHASE-17-REPORT.md`: before
    and after table per mark (median/p90, warm and cold, NVIDIA and AMD),
-   time to visible launch snapshot, time to visible window without one, first frame, project open, close; VRAM saved;
+   time to visible window (= first frame), timeout path, first frame, project open, close; VRAM saved;
    what is now the driver floor; engine commits to push; anything left in
    backlog with reasons.
