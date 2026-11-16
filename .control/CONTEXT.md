@@ -7,11 +7,48 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0 done; S1–S6 pending.** No commit in
-Motioner. Engine work is in the dev clone, uncommitted, on top of the
-6d1bc7a pin. Report: `out/reports/PHASE-17-S0-REPORT.md` (Spanish).
+Session `S-2026-11-15-001` (open). **S0–S1 done; S2–S6 pending.** No commit in
+Motioner. S0 is committed and pinned (engine `5873863`). S1 is committed in the
+engine clone as `5873863..a078f80`, **not pushed**: the Motioner tree does not
+build until the reviewer bumps the pin. Reports:
+`out/reports/PHASE-17-S0-REPORT.md` and `PHASE-17-S1-REPORT.md` (Spanish).
 
-S0 (2026-11-15):
+S1 (2026-11-15):
+
+- `ferrous_font`: `generate_msdf` bins every edge into 8x8 pixel tiles and only
+  tests the edges whose grown bounding box reaches the pixel's tile; winding
+  only looks at edges whose y range straddles the row. Output is byte-identical
+  to the un-culled reference (tests on squares and real glyphs at 16/64 px).
+  `latin_western` 305 glyphs at 64 px: **582.0 -> 35.7 ms single-threaded
+  (16.3x)**; `examples/msdf_bench.rs` reproduces it.
+- `BakedAtlas` (pure data: pixels, metrics, indices, kern+GPOS, vertical metrics)
+  with `upload`; `FontAtlas::new` = build + upload and keeps its behaviour.
+  `encode`/`decode` is a versioned, deterministic, bounds-checked binary form; a
+  corrupt/truncated/stale file is a typed error, never a panic.
+- `AtlasCache` (`<FontKey>.atlas`, FNV-1a 128 of bytes + chars in atlas order +
+  cell size + px range + format/generator versions; atomic write, validated
+  read, LRU eviction, 64 MiB default). `FontCacheConfig` resolves
+  `%LOCALAPPDATA%\<app>\cache\fonts`; `AppConfig::font_cache` /
+  `App::with_font_cache`; `Font::try_load_bytes_cached`. GPOS gained its codec
+  next to the private types; `FontParser::data()` feeds the key. Docs:
+  `crates/ferrous_font/docs/atlas-cache.md` + nav.
+- `Renderer::register_font_2d` dedupes by `FontKey` (same bytes+charset returns
+  the same `FontId2d`, no bake/upload); `Renderer::set_font_cache` and
+  `font_2d`. The engine registers its UI font through that path, so an app
+  drawing Roboto reuses the UI atlas: **Roboto 108-178 ms -> 0.18 ms**.
+- **Measured** (release, 20 warm runs; 5 cold runs with the cache cleared):
+  `--start` first present **867.6 / 875.9 ms** warm (S0 1616.3 / 1651.7) and
+  **989.7 / 1022.0** cold; wall 1072.2 warm. Font spans warm 3.3/3.2/3.2/0.18
+  (S0 178/174/166/108), engine UI atlas 10.1 (S0 134.7), setup 10.9 (S0 642.6);
+  cold font spans ~30 ms per face. `preview examples/demo.motioner` first
+  present **1887.5 / 1902.7** warm (S0 2633.4); its first composition frame is
+  still ~1018 ms (S2/S5). Cache: 4 files, 21.5 MB total.
+- Motioner opts in with `FontCacheConfig::for_app("Motioner")` in `run_inner`;
+  `scripts/startup_bench.py --clear-cache DIR` measures cold runs.
+- Gate green against the clone with a temporary path override (removed); goldens
+  byte-identical. C: 7.1 GB free.
+
+S0 (2026-11-15) — committed as Motioner `d0ea87e`, engine `5873863`:
 
 - Engine: `ferrous_core::startup` (marks, spans, `begin`/`begin_from_env`,
   `span`/`span_with`, `trace`, `first_frame_presented`, `teardown`; enabled
@@ -323,8 +360,10 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 ## Last session
 
-`S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench, gate green
-against the dev clone; engine commits (startup module, adapter/device split,
-hide-before-teardown, docs) await the reviewer's push and pin bump. Next:
-S1 font atlas cache in `ferrous_font`.
+`S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
+pinned), then S1 font atlases: BakedAtlas split, versioned binary form,
+persistent LRU cache, renderer dedupe, 16x faster MSDF bake. Engine commits
+`5873863..a078f80` await the reviewer's push and pin bump; no Motioner commit.
+Gate green against the clone with a temporary path override. Next: S2, lazy
+fonts in Motioner.
 
