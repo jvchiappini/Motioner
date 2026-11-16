@@ -301,7 +301,26 @@ nothing and WM_NCDESTROY leaked it) and it adds unsafe Win32 code, a
    brush without deleting the previous one (one leaked brush per extra
    window); keep one brush per colour or delete the replaced one. (b) After
    S2, decide with numbers whether to trim the engine UI glyph set (its
-   atlas is 10 ms warm, 37 ms cold).
+   atlas is 10 ms warm, 37 ms cold). (c) After the S3b review: double-
+   clicking `motioner.exe` opens a black console window next to the app
+   (console subsystem, because it is also the CLI). With no arguments (or
+   `--start`) the desktop run must show no console: e.g. build as the
+   windows subsystem and `AttachConsole(ATTACH_PARENT_PROCESS)` for the CLI
+   commands, or `FreeConsole` early in the desktop path when the console was
+   created for this process only (`GetConsoleProcessList` == 1). Keep stdout
+   working when run from a terminal; verify by double-click and from a shell.
+   (d) `runner/show.rs` module docs still say the instance/device/swapchain are
+   built on a worker; since S3b only `Renderer::new` is, fix the docs and
+   state that the timeout cannot fire while `init_device` blocks the loop
+   (~430 ms warm; a cold driver can block longer, document it). (e)
+   `scripts/screen_check.py` takes the reference capture after the process
+   has exited when `--exit-after-frames` is small (one reviewer run compared
+   against the terminal behind it and failed); take the reference while the
+   window is still visible or refuse arguments that exit before it, and
+   mask taskbar previews / ignore captures where another window covers the
+   app. (f) `the_timeout_can_be_overridden_from_the_environment` mutates a
+   process env var in a parallel test run; make `resolved_timeout` take the
+   value as a parameter in the test or serialize it.
 4. Final report **in Spanish** at `out/reports/PHASE-17-REPORT.md`: before
    and after table per mark (median/p90, warm and cold, NVIDIA and AMD),
    time to visible window (= first frame), timeout path, first frame, project open, close; VRAM saved;

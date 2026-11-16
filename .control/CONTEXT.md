@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-15
+actualizado: 2026-11-16
 actualizado_por: agente
 version_schema: 1
 ---
@@ -7,12 +7,57 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0-S3 done; S4-S6 pending.** No commit in
+Session `S-2026-11-15-001` (open). **S0-S3b done; S4-S6 pending.** No commit in
 Motioner. S0 is committed and pinned, S1 is committed in the engine clone as
 `5873863..a078f80` (pinned), S2 as `a078f80..4582c42` (pinned), S3 as
-`4582c42..5687d18`, **not pushed**: the Motioner tree does not build until the
-reviewer bumps the pin. Reports: `out/reports/PHASE-17-S0-REPORT.md` through
-`PHASE-17-S3-REPORT.md` (Spanish).
+`4582c42..5687d18` (pinned), S3b as `5687d18..a3ee934` (the rejected snapshot,
+still in history) and its replacement as `a3ee934..2c23263`, **not pushed**:
+the Motioner tree does not build until the reviewer bumps the pin. Reports:
+`out/reports/PHASE-17-S0-REPORT.md` through `PHASE-17-S3B-REPORT.md` (Spanish).
+
+S3b (2026-11-16) — engine `a3ee934..2c23263` ("show the window when it is
+ready"; the launch snapshot is gone):
+
+- The snapshot (`a3ee934`) was **rejected on the real screen**: its child window
+  never painted (the boxed state was passed as `CreateWindowExW` lpParam but
+  never stored in `GWLP_USERDATA`, so `WM_PAINT` drew nothing and
+  `WM_NCDESTROY` leaked it) and the client area stayed white until the handoff.
+  The "0 differing pixels" check was invalid: it ran `capture_window.ps1` in a
+  child `powershell.exe` whose own start-up delay put every capture after the
+  first frame, and the DPI-unaware process captured a virtualised rect, so it
+  compared the post-handoff screen with the file. The reviewer's
+  `ImageGrab` capture from the same process at visibility exposed it.
+- Removed: `snapshot.rs`, the snapshot API on `AppConfig`/`AppContext`, the
+  child window, the file format, docs and tests; Motioner's start key, the
+  capture request and the cache dir (the old `%LOCALAPPDATA%\Motioner\cache\
+  launch` is deleted on run).
+- New: window created hidden; `GraphicsState::init_device` (instance, adapter,
+  device, swapchain) stays on the event-loop thread (`Surface`/DXGI swapchains
+  are not usable from another thread: a worker-created surface failed
+  `is_surface_supported` and the re-probe hung), `Renderer::new` runs on a
+  `ferrous-renderer` worker, the runner renders the first frame from
+  `about_to_wait` (a hidden window gets no `RedrawRequested` from winit),
+  presents it hidden and only then `ShowWindow`; `DWMWA_TRANSITIONS_FORCEDISABLED`
+  kills the Windows 11 open fade. `AppConfig::show_window_when_ready` (default
+  on), `AppConfig::window_show_timeout` (800 ms) +
+  `FERROUS_SHOW_TIMEOUT_MS`; the timeout shows the window with
+  `background_color` filled into the client area *before* `ShowWindow`
+  (`FillRect` + class brush) and the class brush is kept per colour (no leak).
+  Input before the first frame is queued and replayed; close works.
+  Motioner passes the start screen's pasteboard as the background.
+- **Measured** (20 warm): window visible = first frame **514.0 / 526.6** (S3
+  497.4 with the window shown early), wall 713.4, `Renderer::new` 46.8 on the
+  worker, close 4.5. Forced timeout 50 ms: window at 449-455 with the
+  background. DX12: window at 836 (timeout 800) with the background, responsive
+  (`SendMessageTimeout`), first frame 7845; timeout 50: window at 448.
+- **Real screen checks** (`scripts/screen_check.py`, ImageGrab from the same
+  process): normal 3/3, forced timeout 2/2, DX12 50 ms 1/1, DX12 800 ms 1/1.
+  The capture taken the instant `IsWindowVisible` turns true still shows the
+  previous screen: DWM has not composed the window yet (one vsync); the first
+  composed capture (+16 ms) already shows the drawn start screen and matches a
+  capture 1 s later.
+- Tests: gate states, timeout reported once, env override, queue order and
+  overflow. Gate green, goldens byte-identical. C: 3.3 GB free.
 
 S3 (2026-11-15) — engine `cf7ddb9` + `5687d18`:
 
@@ -429,10 +474,15 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
 pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the
-first-frame diagnosis of `preview`, and S3 GPU startup: Vulkan-first ordered
-backends, overlapped GPU/font probes, persisted pipeline cache and a window
-painted with the background colour at ~50 ms. First present 497 ms (was 1616 at
-S0); driver floor named at 432 ms. Engine commits `4582c42..5687d18` await the
-reviewer's push and pin bump; no Motioner commit. Gate green against the clone
-with a temporary path override. Next: S4, lazy 3D resources in Flat2D.
+first-frame diagnosis of `preview`, S3 GPU startup (Vulkan-first backends,
+overlapped probes, pipeline cache, background-coloured window at ~51 ms), S3b
+first as the launch snapshot (rejected: the child window never painted and the
+pixel check looked after the handoff) and then as **show the window when the
+first frame is ready**: hidden window, renderer on a worker, first frame
+presented hidden, shown at 514 ms with the UI, 800 ms safety timeout with the
+start-screen background painted before the show; verified with real desktop
+captures on Vulkan, DX12 and the forced timeout. Engine commits
+`a3ee934..2c23263` await the reviewer's push and pin bump; no Motioner commit.
+Gate green against the clone with a temporary path override. Next: S4, lazy 3D
+resources in Flat2D.
 
