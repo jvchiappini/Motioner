@@ -195,16 +195,28 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
     // `App::run` consumes the app and returns `()`, so a fatal error raised
     // inside the event loop is handed back through this shared slot.
     let fatal = Rc::new(RefCell::new(None));
+    // Whether this window opens the start screen (its pasteboard is the
+    // background used if the first frame is late).
+    let start_screen = options.start.is_some();
     let app = {
         // Prompt 17 S2: work the window does before the first frame.
         let _span = ferrous_engine::startup::span("motioner: app new");
         PreviewApp::new(editor, options, control, Rc::clone(&fatal), title.clone())
     };
+    // Prompt 17 S3b: the start screen paints the theme pasteboard; the window
+    // background (used if the first frame is late) is that colour, so the
+    // timeout path never switches colours. The editor keeps black.
+    let background = if start_screen {
+        let [r, g, b, a] = crate::theme::Theme::dark().pasteboard;
+        Color::rgba(r, g, b, a)
+    } else {
+        Color::rgb(0.0, 0.0, 0.0)
+    };
     App::new(app)
         .with_title(&title)
         .with_size(width.max(320), height.max(240))
         .with_mode(AppMode::Flat2D)
-        .with_background_color(Color::rgb(0.0, 0.0, 0.0))
+        .with_background_color(background)
         .with_target_fps(Some(60))
         .with_vsync(true)
         .with_font_bytes(UI_FONT)
@@ -215,6 +227,9 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         // Prompt 17 S3: keep the compiled pipelines between runs (Vulkan).
         .with_pipeline_cache(ferrous_engine::PipelineCacheConfig::for_app("Motioner"))
         .run();
+    // S3b no longer stores a launch snapshot; a build that used one may have
+    // left its cache behind (best effort, once per run).
+    let _ = std::fs::remove_dir_all(legacy_launch_cache());
     let error = fatal.borrow_mut().take();
     error.map_or(Ok(()), Err)
 }
@@ -252,6 +267,15 @@ pub fn run_app(options: PreviewOptions) -> Result<(), UiError> {
         options.start = Some(crate::StartScreen::new(recents, examples));
     }
     run_inner(editor, options, "Motioner".to_owned())
+}
+
+/// Where the removed S3b launch snapshot used to live.
+fn legacy_launch_cache() -> PathBuf {
+    let mut path = PathBuf::new();
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        path.push(base);
+    }
+    path.join("Motioner").join("cache").join("launch")
 }
 
 fn default_rate() -> Result<FrameRate, UiError> {
