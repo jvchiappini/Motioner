@@ -7,11 +7,43 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0–S1 done; S2–S6 pending.** No commit in
-Motioner. S0 is committed and pinned (engine `5873863`). S1 is committed in the
-engine clone as `5873863..a078f80`, **not pushed**: the Motioner tree does not
-build until the reviewer bumps the pin. Reports:
-`out/reports/PHASE-17-S0-REPORT.md` and `PHASE-17-S1-REPORT.md` (Spanish).
+Session `S-2026-11-15-001` (open). **S0–S2 done; S3–S6 pending.** No commit in
+Motioner. S0 is committed and pinned, S1 is committed in the engine clone as
+`5873863..a078f80` (pinned), S2 as `a078f80..4582c42`, **not pushed**: the
+Motioner tree does not build until the reviewer bumps the pin. Reports:
+`out/reports/PHASE-17-S0-REPORT.md`, `PHASE-17-S1-REPORT.md` and
+`PHASE-17-S2-REPORT.md` (Spanish).
+
+S2 (2026-11-15):
+
+- Motioner fonts are lazy: `LivePainter::lazy` registers only the fallback
+  (Roboto, shared with the engine UI atlas); `paint`/`paint_visible` call
+  `ensure_faces`, which registers every face the plan's text resolves to
+  *before* drawing (unknown family keeps the documented Roboto fallback). Both
+  return `Result<PaintStats, RenderError>`.
+- `font_jobs.rs`: a worker bakes the document's faces through the S1 cache
+  (`document_faces` + `BakedAtlas::build_cached`) while the engine initialises
+  the GPU; the frame thread only uploads (`Renderer::register_baked_font_2d`,
+  new engine API `4582c42`). Started in `PreviewApp::new` (before `App::run`),
+  restarted on reload/open; the start screen registers nothing (no bundled set,
+  no measurer) and opening a project builds `host.fonts` + `CpuTextMetrics`.
+- `FontSet::bundled()` borrows the embedded bytes (`Cow`): `project fonts`
+  0.62 -> 0.03 ms; `bundled fonts` span gone.
+- **Measured** (release, 20 warm / 5 cold with cache cleared): `--start` first
+  present **854.8 / 863.8** warm (S1 867.6), **885.3 / 887.7** cold (S1 989.7).
+  Font work on the start screen 11.0 ms warm = 0.2 Motioner + **10.2 engine UI
+  atlas cache hit** (5.4 MB read+decode+upload; 37.1 cold). `setup` 0.83 (S1
+  10.9). `preview` first present **1874.2 / 1898.2** warm (S1 1887.5), 1917.5
+  cold; worker bakes only Inter 700/400 (2.97/2.67 warm, 34.6/34.3 cold,
+  overlapping GPU init) and the first frame pays 0.87 ms of uploads.
+- The ~1 s first frame of `preview examples/demo.motioner` is **not fonts**:
+  `refresh assets` 323 ms (ffprobe + 6 thumbnails per video in `host.assets`),
+  `audio start` 571 ms (565–1248; `cpal` device open 565, decode 0.94, mix 4.03),
+  `canvas` 93 ms (video texture 26, first image upload 66; text is opacity 0 at
+  frame 0). Diagnosed for S5 in the report with four concrete fixes.
+- Tests: `crates/motioner_ui/tests/live_fonts.rs` (3 GPU tests: face registered
+  before drawing, the face changes the pixels, unknown family falls back) and 3
+  `font_jobs` unit tests. Gate green, goldens byte-identical. C: 5.4 GB free.
 
 S1 (2026-11-15):
 
@@ -361,9 +393,11 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 ## Last session
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
-pinned), then S1 font atlases: BakedAtlas split, versioned binary form,
-persistent LRU cache, renderer dedupe, 16x faster MSDF bake. Engine commits
-`5873863..a078f80` await the reviewer's push and pin bump; no Motioner commit.
-Gate green against the clone with a temporary path override. Next: S2, lazy
-fonts in Motioner.
+pinned), S1 font atlases (BakedAtlas split, versioned binary form, persistent
+LRU cache, renderer dedupe, 16x faster MSDF bake; pinned), S2 lazy fonts in
+Motioner: lazy painter + ensure-before-paint + font worker + borrowed bundled
+faces, and the first-frame diagnosis of `preview` (audio device open and asset
+summaries, not fonts). Engine commits `a078f80..4582c42` await the reviewer's
+push and pin bump; no Motioner commit. Gate green against the clone with a
+temporary path override. Next: S3, GPU init policy in the engine.
 
