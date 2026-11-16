@@ -7,15 +7,57 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0-S4 done; S5-S6 pending.** No commit in
-Motioner. S0 is committed and pinned, S1 is committed in the engine clone as
-`5873863..a078f80` (pinned), S2 as `a078f80..4582c42` (pinned), S3 as
-`4582c42..5687d18` (pinned), S3b as `5687d18..a3ee934` (the rejected snapshot,
-still in history) and its replacement as `a3ee934..2c23263`, S4 as
-`2c23263..8338d1c` (47d0cbc logs, e530596 lazy 3D, 8338d1c gate cfgs),
-**not pushed**: until the reviewer pushes, the Motioner tree only builds with
-the submodule checked out at `8338d1c` (it is, locally). Reports:
-`out/reports/PHASE-17-S0-REPORT.md` through `PHASE-17-S4-REPORT.md` (Spanish).
+Session `S-2026-11-15-001` (open). **S0-S5 done; S6 pending.** No commit in
+Motioner. S0 is committed and pinned, S1 as `5873863..a078f80` (pinned), S2 as
+`a078f80..4582c42` (pinned), S3 as `4582c42..5687d18` (pinned), S3b as
+`5687d18..a3ee934` (the rejected snapshot, still in history) and its
+replacement as `a3ee934..2c23263`, S4 as `2c23263..8338d1c` (pushed; Motioner
+pin `3b02208`), S5 as `8338d1c..493619f` (exit hook, **not pushed**, the
+submodule is checked out there locally). Reports:
+`out/reports/PHASE-17-S0-REPORT.md` through `PHASE-17-S5-REPORT.md` (Spanish).
+
+S5 (2026-11-16) — engine `8338d1c..493619f` (open/close paths):
+
+- Assets: `Host::assets` now returns only the cheap facts (registry, size,
+  usage, cached peaks) and starts a `motioner-assets` worker; ffprobe
+  durations and the 6 video thumbnails arrive through the new
+  `ProjectHost::poll_assets` and `PreviewApp::poll_assets` (installed into the
+  same list, no layout shift). `motioner: refresh assets` 379 -> **1.23 ms**;
+  `asset summaries` 0.22. Test `video_thumbnails_arrive_after_the_first_assets_call`;
+  capture `out/reports/phase17/s5-assets.png`.
+- Audio: `AudioOutput` is a handle to a `motioner-audio` worker that owns the
+  non-`Send` `cpal::Stream`; mix (decode 1 ms + mix 4 ms) stays on the UI. New
+  `audio_prewarm` (called from `run_preview` and `open_composition`) opens the
+  device while the GPU starts. The transport starts playback after the first
+  frame when the device is ready (or after 1.2 s), and `audio_align` starts the
+  buffer at the current frame if the open was late. Device median 587 ms,
+  19/20 before the first frame; outlier 1.23 s. Test
+  `the_shipped_demo_mix_is_not_silent`.
+- Close: new engine `FerrousApp::on_exit` (493619f) runs after the window is
+  hidden and before the event loop exits; `PreviewApp::on_exit` forces
+  `flush_overrides`, `end_session` (lock) and `save_state` (2.44 ms); the
+  pipeline cache is saved after the loop and before the GPU drop.
+  `close_project` also forces the override flush.
+- **Measured** (release, 1600x900, 20 warm): `preview` first frame
+  **1434.1 -> 693.5 ms (-51.6 %)**, wall 1648.8 -> 905.3; `preview` is now
+  start + **155 ms** (`document load` 29.8, `canvas` 105.1); `update` ~819 ->
+  2.92; `start` 538.2 first frame / 722.2 wall (S4 A/B 542.6/737.2); pre-window
+  host 0.27 + recents 0.52 + examples 0.11 + app new 0.04 = **0.94 ms**. Close
+  hidden start 1.66 / preview 2.11 ms; hidden->teardown 74.3 / 96.1; the
+  window disappears well under the 50 ms target.
+- Real screen (`screen_check.py`): start normal 3/3 (505-526), start timeout
+  50 ms 3/3 (473-497), preview normal 3/3 with `--allow-late-content`
+  (677-699; first frame is the editor chrome + video placeholder, reference
+  has the video + thumbnails; never white/black), preview timeout 50 ms 3/3
+  (567-589, black editor background then composition). The script gained
+  `--allow-late-content` for asynchronous media.
+- Gate green: Motioner (fmt, clippy, tests incl. the 34-motioner bin tests and
+  goldens, rustdoc, boundaries, encoding, machete, validate, refs); engine
+  `check --workspace --all-targets`, `test -p ferrous_engine` (56+1 ok),
+  wasm check, fmt. C: 9.4 GB free after purging `target/debug`.
+- Left for S6: budgets/regression guard, D-0062, engine `startup.md`, final
+  report, reviewer findings, the pre-existing `Untitled.motioner/` directory,
+  and the consola/GUI docs (the exit hook is in 493619f).
 
 S4 (2026-11-16) — engine `2c23263..8338d1c` (lazy 3D + step 0):
 
@@ -507,10 +549,11 @@ Claude is architect/auditor; the user speaks Spanish.
 
 Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
-`5687d18`, `a3ee934`, `2c23263`, **`47d0cbc`, `e530596`, `8338d1c`** (S4; the
-submodule is checked out at `8338d1c` locally). **No pin bump in this session.**
-Never edit `engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes
-from the engine and predates this work.
+`5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed)
+and **`493619f`** (S5 exit hook; the submodule is checked out there locally).
+**No pin bump in this session.** Never edit `engine/ferrous`. The
+`svgparser 0.8.1` future-incompat warning comes from the engine and predates
+this work.
 
 ## Goldens
 
@@ -535,11 +578,15 @@ first-frame diagnosis of `preview`, S3 GPU startup (Vulkan-first backends,
 overlapped probes, pipeline cache, background-coloured window at ~51 ms), S3b
 first as the launch snapshot (rejected: the child window never painted and the
 pixel check looked after the handoff) and then as **show the window when the
-first frame is ready**, and S4: no console window for the desktop binary
+first frame is ready**, S4: no console window for the desktop binary
 (GUI subsystem + `AttachConsole`), engine stdout routed through `log`, and
 **lazy 3D in Flat2D** (renderer worker 52.8 -> 30.4 ms, first frame 591 ->
-543 ms, 103.5 MB of VRAM no longer allocated), verified on the real screen
-(normal and forced timeout). Engine commits `2c23263..8338d1c` await the
-reviewer's push and pin bump; no Motioner commit. Next: S5, Motioner open/close
-paths (`refresh assets`, `audio start`, teardown).
+543 ms, 103.5 MB of VRAM no longer allocated), and S5: **assets and audio off
+the preview first frame** (assets worker + `poll_assets`; audio worker +
+prewarm; playback starts at frame 0 when the device is ready) and **a visible
+close in 1.7-2.1 ms** with an engine `on_exit` hook that flushes overrides, the
+session lock and app state after the hide. `preview` first frame 1434 -> 693.5
+ms, start 538 ms, pre-window 0.94 ms. Engine `8338d1c..493619f` unpushed (S4 is
+pushed); no Motioner commit. Next: S6, budgets/docs/final report (`refresh
+assets` and `audio start` are done; teardown is after the hide).
 
