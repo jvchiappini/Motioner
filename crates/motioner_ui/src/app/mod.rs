@@ -119,6 +119,8 @@ pub(crate) struct PreviewApp {
     last_bounds: Option<crate::Bounds>,
     copied_at: Option<Instant>,
     start_playing: bool,
+    /// When the first frame is visible and playback waits for the audio device.
+    start_play_wait: Option<Instant>,
     quit: bool,
     frames_presented: u64,
     dropped: u64,
@@ -190,6 +192,8 @@ pub(crate) struct PreviewApp {
     last_snapshot: Instant,
     /// Whether the host audio device is currently playing this session.
     audio_started: bool,
+    /// Whether a late audio device open was aligned to the transport.
+    audio_aligned: bool,
     /// Last frame that played a scrub grain.
     last_scrub_audio: Option<Frame>,
     /// On-disk atlas cache the font workers bake through (prompt 17 S2).
@@ -266,6 +270,7 @@ impl PreviewApp {
             last_bounds: None,
             copied_at: None,
             start_playing,
+            start_play_wait: None,
             quit: false,
             frames_presented: 0,
             dropped: 0,
@@ -306,6 +311,7 @@ impl PreviewApp {
             last_heartbeat: Instant::now(),
             last_snapshot: Instant::now(),
             audio_started: false,
+            audio_aligned: false,
             last_scrub_audio: None,
             font_cache: ferrous_font::AtlasCache::from_config(&crate::window::font_cache_config()),
             font_bakes: None,
@@ -825,6 +831,8 @@ impl PreviewApp {
         // Prompt 17 S2: upload the atlases the font worker finished before
         // this frame paints.
         self.poll_font_bakes(ctx);
+        // Prompt 17 S5: install ffprobe durations/thumbnails when ready.
+        self.poll_assets();
         let layout = self.relayout(ctx);
         self.editor.view_mut().fit_zoom = canvas::fit_zoom(self.editor.session(), &layout);
 
@@ -846,10 +854,7 @@ impl PreviewApp {
         {
             self.reloaded();
         }
-        if self.start_playing {
-            self.start_playing = false;
-            self.run(&Command::Play);
-        }
+        self.start_initial_playback();
         let audio = if self.editor.transport().is_playing() {
             self.host().and_then(|host| {
                 host.audio_position()
@@ -895,12 +900,61 @@ impl PreviewApp {
             let _span = ferrous_engine::startup::span("motioner: audio start");
             self.sync_audio();
         }
+        // Prompt 17 S5: if the device finished opening after playback began,
+        // join it at the frame currently on screen instead of jumping back.
+        self.align_audio();
         self.reveal(&layout);
         self.editor.session_mut().flush_overrides(Instant::now());
         self.relayout(ctx);
         self.editor.sync_models();
         self.marquee = self.pointer.marquee_rect();
         self.retitle();
+    }
+
+    /// Starts the initial playback once the first frame is visible.
+    ///
+    /// Prompt 17 S5: the audio device is opened on a worker; starting the
+    /// transport immediately would either skip the first beat (aligning the
+    /// late stream) or rewind the playhead. Waiting for the device keeps the
+    /// first sample at frame 0. A device that never opens must not hold the
+    /// transport forever, hence the 1.2 s cap.
+    fn start_initial_playback(&mut self) {
+        if !self.start_playing || self.frames_presented == 0 {
+            return;
+        }
+        let has_audio = self.editor.session().document().is_some_and(|document| {
+            document.nodes().any(|node| {
+                matches!(
+                    node.content(),
+                    motioner_core::NodeContent::Audio(_) | motioner_core::NodeContent::Video(_)
+                )
+            })
+        });
+        let audio_ready = !has_audio || self.host().is_some_and(|host| host.audio_ready());
+        let waited = self
+            .start_play_wait
+            .get_or_insert_with(Instant::now)
+            .elapsed();
+        if audio_ready || waited >= Duration::from_millis(1200) {
+            self.start_playing = false;
+            self.start_play_wait = None;
+            self.run(&Command::Play);
+        }
+    }
+
+    /// Aligns a device that finished opening after playback began.
+    fn align_audio(&mut self) {
+        if !self.audio_started || self.audio_aligned {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        if host.audio_ready() {
+            let _span = ferrous_engine::startup::span("motioner: audio align");
+            host.audio_align(self.editor.frame());
+            self.audio_aligned = true;
+        }
     }
 
     /// Refreshes the video memory readout and the proxy progress text.
@@ -971,6 +1025,7 @@ impl PreviewApp {
         if !playing {
             host.audio_stop();
             self.audio_started = false;
+            self.audio_aligned = false;
             self.last_scrub_audio = None;
             return;
         }
@@ -982,6 +1037,10 @@ impl PreviewApp {
         let path = self.editor.session().path().to_path_buf();
         let frame = self.editor.frame();
         let _ = host.audio_play(&path, document, frame, &muted);
+        // The device may already be open (prewarmed): the alignment step in
+        // `run_update` starts it at the current frame. A late open is aligned
+        // when the worker reports it ready.
+        self.audio_aligned = false;
     }
 
     /// Restarts device audio at the transport's loop start after a wrap.
@@ -1000,6 +1059,7 @@ impl PreviewApp {
         let path = self.editor.session().path().to_path_buf();
         let frame = self.editor.frame();
         let _ = host.audio_play(&path, document, frame, &muted);
+        self.audio_aligned = false;
     }
 
     /// Plays a short grain while scrubbing, at most every four frames.
@@ -1522,6 +1582,26 @@ impl FerrousApp for PreviewApp {
                     });
                 }
             }
+        }
+    }
+
+    fn on_exit(&mut self) {
+        // Prompt 17 S5: the window is already hidden when this runs. Force the
+        // debounced overrides write, release the session lock and persist the
+        // app state before the GPU teardown.
+        let _span = ferrous_engine::startup::span("motioner: close save");
+        let path = self.editor.session().path().to_path_buf();
+        let has_project = self.start.is_none() && !path.as_os_str().is_empty();
+        if has_project {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            self.editor.session_mut().flush_overrides(deadline);
+        }
+        if let Some(host) = self.host() {
+            host.audio_stop();
+            if has_project {
+                host.end_session(&path);
+            }
+            host.save_state();
         }
     }
 }

@@ -419,7 +419,10 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
                         f"{args.timeout_floor_ms} ms of device init"
                     )
         else:
-            if result["composed_vs_reference"] > args.tolerance:
+            if (
+                not args.allow_late_content
+                and result["composed_vs_reference"] > args.tolerance
+            ):
                 problems.append(
                     f"the first composed capture differs from the reference by "
                     f"{result['composed_vs_reference']} (tolerance {args.tolerance})"
@@ -465,6 +468,12 @@ def main() -> int:
     )
     parser.add_argument("--reference-delay", type=int, default=1000)
     parser.add_argument("--tolerance", type=float, default=6.0)
+    parser.add_argument(
+        "--allow-late-content",
+        action="store_true",
+        help="accept a first frame that differs from the reference when media "
+        "loads asynchronously (the chrome must still be drawn, never white/black)",
+    )
     parser.add_argument(
         "--expect-background",
         action="store_true",

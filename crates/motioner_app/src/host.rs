@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use std::collections::HashMap;
+use std::sync::mpsc::{self, TryRecvError};
 
 use motioner_core::{ImageResolver, NodeContent};
 use motioner_io::{
@@ -17,6 +18,12 @@ use motioner_io::{
 };
 use motioner_render::FontSet;
 use motioner_ui::{AssetKindUi, AssetSummary, NewProjectRequest, ProjectHost, StartEntry};
+
+/// Enriched asset metadata produced off the first frame.
+struct AssetJob {
+    composition: PathBuf,
+    receiver: mpsc::Receiver<Vec<AssetSummary>>,
+}
 
 /// Desktop project services.
 pub struct Host {
@@ -27,6 +34,8 @@ pub struct Host {
     video_cache: crate::video_cache::VideoCache,
     proxies: RefCell<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU32>>>,
     proxy_done: RefCell<HashMap<String, std::time::Instant>>,
+    /// ffprobe durations and video thumbnails, computed on a worker.
+    asset_job: RefCell<Option<AssetJob>>,
     /// The last opened project and its manifest mtime, so the per-frame video
     /// path does not re-read and validate `project.motion` 60 times a second.
     project_cache: RefCell<Option<(PathBuf, Option<std::time::SystemTime>, Project)>>,
@@ -46,6 +55,7 @@ impl Host {
             video_cache: crate::video_cache::VideoCache::new(),
             proxies: RefCell::new(HashMap::new()),
             proxy_done: RefCell::new(HashMap::new()),
+            asset_job: RefCell::new(None),
             project_cache: RefCell::new(None),
         }
     }
@@ -98,6 +108,53 @@ impl Host {
         let job =
             crate::video_cache::spawn_proxy(source.to_path_buf(), destination, duration.max(0.1));
         proxies.insert(hash.to_owned(), job);
+    }
+
+    /// Starts the worker that adds ffprobe durations and video thumbnails.
+    fn start_asset_job(&self, composition: &Path, root: &Path) {
+        let composition_path = composition.to_path_buf();
+        let root = root.to_path_buf();
+        let (sender, receiver) = mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("motioner-assets".to_owned())
+            .spawn(move || {
+                let _span = motioner_ui::startup::span("motioner: assets enrich (worker)");
+                let Ok(project) = Project::open(&root) else {
+                    return;
+                };
+                let used = used_keys(&project);
+                let entries: Vec<AssetSummary> = project
+                    .assets()
+                    .iter()
+                    .map(|entry| {
+                        summary(
+                            &project,
+                            entry,
+                            used.get(&entry.key).copied().unwrap_or(0),
+                            true,
+                        )
+                    })
+                    .collect();
+                let _ = sender.send(entries);
+            })
+            .is_ok();
+        if spawned {
+            *self.asset_job.borrow_mut() = Some(AssetJob {
+                composition: composition_path,
+                receiver,
+            });
+        }
+    }
+
+    /// The audio engine, created on first use.
+    fn ensure_audio(&self) -> std::cell::RefMut<'_, crate::audio_out::AudioOutput> {
+        if self.audio.borrow().is_none() {
+            let engine = crate::audio_out::AudioOutput::new();
+            *self.audio.borrow_mut() = Some(engine);
+        }
+        std::cell::RefMut::map(self.audio.borrow_mut(), |slot| {
+            slot.as_mut().expect("the audio engine was just created")
+        })
     }
 
     /// Persists the application state; failures are not fatal.
@@ -321,16 +378,69 @@ impl ProjectHost for Host {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();
         };
+        // Cheap facts only: registry, size, usage and cached audio peaks. Video
+        // durations and thumbnails need ffprobe/ffmpeg and run on a worker
+        // (prompt 17 S5); the panel receives them through `poll_assets`.
         let used = {
             let _span = motioner_ui::startup::span("motioner: assets used keys");
             used_keys(&project)
         };
         let _span = motioner_ui::startup::span("motioner: asset summaries");
-        project
+        let entries: Vec<AssetSummary> = project
             .assets()
             .iter()
-            .map(|entry| summary(&project, entry, used.get(&entry.key).copied().unwrap_or(0)))
-            .collect()
+            .map(|entry| {
+                summary(
+                    &project,
+                    entry,
+                    used.get(&entry.key).copied().unwrap_or(0),
+                    false,
+                )
+            })
+            .collect();
+        self.start_asset_job(composition, project.root());
+        entries
+    }
+
+    fn poll_assets(&self, composition: &Path) -> Option<Vec<AssetSummary>> {
+        let mut slot = self.asset_job.borrow_mut();
+        let job = slot.as_mut()?;
+        if job.composition != composition {
+            return None;
+        }
+        match job.receiver.try_recv() {
+            Ok(entries) => Some(entries),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                *slot = None;
+                None
+            }
+        }
+    }
+
+    fn audio_prewarm(&self, _composition: &Path, document: &motioner_core::Document) {
+        let has_audio = document.nodes().any(|node| {
+            matches!(
+                node.content(),
+                NodeContent::Audio(_) | NodeContent::Video(_)
+            )
+        });
+        if has_audio {
+            self.ensure_audio().prewarm();
+        }
+    }
+
+    fn audio_ready(&self) -> bool {
+        self.audio
+            .borrow()
+            .as_ref()
+            .is_some_and(crate::audio_out::AudioOutput::device_ready)
+    }
+
+    fn audio_align(&self, frame: motioner_core::Frame) {
+        if let Some(audio) = self.audio.borrow().as_ref() {
+            audio.start_at(frame);
+        }
     }
 
     fn import_asset(&self, composition: &Path, source: &Path) -> Result<AssetSummary, String> {
@@ -370,6 +480,7 @@ impl ProjectHost for Host {
             &project,
             &entry,
             used.get(&entry.key).copied().unwrap_or(0),
+            true,
         ))
     }
 
@@ -565,6 +676,10 @@ impl ProjectHost for Host {
         }
     }
 
+    fn save_state(&self) {
+        Host::save_state(self);
+    }
+
     fn end_session(&self, composition: &Path) {
         if let Ok(project) = Project::open(composition) {
             project.end_session();
@@ -610,15 +725,18 @@ impl ProjectHost for Host {
         from: motioner_core::Frame,
         muted: &[String],
     ) -> Result<(), String> {
-        self.audio.borrow_mut().take();
         let project = Project::open(composition).map_err(|error| error.to_string())?;
-        let output = crate::audio_out::AudioOutput::start(&project, document, from, muted, false)?;
-        *self.audio.borrow_mut() = Some(output);
+        let samples = crate::audio_out::mix_for(&project, document, from, muted, false);
+        #[allow(clippy::cast_precision_loss)]
+        let fps = document.composition().frame_rate().as_f64();
+        self.ensure_audio().play(samples, from, fps);
         Ok(())
     }
 
     fn audio_stop(&self) {
-        self.audio.borrow_mut().take();
+        if let Some(audio) = self.audio.borrow().as_ref() {
+            audio.stop();
+        }
     }
 
     fn audio_position(&self) -> Option<f64> {
@@ -642,15 +760,15 @@ impl ProjectHost for Host {
         from: motioner_core::Frame,
         muted: &[String],
     ) {
-        self.audio.borrow_mut().take();
         let Ok(project) = Project::open(composition) else {
             return;
         };
-        if let Ok(output) =
-            crate::audio_out::AudioOutput::start(&project, document, from, muted, true)
-        {
-            *self.audio.borrow_mut() = Some(output);
-        }
+        let samples = crate::audio_out::mix_for(&project, document, from, muted, true);
+        #[allow(clippy::cast_precision_loss)]
+        let fps = document.composition().frame_rate().as_f64();
+        let audio = self.ensure_audio();
+        audio.play(samples, from, fps);
+        audio.start_at(from);
     }
 
     fn video_frame(
@@ -744,7 +862,12 @@ impl ProjectHost for Host {
 }
 
 /// One asset summary for the panel.
-fn summary(project: &Project, entry: &motioner_io::AssetEntry, used_by: usize) -> AssetSummary {
+fn summary(
+    project: &Project,
+    entry: &motioner_io::AssetEntry,
+    used_by: usize,
+    enrich: bool,
+) -> AssetSummary {
     let path = project.assets_dir().join(entry.file_name());
     let size_bytes = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
     let cached_peaks = if entry.kind == AssetKind::Audio {
@@ -756,9 +879,13 @@ fn summary(project: &Project, entry: &motioner_io::AssetEntry, used_by: usize) -
         None
     };
     let duration = if entry.kind == AssetKind::Video {
-        motioner_io::probe_video(&path, &FfmpegLocation::FromEnvOrPath)
-            .ok()
-            .map(|info| info.duration)
+        if enrich {
+            motioner_io::probe_video(&path, &FfmpegLocation::FromEnvOrPath)
+                .ok()
+                .map(|info| info.duration)
+        } else {
+            None
+        }
     } else {
         cached_peaks.as_ref().map(|peaks| peaks.duration)
     };
@@ -768,7 +895,7 @@ fn summary(project: &Project, entry: &motioner_io::AssetEntry, used_by: usize) -
         AssetKind::Audio => AssetKindUi::Audio,
         AssetKind::Video => AssetKindUi::Video,
     };
-    let thumbs = if entry.kind == AssetKind::Video {
+    let thumbs = if enrich && entry.kind == AssetKind::Video {
         crate::video_cache::video_entry(project, &entry.key)
             .map(|video| {
                 crate::video_cache::thumbnails(project, &video, 6)
@@ -896,4 +1023,43 @@ fn traces_setting_raw(composition: &Path) -> Option<bool> {
     let project = Project::open(composition).ok()?;
     let state = motioner_io::EditorState::load(project.root()).ok()?;
     state.traces
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The first `assets()` call is cheap and the video thumbnails arrive
+    /// later through `poll_assets` (prompt 17 S5). Uses the shipped demo, and
+    /// skips when it or ffmpeg is unavailable.
+    #[test]
+    fn video_thumbnails_arrive_after_the_first_assets_call() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project_root = root.join("examples/demo.motioner");
+        let Ok(project) = Project::open(&project_root) else {
+            return;
+        };
+        let composition = project.composition_path(&project.settings().main);
+        let host = Host::new(root);
+        let immediate = host.assets(&composition);
+        if !immediate
+            .iter()
+            .any(|entry| entry.kind == AssetKindUi::Video)
+        {
+            return;
+        }
+        for _ in 0..300 {
+            if let Some(entries) = host.poll_assets(&composition) {
+                assert!(
+                    entries
+                        .iter()
+                        .any(|entry| entry.kind == AssetKindUi::Video && !entry.thumbs.is_empty()),
+                    "the enriched pass must add video thumbnails"
+                );
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("the asset enrichment did not finish within 15 s");
+    }
 }

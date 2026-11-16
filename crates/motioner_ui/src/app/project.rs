@@ -52,6 +52,7 @@ impl PreviewApp {
             host.audio_stop();
         }
         self.audio_started = false;
+        self.audio_aligned = false;
         self.last_scrub_audio = None;
         let Some(host) = self.host() else {
             self.report("opening a project needs the desktop application");
@@ -108,6 +109,11 @@ impl PreviewApp {
         }
         self.start = None;
         self.menu_open = false;
+        // Prompt 17 S5: open the audio device while the first composition
+        // frame is prepared; the first play does not wait for cpal.
+        if let Some(document) = self.editor.session().document() {
+            host.audio_prewarm(&composition, document);
+        }
         // Prompt 17 S2: bake the new document's faces now; the first paint
         // uploads whatever is ready and registers the rest.
         self.start_font_bakes();
@@ -193,9 +199,13 @@ impl PreviewApp {
     pub(crate) fn close_project(&mut self) {
         if let Some(host) = self.host() {
             host.audio_stop();
+            self.editor
+                .session_mut()
+                .flush_overrides(Instant::now() + std::time::Duration::from_secs(1));
             host.end_session(self.editor.session().path());
         }
         self.audio_started = false;
+        self.audio_aligned = false;
         self.last_scrub_audio = None;
         self.recovery = None;
         let (recents, examples) = self.host().map_or_else(
@@ -481,6 +491,19 @@ impl PreviewApp {
             .host()
             .map_or_else(Vec::new, |host| host.assets(self.editor.session().path()));
         self.assets.set_entries(entries, self.asset_generation);
+    }
+
+    /// Installs enriched asset metadata (video durations and thumbnails) when
+    /// the background worker finishes. Cheap when nothing is pending.
+    pub(crate) fn poll_assets(&mut self) {
+        let Some(host) = self.host() else {
+            return;
+        };
+        let path = self.editor.session().path().to_path_buf();
+        if let Some(entries) = host.poll_assets(&path) {
+            self.asset_generation = self.asset_generation.saturating_add(1);
+            self.assets.set_entries(entries, self.asset_generation);
+        }
     }
 
     /// Imports one file, or every file the picker returns when `path` is

@@ -125,6 +125,15 @@ pub trait ProjectHost {
     /// The asset registry as the panel shows it, sorted by key.
     fn assets(&self, composition: &Path) -> Vec<AssetSummary>;
 
+    /// Enriched metadata that arrived after [`Self::assets`] returned.
+    ///
+    /// `None` while the background work is pending; `Some` once with the full
+    /// list (video durations and thumbnails included). Called once per frame.
+    fn poll_assets(&self, composition: &Path) -> Option<Vec<AssetSummary>> {
+        let _ = composition;
+        None
+    }
+
     /// Imports one file and returns its registry entry.
     ///
     /// # Errors
@@ -278,6 +287,9 @@ pub trait ProjectHost {
     /// Marks the project as open for this session (lock + heartbeat).
     fn begin_session(&self, composition: &Path);
 
+    /// Persists application state (window placement, recents, theme) at exit.
+    fn save_state(&self) {}
+
     /// Removes the session lock after a clean close.
     fn end_session(&self, composition: &Path);
 
@@ -304,6 +316,9 @@ pub trait ProjectHost {
     /// Starts audio playback at `from`; `muted` lists the identities of audio
     /// layers muted by the editor (hidden layers or the solo state).
     ///
+    /// The call must not block on the output device: the host may open it on a
+    /// worker and report readiness through [`Self::audio_ready`].
+    ///
     /// # Errors
     ///
     /// A human-readable message when no output device is available.
@@ -316,6 +331,24 @@ pub trait ProjectHost {
     ) -> Result<(), String> {
         let _ = (composition, document, from, muted);
         Ok(())
+    }
+
+    /// Warms the output device before the first play, off the critical path.
+    ///
+    /// Called after a document loads; implementations may start a worker that
+    /// opens the audio device while the window initialises.
+    fn audio_prewarm(&self, composition: &Path, document: &motioner_core::Document) {
+        let _ = (composition, document);
+    }
+
+    /// Whether the audio device is open and its cursor is advancing.
+    fn audio_ready(&self) -> bool {
+        false
+    }
+
+    /// Moves the running audio cursor to `frame` (after a late device open).
+    fn audio_align(&self, frame: motioner_core::Frame) {
+        let _ = frame;
     }
 
     /// Stops audio playback.

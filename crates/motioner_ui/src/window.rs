@@ -139,6 +139,12 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
             Err(error @ SessionError::Io { .. }) => return Err(UiError::Load(error)),
         }
     }
+    // Prompt 17 S5: warm the audio device while the window and the GPU start;
+    // the first play then starts immediately instead of paying the cpal open
+    // on a frame.
+    if let (Some(host), Some(document)) = (options.host.as_ref(), session.document()) {
+        host.audio_prewarm(path, document);
+    }
 
     let (rate, duration) = session
         .composition()
