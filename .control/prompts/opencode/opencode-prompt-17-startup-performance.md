@@ -292,7 +292,13 @@ takes over.
    caches, launch snapshot, what may run before the first frame). Engine docs page
    `startup.md` (trace, caches, backend policy, launch snapshot, how
    apps keep startup fast) in `mkdocs.yml` nav. Motioner docs and CONTEXT numbers updated.
-3. Final report **in Spanish** at `out/reports/PHASE-17-REPORT.md`: before
+3. Reviewer findings to fix here: (a) after S3, `show_with_background`
+   creates a new GDI brush on every window creation and replaces the class
+   brush without deleting the previous one (one leaked brush per extra
+   window); keep one brush per colour or delete the replaced one. (b) After
+   S2, decide with numbers whether to trim the engine UI glyph set (its
+   atlas is 10 ms warm, 37 ms cold).
+4. Final report **in Spanish** at `out/reports/PHASE-17-REPORT.md`: before
    and after table per mark (median/p90, warm and cold, NVIDIA and AMD),
    time to visible launch snapshot, time to visible window without one, first frame, project open, close; VRAM saved;
    what is now the driver floor; engine commits to push; anything left in
