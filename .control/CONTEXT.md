@@ -7,13 +7,68 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0-S3b done; S4-S6 pending.** No commit in
+Session `S-2026-11-15-001` (open). **S0-S4 done; S5-S6 pending.** No commit in
 Motioner. S0 is committed and pinned, S1 is committed in the engine clone as
 `5873863..a078f80` (pinned), S2 as `a078f80..4582c42` (pinned), S3 as
 `4582c42..5687d18` (pinned), S3b as `5687d18..a3ee934` (the rejected snapshot,
-still in history) and its replacement as `a3ee934..2c23263`, **not pushed**:
-the Motioner tree does not build until the reviewer bumps the pin. Reports:
-`out/reports/PHASE-17-S0-REPORT.md` through `PHASE-17-S3B-REPORT.md` (Spanish).
+still in history) and its replacement as `a3ee934..2c23263`, S4 as
+`2c23263..8338d1c` (47d0cbc logs, e530596 lazy 3D, 8338d1c gate cfgs),
+**not pushed**: until the reviewer pushes, the Motioner tree only builds with
+the submodule checked out at `8338d1c` (it is, locally). Reports:
+`out/reports/PHASE-17-S0-REPORT.md` through `PHASE-17-S4-REPORT.md` (Spanish).
+
+S4 (2026-11-16) — engine `2c23263..8338d1c` (lazy 3D + step 0):
+
+- Step 0(a): `motioner_app` is built with the Windows GUI subsystem
+  (`#![cfg_attr(windows, windows_subsystem = "windows")]`), so double-click and
+  `--start` open no console. `main` calls `console::attach_parent_console`
+  first: raw `AttachConsole(ATTACH_PARENT_PROCESS)`, and `CONOUT$`/`CONIN$` are
+  opened only when `GetStdHandle` is null/invalid; inherited console/pipe/file
+  handles are kept. Verified with subprocess (help/info/unknown command: 0/0/1
+  exit codes, pipes), PowerShell `Start-Process -Wait -RedirectStandardOutput`
+  (153 lines) and `startup_bench.py`. `cmd` does not hand its `>` handles to a
+  GUI-subsystem child and does not wait: documented in REF-0002 §11 with the
+  supported alternatives.
+- Step 0(b): removed the per-frame GuiRenderer prints + `static mut` counter and
+  the RenderCollector print/atomic; adapter/pipeline/asset/font messages go
+  through `log`; removed the debug-only per-image average colour and UV scans;
+  Motioner `desktop: enter` gone. `log` added to `ferrous_assets` and
+  `ferrous_ui_render`.
+- S4: `Renderer::new_with_mode(Flat2D|Pure2D)` builds only 2D. `ensure_three_d`
+  creates the world pass (instancing + shadow map + HDR + IBL + sky),
+  material registry, SSAO/prepass, skinning, gizmos, post-process/AA, instance
+  buffers and the 1M particles on the first 3D use or `set_mode(Full3D)`.
+  Clear colour/sky/style/light/SSAO params are cached until then. The runner
+  passes `AppMode` through `GpuInit`/`DeviceInit`; `Pure2dHarness` constructs
+  in `Pure2D`. The four unused PBR pipelines are no longer created. Tests:
+  `tests/lazy_3d.rs` (3). Example: `examples/renderer_startup_cost.rs`.
+- **Measured** (release, 1600x900): engine example Vulkan `Renderer` Flat2D
+  **51.1 ms** median vs Full3D **64.2** (first 3D use 16.4); DX12 7297/7273
+  (2D pipelines dominate) and the group costs 572 ms at first use. DX12
+  allocator: 31.26 MB (Flat2D) -> 134.74 MB (3D), **+103.48 MB (98.7 MiB)**.
+  Motioner same-session A/B (20 warm, S3b pin vs S4): `--start` renderer
+  worker **52.81 -> 30.43 ms (-42 %)**, first frame **591.2 -> 542.6 (-48.6,
+  -8.2 %)**, wall 794.5 -> 737.2; final `8338d1c` 5 runs: 29.2, 509.4, 687.1.
+  `preview`: renderer 51.44 -> 31.10, first frame 1466.9 -> 1434.1, wall
+  1681.8 -> 1648.8; final 1362.2/1556.4. Driver phases also moved (instance
+  233->222, surface 507->483), so the attributable S4 delta is the span.
+- Real screen (`scripts/screen_check.py`, final binary): normal 3/3 (visible
+  541-570, first composed matches reference, diff 0.99-1.04); forced timeout
+  50 ms 3/3 (visible 519-530, first composed is `#0A0B0D`, reference drawn).
+  The harness now raises the window topmost before capturing (another app in
+  front produced false fails and a false pass), accepts a first frame that
+  already beat the timeout, and no longer rejects the uniform background.
+- Gate green: Motioner (fmt, clippy, tests incl. goldens, rustdoc, boundaries,
+  encoding, machete, validate, refs); engine CI scope (fmt on touched files,
+  clippy default + no-default, tests default + no-default + release
+  pure2d_headless, workspace check, wasm check, docs without -D). Fixed the
+  wasm cfg break and the pure2d_images clippy lint from Rust 1.96. C: 8.6 GB
+  free after purging debug targets.
+- Left for S5/S6: preview assets/audio (S5), budgets/decision/docs (S6),
+  `screen_check.py` cover-window handling (started here), `cmd` redirection
+  limitation. Flat2D still builds the internal `RenderTarget` and both
+  `Renderer2d` (2D, not in the S4 list); a Flat2D->Full3D switch keeps the 3D
+  group resident.
 
 S3b (2026-11-16) — engine `a3ee934..2c23263` ("show the window when it is
 ready"; the launch snapshot is gone):
@@ -450,10 +505,12 @@ Claude is architect/auditor; the user speaks Spanish.
 
 ## Engine
 
-Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone `6a30e7d`,
-`e482b3c`, `cab7035`, **`6d1bc7a`** (textured mesh, awaiting push and pin
-bump). **No pin bump in this session.** Never edit `engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes from
-the engine and predates this work.
+Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
+`6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
+`5687d18`, `a3ee934`, `2c23263`, **`47d0cbc`, `e530596`, `8338d1c`** (S4; the
+submodule is checked out at `8338d1c` locally). **No pin bump in this session.**
+Never edit `engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes
+from the engine and predates this work.
 
 ## Goldens
 
@@ -478,11 +535,11 @@ first-frame diagnosis of `preview`, S3 GPU startup (Vulkan-first backends,
 overlapped probes, pipeline cache, background-coloured window at ~51 ms), S3b
 first as the launch snapshot (rejected: the child window never painted and the
 pixel check looked after the handoff) and then as **show the window when the
-first frame is ready**: hidden window, renderer on a worker, first frame
-presented hidden, shown at 514 ms with the UI, 800 ms safety timeout with the
-start-screen background painted before the show; verified with real desktop
-captures on Vulkan, DX12 and the forced timeout. Engine commits
-`a3ee934..2c23263` await the reviewer's push and pin bump; no Motioner commit.
-Gate green against the clone with a temporary path override. Next: S4, lazy 3D
-resources in Flat2D.
+first frame is ready**, and S4: no console window for the desktop binary
+(GUI subsystem + `AttachConsole`), engine stdout routed through `log`, and
+**lazy 3D in Flat2D** (renderer worker 52.8 -> 30.4 ms, first frame 591 ->
+543 ms, 103.5 MB of VRAM no longer allocated), verified on the real screen
+(normal and forced timeout). Engine commits `2c23263..8338d1c` await the
+reviewer's push and pin bump; no Motioner commit. Next: S5, Motioner open/close
+paths (`refresh assets`, `audio start`, teardown).
 

@@ -343,7 +343,18 @@ nothing and WM_NCDESTROY leaked it) and it adds unsafe Win32 code, a
    mask taskbar previews / ignore captures where another window covers the
    app. (f) `the_timeout_can_be_overridden_from_the_environment` mutates a
    process env var in a parallel test run; make `resolved_timeout` take the
-   value as a parameter in the test or serialize it.
+   value as a parameter in the test or serialize it. (g) After the S4 review:
+   with the GUI subsystem, PowerShell and cmd no longer wait for
+   `motioner render ...` and `>` redirection does not reach the child, which
+   hurts the CLI. Ship a console-subsystem companion so terminals keep the
+   old behaviour: e.g. a tiny `motioner.com` (or `motioner-cli.exe`) built from
+   the same crate that runs the CLI in-process (cmd and PowerShell resolve
+   `.com` before `.exe` when invoked as `motioner`), while the shortcut and
+   double-click target `motioner.exe`. Verify `motioner info x.motion > out.txt`
+   and `$LASTEXITCODE` from cmd and PowerShell. (h) A test or manual run left
+   an `Untitled.motioner/` project in the repository root: new projects
+   created by tests or tooling must go to a temp dir; delete that folder and
+   add the pattern to `.gitignore` if anything can still create it there.
 4. Final report **in Spanish** at `out/reports/PHASE-17-REPORT.md`: before
    and after table per mark (median/p90, warm and cold, NVIDIA and AMD),
    time to visible window (= first frame), timeout path, first frame, project open, close; VRAM saved;
