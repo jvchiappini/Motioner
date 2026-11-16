@@ -212,6 +212,8 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         // before its first frame; cache it per face so only the first launch
         // of a build pays it.
         .with_font_cache(font_cache_config())
+        // Prompt 17 S3: keep the compiled pipelines between runs (Vulkan).
+        .with_pipeline_cache(ferrous_engine::PipelineCacheConfig::for_app("Motioner"))
         .run();
     let error = fatal.borrow_mut().take();
     error.map_or(Ok(()), Err)
