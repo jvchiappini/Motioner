@@ -260,6 +260,29 @@ nothing and WM_NCDESTROY leaked it) and it adds unsafe Win32 code, a
 
 ## Phase S4 — Lazy 3D resources in Flat2D (engine, `ferrous_renderer`)
 
+0. First, two user-visible fixes (user request after trying the S3b build):
+   (a) No console window for the desktop app. Double-clicking `motioner.exe`
+   opens a cmd window next to the app because the binary uses the console
+   subsystem (it is also the CLI). Build `motioner_app` with
+   `#![windows_subsystem = "windows"]` (release and debug) and, at the top of
+   `main`, call `AttachConsole(ATTACH_PARENT_PROCESS)` so that, when it is
+   started from a terminal, `motioner render/still/info/...`, `--help` and
+   errors still print to that terminal and exit codes still work (check
+   stdout/stderr piping and redirection to a file as well: when the std handles are
+   already valid, do not replace them). Double-click and `--start` show
+   no console. Document the trade-off (a shell does not wait for a windows-
+   subsystem exe unless it is started with `start /wait` or from scripts; our
+   scripts use subprocess and are fine) in the Motioner docs. Verify by double-click,
+   from PowerShell, from cmd, and via `scripts/startup_bench.py`. (b) Stdout
+   noise from the engine: `ferrous_ui_render/src/gui_renderer.rs` prints
+   `[GuiRenderer] Render/Base Scissor/First Segment` every 120 frames through
+   a `static mut` counter, `Rebuilding pipelines` on every pipeline rebuild,
+   and `ferrous_gpu/src/context.rs` prints `[WGPU] Selected Adapter` with
+   `println!`. Remove the per-frame prints (and the `static mut`); route the others
+   through `log::debug!`/`log::info!`. Grep the engine and Motioner for other
+   `println!`/`eprintln!` on runtime paths (e.g. Motioner `desktop: enter`) and move them to `log`
+   or the startup trace. CLI output that is the command's result stays.
+
 1. `Renderer::new` in `RendererMode::Flat2D` builds only what 2D needs.
    PBR/instancing pipelines, world pass and shadow map, material registry
    GPU parts, SSAO + prepass, skinning, gizmos, particles (and its
@@ -301,7 +324,7 @@ nothing and WM_NCDESTROY leaked it) and it adds unsafe Win32 code, a
    brush without deleting the previous one (one leaked brush per extra
    window); keep one brush per colour or delete the replaced one. (b) After
    S2, decide with numbers whether to trim the engine UI glyph set (its
-   atlas is 10 ms warm, 37 ms cold). (c) After the S3b review: double-
+   atlas is 10 ms warm, 37 ms cold). (c) [moved to S4 step 0; verify only] After the S3b review: double-
    clicking `motioner.exe` opens a black console window next to the app
    (console subsystem, because it is also the CLI). With no arguments (or
    `--start`) the desktop run must show no console: e.g. build as the
