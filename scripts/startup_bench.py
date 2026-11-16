@@ -8,6 +8,12 @@ startup mark:
 
     python scripts/startup_bench.py --scenario preview --markdown
 
+`--clear-cache DIR` deletes the font atlas cache before every run, which is how
+a cold bake is measured (the default cache lives in
+`%LOCALAPPDATA%\\Motioner\\cache\\fonts` on Windows):
+
+    python scripts/startup_bench.py --cold --runs 3 --clear-cache "%LOCALAPPDATA%\\Motioner\\cache\\fonts"
+
 The engine must be built with the startup trace (any release build is: the
 trace is enabled by an environment variable this script sets). Every run is a
 separate process, so the numbers include process creation, the GPU driver and
@@ -35,6 +41,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -98,6 +105,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="write the aggregated numbers to this JSON file",
     )
     parser.add_argument(
+        "--clear-cache",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "delete this directory before every run so the font atlas cache is cold "
+            "(Windows default: %%LOCALAPPDATA%%\\Motioner\\cache\\fonts)"
+        ),
+    )
+    parser.add_argument(
         "--markdown",
         action="store_true",
         help="print Markdown tables instead of aligned text",
@@ -153,7 +170,11 @@ def span_durations(output: str) -> dict[str, float]:
     return durations
 
 
-def run_once(binary: Path, args: list[str], timeout: float) -> tuple[dict, float, str]:
+def run_once(
+    binary: Path, args: list[str], timeout: float, clear_cache: Path | None = None
+) -> tuple[dict, float, str]:
+    if clear_cache is not None:
+        shutil.rmtree(clear_cache, ignore_errors=True)
     started = time.perf_counter()
     completed = subprocess.run(
         [str(binary), *args],
@@ -210,12 +231,14 @@ def measure(scenario: str, binary: Path, args: list[str], opts) -> tuple[Metrics
     runs = opts.runs
 
     if not opts.cold:
-        run_once(binary, args, opts.timeout)
+        run_once(binary, args, opts.timeout, opts.clear_cache)
 
     succeeded = 0
     for index in range(runs):
         try:
-            completed, wall_ms, output = run_once(binary, args, opts.timeout)
+            completed, wall_ms, output = run_once(
+                binary, args, opts.timeout, opts.clear_cache
+            )
         except subprocess.TimeoutExpired:
             warnings.append(f"{scenario}: run {index + 1} timed out after {opts.timeout:g}s")
             continue
@@ -293,6 +316,8 @@ def main(argv: list[str]) -> int:
         metrics, warnings = measure(scenario, binary, SCENARIOS[scenario], opts)
         report[scenario] = metrics.to_json()
         mode = f"{opts.runs} runs" if opts.cold else f"{opts.runs} warm runs (1 warm-up)"
+        if opts.clear_cache is not None:
+            mode += ", font cache cleared before every run"
         print_table(f"scenario: {scenario} ({mode})", metrics, opts.markdown)
         for warning in warnings:
             print(f"  warning: {warning}")

@@ -196,6 +196,10 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         .with_target_fps(Some(60))
         .with_vsync(true)
         .with_font_bytes(UI_FONT)
+        // Prompt 17 S1: the MSDF bake is the largest cost the window pays
+        // before its first frame; cache it per face so only the first launch
+        // of a build pays it.
+        .with_font_cache(ferrous_font::FontCacheConfig::for_app("Motioner"))
         .run();
     let error = fatal.borrow_mut().take();
     error.map_or(Ok(()), Err)
