@@ -31,4 +31,4 @@ parcial — ultima verificacion: 2026-11-11
   (`crates/motioner_io/src/use_assets.rs:1-120`).
 - Line numbers of imported geometry are not meaningful after flattening;
   the CLI paths that compile programs call `run_with_assets` with this
-  resolver: `crates/motioner_app/src/main.rs:1348-1355`.
+  resolver: `crates/motioner_app/src/lib.rs:1413-1414`.
