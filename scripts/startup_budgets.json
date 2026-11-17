@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "notes": "Budgets are 2x the S6 measured medians/p90 (the minimum is 5 ms) except close-to-hidden, which is the 50 ms user-visible target. The path metric excludes the GPU driver floor (first frame minus surface configured).",
+  "scenarios": {
+    "preview": {
+      "metrics": {
+        "path: our critical path": {
+          "median_ms": 279.61,
+          "p90_ms": 293.36
+        },
+        "span: motioner: resolve input": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: motioner: project fonts": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: motioner: document load": {
+          "median_ms": 55.41,
+          "p90_ms": 58.55
+        },
+        "span: motioner: canvas": {
+          "median_ms": 206.5,
+          "p90_ms": 216.45
+        },
+        "span: motioner: paint composition": {
+          "median_ms": 153.48,
+          "p90_ms": 163.83
+        },
+        "span: motioner: refresh assets": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: motioner: update": {
+          "median_ms": 5.7,
+          "p90_ms": 6.52
+        },
+        "span: engine: renderer build (worker)": {
+          "median_ms": 56.55,
+          "p90_ms": 58.16
+        },
+        "close: requested to hidden": {
+          "median_ms": 50.0,
+          "p90_ms": 50.0
+        }
+      }
+    },
+    "start": {
+      "metrics": {
+        "path: our critical path": {
+          "median_ms": 67.57,
+          "p90_ms": 71.58
+        },
+        "span: motioner: host": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: motioner: recents": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: motioner: examples": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: motioner: app new": {
+          "median_ms": 5.0,
+          "p90_ms": 5.0
+        },
+        "span: engine: renderer build (worker)": {
+          "median_ms": 55.7,
+          "p90_ms": 57.4
+        },
+        "close: requested to hidden": {
+          "median_ms": 50.0,
+          "p90_ms": 50.0
+        }
+      }
+    }
+  }
+}

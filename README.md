@@ -284,6 +284,23 @@ python scripts/startup_bench.py --runs 20
 `preview examples/demo.motioner --exit-after-frames 1`, parses the JSON
 trace and prints median/p90 per mark, per span and for the closing path.
 
+The reviewer runs the regression guard with
+
+```
+python scripts/startup_bench.py --check
+```
+
+It fails if the window becomes visible before its first frame (outside the
+safety-timeout path) or if one of our own critical-path metrics exceeds the
+budgets in `scripts/startup_budgets.json` (2x the S6 measurements, driver
+floor excluded). See [docs/startup.md](docs/startup.md) and D-0062.
+
+The release build produces two binaries: `motioner.exe` (GUI, no console on
+double-click) and `motioner-cli.exe` (console, so `cmd`/PowerShell wait for it,
+`>` redirection works and `%ERRORLEVEL%`/`$LASTEXITCODE` are set). Copying
+`motioner-cli.exe` to `motioner.com` next to `motioner.exe` keeps the short
+`motioner` name for terminals (Windows resolves `.com` before `.exe`).
+
 ## Conventions
 
 All code, identifiers, comments, tests, messages and documentation are

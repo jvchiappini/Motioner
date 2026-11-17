@@ -94,6 +94,86 @@ class PercentileTest(unittest.TestCase):
         self.assertEqual(startup_bench.p90([20.0, 1.0, 10.0]), 20.0)
 
 
+class WindowOrderTest(unittest.TestCase):
+    def test_a_normal_path_visible_after_the_first_frame_passes(self) -> None:
+        marks = {
+            startup_bench.FIRST_PRESENT: 500.0,
+            startup_bench.WINDOW_VISIBLE: 500.1,
+        }
+        self.assertIsNone(startup_bench.window_before_first_frame(marks))
+
+    def test_a_normal_path_visible_before_the_first_frame_fails(self) -> None:
+        marks = {
+            startup_bench.FIRST_PRESENT: 500.0,
+            startup_bench.WINDOW_VISIBLE: 50.0,
+        }
+        violation = startup_bench.window_before_first_frame(marks)
+        self.assertIsNotNone(violation)
+        self.assertIn("before the first frame", violation)
+
+    def test_the_timeout_path_is_accepted(self) -> None:
+        marks = {
+            startup_bench.FIRST_PRESENT: 900.0,
+            startup_bench.WINDOW_VISIBLE_TIMEOUT: 450.0,
+        }
+        self.assertIsNone(startup_bench.window_before_first_frame(marks))
+
+    def test_missing_marks_do_not_invent_a_violation(self) -> None:
+        self.assertIsNone(startup_bench.window_before_first_frame({}))
+
+
+class BudgetTest(unittest.TestCase):
+    def budgets(self) -> dict:
+        return {
+            "scenarios": {
+                "start": {
+                    "metrics": {
+                        "span: motioner: host": {
+                            "median_ms": 5.0,
+                            "p90_ms": 6.0,
+                        }
+                    }
+                }
+            }
+        }
+
+    def test_medians_and_p90_within_budget_pass(self) -> None:
+        metrics = startup_bench.Metrics()
+        for value in (0.2, 0.3, 0.4):
+            metrics.add("span: motioner: host", value)
+        self.assertEqual(
+            startup_bench.evaluate_budgets("start", metrics, self.budgets()), []
+        )
+
+    def test_a_median_over_budget_fails(self) -> None:
+        metrics = startup_bench.Metrics()
+        for value in (10.0, 11.0, 12.0):
+            metrics.add("span: motioner: host", value)
+        failures = startup_bench.evaluate_budgets("start", metrics, self.budgets())
+        self.assertTrue(any("median" in failure for failure in failures))
+
+    def test_a_missing_metric_fails_instead_of_silently_passing(self) -> None:
+        failures = startup_bench.evaluate_budgets(
+            "start", startup_bench.Metrics(), self.budgets()
+        )
+        self.assertTrue(any("was not measured" in failure for failure in failures))
+
+    def test_generated_budgets_are_double_and_floored(self) -> None:
+        metrics = startup_bench.Metrics()
+        metrics.add("span: motioner: host", 0.4)
+        metrics.add(startup_bench.OUR_CRITICAL_PATH, 100.0)
+        metrics.add(startup_bench.CLOSE_TO_HIDDEN, 2.0)
+        # `start` requires the other metrics too; only the selected ones are
+        # generated, so the dict is filtered by what was measured.
+        entries = startup_bench.budget_entries(metrics, "start", 2.0)
+        self.assertEqual(entries["span: motioner: host"]["median_ms"], 5.0)
+        self.assertEqual(entries[startup_bench.OUR_CRITICAL_PATH]["median_ms"], 200.0)
+        self.assertEqual(
+            entries[startup_bench.CLOSE_TO_HIDDEN]["median_ms"],
+            startup_bench.CLOSE_BUDGET_MS,
+        )
+
+
 class MetricsTest(unittest.TestCase):
     def test_rows_report_median_and_p90(self) -> None:
         metrics = startup_bench.Metrics()

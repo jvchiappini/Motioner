@@ -92,6 +92,11 @@ USER32.SetWindowPos.argtypes = [
 ]
 USER32.IsHungAppWindow.argtypes = [wt.HWND]
 USER32.IsHungAppWindow.restype = wt.BOOL
+USER32.WindowFromPoint.argtypes = [wt.POINT]
+USER32.WindowFromPoint.restype = wt.HWND
+USER32.GetAncestor.argtypes = [wt.HWND, wt.UINT]
+USER32.GetAncestor.restype = wt.HWND
+GA_ROOT = 2
 USER32.SendMessageTimeoutW.argtypes = [
     wt.HWND,
     wt.UINT,
@@ -239,6 +244,58 @@ def lower_window(hwnd: int) -> None:
     USER32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
 
 
+def covering_window(hwnd: int, box: tuple[int, int, int, int]) -> int | None:
+    """A top-level window other than `hwnd` over the client area, if any.
+
+    A desktop capture is only meaningful while the app is on top. Taskbar
+    thumbnails and other applications can cover part of the client area; the
+    capture would then compare those pixels instead of the app.
+    """
+    left, top, right, bottom = box
+    fractions = ((0.1, 0.1), (0.9, 0.1), (0.5, 0.5), (0.1, 0.9), (0.9, 0.9))
+    for fx, fy in fractions:
+        point = wt.POINT(int(left + (right - left) * fx), int(top + (bottom - top) * fy))
+        at = USER32.WindowFromPoint(point)
+        if not at:
+            continue
+        root = USER32.GetAncestor(at, GA_ROOT)
+        if root != hwnd:
+            return int(root or at)
+    return None
+
+
+def capture_problem(process, hwnd: int, box: tuple[int, int, int, int]) -> str | None:
+    """Why the window cannot be captured right now, or ``None``.
+
+    The process may finish before a late capture (`--exit-after-frames` small)
+    and the window may be hidden by closing or covered by another window; in
+    both cases the desktop capture would show something else.
+    """
+    if process.poll() is not None:
+        return (
+            "the process exited before this capture; keep the window open longer "
+            "with --exit-after-frames (e.g. 120) or use --paused"
+        )
+    if not USER32.IsWindowVisible(hwnd):
+        return "the window was hidden before this capture"
+    cover = covering_window(hwnd, box)
+    if cover is not None:
+        return f"another window (0x{cover:x}) covers the app; bring it to the front"
+    return None
+
+
+def recheck_capture(process, hwnd: int, box: tuple[int, int, int, int]) -> str | None:
+    """Raises the app once and re-checks coverage before failing a run."""
+    problem = capture_problem(process, hwnd, box)
+    if problem is None:
+        return None
+    if "exited" in problem or "hidden" in problem:
+        return problem
+    raise_window(hwnd)
+    time.sleep(0.05)
+    return capture_problem(process, hwnd, box)
+
+
 def distinct_colours(image, size=(200, 120)) -> int:
     small = image.convert("RGB").resize(size)
     return len(set(small.getdata()))
@@ -297,14 +354,17 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
             time.sleep(0.005)
         if hwnd is None or visible_ms is None:
             return {
-                "run": index,
+                "run": index + 1,
                 "pass": False,
                 "error": "no visible window within the timeout",
             }
         box = client_box(hwnd)
         if box is None:
-            return {"run": index, "pass": False, "error": "empty client area"}
+            return {"run": index + 1, "pass": False, "error": "empty client area"}
         raise_window(hwnd)
+        problem = recheck_capture(process, hwnd, box)
+        if problem is not None:
+            return {"run": index + 1, "pass": False, "error": problem}
 
         shots = []
         for delay in (0, 16, 50, 150):
@@ -312,6 +372,12 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
             remaining = target - (time.perf_counter() - started)
             if remaining > 0:
                 time.sleep(remaining)
+            problem = capture_problem(process, hwnd, box)
+            if problem is not None:
+                # A small --exit-after-frames closes the window before the
+                # +150 ms shot and the reference; that capture would be the
+                # desktop behind it (the terminal), not the app.
+                return {"run": index + 1, "pass": False, "error": problem}
             image = ImageGrab.grab(bbox=box, all_screens=True)
             shots.append((delay, image))
 
@@ -323,6 +389,9 @@ def run_once(args: argparse.Namespace, out_dir: Path, index: int) -> dict:
         )
         if remaining > 0:
             time.sleep(remaining)
+        problem = recheck_capture(process, hwnd, box)
+        if problem is not None:
+            return {"run": index + 1, "pass": False, "error": problem}
         reference = ImageGrab.grab(bbox=box, all_screens=True)
         lower_window(hwnd)
 

@@ -29,8 +29,28 @@ Marks are milliseconds since the first `startup::begin` of the process, which
 `motioner` calls as the first statement of `main`. The wall time row is what
 the shell sees (process creation plus loader plus exit).
 
-This script is a measurement tool, not a gate: it never fails on a slow run
-unless a run cannot produce a trace at all.
+Regression guard (`--check`)
+----------------------------
+
+`python scripts/startup_bench.py --check` is the guard the reviewer runs on
+the reference machine. It fails (exit code 1) when:
+
+- the window becomes visible before its first frame on the normal path
+  (`engine: window visible` earlier than `engine: first frame presented`).
+  The safety-timeout path is the only accepted exception and is identified by
+  `engine: window visible (timeout)`;
+- one of our own critical-path metrics (`scripts/startup_budgets.json`)
+  exceeds its budget. The budgets are 2x the S6 measured medians (with a small
+  floor for sub-millisecond spans) and the close-to-hidden target of 50 ms.
+  The GPU driver floor (instance, adapter, device, swapchain) is excluded: the
+  path budget is `first frame presented - surface configured`, so a slower
+  driver does not fail the guard.
+
+The guard is outside the CI gate on purpose (first-run Defender scans and GPU
+state make wall-clock checks unreliable in CI); it is a reviewer tool.
+
+This script is otherwise a measurement tool, not a gate: a measurement run
+never fails on a slow run unless a run cannot produce a trace at all.
 
 Only the Python standard library is used.
 """
@@ -57,12 +77,50 @@ SCENARIOS = {
 }
 
 FIRST_PRESENT = "engine: first frame presented"
+WINDOW_VISIBLE = "engine: window visible"
+WINDOW_VISIBLE_TIMEOUT = "engine: window visible (timeout)"
+SURFACE_CONFIGURED = "engine: surface configured"
 CLOSE_REQUESTED = "engine: close requested"
 WINDOW_HIDDEN = "engine: window hidden"
 TEARDOWN_DONE = "engine: teardown done"
 
 TRACE_PREFIX = "startup-trace "
 CLOSE_PREFIX = "startup-close "
+
+OUR_CRITICAL_PATH = "path: our critical path"
+CLOSE_TO_HIDDEN = "close: requested to hidden"
+
+# Metrics the guard verifies when `--check` (or `--write-budgets`) selects the
+# defaults. A metric that should exist but is missing from the run also fails
+# the guard: it means the trace changed and the budget is no longer checked.
+BUDGETED_METRICS = {
+    "start": [
+        OUR_CRITICAL_PATH,
+        "span: motioner: host",
+        "span: motioner: recents",
+        "span: motioner: examples",
+        "span: motioner: app new",
+        "span: engine: renderer build (worker)",
+        CLOSE_TO_HIDDEN,
+    ],
+    "preview": [
+        OUR_CRITICAL_PATH,
+        "span: motioner: resolve input",
+        "span: motioner: project fonts",
+        "span: motioner: document load",
+        "span: motioner: canvas",
+        "span: motioner: paint composition",
+        "span: motioner: refresh assets",
+        "span: motioner: update",
+        "span: engine: renderer build (worker)",
+        CLOSE_TO_HIDDEN,
+    ],
+}
+
+# A sub-millisecond span must not fail because the scheduler blinked.
+BUDGET_FLOOR_MS = 5.0
+# Closing the window is a user-visible target, not a measured budget.
+CLOSE_BUDGET_MS = 50.0
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -72,8 +130,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--runs",
         type=int,
-        default=20,
-        help="measured runs per scenario (default: 20)",
+        default=None,
+        help="measured runs per scenario (default: 5 with --check, 20 otherwise)",
     )
     parser.add_argument(
         "--binary",
@@ -107,17 +165,38 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--clear-cache",
         type=Path,
-        default=None,
+        action="append",
+        default=[],
         metavar="DIR",
         help=(
-            "delete this directory before every run so the font atlas cache is cold "
-            "(Windows default: %%LOCALAPPDATA%%\\Motioner\\cache\\fonts)"
+            "delete this directory before every run so its cache is cold; repeat "
+            "for the font atlas (%) and the pipelines (%): "
+            "%%LOCALAPPDATA%%\\Motioner\\cache\\fonts, "
+            "%%LOCALAPPDATA%%\\Motioner\\cache\\pipelines"
         ),
     )
     parser.add_argument(
         "--markdown",
         action="store_true",
         help="print Markdown tables instead of aligned text",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="run the regression guard (budgets + window-before-first-frame rule)",
+    )
+    parser.add_argument(
+        "--budgets",
+        type=Path,
+        default=ROOT / "scripts" / "startup_budgets.json",
+        help="budget file read by --check (default: scripts/startup_budgets.json)",
+    )
+    parser.add_argument(
+        "--write-budgets",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="write budgets.json from this run's measurements (2x, with floors)",
     )
     return parser.parse_args(argv)
 
@@ -171,10 +250,10 @@ def span_durations(output: str) -> dict[str, float]:
 
 
 def run_once(
-    binary: Path, args: list[str], timeout: float, clear_cache: Path | None = None
+    binary: Path, args: list[str], timeout: float, clear_caches: list[Path]
 ) -> tuple[dict, float, str]:
-    if clear_cache is not None:
-        shutil.rmtree(clear_cache, ignore_errors=True)
+    for cache in clear_caches:
+        shutil.rmtree(cache, ignore_errors=True)
     started = time.perf_counter()
     completed = subprocess.run(
         [str(binary), *args],
@@ -225,10 +304,30 @@ class Metrics:
         }
 
 
-def measure(scenario: str, binary: Path, args: list[str], opts) -> tuple[Metrics, list[str]]:
+def window_before_first_frame(marks: dict[str, float]) -> str | None:
+    """Why `marks` violates the show-when-ready rule, or ``None``.
+
+    The normal path records `engine: window visible` after the first frame was
+    presented. The safety-timeout path is the only accepted exception and is
+    marked `engine: window visible (timeout)`.
+    """
+    if WINDOW_VISIBLE not in marks or FIRST_PRESENT not in marks:
+        return None
+    if marks[WINDOW_VISIBLE] < marks[FIRST_PRESENT]:
+        return (
+            f"the window became visible at {marks[WINDOW_VISIBLE]:.2f} ms, "
+            f"before the first frame at {marks[FIRST_PRESENT]:.2f} ms "
+            "(not the timeout path)"
+        )
+    return None
+
+
+def measure(
+    scenario: str, binary: Path, args: list[str], opts, runs: int
+) -> tuple[Metrics, list[str], list[str]]:
     metrics = Metrics()
     warnings: list[str] = []
-    runs = opts.runs
+    violations: list[str] = []
 
     if not opts.cold:
         run_once(binary, args, opts.timeout, opts.clear_cache)
@@ -252,14 +351,19 @@ def measure(scenario: str, binary: Path, args: list[str], opts) -> tuple[Metrics
             warnings.append(f"{scenario}: run {index + 1} produced no startup trace")
             continue
         succeeded += 1
+        violation = window_before_first_frame(first)
+        if violation is not None:
+            violations.append(f"{scenario}: run {index + 1}: {violation}")
         metrics.add("process wall time", wall_ms)
         for name, at_ms in first.items():
             metrics.add(f"mark: {name}", at_ms)
         for name, duration in span_durations(output).items():
             metrics.add(f"span: {name}", duration)
+        if FIRST_PRESENT in first and SURFACE_CONFIGURED in first:
+            metrics.add(OUR_CRITICAL_PATH, first[FIRST_PRESENT] - first[SURFACE_CONFIGURED])
         if CLOSE_REQUESTED in close and WINDOW_HIDDEN in close:
             metrics.add(
-                "close: requested to hidden",
+                CLOSE_TO_HIDDEN,
                 close[WINDOW_HIDDEN] - close[CLOSE_REQUESTED],
             )
         if WINDOW_HIDDEN in close and TEARDOWN_DONE in close:
@@ -278,7 +382,75 @@ def measure(scenario: str, binary: Path, args: list[str], opts) -> tuple[Metrics
             f"no usable run for scenario {scenario!r}; is the trace enabled in "
             f"{binary}? ({'; '.join(warnings) or 'no output'})"
         )
-    return metrics, warnings
+    return metrics, warnings, violations
+
+
+def load_budgets(path: Path) -> dict:
+    """Reads a budget file, failing with a readable message."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise SystemExit(f"cannot read budgets {path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid budgets JSON in {path}: {error}") from error
+
+
+def evaluate_budgets(scenario: str, metrics: Metrics, budgets: dict) -> list[str]:
+    """Compares the measured medians/p90 with the budgets for `scenario`."""
+    scenarios = budgets.get("scenarios", {})
+    entries = scenarios.get(scenario, {}).get("metrics", {})
+    if not entries:
+        return [f"{scenario}: the budget file has no metrics for this scenario"]
+    measured = {
+        name: (median, p90_value)
+        for name, median, p90_value, _count in metrics.rows()
+    }
+    failures: list[str] = []
+    for name, limits in entries.items():
+        if name not in measured:
+            failures.append(
+                f"{scenario}: {name!r} was not measured; the trace changed and the "
+                "budget cannot be checked"
+            )
+            continue
+        median, p90_value = measured[name]
+        budget_median = limits.get("median_ms")
+        budget_p90 = limits.get("p90_ms")
+        if budget_median is not None and median > budget_median:
+            failures.append(
+                f"{scenario}: {name} median {median:.2f} ms exceeds the "
+                f"budget {budget_median:.2f} ms"
+            )
+        if budget_p90 is not None and p90_value > budget_p90:
+            failures.append(
+                f"{scenario}: {name} p90 {p90_value:.2f} ms exceeds the "
+                f"budget {budget_p90:.2f} ms"
+            )
+    return failures
+
+
+def budget_entries(metrics: Metrics, scenario: str, multiplier: float) -> dict:
+    """Builds the budget entries for one scenario from its measurements."""
+    measured = {
+        name: (median, p90_value)
+        for name, median, p90_value, _count in metrics.rows()
+    }
+    entries: dict[str, dict[str, float]] = {}
+    for name in BUDGETED_METRICS[scenario]:
+        if name not in measured:
+            continue
+        median, p90_value = measured[name]
+        if name == CLOSE_TO_HIDDEN:
+            entries[name] = {
+                "median_ms": CLOSE_BUDGET_MS,
+                "p90_ms": CLOSE_BUDGET_MS,
+            }
+            continue
+        entries[name] = {
+            "median_ms": round(max(median * multiplier, BUDGET_FLOOR_MS), 2),
+            "p90_ms": round(max(p90_value * multiplier, BUDGET_FLOOR_MS), 2),
+        }
+    return entries
 
 
 def print_table(title: str, metrics: Metrics, markdown: bool) -> None:
@@ -301,7 +473,10 @@ def print_table(title: str, metrics: Metrics, markdown: bool) -> None:
 
 def main(argv: list[str]) -> int:
     opts = parse_args(argv)
-    if opts.runs < 1:
+    if opts.write_budgets is not None and opts.check:
+        raise SystemExit("--check and --write-budgets are different modes")
+    runs = opts.runs if opts.runs is not None else (5 if opts.check else 20)
+    if runs < 1:
         raise SystemExit("--runs must be at least 1")
     binary = opts.binary or default_binary()
     if not binary.is_file():
@@ -309,31 +484,76 @@ def main(argv: list[str]) -> int:
             f"{binary} does not exist; build it with "
             "`cargo build --release -p motioner_app` first"
         )
+    budgets = load_budgets(opts.budgets) if opts.check else None
 
     scenarios = sorted(SCENARIOS) if opts.scenario == "both" else [opts.scenario]
+    if opts.write_budgets is not None and opts.scenario != "both":
+        raise SystemExit("--write-budgets needs --scenario both (the default)")
     report: dict[str, dict] = {}
+    failures: list[str] = []
+    written_budgets: dict[str, dict] = {}
     for scenario in scenarios:
-        metrics, warnings = measure(scenario, binary, SCENARIOS[scenario], opts)
+        metrics, warnings, violations = measure(
+            scenario, binary, SCENARIOS[scenario], opts, runs
+        )
         report[scenario] = metrics.to_json()
-        mode = f"{opts.runs} runs" if opts.cold else f"{opts.runs} warm runs (1 warm-up)"
-        if opts.clear_cache is not None:
-            mode += ", font cache cleared before every run"
+        mode = f"{runs} runs" if opts.cold else f"{runs} warm runs (1 warm-up)"
+        if opts.clear_cache:
+            mode += ", caches cleared before every run"
         print_table(f"scenario: {scenario} ({mode})", metrics, opts.markdown)
         for warning in warnings:
             print(f"  warning: {warning}")
+        failures.extend(violations)
+        for violation in violations:
+            print(f"  FAIL: {violation}")
+        if budgets is not None:
+            budget_failures = evaluate_budgets(scenario, metrics, budgets)
+            failures.extend(budget_failures)
+            for failure in budget_failures:
+                print(f"  FAIL: {failure}")
+        if opts.write_budgets is not None:
+            written_budgets[scenario] = {
+                "metrics": budget_entries(metrics, scenario, 2.0)
+            }
 
     print()
     print(f"binary: {binary}")
+    if opts.write_budgets is not None:
+        payload = {
+            "version": 1,
+            "notes": (
+                "Budgets are 2x the S6 measured medians/p90 (the minimum is "
+                f"{BUDGET_FLOOR_MS:g} ms) except close-to-hidden, which is the "
+                f"{CLOSE_BUDGET_MS:g} ms user-visible target. The path metric "
+                "excludes the GPU driver floor (first frame minus surface "
+                "configured)."
+            ),
+            "scenarios": written_budgets,
+        }
+        opts.write_budgets.parent.mkdir(parents=True, exist_ok=True)
+        opts.write_budgets.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"wrote {opts.write_budgets}")
     if opts.json_out:
         opts.json_out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "engine_trace_version": 1,
-            "runs": opts.runs,
+            "runs": runs,
             "cold": bool(opts.cold),
             "scenarios": report,
         }
         opts.json_out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {opts.json_out}")
+    if opts.check:
+        if failures:
+            print()
+            print(f"check: {len(failures)} failure(s)")
+            for failure in failures:
+                print(f"  - {failure}")
+            return 1
+        print()
+        print("check: ok (window order and budgets)")
     return 0
 
 
