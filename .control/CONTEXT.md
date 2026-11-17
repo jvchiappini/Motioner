@@ -7,14 +7,55 @@ version_schema: 1
 
 ## Prompt 17 status (startup performance)
 
-Session `S-2026-11-15-001` (open). **S0-S5 done; S6 pending.** No commit in
-Motioner. S0 is committed and pinned, S1 as `5873863..a078f80` (pinned), S2 as
-`a078f80..4582c42` (pinned), S3 as `4582c42..5687d18` (pinned), S3b as
-`5687d18..a3ee934` (the rejected snapshot, still in history) and its
+Session `S-2026-11-15-001` (open). **S0-S6 done; prompt 17 complete.** No
+commit in Motioner. S0 is committed and pinned, S1 as `5873863..a078f80`
+(pinned), S2 as `a078f80..4582c42` (pinned), S3 as `4582c42..5687d18` (pinned),
+S3b as `5687d18..a3ee934` (the rejected snapshot, still in history) and its
 replacement as `a3ee934..2c23263`, S4 as `2c23263..8338d1c` (pushed; Motioner
 pin `3b02208`), S5 as `8338d1c..493619f` (exit hook, **not pushed**, the
-submodule is checked out there locally). Reports:
-`out/reports/PHASE-17-S0-REPORT.md` through `PHASE-17-S5-REPORT.md` (Spanish).
+submodule is checked out there locally), and S6 as **uncommitted working-tree
+changes in the dev clone on top of `493619f`** (show.rs docs + pure timeout
+helper, first-frame mark before ShowWindow + `report_first_frame`,
+`startup.md`). Reports: `PHASE-17-S0-REPORT.md` through
+`PHASE-17-S6-REPORT.md` plus `PHASE-17-REPORT.md` (Spanish).
+
+S6 (2026-11-17) — budgets, docs, reviewer findings:
+
+- **Guard**: `scripts/startup_bench.py --check` (5 runs) fails on (i) the
+  normal-path `engine: window visible` before `engine: first frame presented`
+  (the timeout path has its own mark and is accepted) and (ii) any metric in
+  `scripts/startup_budgets.json` over budget or missing. Budgets are 2x the S6
+  median/p90 (5 ms floor) and 50 ms close-to-hidden; the critical path is
+  `first frame - surface configured`, so the driver floor is excluded. The
+  engine now marks the first frame right after `present()` and emits the report
+  after the show (`report_first_frame`), so the order is provable. Pure
+  `timeout_from_override` replaces the env-mutating test. Documented in
+  `docs/startup.md` and D-0062.
+- **Measured** (release, 1600x900, warm 20): start first frame **468.2 ms**,
+  window visible **489.9** (p90 500.3), wall 687.4, path 34.5, renderer worker
+  27.7, close hidden 4.8; preview first frame **609.3**, visible **630.9**
+  (p90 652.3), wall 825.2, path 128.8 (document load 28.7, canvas 90.1, paint
+  65.0), close hidden 2.2. Cold (fonts+pipelines cleared, 5): start 507.3/
+  532.8, preview 655.8/683.5. AMD 760M (`WGPU_POWER_PREF=low`, 5): start
+  444.6/459.7, preview 579.0/597.8. Driver floor: surface configured 433.7
+  (start) / 482.7 (preview); instance 203/250, device 45/43, swapchain 185/190.
+- **Real screen** (`screen_check.py`, now refuses captures after the process
+  exited and detects a covering window): start normal 3/3 (490-507 ms, first
+  composed matches), start timeout 50 ms 3/3 (460-472, background then drawn),
+  preview normal 3/3 (638-658 ms with `--allow-late-content`; a first batch had
+  a 816/859 noisy outlier), preview timeout 3/3 (506-526, black then
+  composition).
+- **Console**: `motioner_app` split into `src/lib.rs` (`run_cli`) + GUI
+  `src/main.rs` (subsystem 2) + `src/bin/motioner-cli.rs` (subsystem 3). Both
+  are built by `cargo build --release -p motioner_app --bins`; verified
+  `motioner-cli info` with `>` and exit codes in PowerShell and cmd, and the
+  `motioner.com` copy alias. REF-0002 §11/README/docs/startup.md updated.
+- **Findings**: (a) one GDI brush per colour was already fixed in S3b
+  (`window_style.rs`); (b) keep `latin_western` (2.5 ms warm / 22 ms cold with
+  the cache, not worth a per-app charset); (d) `show.rs` docs fixed and the
+  timeout limitation documented; (e)/(f) screen_check + pure timeout test;
+  (g) console companion; (h) `Untitled.motioner/` deleted and `/*.motioner/`
+  ignored. Gate green (see the report); C: GB free recorded there.
 
 S5 (2026-11-16) — engine `8338d1c..493619f` (open/close paths):
 
@@ -55,9 +96,9 @@ S5 (2026-11-16) — engine `8338d1c..493619f` (open/close paths):
   goldens, rustdoc, boundaries, encoding, machete, validate, refs); engine
   `check --workspace --all-targets`, `test -p ferrous_engine` (56+1 ok),
   wasm check, fmt. C: 9.4 GB free after purging `target/debug`.
-- Left for S6: budgets/regression guard, D-0062, engine `startup.md`, final
-  report, reviewer findings, the pre-existing `Untitled.motioner/` directory,
-  and the consola/GUI docs (the exit hook is in 493619f).
+- Delivered by S6: budgets/regression guard, D-0062, engine `startup.md`,
+  final report, reviewer findings, the pre-existing `Untitled.motioner/`
+  directory, and the console/GUI docs (the exit hook is in 493619f).
 
 S4 (2026-11-16) — engine `2c23263..8338d1c` (lazy 3D + step 0):
 
@@ -512,7 +553,7 @@ in `motioner_ui`/`motioner_app`.
 Motioner is an AI-first motion-graphics editor and NLE in Rust on the
 custom FerrousEngine (wgpu), branch `feat/m1-foundations`. Program-first
 MDF builds the composition; scope/decisions are REF-0001..0004 and
-D-0010..D-0055. Code is written by opencode with DeepSeek V4.1 Flash;
+D-0010..D-0062. Code is written by opencode with DeepSeek V4.1 Flash;
 Claude is architect/auditor; the user speaks Spanish.
 
 - CLI: `render`, `still`, `info`, `bake`, `preview --control`, `ctl`,
@@ -551,9 +592,13 @@ Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
 `5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed)
 and **`493619f`** (S5 exit hook; the submodule is checked out there locally).
-**No pin bump in this session.** Never edit `engine/ferrous`. The
-`svgparser 0.8.1` future-incompat warning comes from the engine and predates
-this work.
+S6 leaves **uncommitted** engine changes in the dev clone on top of `493619f`
+(`runner/show.rs`, `runner/frame.rs`, `ferrous_core/startup.rs`, `docs/
+startup.md`); the reviewer commits/pushes them and bumps the pin. The S6
+measurements and guard were run with a temporary `../FerrousEngine` path
+override (removed afterwards). **No pin bump in this session.** Never edit
+`engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes from the
+engine and predates this work.
 
 ## Goldens
 
@@ -587,6 +632,14 @@ prewarm; playback starts at frame 0 when the device is ready) and **a visible
 close in 1.7-2.1 ms** with an engine `on_exit` hook that flushes overrides, the
 session lock and app state after the hide. `preview` first frame 1434 -> 693.5
 ms, start 538 ms, pre-window 0.94 ms. Engine `8338d1c..493619f` unpushed (S4 is
-pushed); no Motioner commit. Next: S6, budgets/docs/final report (`refresh
-assets` and `audio start` are done; teardown is after the hide).
+pushed); no Motioner commit.
+
+Then **S6**: the regression guard (`startup_bench.py --check` + budgets, with
+the window-before-first-frame rule), D-0062 and the startup docs, a console
+companion binary (`motioner-cli.exe`, same library; `.com` alias documented),
+`screen_check.py` robustness, the pure timeout test, the deleted
+`Untitled.motioner/` and the final report. Final numbers (warm 20): start
+first frame **468 ms** / visible **490 ms**; preview **609 / 631 ms**; close
+hidden 4.8 (start) and 2.2 (preview); driver floor 434-483 ms. Engine S6
+changes are uncommitted in the dev clone; no Motioner commit.
 
