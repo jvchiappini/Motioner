@@ -84,9 +84,21 @@ impl FontBakes {
     }
 
     /// The bakes that finished since the last call; never blocks.
+    ///
+    /// The flag is `true` while the worker is still baking (the channel is
+    /// empty but connected). The on-demand window schedules a short wake
+    /// while it is set, so the finished faces are uploaded without a
+    /// continuous loop.
     #[must_use]
-    pub fn poll(&self) -> Vec<BakedFace> {
-        self.receiver.try_iter().collect()
+    pub fn poll(&self) -> (Vec<BakedFace>, bool) {
+        let mut faces = Vec::new();
+        loop {
+            match self.receiver.try_recv() {
+                Ok(face) => faces.push(face),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return (faces, true),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return (faces, false),
+            }
+        }
     }
 }
 
@@ -137,7 +149,7 @@ mod tests {
         };
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let done = bakes.poll();
+            let (done, _pending) = bakes.poll();
             if let Some(face) = done.into_iter().next() {
                 assert_eq!(face.family, "Inter");
                 assert_eq!(face.weight, 700);

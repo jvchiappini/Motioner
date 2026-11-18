@@ -228,6 +228,10 @@ impl PreviewApp {
     /// texture per layer. Called only when the frame or preview mode changes;
     /// a frame that is still decoding is retried on the next UI frame.
     fn update_video_images(&mut self, frame: i64, playing: bool) {
+        if self.options.hidden_window {
+            // A hidden idle benchmark must not start decoders/proxies.
+            return;
+        }
         if self.video_last == Some((frame, playing)) && !self.video_waiting {
             return;
         }

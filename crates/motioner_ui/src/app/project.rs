@@ -15,7 +15,7 @@ use crate::command::Command;
 use crate::editor::{EditMode, Editor};
 use crate::layout::MenuAction;
 use crate::start::{NewProjectRequest, StartAction, StartLayout, StartMode, StartScreen};
-use crate::{FileWatch, PreviewSession};
+use crate::PreviewSession;
 
 impl PreviewApp {
     /// The window title: the project name, or "Motioner" on the start screen,
@@ -99,8 +99,6 @@ impl PreviewApp {
             painter.set_fonts(fonts.clone());
         }
         self.blur.set_fonts(fonts);
-        self.watch = FileWatch::new(&composition);
-        self.program_writes = self.editor.session().program_writes();
         self.painter_generation = None;
         self.blur_generation = None;
         self.last_bounds = None;
@@ -117,6 +115,8 @@ impl PreviewApp {
         // Prompt 17 S2: bake the new document's faces now; the first paint
         // uploads whatever is ready and registers the rest.
         self.start_font_bakes();
+        // Prompt 18 P1: the watcher follows the newly opened program.
+        self.start_watch_worker();
         if let Some(host) = self.host() {
             self.recovery = host.recovery(&composition);
             host.begin_session(&composition);
@@ -215,8 +215,8 @@ impl PreviewApp {
         self.start = Some(StartScreen::new(recents, examples));
         self.menu_open = false;
         self.font_bakes = None;
+        self.watch_worker = None;
         self.editor = Editor::blank(self.metrics());
-        self.program_writes = 0;
         self.asset_generation = self.asset_generation.saturating_add(1);
         self.assets.set_entries(Vec::new(), self.asset_generation);
         self.painter_generation = None;
@@ -495,15 +495,19 @@ impl PreviewApp {
 
     /// Installs enriched asset metadata (video durations and thumbnails) when
     /// the background worker finishes. Cheap when nothing is pending.
-    pub(crate) fn poll_assets(&mut self) {
+    ///
+    /// Returns whether the worker is still running, so the caller can
+    /// schedule a short wake in on-demand mode.
+    pub(crate) fn poll_assets(&mut self) -> bool {
         let Some(host) = self.host() else {
-            return;
+            return false;
         };
         let path = self.editor.session().path().to_path_buf();
         if let Some(entries) = host.poll_assets(&path) {
             self.asset_generation = self.asset_generation.saturating_add(1);
             self.assets.set_entries(entries, self.asset_generation);
         }
+        host.assets_pending(&path)
     }
 
     /// Imports one file, or every file the picker returns when `path` is

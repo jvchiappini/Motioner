@@ -17,7 +17,7 @@ use motioner_io::{
     RecentProject,
 };
 use motioner_render::FontSet;
-use motioner_ui::{AssetKindUi, AssetSummary, NewProjectRequest, ProjectHost, StartEntry};
+use motioner_ui::{AssetKindUi, AssetSummary, NewProjectRequest, ProjectHost, StartEntry, Waker};
 
 /// Enriched asset metadata produced off the first frame.
 struct AssetJob {
@@ -36,6 +36,8 @@ pub struct Host {
     proxy_done: RefCell<HashMap<String, std::time::Instant>>,
     /// ffprobe durations and video thumbnails, computed on a worker.
     asset_job: RefCell<Option<AssetJob>>,
+    /// Wakes the on-demand window when a worker finishes (prompt 18 P1).
+    waker: RefCell<Option<Waker>>,
     /// The last opened project and its manifest mtime, so the per-frame video
     /// path does not re-read and validate `project.motion` 60 times a second.
     project_cache: RefCell<Option<(PathBuf, Option<std::time::SystemTime>, Project)>>,
@@ -56,6 +58,7 @@ impl Host {
             proxies: RefCell::new(HashMap::new()),
             proxy_done: RefCell::new(HashMap::new()),
             asset_job: RefCell::new(None),
+            waker: RefCell::new(None),
             project_cache: RefCell::new(None),
         }
     }
@@ -114,28 +117,33 @@ impl Host {
     fn start_asset_job(&self, composition: &Path, root: &Path) {
         let composition_path = composition.to_path_buf();
         let root = root.to_path_buf();
+        let waker = self.waker.borrow().clone();
         let (sender, receiver) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("motioner-assets".to_owned())
             .spawn(move || {
                 let _span = motioner_ui::startup::span("motioner: assets enrich (worker)");
-                let Ok(project) = Project::open(&root) else {
-                    return;
-                };
-                let used = used_keys(&project);
-                let entries: Vec<AssetSummary> = project
-                    .assets()
-                    .iter()
-                    .map(|entry| {
-                        summary(
-                            &project,
-                            entry,
-                            used.get(&entry.key).copied().unwrap_or(0),
-                            true,
-                        )
-                    })
-                    .collect();
-                let _ = sender.send(entries);
+                if let Ok(project) = Project::open(&root) {
+                    let used = used_keys(&project);
+                    let entries: Vec<AssetSummary> = project
+                        .assets()
+                        .iter()
+                        .map(|entry| {
+                            summary(
+                                &project,
+                                entry,
+                                used.get(&entry.key).copied().unwrap_or(0),
+                                true,
+                            )
+                        })
+                        .collect();
+                    let _ = sender.send(entries);
+                }
+                // Wake the window even when opening failed, so it can clear
+                // the job instead of waiting for a list that never comes.
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
             })
             .is_ok();
         if spawned {
@@ -409,13 +417,28 @@ impl ProjectHost for Host {
             return None;
         }
         match job.receiver.try_recv() {
-            Ok(entries) => Some(entries),
+            Ok(entries) => {
+                // The worker sends once and exits; the list is complete.
+                *slot = None;
+                Some(entries)
+            }
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
                 *slot = None;
                 None
             }
         }
+    }
+
+    fn assets_pending(&self, composition: &Path) -> bool {
+        self.asset_job
+            .borrow()
+            .as_ref()
+            .is_some_and(|job| job.composition == composition)
+    }
+
+    fn install_waker(&self, waker: Waker) {
+        *self.waker.borrow_mut() = Some(waker);
     }
 
     fn audio_prewarm(&self, _composition: &Path, document: &motioner_core::Document) {
@@ -671,7 +694,9 @@ impl ProjectHost for Host {
     }
 
     fn begin_session(&self, composition: &Path) {
-        if let Ok(project) = Project::open(composition) {
+        // Use the manifest-mtime cache: reopening the project every heartbeat
+        // re-read and validated the whole project (3 s at the 30 s mark).
+        if let Some(project) = self.project_for(composition) {
             let _ = project.begin_session();
         }
     }
@@ -681,19 +706,21 @@ impl ProjectHost for Host {
     }
 
     fn end_session(&self, composition: &Path) {
-        if let Ok(project) = Project::open(composition) {
+        if let Some(project) = self.project_for(composition) {
             project.end_session();
         }
     }
 
     fn heartbeat(&self, composition: &Path) {
-        if let Ok(project) = Project::open(composition) {
+        if let Some(project) = self.project_for(composition) {
             let _ = project.heartbeat();
         }
     }
 
     fn snapshot(&self, composition: &Path) -> Result<String, String> {
-        let project = Project::open(composition).map_err(|error| error.to_string())?;
+        let project = self
+            .project_for(composition)
+            .ok_or_else(|| format!("cannot open {}", composition.display()))?;
         project
             .snapshot(std::time::SystemTime::now())
             .map(|info| info.name)

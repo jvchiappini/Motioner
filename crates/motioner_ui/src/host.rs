@@ -134,6 +134,24 @@ pub trait ProjectHost {
         None
     }
 
+    /// Whether [`Self::poll_assets`] still has work in flight.
+    ///
+    /// The on-demand window schedules a short wake while this is `true`, so an
+    /// opening project installs the enriched list without a continuous loop.
+    fn assets_pending(&self, composition: &Path) -> bool {
+        let _ = composition;
+        false
+    }
+
+    /// Gives the host the loop's wake handle.
+    ///
+    /// Background workers (asset metadata, audio, video decode) call it when
+    /// they finish, so an idle on-demand window presents one frame to install
+    /// the result instead of polling.
+    fn install_waker(&self, waker: crate::Waker) {
+        let _ = waker;
+    }
+
     /// Imports one file and returns its registry entry.
     ///
     /// # Errors

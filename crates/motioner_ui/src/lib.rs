@@ -64,6 +64,7 @@ mod timeline;
 mod timeline_model;
 mod transport;
 mod viewport;
+mod watch_worker;
 mod widgets;
 mod window;
 
@@ -104,6 +105,9 @@ pub use motioner_dsl::structural::{LayerKind, StructuralCommand};
 /// The engine's startup trace, so the application binary can mark its own
 /// pre-window phases without depending on the engine directly.
 pub use ferrous_engine::startup;
+
+/// Wakes the event loop from a background worker (prompt 18 P1).
+pub use ferrous_engine::Waker;
 
 /// The engine's allocation accounting, re-exported so the bench binary can
 /// install the counting allocator without depending on `ferrous_core`.

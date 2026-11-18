@@ -37,6 +37,10 @@ pub struct PreviewOptions {
     pub paused: bool,
     /// Close the window after this many presented frames (smoke tests/CI).
     pub exit_after_frames: Option<u64>,
+    /// Close the window after this many seconds of wall time (idle
+    /// measurements: an on-demand window presents no frames, so a frame
+    /// limit would never be reached).
+    pub exit_after_seconds: Option<f64>,
     /// Initial window size in physical pixels; [`DEFAULT_WINDOW_SIZE`] when
     /// `None`.
     pub window_size: Option<(u32, u32)>,
@@ -74,6 +78,12 @@ pub struct PreviewOptions {
     pub start: Option<crate::StartScreen>,
     /// Left panel tab shown at startup (screenshots and demos).
     pub panel_tab: Option<crate::LeftTab>,
+    /// Draw continuously instead of on demand. Benchmark and demo switch;
+    /// the normal editor never sets it.
+    pub continuous: bool,
+    /// Never map the OS window: frames present to a hidden surface and no
+    /// input can reach the app. Used by the idle benchmarks.
+    pub hidden_window: bool,
 }
 
 /// Errors that prevent the preview window from running.
@@ -142,8 +152,10 @@ pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> 
     // Prompt 17 S5: warm the audio device while the window and the GPU start;
     // the first play then starts immediately instead of paying the cpal open
     // on a frame.
-    if let (Some(host), Some(document)) = (options.host.as_ref(), session.document()) {
-        host.audio_prewarm(path, document);
+    if !options.hidden_window {
+        if let (Some(host), Some(document)) = (options.host.as_ref(), session.document()) {
+            host.audio_prewarm(path, document);
+        }
     }
 
     let (rate, duration) = session
@@ -204,6 +216,8 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
     // Whether this window opens the start screen (its pasteboard is the
     // background used if the first frame is late).
     let start_screen = options.start.is_some();
+    let continuous = options.continuous;
+    let hidden_window = options.hidden_window;
     let app = {
         // Prompt 17 S2: work the window does before the first frame.
         let _span = ferrous_engine::startup::span("motioner: app new");
@@ -223,6 +237,16 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         .with_size(width.max(320), height.max(240))
         .with_mode(AppMode::Flat2D)
         .with_background_color(background)
+        // Prompt 18 P1: an editor is event-driven. Playback, scrubbing and
+        // drags ask for frames; an idle window presents none and submits no
+        // GPU work. `--continuous` keeps the historical loop for the heavy
+        // benchmark and for demos.
+        .with_redraw_policy(if continuous {
+            ferrous_engine::RedrawPolicy::Continuous
+        } else {
+            ferrous_engine::RedrawPolicy::OnDemand
+        })
+        .with_visible(!hidden_window)
         .with_target_fps(Some(60))
         .with_vsync(true)
         .with_font_bytes(UI_FONT)

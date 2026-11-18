@@ -83,6 +83,13 @@ USER32.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
 USER32.SetForegroundWindow.argtypes = [wt.HWND]
 USER32.SetWindowPos.argtypes = [wt.HWND, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
 USER32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+USER32.GetCursorPos.argtypes = [ctypes.c_void_p]
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", wt.LONG), ("y", wt.LONG)]
+
+
 
 
 class RECT(ctypes.Structure):
@@ -143,26 +150,36 @@ def raise_window(hwnd: int) -> None:
 
 
 def hover_loop(pid: int, stop: threading.Event) -> None:
-    """Move the cursor over the app's client area until `stop`."""
+    """Move the cursor over the app's client area until `stop`.
+
+    Only runs when the caller passed ``--allow-pointer``: it takes over the
+    user's mouse (and raises the window), so it is never implicit. The
+    original cursor position is restored when the loop ends.
+    """
+    origin = POINT()
+    USER32.GetCursorPos(ctypes.byref(origin))
     hwnd = None
-    while not stop.is_set() and hwnd is None:
-        hwnd = find_window(pid)
+    try:
+        while not stop.is_set() and hwnd is None:
+            hwnd = find_window(pid)
+            if hwnd is None:
+                time.sleep(0.05)
         if hwnd is None:
-            time.sleep(0.05)
-    if hwnd is None:
-        return
-    raise_window(hwnd)
-    box = client_box(hwnd)
-    if box is None:
-        return
-    left, top, right, bottom = box
-    while not stop.is_set():
-        for step in range(20):
-            x = left + int((right - left) * (0.1 + 0.8 * (step % 10) / 9.0))
-            y = top + int((bottom - top) * (0.15 + 0.7 * ((step // 10) % 2)))
-            USER32.SetCursorPos(x, y)
-            if stop.wait(0.016):
-                return
+            return
+        raise_window(hwnd)
+        box = client_box(hwnd)
+        if box is None:
+            return
+        left, top, right, bottom = box
+        while not stop.is_set():
+            for step in range(20):
+                x = left + int((right - left) * (0.1 + 0.8 * (step % 10) / 9.0))
+                y = top + int((bottom - top) * (0.15 + 0.7 * ((step // 10) % 2)))
+                USER32.SetCursorPos(x, y)
+                if stop.wait(0.016):
+                    return
+    finally:
+        USER32.SetCursorPos(origin.x, origin.y)
 
 
 def scrub_loop(binary: Path, endpoint: Path, stop: threading.Event) -> None:
@@ -218,23 +235,26 @@ def scenario_specs() -> dict[str, dict]:
     tmp.mkdir(parents=True, exist_ok=True)
     return {
         "start_idle": {
-            "description": "start screen idle 10 s",
-            "args": lambda _p: ["--start", "--exit-after-frames", "600", "--window-size", "1600x900"],
-            "expected_frames": 600,
+            "description": "start screen idle 30 s (15 s measured tail)",
+            "args": lambda _p: ["--start", "--exit-after-seconds", "30", "--hidden", "--window-size", "1600x900"],
+            "expected_frames": 0,
+            "idle": True,
             "timeout": 40,
         },
         "editor_idle": {
-            "description": "editor with the demo project idle 10 s",
+            "description": "editor with the demo project idle 30 s (15 s measured tail)",
             "args": lambda _p: [
                 "preview",
                 "examples/demo.motioner",
                 "--paused",
-                "--exit-after-frames",
-                "600",
+                "--exit-after-seconds",
+                "30",
+                "--hidden",
                 "--window-size",
                 "1600x900",
             ],
-            "expected_frames": 600,
+            "expected_frames": 0,
+            "idle": True,
             "timeout": 40,
         },
         "editor_hover": {
@@ -243,12 +263,13 @@ def scenario_specs() -> dict[str, dict]:
                 "preview",
                 "examples/demo.motioner",
                 "--paused",
-                "--exit-after-frames",
-                "600",
+                "--exit-after-seconds",
+                "30",
                 "--window-size",
                 "1600x900",
             ],
-            "expected_frames": 600,
+            "expected_frames": 0,
+            "idle": True,
             "timeout": 40,
             "hover": True,
         },
@@ -258,14 +279,15 @@ def scenario_specs() -> dict[str, dict]:
                 "preview",
                 "examples/demo.motioner",
                 "--paused",
-                "--exit-after-frames",
-                "600",
+                "--exit-after-seconds",
+                "30",
                 "--window-size",
                 "1600x900",
                 "--control-file",
                 str(endpoint),
             ],
-            "expected_frames": 600,
+            "expected_frames": 0,
+            "idle": True,
             "timeout": 40,
             "control": True,
         },
@@ -288,6 +310,7 @@ def scenario_specs() -> dict[str, dict]:
                 "preview",
                 str(heavy),
                 "--paused",
+                "--continuous",
                 "--exit-after-frames",
                 "600",
                 "--window-size",
@@ -302,6 +325,7 @@ def scenario_specs() -> dict[str, dict]:
                 "preview",
                 "examples/showcase_pro.motion",
                 "--paused",
+                "--continuous",
                 "--exit-after-frames",
                 "600",
                 "--window-size",
@@ -362,10 +386,15 @@ def run_once(
     endpoint: Path,
     timeout: float,
     hang_timeout: float | None = None,
+    allow_pointer: bool = False,
 ) -> dict:
     args = spec["args"](endpoint)
     env = os.environ.copy()
     env["FERROUS_TRACE_FRAMES"] = "1"
+    # The startup report carries the first-frame mark; the harness uses it to
+    # separate the one-shot start-up CPU from the idle CPU after the window is
+    # live (prompt 18 P1).
+    env["FERROUS_TRACE_STARTUP"] = "1"
     command = [str(binary), *args]
     started = time.perf_counter()
     process = subprocess.Popen(
@@ -373,14 +402,39 @@ def run_once(
         cwd=str(ROOT),
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
+
+    try:
+        ps = psutil.Process(process.pid)
+    except psutil.NoSuchProcess:
+        ps = None
+
+    output_lines: list[str] = []
+    first_frame_at: list[float | None] = [None]
+    cpu_at_first: list[float | None] = [None]
+
+    def read_output(pipe) -> None:
+        for line in pipe:
+            output_lines.append(line)
+            if first_frame_at[0] is None and "first frame presented" in line:
+                first_frame_at[0] = time.perf_counter()
+                if ps is not None:
+                    try:
+                        times = ps.cpu_times()
+                        cpu_at_first[0] = times.user + times.system
+                    except psutil.Error:
+                        pass
+
+    reader = threading.Thread(target=read_output, args=(process.stdout,), daemon=True)
+    reader.start()
+
     stop = threading.Event()
     workers: list[threading.Thread] = []
-    if spec.get("hover"):
+    if spec.get("hover") and allow_pointer:
         workers.append(threading.Thread(target=hover_loop, args=(process.pid, stop), daemon=True))
     if spec.get("control"):
         workers.append(
@@ -391,10 +445,6 @@ def run_once(
     for worker in workers:
         worker.start()
 
-    try:
-        ps = psutil.Process(process.pid)
-    except psutil.NoSuchProcess:
-        ps = None
     start_cpu = None
     if ps is not None:
         try:
@@ -403,9 +453,15 @@ def run_once(
         except psutil.Error:
             start_cpu = None
     last_cpu = start_cpu
+    last_at = started
     max_rss = 0
     max_private = 0
     max_threads = 0
+    # Idle scenarios keep a 15 s tail after a 15 s settle window: start-up
+    # work (GPU init, asset probes, proxies) is excluded from the idle number.
+    tail_start = started + 15.0 if spec.get("idle") else None
+    tail_cpu = None
+    tail_at = None
     limit = hang_timeout or timeout
     try:
         while process.poll() is None and time.perf_counter() - started < limit:
@@ -413,10 +469,19 @@ def run_once(
                 try:
                     times = ps.cpu_times()
                     last_cpu = times.user + times.system
+                    last_at = time.perf_counter()
                     info = ps.memory_info()
                     max_rss = max(max_rss, int(info.rss))
                     max_private = max(max_private, int(getattr(info, "private", 0)))
                     max_threads = max(max_threads, ps.num_threads())
+                    if (
+                        tail_start is not None
+                        and tail_cpu is None
+                        and time.perf_counter() >= tail_start
+                        and last_cpu is not None
+                    ):
+                        tail_cpu = last_cpu
+                        tail_at = time.perf_counter()
                 except psutil.Error:
                     pass
             time.sleep(0.25)
@@ -425,21 +490,45 @@ def run_once(
         timed_out = process.poll() is None
         if timed_out:
             process.kill()
-        stdout, stderr = process.communicate(timeout=30)
-    wall = time.perf_counter() - started
+        process.wait(timeout=30)
+        end_at = time.perf_counter()
+        reader.join(timeout=10)
+    wall = end_at - started
     if last_cpu is None:
         last_cpu = start_cpu
     cpu_seconds = 0.0
     if start_cpu is not None and last_cpu is not None:
         cpu_seconds = max(0.0, last_cpu - start_cpu)
-    frame, memory = parse_json_lines(f"{stdout}\n{stderr}")
+    idle_cpu_s = None
+    idle_cpu_percent = None
+    if (
+        first_frame_at[0] is not None
+        and cpu_at_first[0] is not None
+        and last_cpu is not None
+    ):
+        idle_span = last_at - first_frame_at[0]
+        if idle_span > 0.0:
+            idle_cpu_s = max(0.0, last_cpu - cpu_at_first[0])
+            idle_cpu_percent = idle_cpu_s / idle_span * 100.0
+    tail_cpu_s = None
+    tail_cpu_percent = None
+    if tail_cpu is not None and tail_at is not None and last_cpu is not None:
+        tail_span = last_at - tail_at
+        if tail_span > 0.0:
+            tail_cpu_s = max(0.0, last_cpu - tail_cpu)
+            tail_cpu_percent = tail_cpu_s / tail_span * 100.0
+    frame, memory = parse_json_lines("".join(output_lines))
     frames = 0
+    presented = 0
+    gpu_submits = 0
     gpu = {}
     stages = {}
     allocs = None
     alloc_bytes = None
     if frame is not None:
         frames = int(frame.get("frames", 0))
+        presented = int(frame.get("presented", 0))
+        gpu_submits = int(frame.get("gpu_submits", 0))
         stages = frame.get("stages", {})
         gpu = {
             pass_name: float(value.get("median_ms", 0.0))
@@ -461,6 +550,16 @@ def run_once(
         "cpu_s": round(cpu_seconds, 3),
         "cpu_percent": round(cpu_seconds / wall * 100.0, 3) if wall > 0 else 0.0,
         "frames": frames,
+        "presented": presented,
+        "gpu_submits": gpu_submits,
+        "idle_cpu_s": round(idle_cpu_s, 4) if idle_cpu_s is not None else None,
+        "idle_cpu_percent": (
+            round(idle_cpu_percent, 3) if idle_cpu_percent is not None else None
+        ),
+        "tail_cpu_s": round(tail_cpu_s, 4) if tail_cpu_s is not None else None,
+        "tail_cpu_percent": (
+            round(tail_cpu_percent, 3) if tail_cpu_percent is not None else None
+        ),
         "expected_frames": expected,
         "dropped_frames": max(0, expected - frames),
         "fps": round(frames / wall, 3) if wall > 0 else 0.0,
@@ -530,6 +629,12 @@ def aggregate(runs: list[dict]) -> dict:
         "cpu_percent": med("cpu_percent"),
         "wall_s": med("wall_s"),
         "frames": med("frames"),
+        "presented": med("presented"),
+        "gpu_submits": med("gpu_submits"),
+        "idle_cpu_s": med("idle_cpu_s"),
+        "idle_cpu_percent": med("idle_cpu_percent"),
+        "tail_cpu_s": med("tail_cpu_s"),
+        "tail_cpu_percent": med("tail_cpu_percent"),
         "dropped_frames": med("dropped_frames"),
         "fps": med("fps"),
         "working_set_mb": maximum("working_set_mb"),
@@ -566,9 +671,20 @@ def print_result(name: str, description: str, result: dict) -> None:
     print(f"\n{name}: {description}")
     print(
         f"  cpu {result['cpu_percent']}%  wall {result['wall_s']} s  "
-        f"frames {result['frames']}  dropped {result['dropped_frames']}  "
+        f"frames {result['frames']}  presented {result['presented']}  "
+        f"submits {result['gpu_submits']}  dropped {result['dropped_frames']}  "
         f"fps {result['fps']}"
     )
+    if result["idle_cpu_percent"] is not None:
+        print(
+            f"  idle cpu {result['idle_cpu_percent']}% of a core  "
+            f"({result['idle_cpu_s']} s after the first frame)"
+        )
+    if result["tail_cpu_percent"] is not None:
+        print(
+            f"  idle tail {result['tail_cpu_percent']}% of a core  "
+            f"({result['tail_cpu_s']} s in the measured tail)"
+        )
     print(
         f"  working set {result['working_set_mb']} MB  private "
         f"{result['private_mb']} MB  threads {result['threads']}  "
@@ -631,6 +747,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--json-out", type=Path, default=WORK / "p0-baseline.json")
     parser.add_argument("--check", type=Path, default=None, help="budget JSON to enforce")
     parser.add_argument("--alloc-frames", type=int, default=120)
+    parser.add_argument(
+        "--allow-pointer",
+        action="store_true",
+        help="allow the hover scenario to move the real cursor (and restore it)",
+    )
     args = parser.parse_args(argv)
     if args.runs < 1:
         raise SystemExit("--runs must be at least 1")
@@ -646,13 +767,16 @@ def main(argv: list[str]) -> int:
     results: dict[str, dict] = {}
     for name in names:
         spec = specs[name]
+        if spec.get("hover") and not args.allow_pointer:
+            print(f"\n{name}: skipped (needs --allow-pointer: it moves the real mouse)")
+            continue
         endpoint = Path(tempfile.gettempdir()) / f"motioner-p0-{name}.ctl"
         if endpoint.exists():
             endpoint.unlink()
         for _ in range(args.warmup):
-            run_once(args.binary, name, spec, endpoint, spec["timeout"])
+            run_once(args.binary, name, spec, endpoint, spec["timeout"], allow_pointer=args.allow_pointer)
         runs = [
-            run_once(args.binary, name, spec, endpoint, spec["timeout"])
+            run_once(args.binary, name, spec, endpoint, spec["timeout"], allow_pointer=args.allow_pointer)
             for _ in range(args.runs)
         ]
         result = aggregate(runs)
@@ -670,6 +794,7 @@ def main(argv: list[str]) -> int:
                 alloc_spec,
                 endpoint,
                 spec["timeout"],
+                allow_pointer=False,
             )
             result["allocations_per_frame"] = alloc.get("allocations_per_frame")
             result["allocated_bytes_per_frame"] = alloc.get("allocated_bytes_per_frame")

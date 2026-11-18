@@ -212,6 +212,14 @@ impl PreviewApp {
             self.pointer.hover = hover;
             self.pointer.hover_since = now;
         }
+        if self.pointer.pressed.is_none() {
+            // Prompt 18 P1: the tooltip appears after a delay; schedule that
+            // one wake instead of redrawing while the pointer rests.
+            let due = self.pointer.hover_since + super::TOOLTIP_DELAY;
+            if Instant::now() < due {
+                ctx.redraw_at(due);
+            }
+        }
         let modifiers = modifiers(ctx);
         if ctx.input.button_just_pressed(MouseButton::Left) {
             self.on_press(layout, hover, (mx, my), modifiers, now);

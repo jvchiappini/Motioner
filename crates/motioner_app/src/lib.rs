@@ -81,8 +81,9 @@ Usage:
   motioner tool    <project|file.motion> <name> [--args JSON] [--out DIR]
   motioner tool    <project|file.motion> --batch FILE.jsonl
   motioner preview <project|file.motion> [--frame N] [--paused] [--exit-after-frames N]
-                   [--window-size WxH] [--ui-scale F] [--select ROW]
-                   [--screenshot <file.png>] [--control] [--control-file FILE]
+                   [--exit-after-seconds F] [--window-size WxH] [--ui-scale F]
+                   [--select ROW] [--screenshot <file.png>] [--control]
+                   [--control-file FILE] [--continuous]
   motioner --help
 
 A project is a `<name>.motioner/` folder (D-0045); every command also accepts
@@ -93,7 +94,10 @@ its asset root.
 Frames are integer indices. `render` draws the half-open range [from, to) and
 defaults to the whole composition. `still` draws one frame. `preview` opens the
 live editor window; `--exit-after-frames` closes it after N presented frames
-(for smoke runs and CI), `--window-size` sets the window in physical pixels,
+(for smoke runs and CI), `--exit-after-seconds` closes it after that much wall
+time (an idle window presents no frames), `--window-size` sets the window in
+physical pixels, `--continuous` keeps the historical 60 fps loop for demos and
+the heavy benchmark,
 `--ui-scale` overrides the chrome scale (to check other DPI settings),
 `--select` selects an outline row at startup and `--screenshot` writes the
 window to a PNG after `--exit-after-frames` frames (1 by default) and closes
@@ -119,7 +123,7 @@ advisory diagnostics. `preview --control` opens a local control endpoint;
 screenshot(path).";
 
 /// Parsed command line.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 enum Command {
     /// Create a project folder.
     New(NewArgs),
@@ -180,10 +184,14 @@ struct ImportArgs {
 }
 
 /// Arguments of the start screen (the no-argument launch).
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Default)]
 struct DesktopArgs {
     /// Close the window after this many presented frames.
     exit_after_frames: Option<u64>,
+    /// Close the window after this many seconds of wall time.
+    exit_after_seconds: Option<f64>,
+    /// Never map the window (idle benchmarks).
+    hidden_window: bool,
     /// Window size in physical pixels.
     window_size: Option<(u32, u32)>,
     /// Chrome scale override, stored in thousandths.
@@ -265,7 +273,8 @@ struct BakeArgs {
 }
 
 /// Arguments of the `preview` command.
-#[derive(Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // independent CLI switches
+#[derive(Debug, PartialEq)]
 struct PreviewArgs {
     /// MDF program.
     input: PathBuf,
@@ -275,6 +284,10 @@ struct PreviewArgs {
     paused: bool,
     /// Close the window after this many presented frames.
     exit_after_frames: Option<u64>,
+    /// Close the window after this many seconds of wall time.
+    exit_after_seconds: Option<f64>,
+    /// Never map the window (idle benchmarks).
+    hidden_window: bool,
     /// Window size in physical pixels.
     window_size: Option<(u32, u32)>,
     /// Chrome scale override, stored in thousandths so the struct stays `Eq`.
@@ -287,6 +300,8 @@ struct PreviewArgs {
     control: Option<PathBuf>,
     /// Show the assets tab instead of the layers tab at startup.
     assets: bool,
+    /// Draw continuously (benchmarks and demos) instead of on demand.
+    continuous: bool,
 }
 
 /// Why the run stopped and with which exit code.
@@ -528,8 +543,9 @@ fn parse_desktop(args: &[OsString]) -> Result<Command> {
             "--ui-scale",
             "--screenshot",
             "--exit-after-frames",
+            "--exit-after-seconds",
         ],
-        &[],
+        &["--hidden"],
     )?;
     if !parsed.rest.is_empty() {
         bail!("the start screen takes no positional arguments");
@@ -539,6 +555,11 @@ fn parse_desktop(args: &[OsString]) -> Result<Command> {
             .value("--exit-after-frames")
             .map(parse_u64)
             .transpose()?,
+        exit_after_seconds: parsed
+            .value("--exit-after-seconds")
+            .map(parse_seconds)
+            .transpose()?,
+        hidden_window: parsed.switches.contains(&"--hidden"),
         window_size: parsed.value("--window-size").map(parse_size).transpose()?,
         ui_scale_milli: parsed
             .value("--ui-scale")
@@ -561,6 +582,17 @@ fn parse_desktop(args: &[OsString]) -> Result<Command> {
 fn parse_u64(text: &str) -> Result<u64> {
     text.parse()
         .with_context(|| format!("invalid whole number '{text}'"))
+}
+
+/// Parses a positive number of seconds.
+fn parse_seconds(text: &str) -> Result<f64> {
+    let seconds: f64 = text
+        .parse()
+        .with_context(|| format!("invalid seconds '{text}'"))?;
+    if !seconds.is_finite() || seconds < 0.0 {
+        bail!("seconds must be a non-negative finite number, got '{text}'");
+    }
+    Ok(seconds)
 }
 
 /// Parses `new <dir> [--name NAME] [--size WxH] [--fps N] [--duration FRAMES]`.
@@ -1076,17 +1108,21 @@ fn parse_bake(args: &[OsString]) -> Result<Command> {
 }
 
 /// Parses `preview <file> [--frame N] [--paused] [--exit-after-frames N]`.
+#[allow(clippy::too_many_lines)] // one arm per flag
 fn parse_preview(args: &[OsString]) -> Result<Command> {
     let mut input = None;
     let mut frame = None;
     let mut paused = false;
     let mut exit_after_frames = None;
+    let mut exit_after_seconds = None;
     let mut window_size = None;
     let mut ui_scale_milli = None;
     let mut select = None;
     let mut screenshot = None;
     let mut control = None;
     let mut assets = false;
+    let mut continuous = false;
+    let mut hidden = false;
     let mut index = 0;
     while index < args.len() {
         let Some(arg) = args[index].to_str() else {
@@ -1103,6 +1139,14 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
             }
             "--exit-after-frames" => {
                 exit_after_frames = Some(count_value(args, index, "--exit-after-frames")?);
+                index += 2;
+            }
+            "--exit-after-seconds" => {
+                let value = flag_value(args, index, "--exit-after-seconds")?;
+                let text = value.to_str().ok_or_else(|| {
+                    anyhow!("the value of --exit-after-seconds must be valid UTF-8")
+                })?;
+                exit_after_seconds = Some(parse_seconds(text)?);
                 index += 2;
             }
             "--window-size" => {
@@ -1124,6 +1168,14 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
             }
             "--assets" => {
                 assets = true;
+                index += 1;
+            }
+            "--continuous" => {
+                continuous = true;
+                index += 1;
+            }
+            "--hidden" => {
+                hidden = true;
                 index += 1;
             }
             "--control" => {
@@ -1150,12 +1202,15 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
         frame,
         paused,
         exit_after_frames,
+        exit_after_seconds,
         window_size,
         ui_scale_milli,
         select,
         screenshot,
         control,
         assets,
+        continuous,
+        hidden_window: hidden,
     }))
 }
 
@@ -1288,6 +1343,8 @@ fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
         host: Some(std::rc::Rc::clone(&services)),
         start: None,
         exit_after_frames: args.exit_after_frames,
+        exit_after_seconds: args.exit_after_seconds,
+        hidden_window: args.hidden_window,
         window_size: args.window_size.or_else(|| {
             (placement.width > 0 && placement.height > 0)
                 .then_some((placement.width, placement.height))
@@ -1328,6 +1385,7 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         frame: args.frame,
         paused: args.paused,
         exit_after_frames: args.exit_after_frames,
+        exit_after_seconds: args.exit_after_seconds,
         window_size: args.window_size,
         #[allow(clippy::cast_precision_loss)] // at most 4000
         ui_scale: args.ui_scale_milli.map(|milli| milli as f32 / 1000.0),
@@ -1345,6 +1403,8 @@ fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
         ))),
         start: None,
         panel_tab: args.assets.then_some(motioner_ui::LeftTab::Assets),
+        continuous: args.continuous,
+        hidden_window: args.hidden_window,
     };
     if let Some(path) = &args.screenshot {
         ensure_parent(path)?;
@@ -2080,12 +2140,15 @@ mod tests {
                 frame: Some(42),
                 paused: true,
                 exit_after_frames: Some(600),
+                exit_after_seconds: None,
                 window_size: Some((1280, 720)),
                 ui_scale_milli: Some(1250),
                 select: Some(3),
                 screenshot: Some(PathBuf::from("shot.png")),
                 control: Some(PathBuf::from("ctl.txt")),
                 assets: false,
+                continuous: false,
+                hidden_window: false,
             })
         );
     }
@@ -2099,12 +2162,15 @@ mod tests {
                 frame: None,
                 paused: false,
                 exit_after_frames: None,
+                exit_after_seconds: None,
                 window_size: None,
                 ui_scale_milli: None,
                 select: None,
                 screenshot: None,
                 control: None,
                 assets: false,
+                continuous: false,
+                hidden_window: false,
             })
         );
     }

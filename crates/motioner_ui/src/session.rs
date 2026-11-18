@@ -718,6 +718,18 @@ impl PreviewSession {
         Ok(self.overrides_path.clone())
     }
 
+    /// Whether an edit is waiting for the debounced write.
+    #[must_use]
+    pub fn has_pending_overrides(&self) -> bool {
+        self.dirty.is_some()
+    }
+
+    /// The instant the pending overrides write is due, when there is one.
+    #[must_use]
+    pub fn overrides_due(&self) -> Option<Instant> {
+        self.dirty.as_ref().map(|_| self.write_at)
+    }
+
     /// Polls both files and reports whether an external change should reload.
     ///
     /// The editor's own writes are not changes: each watcher is reset after

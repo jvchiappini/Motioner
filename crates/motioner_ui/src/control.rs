@@ -25,11 +25,13 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::command::{parse_calls, Args, Command, CommandError, ErrorKind};
 use crate::json::Json;
+use crate::Waker;
 
 /// Largest request accepted, in bytes.
 const MAX_REQUEST: u64 = 64 * 1024;
@@ -242,6 +244,8 @@ pub struct ControlServer {
     requests: Receiver<Pending>,
     endpoint: Endpoint,
     file: PathBuf,
+    /// Wakes the on-demand window when a request arrives (prompt 18 P1).
+    waker: Arc<Mutex<Option<Waker>>>,
 }
 
 impl ControlServer {
@@ -263,14 +267,26 @@ impl ControlServer {
         crate::write_atomic(file, &endpoint.to_text())?;
         let (sender, requests) = mpsc::channel();
         let token = endpoint.token.clone();
+        let waker = Arc::new(Mutex::new(None));
+        let accept_waker = Arc::clone(&waker);
         thread::Builder::new()
             .name("motioner-control".to_owned())
-            .spawn(move || accept_loop(&listener, &token, &sender))?;
+            .spawn(move || accept_loop(&listener, &token, &sender, &accept_waker))?;
         Ok(Self {
             requests,
             endpoint,
             file: file.to_owned(),
+            waker,
         })
+    }
+
+    /// Installs the wake handle the accept thread uses when a request
+    /// arrives. Without it an idle on-demand window would not notice the
+    /// client until the next mouse move.
+    pub fn install_waker(&self, waker: Waker) {
+        if let Ok(mut slot) = self.waker.lock() {
+            *slot = Some(waker);
+        }
     }
 
     /// The endpoint clients connect to.
@@ -295,22 +311,33 @@ impl Drop for ControlServer {
     }
 }
 
-fn accept_loop(listener: &TcpListener, token: &str, sender: &Sender<Pending>) {
+fn accept_loop(
+    listener: &TcpListener,
+    token: &str,
+    sender: &Sender<Pending>,
+    waker: &Arc<Mutex<Option<Waker>>>,
+) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             continue;
         };
         let token = token.to_owned();
         let sender = sender.clone();
+        let waker = Arc::clone(waker);
         let _ = thread::Builder::new()
             .name("motioner-control-client".to_owned())
             .spawn(move || {
-                let _ = serve(stream, &token, &sender);
+                let _ = serve(stream, &token, &sender, &waker);
             });
     }
 }
 
-fn serve(mut stream: TcpStream, token: &str, sender: &Sender<Pending>) -> io::Result<()> {
+fn serve(
+    mut stream: TcpStream,
+    token: &str,
+    sender: &Sender<Pending>,
+    waker: &Mutex<Option<Waker>>,
+) -> io::Result<()> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let mut text = String::new();
     (&mut stream).take(MAX_REQUEST).read_to_string(&mut text)?;
@@ -328,7 +355,15 @@ fn serve(mut stream: TcpStream, token: &str, sender: &Sender<Pending>) -> io::Re
         text: request_text,
         reply,
     };
-    let line = if sender.send(pending).is_ok() {
+    let sent = sender.send(pending).is_ok();
+    if sent {
+        // The window may be asleep in on-demand mode; wake it so this frame
+        // runs the request.
+        if let Some(waker) = waker.lock().ok().and_then(|slot| slot.clone()) {
+            waker.wake();
+        }
+    }
+    let line = if sent {
         answer.recv_timeout(REPLY_TIMEOUT).unwrap_or_else(|_| {
             "{\"ok\":false,\"error\":{\"kind\":\"timeout\",\"message\":\"the editor did not answer\"}}"
                 .to_owned()

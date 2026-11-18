@@ -41,7 +41,8 @@ use crate::panels::{self, OrphanRow, Stats, TooltipRequest, View};
 use crate::text_edit::{EditKey, TextEdit};
 use crate::theme::Theme;
 use crate::timeline_model;
-use crate::{skipped_frames, FileWatch, InspectLayout, PreviewOptions, UiError};
+use crate::watch_worker::WatchWorker;
+use crate::{skipped_frames, InspectLayout, PreviewOptions, UiError};
 
 use self::pointer::Pointer;
 
@@ -67,6 +68,8 @@ const SHORTCUT_KEYS: [KeyCode; 17] = [
     KeyCode::Escape,
 ];
 
+/// The frame budget of an animation when vsync does not pace it (60 fps).
+const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// Hover time before a tooltip appears.
 const TOOLTIP_DELAY: Duration = Duration::from_millis(450);
 /// How long the reload pulse in the top bar lasts.
@@ -78,10 +81,12 @@ const COPIED_PULSE: Duration = Duration::from_millis(1200);
 #[allow(clippy::struct_excessive_bools)] // independent UI flags, not a state machine
 pub(crate) struct PreviewApp {
     editor: Editor,
-    watch: FileWatch,
-    /// Program-write counter of the last frame, so the window's own watcher
-    /// ignores writes the editor made through write-through.
-    program_writes: u64,
+    /// Wakes this window from background work (set in `setup`).
+    waker: Option<ferrous_engine::Waker>,
+    /// Background notifier for external edits while the window is idle.
+    watch_worker: Option<WatchWorker>,
+    /// Wall-clock deadline from `--exit-after-seconds`.
+    exit_deadline: Option<Instant>,
     options: PreviewOptions,
     /// Project faces for the live painter, when the app supplied them.
     fonts: Option<motioner_render::FontSet>,
@@ -211,9 +216,10 @@ impl PreviewApp {
         fatal: Rc<RefCell<Option<UiError>>>,
         title: String,
     ) -> Self {
-        let watch = FileWatch::new(editor.session().path());
-        let program_writes = editor.session().program_writes();
         let start_playing = !options.paused && options.start.is_none();
+        let exit_deadline = options
+            .exit_after_seconds
+            .map(|seconds| Instant::now() + Duration::from_secs_f64(seconds.max(0.0)));
         let host = options.host.clone();
         let start = options.start.clone();
         let title_dirty = start.is_none();
@@ -235,8 +241,9 @@ impl PreviewApp {
         let blur_fonts = fonts.clone().unwrap_or_default();
         let mut app = Self {
             editor,
-            watch,
-            program_writes,
+            waker: None,
+            watch_worker: None,
+            exit_deadline,
             options,
             fonts,
             timeline_layout: timeline_model::RowsLayout {
@@ -338,20 +345,43 @@ impl PreviewApp {
             crate::font_jobs::FontBakes::spawn(document, fonts, self.font_cache.clone());
     }
 
+    /// Starts (or restarts) the background watcher for external edits.
+    ///
+    /// It exists because an on-demand window has no frame loop to poll the
+    /// file: the watcher sleeps and wakes the loop when the program or the
+    /// overrides file changes on disk.
+    fn start_watch_worker(&mut self) {
+        self.watch_worker = None;
+        let Some(waker) = self.waker.clone() else {
+            return;
+        };
+        if self.editor.session().document().is_none() {
+            return;
+        }
+        self.watch_worker = WatchWorker::start(
+            self.editor.session().path(),
+            self.editor.session().overrides_path(),
+            waker,
+        );
+    }
+
     /// Uploads the atlases the worker finished, on the frame thread.
-    fn poll_font_bakes(&mut self, ctx: &mut AppContext<'_>) {
-        let done = match self.font_bakes.as_ref() {
+    ///
+    /// Returns whether the worker is still baking, so the caller can schedule
+    /// a short wake instead of a continuous loop.
+    fn poll_font_bakes(&mut self, ctx: &mut AppContext<'_>) -> bool {
+        let (done, pending) = match self.font_bakes.as_ref() {
             Some(bakes) => bakes.poll(),
-            None => return,
+            None => return false,
         };
         if done.is_empty() {
-            return;
+            return pending;
         }
         let renderer = ctx.render.renderer_mut();
         let mut errors = Vec::new();
         {
             let Some(painter) = self.painter.as_mut() else {
-                return;
+                return pending;
             };
             for face in done {
                 let _span = ferrous_engine::startup::span_with(|| {
@@ -366,6 +396,58 @@ impl PreviewApp {
         }
         for message in errors {
             self.report(&message);
+        }
+        pending
+    }
+
+    /// Schedules the wakes that keep the window correct while it is idle:
+    /// playback, a device that is still opening, an animation pulse, a
+    /// debounced write and the session heartbeat.
+    fn schedule_idle_work(&mut self, ctx: &mut AppContext<'_>) {
+        let now = Instant::now();
+        if self.editor.transport().is_playing() {
+            // An animation runs at the display's pace, but never faster: an
+            // occluded window may not block on vsync, and a 300 fps playback
+            // would burn a core for frames nobody sees.
+            ctx.redraw_at(now + FRAME_BUDGET);
+        }
+        if self.start_playing || (self.audio_started && !self.audio_aligned) {
+            ctx.redraw_at(now + Duration::from_millis(50));
+        }
+        if self
+            .last_reload
+            .is_some_and(|at| at.elapsed() < RELOAD_PULSE)
+            || self.copied_at.is_some_and(|at| at.elapsed() < COPIED_PULSE)
+        {
+            ctx.redraw_at(now + FRAME_BUDGET);
+        }
+        // A frame limit is checked by the next `update`; on-demand mode must
+        // ask for that next frame or a `--exit-after-frames 1` run would
+        // present once and then sleep forever.
+        if self
+            .options
+            .exit_after_frames
+            .is_some_and(|limit| self.frames_presented < limit)
+        {
+            ctx.redraw_at(now + FRAME_BUDGET);
+        }
+        if self.options.hidden_window {
+            // A never-shown swapchain can block after the first frame; hidden
+            // benchmark runs only need that frame and the exit deadline.
+            return;
+        }
+        if self.editor.session().has_pending_overrides() {
+            if let Some(due) = self.editor.session().overrides_due() {
+                ctx.redraw_at(due);
+            }
+        }
+        if self.start.is_none() && self.editor.session().document().is_some() {
+            let heartbeat = self.last_heartbeat + Duration::from_secs(30);
+            let snapshot = self.last_snapshot + Duration::from_mins(2);
+            let next = heartbeat.min(snapshot);
+            if next > now {
+                ctx.redraw_at(next);
+            }
         }
     }
 
@@ -800,11 +882,41 @@ impl PreviewApp {
 
     // ---- frame -------------------------------------------------------------
 
-    fn run_update(&mut self, ctx: &mut AppContext<'_>) {
+    /// Whether this frame must close the window (exit deadline, frame limit,
+    /// capture failure or a quit key).
+    fn exit_requested(&mut self, ctx: &mut AppContext<'_>) -> bool {
+        // Prompt 18 P1: a wall-clock exit for idle measurements; the frame
+        // limit only works while frames are being drawn.
+        if let Some(deadline) = self.exit_deadline {
+            if Instant::now() >= deadline {
+                ctx.request_exit();
+                return true;
+            }
+            ctx.redraw_at(deadline);
+        }
         if self.handle_captures() || self.frame_limit_reached() || self.quit {
             ctx.request_exit();
+            return true;
+        }
+        false
+    }
+
+    /// Polls the font and asset workers; an outstanding job gets one short
+    /// wake (the asset worker also wakes the loop itself).
+    fn poll_workers(&mut self, ctx: &mut AppContext<'_>, now: Instant) {
+        if self.poll_font_bakes(ctx) && !self.options.hidden_window {
+            ctx.redraw_at(now + Duration::from_millis(25));
+        }
+        self.poll_assets();
+    }
+
+    fn run_update(&mut self, ctx: &mut AppContext<'_>) {
+        if self.exit_requested(ctx) {
             return;
         }
+        // Playback, an opening audio device and the debounced write keep the
+        // loop awake on their own; everything else sleeps.
+        self.schedule_idle_work(ctx);
         self.clock = Duration::from_secs_f64(ctx.time.elapsed.max(0.0));
         let dpr = ctx.window.scale_factor() as f32;
         if (dpr - self.pixel_ratio).abs() > 1e-4 {
@@ -813,6 +925,7 @@ impl PreviewApp {
         }
         if self.asset_generation == 0
             && self.start.is_none()
+            && !self.options.hidden_window
             && self.editor.session().document().is_some()
         {
             // Prompt 17 S2: first-frame cost (asset scan/hash), measured.
@@ -826,32 +939,24 @@ impl PreviewApp {
                 let title = self.last_title.clone();
                 ctx.window.set_title(&title);
             }
+            self.schedule_idle_work(ctx);
             return;
         }
-        // Prompt 17 S2: upload the atlases the font worker finished before
-        // this frame paints.
-        self.poll_font_bakes(ctx);
-        // Prompt 17 S5: install ffprobe durations/thumbnails when ready.
-        self.poll_assets();
+        // Prompt 17 S2/S5: install worker results before this frame paints.
+        let now = Instant::now();
+        self.poll_workers(ctx, now);
         let layout = self.relayout(ctx);
         self.editor.view_mut().fit_zoom = canvas::fit_zoom(self.editor.session(), &layout);
 
         if self.menu_click(ctx, &layout) {
             self.pointer.pressed = None;
+            self.schedule_idle_work(ctx);
             return;
         }
         self.handle_keys(ctx);
-        let now = Instant::now();
-        // Write-through wrote the program itself; do not treat that as an
-        // external change in this window's watcher.
-        let writes = self.editor.session().program_writes();
-        if writes != self.program_writes {
-            self.program_writes = writes;
-            self.watch.reset();
-        }
-        if (self.watch.check(now) || self.editor.session_mut().poll_changes(now))
-            && self.editor.reload(self.clock)
-        {
+        // The background watcher wakes this frame on an external edit; the
+        // session applies the debounce and ignores its own writes.
+        if self.editor.session_mut().poll_changes(now) && self.editor.reload(self.clock) {
             self.reloaded();
         }
         self.start_initial_playback();
@@ -894,6 +999,7 @@ impl PreviewApp {
 
         self.handle_pointer(ctx, &layout);
         self.poll_proxy_status();
+        self.schedule_proxy_wake(ctx, now);
         {
             // Prompt 17 S2: starting device audio mixes the document's audio
             // on the first frame; measured so it does not hide elsewhere.
@@ -909,6 +1015,7 @@ impl PreviewApp {
         self.editor.sync_models();
         self.marquee = self.pointer.marquee_rect();
         self.retitle();
+        self.schedule_idle_work(ctx);
     }
 
     /// Starts the initial playback once the first frame is visible.
@@ -957,8 +1064,27 @@ impl PreviewApp {
         }
     }
 
+    /// Schedules the progress refresh while a proxy encodes, or the single
+    /// wake that clears a completed indicator after its grace period.
+    fn schedule_proxy_wake(&mut self, ctx: &mut AppContext<'_>, now: Instant) {
+        if self.options.hidden_window {
+            return;
+        }
+        if let Some(status) = &self.proxy_status {
+            let delay = if status.ends_with("100%") {
+                Duration::from_millis(3200)
+            } else {
+                Duration::from_millis(250)
+            };
+            ctx.redraw_at(now + delay);
+        }
+    }
+
     /// Refreshes the video memory readout and the proxy progress text.
     fn poll_proxy_status(&mut self) {
+        if self.options.hidden_window {
+            return;
+        }
         let Some(host) = self.host.as_ref() else {
             return;
         };
@@ -1335,6 +1461,11 @@ impl PreviewApp {
             let _span = ferrous_engine::startup::span("motioner: canvas");
             self.paint_canvas(ctx.render.renderer_mut(), &layout, frame)
         };
+        if self.video_waiting && !self.options.hidden_window {
+            // A decoded video frame is on its way; retry shortly instead of
+            // holding the loop awake.
+            ctx.redraw_at(Instant::now() + FRAME_BUDGET);
+        }
         let file_name = self
             .editor
             .session()
@@ -1507,6 +1638,21 @@ impl PreviewApp {
 impl FerrousApp for PreviewApp {
     fn setup(&mut self, ctx: &mut AppContext<'_>) {
         crate::alloc::start();
+        // Prompt 18 P1: keep the loop's wake handle for workers (control
+        // endpoint, file watcher) and arm the wall-clock exit if requested.
+        if !self.options.hidden_window {
+            self.waker = Some(ctx.waker().clone());
+            if let Some(control) = &self.control {
+                control.install_waker(ctx.waker().clone());
+            }
+            if let Some(host) = self.host() {
+                host.install_waker(ctx.waker().clone());
+            }
+            self.start_watch_worker();
+        }
+        if let Some(deadline) = self.exit_deadline {
+            ctx.redraw_at(deadline);
+        }
         let pasteboard = self.theme.pasteboard;
         ctx.render.enable_pure_2d(EngineColor::rgb(
             pasteboard[0],
