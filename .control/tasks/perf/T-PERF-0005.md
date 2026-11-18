@@ -1,7 +1,7 @@
 ---
 id: T-PERF-0005
 titulo: FerrousEngine to the byte: measured, zero-waste, idle-free engine (prompt 18)
-estado: backlog
+estado: in_progress
 prioridad: alta
 tipo: feature
 creado_por: usuario
@@ -12,7 +12,6 @@ depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 User rule (2026-11-17): FerrousEngine must be as optimized as possible —
@@ -53,3 +52,10 @@ Plan: `.control/prompts/opencode/opencode-prompt-18-engine-performance.md`
       `performance.md`, final report in Spanish with before/after ledger.
 
 ## Notas del agente
+
+- P0 (2026-11-17): instruments and baseline complete. Engine `23278a2`
+  (not pushed; submodule local at `23278a2`), Motioner no commit. Report
+  `out/reports/PHASE-18-P0-REPORT.md`. Baseline: start idle 11.85 % of a
+  core / 601 frames / 114 allocs per frame; heavy UI 99.86 % / 15 459
+  allocs per frame; playback 18.33 % / 2.83 MB per frame; showcase_pro
+  748.7 MB private. Next: P1 (idle = zero).

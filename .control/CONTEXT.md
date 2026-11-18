@@ -1,9 +1,58 @@
 ---
-actualizado: 2026-11-16
+actualizado: 2026-11-17
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
+
+## Prompt 18 status (engine performance)
+
+Session `S-2026-11-17-001` (open). **P0 done; P1-P7 pending.** Engine commit
+**`23278a2`** on `c2196d0` (not pushed); the Motioner submodule is checked out
+at `23278a2` and the parent pin is **not committed**. No Motioner commits.
+Report: `out/reports/PHASE-18-P0-REPORT.md` (Spanish).
+
+P0 (2026-11-17) — instruments and baseline:
+
+- **Instruments**: `ferrous_core::alloc_stats` (feature `alloc-stats`, counting
+  global allocator + `snapshot`/`FrameScope`), `frame_trace` (`FERROUS_TRACE_FRAMES`,
+  nine stages, median/p90/p99 + allocations, JSON on exit), per-pass GPU
+  timestamps (`TIMESTAMP_QUERY`, Pure2D + GUI passes, async readback with lag),
+  `ferrous_core::memory` + `Renderer::memory_report` (GPU/CPU per subsystem and
+  largest items; 3D passes/offscreen targets and Motioner's decoded-image CPU
+  copies/glyph tables are declared P0 gaps for P3), divan
+  `benches/subsystems.rs`, and `scripts/perf_bench.py` (8 scenarios, psutil,
+  `--check` scaffold). `motioner-bench` binary (feature `alloc-stats`) installs
+  the counting allocator; `alloc_stats` is re-exported through `motioner_ui` to
+  keep the dependency boundaries.
+- **Bug found/fixed**: GPU timestamps were created from the env var alone and
+  the headless `still`/`render` path hung waiting. `Renderer::enable_gpu_timings`
+  is now called only by the runner; the headless harness never creates a query
+  set. Headless readback tests pass again.
+- **Baseline** (release, 1600x900, 1 measured + 1 warm-up, alloc build for
+  allocations): start idle **11.85 %** CPU / 10.81 s / 601 frames / 334 MB WS /
+  465 MB private / 45 threads / 18.6 MB VRAM / **114 allocs/frame**; editor idle
+  17.20 % / 408 MB / 565 MB / 52 threads / 295 allocs; hover 16.96 %; scrub
+  20.32 %; playback 1080p 18.33 % / 594 MB private / **2.83 MB per frame**;
+  heavy UI (3000 texts) **99.86 %** / 36.91 s / 16.3 fps / **15 459 allocs/frame**
+  (event 22.26 ms + command collection 18.78 ms per frame); showcase_pro 13.15 %
+  / **748.7 MB private**; export 120 frames 31.97 % / 7.28 s / 16.5 fps.
+  GPU passes are small (Pure2D 0.005-1.759 ms, GUI 0.152-0.306 ms).
+- **Profiling**: WPR/ETW captured 56 201 samples / 641 282 stack events for
+  heavy_ui and 18 338 / 221 641 for playback. `samply` cannot record on Windows
+  (Linux/macOS only); no WPA/xperf/PDB, so stacks were not symbolized. The top-20
+  ranking in the report is by measured stage/GPU/allocation/memory share, not
+  function names (declared limitation).
+- **Benchmarks**: ui_layout 8192 5.451 ms (14.18 MB one-shot); gui_batch
+  16k quads/glyphs ~165 µs, 0 allocs; text layout 4.599 µs long / 0 allocs;
+  MSDF ASCII 3.295 ms / 213 allocs / 1.80 MB; tessellation 0 allocs; pure2d
+  heavy 2048 328 µs / 87 allocs; SVG upload 2.023 µs / 6 allocs.
+- **Gate**: Motioner fmt, clippy, 85 test groups, doc, boundaries, encoding,
+  machete, validate and refs green; engine tests 28 groups green, wasm green,
+  touched-file rustfmt clean. P0 files clippy-clean; `ferrous_engine`/
+  `ferrous_ui_render` keep the preexisting pedantic debt (27/13) documented in
+  S5. **C: ≈2.85 GB free**; `cargo clean --release` twice. Next: P1 (idle = 0
+  frames, ≤0.5 % of a core, thread audit).
 
 ## Prompt 17 status (startup performance)
 

@@ -163,6 +163,39 @@ depends on, all zero-cost when disabled.
    `out/reports/PHASE-18-P0-REPORT.md` with the baseline table and that
    ranking; later phases re-run the same harness.
 
+## Review findings after P0 (apply in the phase named)
+
+- **P1 and P4, profiles by function.** The P0 ETW captures could not be
+  symbolised (no PDB, no WPA), so the top-20 is by stage, not by function.
+  Before optimising in P1 and again in P4, get function-level profiles:
+  - build the bench binary with `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`
+    so rustc emits a PDB (and `CARGO_PROFILE_RELEASE_STRIP=none`);
+  - sample with a tool that resolves PDBs on Windows, e.g. `blondie` (ETW,
+    writes folded stacks or a flamegraph; needs an elevated shell, so ask the
+    user to run that one command) or `cargo flamegraph`, which uses blondie
+    on Windows.
+
+  Rank the top 20 by function with their shares, and keep the SVGs in
+  `out/reports/phase18/`. Mind the disk: C: had 265 MB free after the
+  reviewer's gate, so `cargo clean` before and after each profile build.
+- **P2, per-thread allocation counts.** `alloc_stats` uses process-wide
+  counters, so a `FrameScope` also counts the audio, decode, font and rayon
+  workers. Add thread-local counters (or main-thread vs others) so the "0
+  allocations per frame" tests measure the frame thread. Report worker
+  allocations separately, with their own budget.
+- **P1 and P4, heavy UI is CPU bound at ~100 % of a core.** Event handling
+  takes 22.3 ms/frame and command collection 18.8 ms/frame, against 1.8 ms
+  for the GPU pass. Start P1 by explaining why event handling costs 22 ms;
+  a hover must not walk the whole tree. P4 items 1–2 (incremental layout,
+  retained commands) target the 18.8 ms; record both in the ledger.
+- **P3, memory inventory gaps.** The 3-D passes, intermediate layers and
+  Motioner's CPU copies of images and glyphs are not in the inventory yet;
+  close those gaps first in P3.
+- **P7, engine lints.** `ferrous_engine` and `ferrous_ui_render` carry 27 and
+  13 pre-existing pedantic clippy warnings, and `cargo doc` has warnings.
+  Leave the engine with 0 clippy warnings at the engine's configured level and
+  rustdoc `-D warnings` clean.
+
 ## Phase P1 — Idle = zero (engine + Motioner)
 
 When nothing changes, the app must not render, must not tick the GPU, and

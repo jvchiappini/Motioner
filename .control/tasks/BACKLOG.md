@@ -9,7 +9,6 @@
 - **T-NLE-0001** — NLE video: import, cut, trim, arrange and export with audio `[alta]` (actualizado 2026-11-03)
 - **T-NLE-0002** — NLE transitions: crossfade, dip to black and wipes on the timeline `[alta]` (actualizado 2026-11-04)
 - **T-PERF-0001** — Define performance budgets and benchmark plan `[alta]` (actualizado 2026-10-31)
-- **T-PERF-0005** — FerrousEngine to the byte: measured, zero-waste, idle-free engine (prompt 18) `[alta]` (actualizado 2026-11-17)
 - **T-RENDER-0004** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0014** — 3D layers: glTF, cameras, lights, per-object shading (unlit, PBR, path traced) composited with 2D `[alta]` (actualizado 2026-11-04)
