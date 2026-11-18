@@ -184,6 +184,7 @@ impl Editor {
                 } else {
                     self.solo.remove(&node);
                 }
+                self.layer_flags_revision = self.layer_flags_revision.wrapping_add(1);
                 Ok(Outcome::done(format!("{id} solo {}", on_off(*on))))
             }
             Command::Shy { id, on } => {
@@ -193,6 +194,7 @@ impl Editor {
                 } else {
                     self.shy.remove(&node);
                 }
+                self.layer_flags_revision = self.layer_flags_revision.wrapping_add(1);
                 Ok(Outcome::done(format!("{id} shy {}", on_off(*on))))
             }
             Command::ShowShy(on) => {

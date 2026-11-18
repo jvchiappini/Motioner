@@ -10,7 +10,7 @@
 //! engine sorts by `z`, so shapes and text interleave exactly in the order the
 //! evaluator produced.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use ferrous_2d::render::{Effect2d, FontId2d, MAX_EFFECTS_PER_LAYER};
 use ferrous_renderer::headless::{HarnessError, Pure2dHarness, DEFAULT_FORMAT};
@@ -51,11 +51,13 @@ pub(crate) fn create(
         font_ids,
         adapter_name,
         clear: None,
-        missing_glyphs: HashMap::new(),
+        missing_glyphs: HashMap::default(),
         path_cache: PathCache::default(),
         images: crate::ImageSet::new(),
-        image_textures: HashMap::new(),
-        image_revisions: HashMap::new(),
+        image_textures: HashMap::default(),
+        image_revisions: HashMap::default(),
+        mesh_vertices: Vec::new(),
+        mesh_indices: HashMap::default(),
         texture_budget: crate::DEFAULT_TEXTURE_BUDGET,
         evaluator: motioner_eval::Evaluator::new(),
         plan: RenderPlan::new(),
@@ -151,6 +153,8 @@ fn render_plan_into_target(
         &renderer.images,
         &mut renderer.image_textures,
         &mut renderer.image_revisions,
+        &mut renderer.mesh_vertices,
+        &mut renderer.mesh_indices,
         None,
     );
     let report = renderer.harness.render_frame();
@@ -310,35 +314,6 @@ fn text_faces<'a>(
     })
 }
 
-/// The faces `plan`'s text uses, resolved through `fonts` and deduplicated.
-///
-/// A family `fonts` does not have is skipped: layout falls back to Roboto for
-/// it, which is the documented behaviour for an unknown family, so there is no
-/// face to register. A family the set *does* have is always listed, which is
-/// what the live painter uses to register it before drawing.
-#[cfg(feature = "live")]
-pub(crate) fn resolved_faces(
-    document: &Document,
-    plan: &RenderPlan,
-    fonts: &FontSet,
-) -> Vec<(String, u16)> {
-    let mut faces: Vec<(String, u16)> = Vec::new();
-    for (family, weight) in text_faces(document, plan) {
-        let Ok(resolved) = fonts.resolve(family, weight) else {
-            continue;
-        };
-        let key = (resolved.family.to_owned(), resolved.weight);
-        if faces
-            .iter()
-            .any(|(name, w)| *w == key.1 && name.eq_ignore_ascii_case(&key.0))
-        {
-            continue;
-        }
-        faces.push(key);
-    }
-    faces
-}
-
 /// Registers one atlas per resolved `(family, weight)` the plan uses.
 ///
 /// A missing family is a typed error naming the family and what was searched;
@@ -413,6 +388,8 @@ pub(crate) fn paint_plan(
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
+    mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
 ) -> PaintStats {
     let mut total = 0u32;
@@ -535,6 +512,8 @@ pub(crate) fn paint_plan(
                     images,
                     image_textures,
                     image_revisions,
+                    mesh_vertices,
+                    mesh_indices,
                     item,
                     flip,
                     &mut z_index,

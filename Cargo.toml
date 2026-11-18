@@ -25,6 +25,10 @@ license = "Apache-2.0"
 repository = "https://github.com/jvchiappini/Motioner"
 
 [workspace.dependencies]
+# OS file notifications (ReadDirectoryChangesW et al.) and the fast hasher for
+# hot-path maps (prompt 18 P2; D-0063 records the single workspace choice).
+notify = "6.1.1"
+rustc-hash = "2.1.3"
 motioner_core = { path = "crates/motioner_core" }
 motioner_eval = { path = "crates/motioner_eval" }
 motioner_dsl = { path = "crates/motioner_dsl" }

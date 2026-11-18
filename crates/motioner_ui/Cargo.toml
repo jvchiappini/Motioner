@@ -22,6 +22,9 @@ ferrous_gui.workspace = true
 ferrous_font.workspace = true
 # `SpriteInstance` for the motion-blur preview sprite.
 ferrous_2d.workspace = true
+# OS change notifications for the hot-reload watcher (no periodic stat).
+notify.workspace = true
+# Fast non-cryptographic hasher for hot-path maps.
 
 [features]
 default = []

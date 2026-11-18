@@ -44,16 +44,27 @@ impl MeshSample {
     /// Triangle indices for the grid, two triangles per cell.
     #[must_use]
     pub fn indices(&self) -> Vec<u32> {
-        let mut indices = Vec::with_capacity(
-            ((self.columns.saturating_sub(1)) * (self.rows.saturating_sub(1)) * 6) as usize,
-        );
+        let mut indices = Vec::new();
+        self.write_indices(&mut indices);
+        indices
+    }
+
+    /// Writes the grid's triangle indices into `out`, reusing its capacity.
+    ///
+    /// The topology only depends on `columns`/`rows`: a caller that keeps one
+    /// buffer per topology (or one scratch buffer) allocates nothing after the
+    /// first mesh.
+    pub fn write_indices(&self, out: &mut Vec<u32>) {
+        out.clear();
+        let count = ((self.columns.saturating_sub(1)) * (self.rows.saturating_sub(1)) * 6) as usize;
+        out.reserve(count.saturating_sub(out.capacity()));
         for row in 0..self.rows.saturating_sub(1) {
             for column in 0..self.columns.saturating_sub(1) {
                 let top_left = row * self.columns + column;
                 let top_right = top_left + 1;
                 let bottom_left = top_left + self.columns;
                 let bottom_right = bottom_left + 1;
-                indices.extend_from_slice(&[
+                out.extend_from_slice(&[
                     top_left,
                     bottom_left,
                     top_right,
@@ -63,7 +74,6 @@ impl MeshSample {
                 ]);
             }
         }
-        indices
     }
 }
 
@@ -241,13 +251,40 @@ impl Mesh {
     /// stored topology was corrupted, which the insertion path prevents.
     #[must_use]
     pub fn sample(&self, time: f64, ease: impl FnOnce(Ease, f64) -> f64) -> Option<MeshSample> {
-        let points = if let (Some(first), Some(last)) = (self.keys.first(), self.keys.last()) {
+        let mut sample = MeshSample {
+            columns: self.columns,
+            rows: self.rows,
+            uvs: Vec::new(),
+            points: Vec::new(),
+        };
+        self.sample_into(time, ease, &mut sample).then_some(sample)
+    }
+
+    /// Samples into a caller-owned [`MeshSample`], reusing its UV and point
+    /// buffers.
+    ///
+    /// The UVs are copied from the topology (the vector is reused, so no heap
+    /// allocation after warm-up); the points are either copied from a key or
+    /// interpolated into the reused vector. Returns `false` only for a
+    /// corrupted topology, which insertion prevents.
+    pub fn sample_into(
+        &self,
+        time: f64,
+        ease: impl FnOnce(Ease, f64) -> f64,
+        out: &mut MeshSample,
+    ) -> bool {
+        out.columns = self.columns;
+        out.rows = self.rows;
+        out.uvs.clear();
+        out.uvs.extend_from_slice(&self.uvs);
+        out.points.clear();
+        if let (Some(first), Some(last)) = (self.keys.first(), self.keys.last()) {
             let first_time = frame_seconds(first.frame);
             let last_time = frame_seconds(last.frame);
             if time <= first_time {
-                first.points.clone()
+                out.points.extend_from_slice(&first.points);
             } else if time >= last_time {
-                last.points.clone()
+                out.points.extend_from_slice(&last.points);
             } else {
                 let next = self
                     .keys
@@ -255,21 +292,13 @@ impl Mesh {
                 let (a, b) = (&self.keys[next - 1], &self.keys[next]);
                 let span = frame_seconds(b.frame - a.frame);
                 let t = ease(b.ease, (time - frame_seconds(a.frame)) / span);
-                a.points
-                    .iter()
-                    .zip(&b.points)
-                    .map(|(a, b)| a.lerp(*b, t))
-                    .collect()
+                out.points
+                    .extend(a.points.iter().zip(&b.points).map(|(a, b)| a.lerp(*b, t)));
             }
         } else {
-            self.points.clone()
-        };
-        Some(MeshSample {
-            columns: self.columns,
-            rows: self.rows,
-            uvs: self.uvs.clone(),
-            points,
-        })
+            out.points.extend_from_slice(&self.points);
+        }
+        true
     }
 
     /// The sampled mesh converted to local pixels for a `width x height` box.

@@ -209,6 +209,28 @@ impl Editor {
     /// ranked by their shift-corrected provenance key.
     #[must_use]
     pub fn orphan_suggestions(&self) -> Vec<(OverrideEntry, Vec<String>)> {
+        (*self.orphan_suggestions_shared()).clone()
+    }
+
+    /// Orphan suggestions cached by session generation.
+    ///
+    /// The result only depends on the compiled document and the override set;
+    /// the preview asks for it every frame, so the list is built once per
+    /// document revision and shared through an `Rc` (no per-frame clone).
+    #[must_use]
+    pub fn orphan_suggestions_shared(&self) -> std::rc::Rc<Vec<(OverrideEntry, Vec<String>)>> {
+        let generation = self.session.generation();
+        if let Some((cached, suggestions)) = self.orphan_cache.borrow().as_ref() {
+            if *cached == generation {
+                return std::rc::Rc::clone(suggestions);
+            }
+        }
+        let suggestions = std::rc::Rc::new(self.orphan_suggestions_uncached());
+        *self.orphan_cache.borrow_mut() = Some((generation, std::rc::Rc::clone(&suggestions)));
+        suggestions
+    }
+
+    fn orphan_suggestions_uncached(&self) -> Vec<(OverrideEntry, Vec<String>)> {
         let orphans = self.orphans();
         let Some(document) = self.document() else {
             return orphans

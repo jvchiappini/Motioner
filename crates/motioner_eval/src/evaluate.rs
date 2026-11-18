@@ -562,6 +562,38 @@ mod tests {
     }
 
     #[test]
+    fn a_playback_frame_allocates_nothing_after_warmup() {
+        let mut doc = document();
+        let id = square(&mut doc);
+        doc.add_keyframe(
+            id,
+            Property::Position,
+            0,
+            PropertyValue::Vec2(Vec2::new(0.0, 0.0)),
+            Ease::Linear,
+        )
+        .unwrap();
+        doc.add_keyframe(
+            id,
+            Property::Position,
+            60,
+            PropertyValue::Vec2(Vec2::new(50.0, 0.0)),
+            Ease::Linear,
+        )
+        .unwrap();
+        let mut evaluator = Evaluator::new();
+        let mut plan = RenderPlan::new();
+        for frame in 0..10 {
+            evaluator.evaluate(&doc, frame, &mut plan);
+        }
+        ferrous_core::alloc_stats::reset();
+        let scope = ferrous_core::alloc_stats::ThreadScope::new();
+        evaluator.evaluate(&doc, 11, &mut plan);
+        let delta = scope.finish();
+        assert_eq!(delta.allocating_calls(), 0, "{delta:?}");
+    }
+
+    #[test]
     fn invisible_subtrees_are_skipped() {
         let mut doc = document();
         let id = square(&mut doc);

@@ -9,7 +9,7 @@
 //! world units with [`crate::space::world_unit_scale`]. Under a non-uniform
 //! scale that single factor is an approximation (documented in the README).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use ferrous_2d::render::ShapeInstance;
 use motioner_core::Color;
@@ -86,6 +86,8 @@ pub(crate) fn draw_item(
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
+    mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -175,6 +177,8 @@ pub(crate) fn draw_item(
             images,
             image_textures,
             image_revisions,
+            mesh_vertices,
+            mesh_indices,
             item,
             model,
             key,
@@ -196,6 +200,8 @@ fn draw_image(
     images: &crate::ImageSet,
     image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
+    mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
     item: &RenderItem,
     model: Affine2,
     key: Option<motioner_core::ImageKey>,
@@ -260,11 +266,9 @@ fn draw_image(
     if let Some(index) = mesh {
         if let Some(sample) = plan.mesh(index) {
             let alpha = space::to_f32(item.opacity);
-            let vertices: Vec<ferrous_2d::render::MeshVertex2d> = sample
-                .points
-                .iter()
-                .zip(&sample.uvs)
-                .map(|(point, mesh_uv)| ferrous_2d::render::MeshVertex2d {
+            mesh_vertices.clear();
+            for (point, mesh_uv) in sample.points.iter().zip(&sample.uvs) {
+                mesh_vertices.push(ferrous_2d::render::MeshVertex2d {
                     position: [space::to_f32(point.x), space::to_f32(point.y), 0.0],
                     // The mesh UVs are [0, 1] over the node; remap them into
                     // the resolved crop exactly like the sprite path does.
@@ -274,13 +278,16 @@ fn draw_image(
                     ],
                     alpha,
                     premultiplied: 0.0,
-                })
-                .collect();
-            let indices = sample.indices();
+                });
+            }
+            let indices = mesh_indices
+                .entry((sample.columns, sample.rows))
+                .or_default();
+            sample.write_indices(indices);
             // Mesh points are pixels, so the transform carries no extra box
             // scale (the sprite path folds `width`/`height` into its matrix).
             let transform = space::model_mat4(model, 1.0, 1.0, z);
-            canvas.draw_mesh(texture_id, &vertices, &indices, transform);
+            canvas.draw_mesh(texture_id, mesh_vertices, indices, transform);
             return 1;
         }
     }

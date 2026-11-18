@@ -19,6 +19,7 @@ mod rig_edit;
 mod rig_json;
 mod view;
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
@@ -232,6 +233,9 @@ struct Gesture {
     keys: Vec<KeyRef>,
 }
 
+/// Orphan suggestions cached per document revision.
+pub(crate) type OrphanSuggestions = Rc<Vec<(motioner_core::OverrideEntry, Vec<String>)>>;
+
 /// The editor state and command executor.
 pub struct Editor {
     session: PreviewSession,
@@ -279,6 +283,13 @@ pub struct Editor {
     model_generation: u64,
     /// Generation the full outline (including visibility runs) was built for.
     outline_generation: Option<u64>,
+    /// Orphan suggestions cached by session generation (prompt 18 P2).
+    orphan_cache: RefCell<Option<(u64, OrphanSuggestions)>>,
+    /// Code panel cached by session generation.
+    code_panel_cache: RefCell<Option<(u64, Rc<crate::CodePanel>)>>,
+    /// Bumped whenever the solo or shy sets change, so caches keyed by the
+    /// session generation can also see these view-only flags.
+    layer_flags_revision: u64,
 }
 
 impl Editor {
@@ -325,6 +336,9 @@ impl Editor {
             font_families: vec!["Inter".to_owned(), "Roboto".to_owned()],
             model_generation: u64::MAX,
             outline_generation: None,
+            orphan_cache: RefCell::new(None),
+            code_panel_cache: RefCell::new(None),
+            layer_flags_revision: 0,
         };
         editor.refresh_models();
         if let Some(row) = select {
@@ -425,6 +439,7 @@ impl Editor {
         self.visible.clear();
         self.solo.clear();
         self.shy.clear();
+        self.layer_flags_revision = self.layer_flags_revision.wrapping_add(1);
         self.show_shy = false;
         self.graph = None;
         self.only_animated = false;
@@ -523,6 +538,12 @@ impl Editor {
     #[must_use]
     pub fn is_solo(&self, node: NodeId) -> bool {
         self.solo.contains(&node)
+    }
+
+    /// Changes whenever any layer's solo or shy flag changes.
+    #[must_use]
+    pub fn layer_flags_revision(&self) -> u64 {
+        self.layer_flags_revision
     }
 
     /// Whether a layer is shy (hidden from the preview by default).
@@ -668,8 +689,19 @@ impl Editor {
     /// The ranges come from the applied [`CodeEdit`], not from re-diffing the
     /// text, so the panel can never disagree with what was written.
     #[must_use]
-    pub fn code_panel(&self) -> crate::CodePanel {
-        crate::CodePanel::build(self.session.source(), self.last_edit.as_ref())
+    pub fn code_panel(&self) -> Rc<crate::CodePanel> {
+        let generation = self.session.generation();
+        if let Some((cached, panel)) = self.code_panel_cache.borrow().as_ref() {
+            if *cached == generation {
+                return Rc::clone(panel);
+            }
+        }
+        let panel = Rc::new(crate::CodePanel::build(
+            self.session.source(),
+            self.last_edit.as_ref(),
+        ));
+        *self.code_panel_cache.borrow_mut() = Some((generation, Rc::clone(&panel)));
+        panel
     }
 
     /// One row per pending override, with the last commit's reasons.

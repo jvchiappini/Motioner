@@ -205,7 +205,23 @@ pub(crate) struct PreviewApp {
     font_cache: Option<ferrous_font::AtlasCache>,
     /// Faces a worker is baking for the open document, when any.
     font_bakes: Option<crate::font_jobs::FontBakes>,
+    /// `frame_facts` cached by document revision and view geometry.
+    facts_cache: RefCell<Option<(FactsKey, Rc<FrameFacts>)>>,
 }
+
+/// Identity of the inputs of [`PreviewApp::frame_facts`].
+type FactsKey = (
+    u64, // session generation
+    u64, // solo/shy revision
+    u64, // fit zoom bits
+    u64, // manual zoom bits
+    u64, // pan x bits
+    u64, // pan y bits
+    u32, // canvas x bits
+    u32, // canvas y bits
+    u32, // canvas width bits
+    u32, // canvas height bits
+);
 
 impl PreviewApp {
     #[allow(clippy::too_many_lines)] // one struct literal; the fields are the window's state
@@ -322,6 +338,7 @@ impl PreviewApp {
             last_scrub_audio: None,
             font_cache: ferrous_font::AtlasCache::from_config(&crate::window::font_cache_config()),
             font_bakes: None,
+            facts_cache: RefCell::new(None),
         };
         app.start_font_bakes();
         app
@@ -989,6 +1006,12 @@ impl PreviewApp {
             self.restart_audio();
         }
         self.poll_control();
+        // A control command may request the close; exit on this frame so an
+        // on-demand window does not wait for input that will never come.
+        if self.quit {
+            ctx.request_exit();
+            return;
+        }
         self.editor.sync_models();
         if self.title_dirty {
             self.title_dirty = false;
@@ -1358,21 +1381,35 @@ impl PreviewApp {
             .unwrap_or_default()
     }
 
-    fn frame_facts(&self, layout: &Layout) -> FrameFacts {
+    fn frame_facts(&self, layout: &Layout) -> Rc<FrameFacts> {
+        let view_state = self.editor.view();
+        let key: FactsKey = (
+            self.editor.session().generation(),
+            self.editor.layer_flags_revision(),
+            view_state.fit_zoom.to_bits(),
+            view_state.zoom.unwrap_or(0.0).to_bits(),
+            view_state.pan.0.to_bits(),
+            view_state.pan.1.to_bits(),
+            layout.canvas.x.to_bits(),
+            layout.canvas.y.to_bits(),
+            layout.canvas.w.to_bits(),
+            layout.canvas.h.to_bits(),
+        );
+        if let Some((cached, facts)) = self.facts_cache.borrow().as_ref() {
+            if *cached == key {
+                return Rc::clone(facts);
+            }
+        }
         let view = canvas::viewport(self.editor.session(), self.editor.view(), layout);
         let comp_rect = view.map(|view| view.rect);
         let zoom = view.map_or(0.0, |view| view.scale);
-        let reload_pulse = self.last_reload.map_or(0.0, |at| {
-            1.0 - (at.elapsed().as_secs_f32() / RELOAD_PULSE.as_secs_f32()).min(1.0)
-        });
-        let orphans: Vec<OrphanRow> = self
-            .editor
-            .orphan_suggestions()
-            .into_iter()
+        let suggestions = self.editor.orphan_suggestions_shared();
+        let orphans: Vec<OrphanRow> = suggestions
+            .iter()
             .map(|(entry, suggestions)| OrphanRow {
-                id: entry.id,
-                property: entry.property,
-                suggestion: suggestions.into_iter().next(),
+                id: entry.id.clone(),
+                property: entry.property.clone(),
+                suggestion: suggestions.first().cloned(),
             })
             .collect();
         let document = self.editor.session().document();
@@ -1393,16 +1430,15 @@ impl PreviewApp {
             .iter()
             .map(|row| (self.editor.is_solo(row.node), self.editor.is_shy(row.node)))
             .collect();
-        let copied = self.copied_at.is_some_and(|at| at.elapsed() < COPIED_PULSE);
-        FrameFacts {
+        let facts = Rc::new(FrameFacts {
             comp_rect,
             zoom,
-            reload_pulse,
             orphans,
             layer_states,
             layer_flags,
-            copied,
-        }
+        });
+        *self.facts_cache.borrow_mut() = Some((key, Rc::clone(&facts)));
+        facts
     }
 
     #[allow(clippy::too_many_lines)] // one immediate-mode paint pass
@@ -1475,6 +1511,10 @@ impl PreviewApp {
             .unwrap_or("untitled")
             .to_owned();
         let facts = self.frame_facts(&layout);
+        let reload_pulse = self.last_reload.map_or(0.0, |at| {
+            1.0 - (at.elapsed().as_secs_f32() / RELOAD_PULSE.as_secs_f32()).min(1.0)
+        });
+        let copied = self.copied_at.is_some_and(|at| at.elapsed() < COPIED_PULSE);
         let tooltip = self.tooltip(&layout);
         let (mouse_x, mouse_y) = ctx.input.mouse_pos_f32();
         let menu_hover = if self.menu_open {
@@ -1534,7 +1574,7 @@ impl PreviewApp {
             proxy_status: self.proxy_status.as_deref(),
             layer_scroll: self.scroll_px(PanelId::Layers),
             inspector_scroll: self.scroll_px(PanelId::Inspector),
-            reload_pulse: facts.reload_pulse,
+            reload_pulse,
             inspector: editor.inspector(),
             inspector_layout: &self.inspector_layout,
             editing: self.editing.as_ref(),
@@ -1548,7 +1588,7 @@ impl PreviewApp {
             expanded: editor.expanded(),
             orphans: &facts.orphans,
             layer_states: &facts.layer_states,
-            copied: facts.copied,
+            copied,
             filter: editor.filter(),
             layer_flags: &facts.layer_flags,
             show_shy: editor.show_shy(),
@@ -1686,6 +1726,46 @@ impl FerrousApp for PreviewApp {
         self.run_draw_ui(dc);
     }
 
+    fn on_window_event(
+        &mut self,
+        event: &ferrous_engine::winit::event::WindowEvent,
+        ctx: &mut AppContext<'_>,
+    ) {
+        let ferrous_engine::winit::event::WindowEvent::CursorMoved { .. } = event else {
+            return;
+        };
+        let (mx, my) = ctx.input.mouse_pos_f32();
+        if let Some(screen) = self.start.take() {
+            let layout = self.start_layout(ctx, &screen);
+            let hover = screen.action_at(&layout, mx, my);
+            if hover != self.start_hover {
+                ctx.request_redraw();
+            }
+            self.start = Some(screen);
+            return;
+        }
+        let Some(layout) = self.layout else {
+            // The first frame has not laid the editor out yet.
+            ctx.request_redraw();
+            return;
+        };
+        let hover = self.hover_at(&layout, mx, my);
+        if hover != self.pointer.hover {
+            // The highlight, cursor or the hovered canvas node changed.
+            ctx.request_redraw();
+        } else if hover == Some(Hit::Canvas) {
+            // The canvas hover overlay follows the pointer even when the hit
+            // kind is unchanged.
+            ctx.request_redraw();
+        } else if self.tooltip(&layout).is_some() {
+            // The target has a tooltip: schedule the one wake that shows it.
+            let due = self.pointer.hover_since + TOOLTIP_DELAY;
+            if Instant::now() < due {
+                ctx.redraw_at(due);
+            }
+        }
+    }
+
     fn on_screenshot(&mut self, screenshot: Screenshot) {
         self.capture.deliver(
             self.options.png_writer,
@@ -1782,11 +1862,9 @@ fn draw_drop_hover(p: &mut Painter<'_>, layout: &Layout, x: f32, y: f32) {
 struct FrameFacts {
     comp_rect: Option<Rect>,
     zoom: f64,
-    reload_pulse: f32,
     orphans: Vec<OrphanRow>,
     layer_states: Vec<(bool, bool)>,
     layer_flags: Vec<(bool, bool)>,
-    copied: bool,
 }
 
 /// Modifier state for this frame.

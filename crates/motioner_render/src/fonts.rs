@@ -7,8 +7,8 @@
 //! built from, so measurement (including GPOS kerning) can never drift from
 //! what is drawn.
 
+use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -263,7 +263,7 @@ impl CpuTextMetrics {
     pub fn new(fonts: FontSet) -> Self {
         Self {
             fonts,
-            layouts: Arc::new(Mutex::new(HashMap::new())),
+            layouts: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 

@@ -37,7 +37,7 @@ pub use fonts::{
 pub use paths::path_bounds;
 pub use space::{linear_rgba, srgb_to_linear};
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::fmt;
 
 use ferrous_2d::render::{FontId2d, ShapeInstance};
@@ -553,6 +553,9 @@ pub struct FrameRenderer {
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
     image_revisions: HashMap<motioner_core::ImageKey, u64>,
+    /// Reused mesh vertex scratch and one index buffer per topology.
+    mesh_vertices: Vec<ferrous_2d::render::MeshVertex2d>,
+    mesh_indices: HashMap<(u32, u32), Vec<u32>>,
     texture_budget: u64,
     /// Reused across frame renders, so a preview does not rebuild the
     /// evaluator scratch or the plan's item buffers every call.
@@ -900,6 +903,12 @@ pub struct LivePainter {
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
     image_revisions: HashMap<motioner_core::ImageKey, u64>,
+    /// Reused mesh vertex scratch and one index buffer per topology.
+    mesh_vertices: Vec<ferrous_2d::render::MeshVertex2d>,
+    mesh_indices: HashMap<(u32, u32), Vec<u32>>,
+    /// Resolved document faces, cached by document pointer (prompt 18 P2).
+    faces_key: Option<usize>,
+    faces_cache: Vec<(String, u16)>,
 }
 
 #[cfg(feature = "live")]
@@ -969,11 +978,15 @@ impl LivePainter {
             font: register_face(renderer, "Roboto", 400, ROBOTO)?,
             fonts,
             font_ids: Vec::new(),
-            missing_glyphs: HashMap::new(),
+            missing_glyphs: HashMap::default(),
             path_cache: paths::PathCache::default(),
             images: ImageSet::new(),
-            image_textures: HashMap::new(),
-            image_revisions: HashMap::new(),
+            image_textures: HashMap::default(),
+            image_revisions: HashMap::default(),
+            mesh_vertices: Vec::new(),
+            mesh_indices: HashMap::default(),
+            faces_key: None,
+            faces_cache: Vec::new(),
         })
     }
 
@@ -989,6 +1002,7 @@ impl LivePainter {
     /// new set resolves to and is still missing, so switching documents never
     /// re-uploads a face the engine already has.
     pub fn set_fonts(&mut self, fonts: FontSet) {
+        self.faces_key = None;
         self.fonts = fonts;
     }
 
@@ -1051,10 +1065,15 @@ impl LivePainter {
         &mut self,
         renderer: &mut ferrous_renderer::Renderer,
         document: &Document,
-        plan: &RenderPlan,
+        _plan: &RenderPlan,
     ) -> Result<(), RenderError> {
-        for (family, weight) in frame::resolved_faces(document, plan, &self.fonts) {
-            if self.face_registered(&family, weight) {
+        let key = std::ptr::from_ref(document).addr();
+        if self.faces_key != Some(key) {
+            self.faces_cache = document_faces(document, &self.fonts);
+            self.faces_key = Some(key);
+        }
+        for (family, weight) in &self.faces_cache {
+            if self.face_registered(family, *weight) {
                 continue;
             }
             let _span = ferrous_core::startup::span_with(|| {
@@ -1062,7 +1081,7 @@ impl LivePainter {
             });
             let face = self
                 .fonts
-                .resolve(&family, weight)
+                .resolve(family, *weight)
                 .map_err(RenderError::FontFamily)?;
             let id = register_face(renderer, face.family, face.weight, face.bytes)?;
             self.font_ids
@@ -1159,6 +1178,8 @@ impl LivePainter {
             &self.images,
             &mut self.image_textures,
             &mut self.image_revisions,
+            &mut self.mesh_vertices,
+            &mut self.mesh_indices,
             None,
         ))
     }
@@ -1203,6 +1224,8 @@ impl LivePainter {
             &self.images,
             &mut self.image_textures,
             &mut self.image_revisions,
+            &mut self.mesh_vertices,
+            &mut self.mesh_indices,
             Some(hidden),
         ))
     }

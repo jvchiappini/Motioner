@@ -246,6 +246,9 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         } else {
             ferrous_engine::RedrawPolicy::OnDemand
         })
+        // Hover draws only when a pointer move changes the target or another
+        // visible state; `PreviewApp::on_window_event` makes that decision.
+        .with_redraw_on_pointer_move(false)
         .with_visible(!hidden_window)
         .with_target_fps(Some(60))
         .with_vsync(true)

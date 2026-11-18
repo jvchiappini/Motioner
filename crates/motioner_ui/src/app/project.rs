@@ -296,7 +296,7 @@ impl PreviewApp {
     // ---- start screen ------------------------------------------------------
 
     /// The start screen layout for the current window.
-    fn start_layout(&self, ctx: &AppContext<'_>, screen: &StartScreen) -> StartLayout {
+    pub(crate) fn start_layout(&self, ctx: &AppContext<'_>, screen: &StartScreen) -> StartLayout {
         let (width, height) = ctx.window_size;
         StartLayout::compute(
             width as f32,

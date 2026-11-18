@@ -16,7 +16,7 @@
     clippy::cast_lossless
 )] // image pixels and sample indices; loop bounds are the buffer sizes
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use motioner_core::{
     Color, Composition, Document, FrameRate, NodeContent, Paint, Property, PropertyValue, Stroke,
@@ -940,7 +940,7 @@ impl ImageCache {
     #[must_use]
     pub fn new(limit: usize) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: HashMap::default(),
             order: Vec::new(),
             limit: limit.max(1),
         }

@@ -182,6 +182,41 @@ def hover_loop(pid: int, stop: threading.Event) -> None:
         USER32.SetCursorPos(origin.x, origin.y)
 
 
+def hover_static_loop(pid: int, stop: threading.Event) -> None:
+    """Move the cursor inside one static panel area until `stop`.
+
+    Every position hits the same target, so the editor's pointer-move hook
+    must not request a frame. Only runs with ``--allow-pointer``; the cursor
+    is restored.
+    """
+    origin = POINT()
+    USER32.GetCursorPos(ctypes.byref(origin))
+    hwnd = None
+    try:
+        while not stop.is_set() and hwnd is None:
+            hwnd = find_window(pid)
+            if hwnd is None:
+                time.sleep(0.05)
+        if hwnd is None:
+            return
+        raise_window(hwnd)
+        box = client_box(hwnd)
+        if box is None:
+            return
+        left, top, right, bottom = box
+        # The status bar: a static strip with no hover target.
+        x0 = left + int((right - left) * 0.40)
+        y0 = top + int((bottom - top) * 0.975)
+        step = 0
+        while not stop.is_set():
+            USER32.SetCursorPos(x0 + (step % 20), y0 + ((step // 20) % 20))
+            step += 1
+            if stop.wait(0.016):
+                return
+    finally:
+        USER32.SetCursorPos(origin.x, origin.y)
+
+
 def scrub_loop(binary: Path, endpoint: Path, stop: threading.Event) -> None:
     """Send seek() commands through the control endpoint until `stop`."""
     deadline = time.perf_counter() + 8.0
@@ -239,6 +274,7 @@ def scenario_specs() -> dict[str, dict]:
             "args": lambda _p: ["--start", "--exit-after-seconds", "30", "--hidden", "--window-size", "1600x900"],
             "expected_frames": 0,
             "idle": True,
+            "startup_trace": True,
             "timeout": 40,
         },
         "editor_idle": {
@@ -255,6 +291,7 @@ def scenario_specs() -> dict[str, dict]:
             ],
             "expected_frames": 0,
             "idle": True,
+            "startup_trace": True,
             "timeout": 40,
         },
         "editor_hover": {
@@ -272,6 +309,21 @@ def scenario_specs() -> dict[str, dict]:
             "idle": True,
             "timeout": 40,
             "hover": True,
+        },
+        "editor_hover_static": {
+            "description": "editor hover inside one static panel area (0 frames once settled)",
+            "args": lambda _p: [
+                "preview",
+                "examples/demo.motioner",
+                "--paused",
+                "--exit-after-seconds",
+                "30",
+                "--window-size",
+                "1600x900",
+            ],
+            "expected_frames": 0,
+            "hover_static": True,
+            "timeout": 40,
         },
         "timeline_scrub": {
             "description": "timeline scrubbing through the control endpoint",
@@ -394,7 +446,8 @@ def run_once(
     # The startup report carries the first-frame mark; the harness uses it to
     # separate the one-shot start-up CPU from the idle CPU after the window is
     # live (prompt 18 P1).
-    env["FERROUS_TRACE_STARTUP"] = "1"
+    if spec.get("startup_trace"):
+        env["FERROUS_TRACE_STARTUP"] = "1"
     command = [str(binary), *args]
     started = time.perf_counter()
     process = subprocess.Popen(
@@ -436,6 +489,10 @@ def run_once(
     workers: list[threading.Thread] = []
     if spec.get("hover") and allow_pointer:
         workers.append(threading.Thread(target=hover_loop, args=(process.pid, stop), daemon=True))
+    if spec.get("hover_static") and allow_pointer:
+        workers.append(
+            threading.Thread(target=hover_static_loop, args=(process.pid, stop), daemon=True)
+        )
     if spec.get("control"):
         workers.append(
             threading.Thread(
@@ -744,7 +801,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--scenario", action="append", default=[], help="only these scenarios")
-    parser.add_argument("--json-out", type=Path, default=WORK / "p0-baseline.json")
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="output JSON (default: out/reports/phase18/perf-<timestamp>.json)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing output file (a baseline is never overwritten implicitly)",
+    )
     parser.add_argument("--check", type=Path, default=None, help="budget JSON to enforce")
     parser.add_argument("--alloc-frames", type=int, default=120)
     parser.add_argument(
@@ -758,6 +825,14 @@ def main(argv: list[str]) -> int:
     if not args.binary.is_file():
         raise SystemExit(f"{args.binary} does not exist; build the release binary first")
     WORK.mkdir(parents=True, exist_ok=True)
+    json_out = args.json_out or (
+        WORK / f"perf-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    )
+    if json_out.exists() and not args.force:
+        raise SystemExit(
+            f"{json_out} already exists; pass --force to overwrite it "
+            "(baselines are never overwritten implicitly)"
+        )
     specs = scenario_specs()
     names = args.scenario or list(specs)
     for name in names:
@@ -767,7 +842,7 @@ def main(argv: list[str]) -> int:
     results: dict[str, dict] = {}
     for name in names:
         spec = specs[name]
-        if spec.get("hover") and not args.allow_pointer:
+        if (spec.get("hover") or spec.get("hover_static")) and not args.allow_pointer:
             print(f"\n{name}: skipped (needs --allow-pointer: it moves the real mouse)")
             continue
         endpoint = Path(tempfile.gettempdir()) / f"motioner-p0-{name}.ctl"
@@ -809,9 +884,9 @@ def main(argv: list[str]) -> int:
         "warmup": args.warmup,
         "scenarios": results,
     }
-    args.json_out.parent.mkdir(parents=True, exist_ok=True)
-    args.json_out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"\nwrote {args.json_out}")
+    json_out.parent.mkdir(parents=True, exist_ok=True)
+    json_out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"\nwrote {json_out}")
     if args.check is not None:
         budgets = json.loads(args.check.read_text(encoding="utf-8"))
         failures = check_budgets(results, budgets)

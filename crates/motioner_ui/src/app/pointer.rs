@@ -190,9 +190,11 @@ pub(super) fn span(a: (f32, f32), b: (f32, f32)) -> Rect {
 }
 
 impl PreviewApp {
-    pub(super) fn handle_pointer(&mut self, ctx: &mut AppContext<'_>, layout: &Layout) {
-        let now = Instant::now();
-        let (mx, my) = ctx.input.mouse_pos_f32();
+    /// The hit target under a pointer position, without side effects.
+    ///
+    /// The pointer-move hook uses it to decide whether the hover actually
+    /// changed; `handle_pointer` uses the same function during the frame.
+    pub(super) fn hover_at(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
         let base_hit = layout.hit(
             mx,
             my,
@@ -200,14 +202,19 @@ impl PreviewApp {
             self.scroll_px(PanelId::Layers),
             self.scroll_px(PanelId::Timeline),
         );
-        let hover = self
-            .hit_inspector(layout, mx, my)
+        self.hit_inspector(layout, mx, my)
             .or_else(|| self.hit_orphans(layout, mx, my))
             .or_else(|| self.hit_graph(layout, mx, my))
             .or_else(|| self.hit_timeline(layout, mx, my))
             .or_else(|| self.hit_gizmo(layout, mx, my))
             .or_else(|| self.hit_layers(layout, mx, my))
-            .or(base_hit);
+            .or(base_hit)
+    }
+
+    pub(super) fn handle_pointer(&mut self, ctx: &mut AppContext<'_>, layout: &Layout) {
+        let now = Instant::now();
+        let (mx, my) = ctx.input.mouse_pos_f32();
+        let hover = self.hover_at(layout, mx, my);
         if self.pointer.drag.is_none() && hover != self.pointer.hover {
             self.pointer.hover = hover;
             self.pointer.hover_since = now;

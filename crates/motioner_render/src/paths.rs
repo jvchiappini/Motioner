@@ -10,7 +10,7 @@
 //! trim, dash, stroke width and cap/join, so an animated trim only
 //! re-tessellates the frames whose value changed.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::hash::{Hash, Hasher};
 
 use ferrous_2d::render::ShapeInstance;
@@ -298,7 +298,7 @@ fn triangle_area([a, b, c]: [Vec2; 3]) -> f64 {
 
 /// Marks an edge anti-aliased only when it belongs to one triangle.
 fn classify_edges(triangles: Vec<[Vec2; 3]>) -> Vec<LocalTriangle> {
-    let mut counts: HashMap<(u64, u64), u8> = HashMap::new();
+    let mut counts: HashMap<(u64, u64), u8> = HashMap::default();
     for triangle in &triangles {
         for edge in edges(triangle) {
             *counts.entry(edge).or_insert(0) += 1;
