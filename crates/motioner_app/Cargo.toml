@@ -7,9 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+autobins = false
+
 [[bin]]
 name = "motioner"
 path = "src/main.rs"
+
+[[bin]]
+name = "motioner-cli"
+path = "src/bin/motioner-cli.rs"
+
+[[bin]]
+name = "motioner-bench"
+path = "src/bin/motioner-bench.rs"
+required-features = ["alloc-stats"]
 
 [dependencies]
 motioner_core.workspace = true
@@ -28,6 +39,10 @@ cpal = "0.18.2"
 [features]
 default = []
 alloc-count = ["motioner_ui/alloc-count"]
+# Counting global allocator for the bench binary.  Normal `motioner` and
+# `motioner-cli` builds never enable it.  Re-exported through `motioner_ui`
+# so the application crate stays inside the dependency boundaries.
+alloc-stats = ["motioner_ui/alloc-stats"]
 
 [dev-dependencies]
 png.workspace = true

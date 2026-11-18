@@ -105,6 +105,11 @@ pub use motioner_dsl::structural::{LayerKind, StructuralCommand};
 /// pre-window phases without depending on the engine directly.
 pub use ferrous_engine::startup;
 
+/// The engine's allocation accounting, re-exported so the bench binary can
+/// install the counting allocator without depending on `ferrous_core`.
+#[cfg(feature = "alloc-stats")]
+pub use ferrous_core::alloc_stats;
+
 pub use outline::{outline_rows, NodeKind, OutlineRow};
 pub use overrides_panel::{command_text as override_command_text, OverrideRow};
 pub use properties::PropertySet;

@@ -14,6 +14,8 @@ motioner_eval.workspace = true
 motioner_render = { workspace = true, features = ["live"] }
 # The window is the one consumer of the engine's app runner and UI pass.
 ferrous_engine.workspace = true
+# Re-exported for the bench binary's counting allocator (feature `alloc-stats`).
+ferrous_core.workspace = true
 ferrous_renderer.workspace = true
 # Names the UI batch, quad and font types the chrome draws with.
 ferrous_gui.workspace = true
@@ -25,6 +27,8 @@ ferrous_2d.workspace = true
 default = []
 # Counts allocations for the steady-state profile (prompt 10 Phase 10).
 alloc-count = []
+# Counting global allocator for the bench binary (prompt 18 P0).
+alloc-stats = ["ferrous_core/alloc-stats"]
 
 [dev-dependencies]
 png.workspace = true
