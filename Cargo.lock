@@ -1012,6 +1012,7 @@ name = "ferrous_2d"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "ferrous_core",
  "ferrous_ecs",
  "ferrous_font",
  "glam 0.29.3",
@@ -1255,6 +1256,7 @@ dependencies = [
  "bytemuck",
  "crossbeam-channel",
  "ferrous_assets",
+ "ferrous_core",
  "ferrous_svg",
  "ferrous_ui_core",
  "glam 0.29.3",
@@ -2386,6 +2388,7 @@ name = "motioner_ui"
 version = "0.1.0"
 dependencies = [
  "ferrous_2d",
+ "ferrous_core",
  "ferrous_engine",
  "ferrous_font",
  "ferrous_gui",
