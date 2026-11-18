@@ -241,6 +241,69 @@ depends on, all zero-cost when disabled.
   Give each phase its own output name and refuse to overwrite a baseline
   file without `--force`.
 
+## Review findings after P2 (apply in the phase named)
+
+- **Fixed in review: `frame_facts` cache key.** The cache was keyed on the
+  session generation and the view geometry, but `layer_flags` also reads
+  the solo and shy sets. Those are view-only and do not bump the
+  generation, so toggling solo/shy left the layer icons stale. The review
+  added `Editor::layer_flags_revision` to the key. **Rule for every cache
+  from now on:** the key covers every input the cached value reads, and a
+  test changes each input once and asserts that the cache refreshes.
+  Audit the P2 caches (`orphan_cache`, `code_panel_cache`, `facts_cache`,
+  LivePainter faces, mesh index cache) against this rule in P3.
+- **P3 first: the idle regression.** P1 measured start_idle at 0.03 % and
+  editor_idle at 0.06 %. P2 reports 0.42 % (tail 0.52 %) and 0.16 % (tail
+  0.21 %): 10× and 3× worse while the frame count stays at 1. Find what
+  wakes or spins: the `notify` thread, the audio worker, the font bake
+  worker, or the change in warm-up. Bring idle back to ≤ 0.05 % of a core,
+  or explain each remaining wakeup with its source and its period.
+- **P3/P4: static hover CPU.** Static hover costs 2.83 % of a core for 5
+  frames in 30 s, so the per-`CursorMoved` path (`hover_at`, `tooltip`,
+  the start-screen layout) is not free. Profile it and make a pointer move
+  over a static area cost under 0.5 % of a core.
+- **P3 baseline: export.** P0 export ran at 16.5 fps and P2 runs at 13.4 fps.
+  The report attributes the difference to machine state. Prove it: run the
+  P0 binary, the P1 binary and the current binary back to back in the same
+  session. If the current binary is slower, bisect it.
+
+## Execution model from P3 on (parallel subagents)
+
+Phases P3 to P7 run with subagents to cut wall time. The main agent
+orchestrates; subagents only edit.
+
+1. **Main agent, before any edit:**
+   1. measure the phase baseline with the harness (one named output file);
+   2. read the code the phase touches and split it into **lanes**, each
+      with an explicit list of the files it owns. No file belongs to two
+      lanes. The engine clone and Motioner are always separate lanes;
+   3. write the lane plan in the ledger: the lane, its files, its goal and
+      the number it must move.
+2. **Subagents, all lanes in parallel:**
+   - edit only the files their lane owns. A lane that needs a change
+     outside its files writes the request in its hand-off note and does not
+     make the change;
+   - run **no** cargo build, check, clippy, test or doc, because one shared
+     target dir and the tight disk on C: cannot take parallel builds.
+     `rustfmt <file>` on their own files is allowed;
+   - re-read their diff before handing off: signatures and call sites
+     match, every new cache key covers every input, and no `unwrap` on a
+     frame path;
+   - hand off a short note: the files changed, the intent of each change,
+     the risks, the cross-lane requests and the tests to add or update.
+3. **Main agent, after all lanes:**
+   1. apply the cross-lane requests;
+   2. run the full gate once and fix the failures (`cargo check` first,
+      then clippy, tests, doc, the scripts);
+   3. in parallel with the gate, run one read-only review subagent over the
+      whole diff with the hand-off notes;
+   4. measure the phase numbers with the harness and compare them with the
+      baseline from step 1;
+   5. write the report, then `cargo clean` and check the free space on C:.
+
+A lane whose change fails the gate and cannot be fixed quickly is reverted
+and reported. It does not block the other lanes.
+
 ## Phase P1 — Idle = zero (engine + Motioner)
 
 When nothing changes, the app must not render, must not tick the GPU, and

@@ -7,12 +7,49 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0 and P1 done; P2-P7 pending.** Engine
-through **`9c3d6e3`** on `23278a2` (6 commits, not pushed); the Motioner
-submodule is checked out at `9c3d6e3` and the parent pin is **not committed**.
-No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md` and
-`PHASE-18-P1-REPORT.md` (Spanish); ledger
+Session `S-2026-11-17-001` (open). **P0, P1 and P2 done; P3-P7 pending.**
+Engine through **`c577877`** (`23278a2..c577877`, 8 commits, not pushed); the
+Motioner submodule is checked out at `c577877` and the parent pin is **not
+committed**. No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md`,
+`PHASE-18-P1-REPORT.md` and `PHASE-18-P2-REPORT.md` (Spanish); ledger
 `out/reports/phase18/ledger.md`.
+
+P2 (2026-11-18) — zero allocations per frame:
+
+- **Heavy-UI memory jump closed** (`e9761db`): P1's harness enabled
+  `FERROUS_TRACE_STARTUP=1` everywhere and `startup::span` recorded every
+  per-frame span (1.8M records at teardown, 926.8 MB private). Spans now stop
+  at the first-frame report (marks continue for close); the harness enables the
+  startup trace only for idle. Heavy UI back to **557.3 MB private / 395.4 MB
+  WS** (P0 556.2 / 403.0).
+- **Per-thread alloc counters**: `thread_snapshot`/`ThreadScope`; `frame_trace`
+  reports frame-thread allocations and `worker_*` separately. Heavy UI (120
+  frames, alloc build): **3,154 frame-thread + 0 worker** allocs/frame (P0
+  15,459 process-wide), 423 KB/frame.
+- **Zero-allocation paths**: `RenderCollector::collect_with` (by reference, no
+  child/command clones), `UiSystem::render_into` into the recycled batch,
+  `draw_text_baseline` direct push, SVG scratch buffers, FxHasher
+  (`rustc-hash`) in font/renderer/UI maps; Motioner mesh vertex/index scratch +
+  per-topology indices, `Mesh::sample_into`/`write_indices`; LivePainter face
+  cache; Editor `orphan_suggestions`/`code_panel` and PreviewApp `frame_facts`
+  caches by generation/geometry.
+- **Tests**: engine UI + Pure2D, Motioner editor + playback = **0 allocs/frame**
+  after warm-up (`alloc-stats`, ThreadScope). Heavy UI still 3,154/frame
+  (text/collection; P4).
+- **Hover**: `redraw_on_pointer_move(false)` + `on_window_event`; across panels
+  1144 -> **698 frames/30 s**, static area **5 frames/30 s total, 0 after
+  startup**.
+- **Watcher**: `notify` OS events replace the 80 ms sleep + 250 ms stat; 0
+  periodic wakeups. **Harness**: unique output names + `--force`, startup trace
+  only for idle, `--allow-pointer` restores the cursor.
+- **Measured**: idle start/editor 1 frame / 1 submit, 0.42 / 0.16 % after the
+  first frame; playback 55.3 fps / 20.28 % (P1 18.86; A/B P1 binary today
+  23.11 % / 68.4 fps); heavy UI collection 20.14 -> **15.45 ms**, 14.1 fps
+  (machine state; export 13.4 fps for both P1/P2 binaries today).
+- **Gate**: Motioner fmt, clippy, **86 test groups**, doc, boundaries, encoding,
+  machete, validate, refs, plus the zero-alloc tests; engine **29 groups**,
+  wasm, clippy default/no-default (no new warnings in touched files), docs (no
+  new warnings in touched files), touched-file rustfmt. **C: 13.50 GB free**.
 
 P1 (2026-11-18) — idle = zero:
 
@@ -677,9 +714,10 @@ Claude is architect/auditor; the user speaks Spanish.
 Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
 `5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed),
-`493619f` (S5), `c2196d0` (S6), `23278a2` (P0) and **`9c3d6e3`** (P1: 7022976,
-ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3). The submodule is checked out at
-`9c3d6e3`; the parent pin is not committed. The reviewer pushes the engine and
+`493619f` (S5), `c2196d0` (S6), `23278a2` (P0), `9c3d6e3` (P1: 7022976,
+ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3) and **`c577877`** (P2: e9761db,
+c577877). The submodule is checked out at
+`c577877`; the parent pin is not committed. The reviewer pushes the engine and
 bumps the pin. **No pin bump in this session.** Never edit `engine/ferrous`.
 The `svgparser 0.8.1` future-incompat warning predates this work. Engine
 pre-existing debt remains: crate-wide rustfmt diffs (`asset_bridge.rs`,
@@ -704,10 +742,12 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 ## Last session
 
-`S-2026-11-17-001` (prompt 18): P0 instruments/baseline, then P1 on-demand
-redraw (idle = 1 startup frame, 0 after; <=0.06 % of a core on a 45 s tail;
-0 submits, 1/1 start/editor), worker wakes, thread audit, engine docs, gate
-green, C: 13.6 GB. Next: P2 (zero allocations per frame).
+`S-2026-11-17-001` (prompt 18): P0 instruments/baseline; P1 on-demand redraw
+(idle = 1 startup frame, 0 after; <=0.06 % of a core on a 45 s tail; 0 submits);
+P2 zero allocations per frame (heavy-UI memory jump closed; per-thread alloc
+counters; 0 allocs in the four frame tests; editor caches; hover suppression;
+notify watcher; harness naming). Gate green, C: 13.57 GB. Next: P3 (bytes and
+ownership).
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
 pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the
