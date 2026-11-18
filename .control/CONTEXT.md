@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-17
+actualizado: 2026-11-18
 actualizado_por: agente
 version_schema: 1
 ---
@@ -7,10 +7,46 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0 done; P1-P7 pending.** Engine commit
-**`23278a2`** on `c2196d0` (not pushed); the Motioner submodule is checked out
-at `23278a2` and the parent pin is **not committed**. No Motioner commits.
-Report: `out/reports/PHASE-18-P0-REPORT.md` (Spanish).
+Session `S-2026-11-17-001` (open). **P0 and P1 done; P2-P7 pending.** Engine
+through **`9c3d6e3`** on `23278a2` (6 commits, not pushed); the Motioner
+submodule is checked out at `9c3d6e3` and the parent pin is **not committed**.
+No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md` and
+`PHASE-18-P1-REPORT.md` (Spanish); ledger
+`out/reports/phase18/ledger.md`.
+
+P1 (2026-11-18) — idle = zero:
+
+- **Engine** (`7022976`, `ee2b772`, `9d6218c`, `11a5b3c`, `74e85a2`,
+  `9c3d6e3`): `redraw.rs` with `RedrawPolicy::{Continuous, OnDemand}` and a
+  pure `Scheduler`; `AppContext::request_redraw`/`redraw_at(Instant)`/`waker`;
+  worker `Waker` over `EventLoopProxy`; runner creates the loop first,
+  `user_event` wakes it, `about_to_wait` draws or sleeps; `AppConfig::visible`
+  (never-shown window renders from `about_to_wait` because it gets no
+  `RedrawRequested`); `frame_trace` gains `presented`/`gpu_submits` and stops
+  counting `RedrawRequested` as event handling. Docs `redraw.md` + nav.
+- **Motioner**: `OnDemand` (with `--continuous` opt-out), no
+  `request_redraw` left: playback 16 ms, audio open 50 ms, pulses 16 ms,
+  tooltip due, overrides `write_at`, heartbeat 30 s/snapshot 2 min, proxy
+  250 ms (one 3.2 s wake to clear 100 %), video 16 ms, frame limit.
+  `motioner-watch` worker + `Waker`; control/assets workers wake the loop;
+  heartbeat uses the cached `Project` (30 s spike 3.3 s -> ~0).
+  `--exit-after-seconds`, `--hidden`; `--start --hidden` fixed. App-side
+  `FileWatch`/`program_writes` removed.
+- **Measured** (release 1600x900): start idle **1 frame total, 0 after**,
+  0.031 % over a 45 s tail, 1 submit; editor idle **1 frame, 0 after**,
+  0.062 %, 1 submit (hidden window; 60 s probe). 30 s harness + warm-up:
+  start 0.37 % idle / 0.521 % tail, editor 0.264 % / 0.313 %. Playback
+  55.4 fps / 18.86 % (P0 54.2 / 18.33); hover 1144/30 s / 9.79 % (P0
+  601/11 s / 16.96); scrub 6.82 % (P0 20.32); heavy composition 11.49 % /
+  55.3 fps (P0 13.15); export 28.68 % / 15.9 fps (P0 31.97). Heavy UI still
+  99.4 % / 14.9 fps, collection 20.14 ms (event handling was a trace bug:
+  22.26 -> 0.000); private 927 MB vs 556 (P3/P4).
+- **Threads**: 45 start, 45 editor hidden, 52 editor visible (watcher +1;
+  workers block on channels); 0 idle frame wakeups, autosave 1/30 s.
+- **Gate**: Motioner fmt, clippy, 85 test groups, doc, boundaries, encoding,
+  machete, validate, refs; engine 28 test groups, wasm, clippy default +
+  no-default (no new warnings in touched files), docs (no new warnings in
+  touched files), touched-file rustfmt. **C: 13.6 GB free** after cleaning.
 
 P0 (2026-11-17) — instruments and baseline:
 
@@ -640,15 +676,16 @@ Claude is architect/auditor; the user speaks Spanish.
 
 Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
-`5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed)
-and **`493619f`** (S5 exit hook; the submodule is checked out there locally).
-S6 leaves **uncommitted** engine changes in the dev clone on top of `493619f`
-(`runner/show.rs`, `runner/frame.rs`, `ferrous_core/startup.rs`, `docs/
-startup.md`); the reviewer commits/pushes them and bumps the pin. The S6
-measurements and guard were run with a temporary `../FerrousEngine` path
-override (removed afterwards). **No pin bump in this session.** Never edit
-`engine/ferrous`. The `svgparser 0.8.1` future-incompat warning comes from the
-engine and predates this work.
+`5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed),
+`493619f` (S5), `c2196d0` (S6), `23278a2` (P0) and **`9c3d6e3`** (P1: 7022976,
+ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3). The submodule is checked out at
+`9c3d6e3`; the parent pin is not committed. The reviewer pushes the engine and
+bumps the pin. **No pin bump in this session.** Never edit `engine/ferrous`.
+The `svgparser 0.8.1` future-incompat warning predates this work. Engine
+pre-existing debt remains: crate-wide rustfmt diffs (`asset_bridge.rs`,
+`plugin.rs`, `renderer.rs`), broken rustdoc links (`render_context.rs`,
+`traits.rs`), and pedantic clippy warnings in `ferrous_engine`/
+`ferrous_ui_render` (P7).
 
 ## Goldens
 
@@ -666,6 +703,11 @@ Ryzen 5 8645HS, 8 GB RAM, RTX 4050 Laptop 6 GB + Radeon 760M, Windows 11.
 Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 ## Last session
+
+`S-2026-11-17-001` (prompt 18): P0 instruments/baseline, then P1 on-demand
+redraw (idle = 1 startup frame, 0 after; <=0.06 % of a core on a 45 s tail;
+0 submits, 1/1 start/editor), worker wakes, thread audit, engine docs, gate
+green, C: 13.6 GB. Next: P2 (zero allocations per frame).
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
 pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the

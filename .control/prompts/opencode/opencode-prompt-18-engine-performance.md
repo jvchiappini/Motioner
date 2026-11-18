@@ -196,6 +196,51 @@ depends on, all zero-cost when disabled.
   Leave the engine with 0 clippy warnings at the engine's configured level and
   rustdoc `-D warnings` clean.
 
+## Review findings after P1 (apply in the phase named)
+
+- **P2 first: explain the heavy-UI memory jump.** Private bytes in heavy_ui
+  went from 556 MB (P0) to 927 MB (P1), and the working set from 403 to 636
+  MB, with no explanation. Before any P2 work, bisect it across the six P1
+  engine commits and the Motioner changes (or prove it is the harness: the
+  `--continuous` path, trace buffers, GPU timing query sets, the waker
+  queue). Fix it, or account for every MB in the report. A change that adds
+  370 MB without a reason is not accepted under this prompt.
+- **P2/P6: per-frame editor logic.** The P1 function profile of heavy UI is
+  topped by editor logic, not drawing:
+  - `editor::rebind::infer_shift`;
+  - `PreviewApp::frame_facts`;
+  - `Editor::orphan_suggestions`;
+  - `rebind::Provenance::parse`;
+  - `CodePanel::build`;
+  - `resolved_faces`/`ensure_faces`/`font_for`;
+  - `layout_block`.
+
+  These are derived from the document and must be computed once per document
+  revision (or per selection change), cached, and reused by later frames.
+  Their inputs are the revision, the selection and the panel size; key the
+  cache on those. `siphash` shows up in the generic top: apply the fast-hasher
+  rule here. `project_root` and `poll_proxy_status` run every playback frame;
+  hoist them out of the frame.
+- **P2: hover redraws.** The 1144 frames in 30 s of hover were measured
+  before the pointer change and not repeated. Re-measure it with
+  `--allow-pointer`. Implement the P1 item 2 rule: a pointer move that
+  changes no hover target and no visible state does not request a frame.
+  Report the frames per second of mouse movement over static UI; the target
+  is 0 frames over empty or unchanged areas.
+- **P6: playback pacing.** Playback is paced by a fixed 16 ms deadline and
+  reaches 55.4 fps on 60 fps content. Pace by the composition frame rate
+  against the presentation clock (vsync or `Fifo`), so the result is 0
+  dropped frames at 60 fps when the frame cost allows. Report the dropped
+  frames and the frame-time p99.
+- **P2: file watcher.** `motioner-watch` sleeps 80 ms and stats every 250 ms
+  (12.5 wakeups/s while idle). Use OS change notifications instead
+  (ReadDirectoryChangesW through the `notify` crate, already in Cargo.lock
+  via `ferrous_assets`), with a debounce, so an idle app has 0 periodic
+  wakeups apart from the 30 s autosave.
+- **Harness:** `p0-baseline.json` was overwritten by a default output path.
+  Give each phase its own output name and refuse to overwrite a baseline
+  file without `--force`.
+
 ## Phase P1 — Idle = zero (engine + Motioner)
 
 When nothing changes, the app must not render, must not tick the GPU, and
