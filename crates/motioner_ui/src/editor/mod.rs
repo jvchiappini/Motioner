@@ -146,6 +146,23 @@ fn panel_index(panel: Panel) -> usize {
     }
 }
 
+/// A cheap hash of exactly the edit fields [`crate::CodePanel::build`] reads.
+///
+/// `None` means "no edit".  Hashing the replacements instead of storing a
+/// clone keeps the per-frame cache check allocation-free.
+fn code_edit_fingerprint(edit: Option<&CodeEdit>) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    edit.map(|edit| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for replacement in edit.replacements() {
+            replacement.start.hash(&mut hasher);
+            replacement.end.hash(&mut hasher);
+            replacement.text.hash(&mut hasher);
+        }
+        hasher.finish()
+    })
+}
+
 /// What the caller should do after a command, beyond redrawing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
@@ -236,6 +253,9 @@ struct Gesture {
 /// Orphan suggestions cached per document revision.
 pub(crate) type OrphanSuggestions = Rc<Vec<(motioner_core::OverrideEntry, Vec<String>)>>;
 
+/// Cached code panel: session, generation, last-edit fingerprint and panel.
+type CodePanelCache = Option<(u64, u64, Option<u64>, Rc<crate::CodePanel>)>;
+
 /// The editor state and command executor.
 pub struct Editor {
     session: PreviewSession,
@@ -281,14 +301,17 @@ pub struct Editor {
     /// Families the text inspector offers: bundled plus project faces.
     font_families: Vec<String>,
     model_generation: u64,
+    /// Bumped when [`Self::replace_session`] swaps the whole session, so
+    /// caches keyed by the session generation cannot hit a previous session.
+    session_id: u64,
     /// Generation the full outline (including visibility runs) was built for.
     outline_generation: Option<u64>,
-    /// Orphan suggestions cached by session generation (prompt 18 P2).
-    orphan_cache: RefCell<Option<(u64, OrphanSuggestions)>>,
-    /// Code panel cached by session generation.
-    code_panel_cache: RefCell<Option<(u64, Rc<crate::CodePanel>)>>,
-    /// Bumped whenever the solo or shy sets change, so caches keyed by the
-    /// session generation can also see these view-only flags.
+    /// Orphan suggestions cached by session id and generation (prompt 18 P2).
+    orphan_cache: RefCell<Option<(u64, u64, OrphanSuggestions)>>,
+    /// Code panel cached by session, generation and last-edit fingerprint.
+    code_panel_cache: RefCell<CodePanelCache>,
+    /// Bumped whenever the solo/shy sets or `show_shy` change, so caches keyed
+    /// by the session generation can also see these view-only flags.
     layer_flags_revision: u64,
 }
 
@@ -335,6 +358,7 @@ impl Editor {
             },
             font_families: vec!["Inter".to_owned(), "Roboto".to_owned()],
             model_generation: u64::MAX,
+            session_id: 0,
             outline_generation: None,
             orphan_cache: RefCell::new(None),
             code_panel_cache: RefCell::new(None),
@@ -427,6 +451,7 @@ impl Editor {
             .map(|composition| (composition.frame_rate(), composition.duration()))
             .ok_or_else(|| CommandError::new(ErrorKind::NoDocument, "no composition"))?;
         self.session = session;
+        self.session_id = self.session_id.wrapping_add(1);
         self.transport = Transport::new(rate, duration);
         self.outline.clear();
         self.timeline = TimelineRows::default();
@@ -449,6 +474,8 @@ impl Editor {
         self.undo = UndoStack::default_limit();
         self.gesture = None;
         self.last_commit = None;
+        self.last_code = None;
+        self.last_edit = None;
         self.notice = None;
         self.view.zoom = None;
         self.view.pan = (0.0, 0.0);
@@ -690,9 +717,17 @@ impl Editor {
     /// text, so the panel can never disagree with what was written.
     #[must_use]
     pub fn code_panel(&self) -> Rc<crate::CodePanel> {
-        let generation = self.session.generation();
-        if let Some((cached, panel)) = self.code_panel_cache.borrow().as_ref() {
-            if *cached == generation {
+        // The panel reads the program text (session generation), the session
+        // itself (a swap resets the id) and exactly the replacements of the
+        // last edit. `execute` resets the edit without recompiling, so the
+        // generation alone is not enough (prompt 18 P3).
+        let key = (
+            self.session_id,
+            self.session.generation(),
+            code_edit_fingerprint(self.last_edit.as_ref()),
+        );
+        if let Some((session, generation, edit, panel)) = self.code_panel_cache.borrow().as_ref() {
+            if (*session, *generation, *edit) == key {
                 return Rc::clone(panel);
             }
         }
@@ -700,7 +735,7 @@ impl Editor {
             self.session.source(),
             self.last_edit.as_ref(),
         ));
-        *self.code_panel_cache.borrow_mut() = Some((generation, Rc::clone(&panel)));
+        *self.code_panel_cache.borrow_mut() = Some((key.0, key.1, key.2, Rc::clone(&panel)));
         panel
     }
 

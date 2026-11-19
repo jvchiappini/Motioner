@@ -212,21 +212,24 @@ impl Editor {
         (*self.orphan_suggestions_shared()).clone()
     }
 
-    /// Orphan suggestions cached by session generation.
+    /// Orphan suggestions cached by session id and generation.
     ///
     /// The result only depends on the compiled document and the override set;
     /// the preview asks for it every frame, so the list is built once per
     /// document revision and shared through an `Rc` (no per-frame clone).
+    /// The session id is part of the key because [`Editor::replace_session`]
+    /// can install a different document whose generation restarts at the same
+    /// value as the one already cached.
     #[must_use]
     pub fn orphan_suggestions_shared(&self) -> std::rc::Rc<Vec<(OverrideEntry, Vec<String>)>> {
-        let generation = self.session.generation();
-        if let Some((cached, suggestions)) = self.orphan_cache.borrow().as_ref() {
-            if *cached == generation {
+        let key = (self.session_id, self.session.generation());
+        if let Some((session, generation, suggestions)) = self.orphan_cache.borrow().as_ref() {
+            if (*session, *generation) == key {
                 return std::rc::Rc::clone(suggestions);
             }
         }
         let suggestions = std::rc::Rc::new(self.orphan_suggestions_uncached());
-        *self.orphan_cache.borrow_mut() = Some((generation, std::rc::Rc::clone(&suggestions)));
+        *self.orphan_cache.borrow_mut() = Some((key.0, key.1, std::rc::Rc::clone(&suggestions)));
         suggestions
     }
 

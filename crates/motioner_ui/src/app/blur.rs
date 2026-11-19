@@ -15,7 +15,7 @@
 use ferrous_2d::render::SpriteInstance;
 use ferrous_renderer::Renderer;
 use motioner_core::{Document, Frame};
-use motioner_render::{FontSet, FrameRenderer, ImageSet};
+use motioner_render::{FontSet, FrameRenderer, ImageSet, ProxyTarget};
 
 use crate::layout::Rect;
 
@@ -112,7 +112,14 @@ impl BlurPreview {
         if self.size != (width, height) || self.renderer.is_none() {
             match FrameRenderer::with_fonts(width, height, self.fonts.clone()) {
                 Ok(mut offscreen) => {
+                    // Full-size uploads: a node may scale an image above the
+                    // composition size, so a composition-sized proxy would
+                    // blur it (review of prompt 18 P3; P4 sizes proxies per
+                    // drawn image). The decoded CPU pixels can go once the
+                    // textures exist (the source set keeps its own copy).
+                    offscreen.set_proxy_target(ProxyTarget::Full);
                     offscreen.set_images(self.images.clone());
+                    offscreen.release_image_cpu_pixels();
                     self.renderer = Some(offscreen);
                     self.size = (width, height);
                     self.texture = None;

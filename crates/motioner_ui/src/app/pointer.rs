@@ -194,21 +194,41 @@ impl PreviewApp {
     ///
     /// The pointer-move hook uses it to decide whether the hover actually
     /// changed; `handle_pointer` uses the same function during the frame.
+    ///
+    /// The order matters: several specialized targets overlap the base
+    /// layout's regions (an inspector row sits inside the inspector body, an
+    /// orphan button inside the layers panel, a graph key inside the
+    /// timeline), so the first match must win in exactly this sequence:
+    /// inspector, orphans, graph, timeline, gizmo, layers, and only then the
+    /// base layout. The base layout is last and lazy because it is by far the
+    /// most expensive test; a pointer move usually resolves against a cheap
+    /// panel rectangle before it is reached, and skipping it cannot change
+    /// the result because it was already the fallback.
     pub(super) fn hover_at(&self, layout: &Layout, mx: f32, my: f32) -> Option<Hit> {
-        let base_hit = layout.hit(
-            mx,
-            my,
-            self.editor.outline().len(),
-            self.scroll_px(PanelId::Layers),
-            self.scroll_px(PanelId::Timeline),
-        );
+        // The status bar has no hit target except the two recovery buttons.
+        // Outside those, the base layout ends in `None` for this strip, so a
+        // pointer resting there pays three rectangle tests and nothing else.
+        if layout.status_bar.contains(mx, my)
+            && !layout.recovery_restore.contains(mx, my)
+            && !layout.recovery_dismiss.contains(mx, my)
+        {
+            return None;
+        }
         self.hit_inspector(layout, mx, my)
             .or_else(|| self.hit_orphans(layout, mx, my))
             .or_else(|| self.hit_graph(layout, mx, my))
             .or_else(|| self.hit_timeline(layout, mx, my))
             .or_else(|| self.hit_gizmo(layout, mx, my))
             .or_else(|| self.hit_layers(layout, mx, my))
-            .or(base_hit)
+            .or_else(|| {
+                layout.hit(
+                    mx,
+                    my,
+                    self.editor.outline().len(),
+                    self.scroll_px(PanelId::Layers),
+                    self.scroll_px(PanelId::Timeline),
+                )
+            })
     }
 
     pub(super) fn handle_pointer(&mut self, ctx: &mut AppContext<'_>, layout: &Layout) {

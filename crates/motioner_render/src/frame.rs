@@ -21,7 +21,9 @@ use motioner_eval::{Affine2, EffectValue, ItemShape, RenderItem, RenderPlan};
 use crate::fonts::FontSet;
 use crate::paths::PathCache;
 use crate::space::{self, to_f32};
-use crate::{shapes, text, Canvas2d, FrameRenderer, FrameStats, PaintStats, RenderError};
+use crate::{
+    proxy, shapes, text, Canvas2d, FrameRenderer, FrameStats, PaintStats, ProxyTarget, RenderError,
+};
 
 /// Creates the engine harness, registers Roboto and wraps it in a
 /// [`FrameRenderer`].
@@ -56,6 +58,9 @@ pub(crate) fn create(
         images: crate::ImageSet::new(),
         image_textures: HashMap::default(),
         image_revisions: HashMap::default(),
+        proxy: crate::ProxyTarget::Full,
+        image_scratch: Vec::new(),
+        image_inventory: crate::ImageInventory::new(),
         mesh_vertices: Vec::new(),
         mesh_indices: HashMap::default(),
         texture_budget: crate::DEFAULT_TEXTURE_BUDGET,
@@ -65,11 +70,16 @@ pub(crate) fn create(
 }
 
 /// Uploads every decoded image once, before the plan is painted.
+///
+/// `scratch` is reused for a proxy downscale; the headless path uses
+/// [`ProxyTarget::Full`], so it never touches it.
 fn prepare_images(
     canvas: &mut impl Canvas2d,
     images: &crate::ImageSet,
     textures: &mut HashMap<motioner_core::ImageKey, u32>,
     revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    proxy: ProxyTarget,
+    scratch: &mut Vec<u8>,
 ) -> Result<(), RenderError> {
     for (key, image) in images.iter() {
         if let Some(&id) = textures.get(key) {
@@ -77,11 +87,30 @@ fn prepare_images(
                 .get(key)
                 .is_none_or(|revision| *revision != image.revision)
             {
-                canvas.update_image(id, image)?;
+                let upload = proxy::prepare(image, proxy, scratch);
+                if canvas
+                    .update_image(id, upload.width, upload.height, upload.rgba8)
+                    .is_err()
+                {
+                    // A proxy or source-size change makes the in-place update
+                    // invalid; replace the texture at the new size.
+                    canvas.free_image(id);
+                    match canvas.register_image(upload.width, upload.height, upload.rgba8) {
+                        Ok(new_id) => {
+                            textures.insert(*key, new_id);
+                        }
+                        Err(error) => {
+                            textures.remove(key);
+                            revisions.remove(key);
+                            return Err(error);
+                        }
+                    }
+                }
                 revisions.insert(*key, image.revision);
             }
         } else {
-            let id = canvas.register_image(image)?;
+            let upload = proxy::prepare(image, proxy, scratch);
+            let id = canvas.register_image(upload.width, upload.height, upload.rgba8)?;
             textures.insert(*key, id);
             revisions.insert(*key, image.revision);
         }
@@ -139,6 +168,8 @@ fn render_plan_into_target(
         &renderer.images,
         &mut renderer.image_textures,
         &mut renderer.image_revisions,
+        renderer.proxy,
+        &mut renderer.image_scratch,
     )?;
     let stats = paint_plan(
         &mut renderer.harness,
@@ -155,6 +186,8 @@ fn render_plan_into_target(
         &mut renderer.image_revisions,
         &mut renderer.mesh_vertices,
         &mut renderer.mesh_indices,
+        renderer.proxy,
+        &mut renderer.image_scratch,
         None,
     );
     let report = renderer.harness.render_frame();
@@ -390,6 +423,8 @@ pub(crate) fn paint_plan(
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
     mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
+    proxy: ProxyTarget,
+    image_scratch: &mut Vec<u8>,
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
 ) -> PaintStats {
     let mut total = 0u32;
@@ -514,6 +549,8 @@ pub(crate) fn paint_plan(
                     image_revisions,
                     mesh_vertices,
                     mesh_indices,
+                    proxy,
+                    image_scratch,
                     item,
                     flip,
                     &mut z_index,

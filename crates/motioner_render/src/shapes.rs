@@ -17,7 +17,7 @@ use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan, ResolvedFill, Re
 
 use crate::gradients::{self, GradientTable};
 use crate::paths::{self, PathCache};
-use crate::{space, Canvas2d};
+use crate::{proxy, space, Canvas2d, ProxyTarget};
 
 /// Colour, opacity and depth shared by one shape instance.
 #[derive(Clone, Copy)]
@@ -88,6 +88,8 @@ pub(crate) fn draw_item(
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
     mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
+    proxy: ProxyTarget,
+    image_scratch: &mut Vec<u8>,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -179,6 +181,8 @@ pub(crate) fn draw_item(
             image_revisions,
             mesh_vertices,
             mesh_indices,
+            proxy,
+            image_scratch,
             item,
             model,
             key,
@@ -202,6 +206,8 @@ fn draw_image(
     image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
     mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
+    proxy: ProxyTarget,
+    image_scratch: &mut Vec<u8>,
     item: &RenderItem,
     model: Affine2,
     key: Option<motioner_core::ImageKey>,
@@ -218,44 +224,46 @@ fn draw_image(
     let Some(image) = images.get(&key) else {
         return 0;
     };
-    let texture_id = match image_textures.get(&key) {
-        Some(&id) => {
-            if image_revisions
-                .get(&key)
-                .is_none_or(|revision| *revision != image.revision)
+    let texture_id = if let Some(&id) = image_textures.get(&key) {
+        if image_revisions
+            .get(&key)
+            .is_none_or(|revision| *revision != image.revision)
+        {
+            let upload = proxy::prepare(image, proxy, image_scratch);
+            if canvas
+                .update_image(id, upload.width, upload.height, upload.rgba8)
+                .is_err()
             {
-                if canvas.update_image(id, image).is_err() {
-                    // A video switches between its original and proxy sizes;
-                    // drop the stale texture and register the new frame.
-                    canvas.free_image(id);
-                    match canvas.register_image(image) {
-                        Ok(new_id) => {
-                            image_textures.insert(key, new_id);
-                            image_revisions.insert(key, image.revision);
-                            new_id
-                        }
-                        Err(_) => {
-                            return draw_placeholder(
-                                canvas, item, model, width, height, z_index, total,
-                            )
-                        }
-                    }
-                } else {
+                // A video switches between its original and proxy sizes;
+                // drop the stale texture and register the new frame.
+                canvas.free_image(id);
+                if let Ok(new_id) = canvas.register_image(upload.width, upload.height, upload.rgba8)
+                {
+                    image_textures.insert(key, new_id);
                     image_revisions.insert(key, image.revision);
-                    id
+                    new_id
+                } else {
+                    image_textures.remove(&key);
+                    image_revisions.remove(&key);
+                    return draw_placeholder(canvas, item, model, width, height, z_index, total);
                 }
             } else {
+                image_revisions.insert(key, image.revision);
                 id
             }
+        } else {
+            id
         }
-        None => match canvas.register_image(image) {
+    } else {
+        let upload = proxy::prepare(image, proxy, image_scratch);
+        match canvas.register_image(upload.width, upload.height, upload.rgba8) {
             Ok(id) => {
                 image_textures.insert(key, id);
                 image_revisions.insert(key, image.revision);
                 id
             }
             Err(_) => return draw_placeholder(canvas, item, model, width, height, z_index, total),
-        },
+        }
     };
     let z = space::z_for(*z_index, total);
     *z_index += 1;
@@ -280,6 +288,9 @@ fn draw_image(
                     premultiplied: 0.0,
                 });
             }
+            // The indices depend only on the grid topology: `write_indices`
+            // clears the buffer, so reusing it across meshes with the same
+            // (columns, rows) key cannot carry stale values.
             let indices = mesh_indices
                 .entry((sample.columns, sample.rows))
                 .or_default();
@@ -623,6 +634,26 @@ mod tests {
         let model = space::shape_model(flip, Affine2::IDENTITY);
         let fill = fill_rect(model, 100.0, 100.0, 80.0, 1.0, style());
         assert!((fill.params[1] - 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn mesh_index_cache_reuses_one_cleared_buffer_per_topology() {
+        use motioner_core::MeshSample;
+        let mut cache: HashMap<(u32, u32), Vec<u32>> = HashMap::default();
+        cache.insert((3, 3), vec![999; 40]);
+        let sample = MeshSample {
+            columns: 3,
+            rows: 3,
+            uvs: Vec::new(),
+            points: Vec::new(),
+        };
+        let indices = cache.entry((sample.columns, sample.rows)).or_default();
+        sample.write_indices(indices);
+        // Two triangles per cell, four cells: a stale longer buffer must be
+        // cleared, which proves the cached value depends only on the topology.
+        assert_eq!(indices.len(), 24);
+        assert!(!indices.contains(&999));
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]

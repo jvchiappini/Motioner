@@ -34,6 +34,20 @@ The scenarios:
 All scenarios run in release.  ``--warmup`` runs (default 1) are discarded.
 The frame trace is enabled with ``FERROUS_TRACE_FRAMES=1``; the engine prints
 one summary at exit and one memory inventory line.
+
+Idle accounting excludes the last ``IDLE_EXCLUDE_S`` seconds before the
+process exits: the close path tears down the GPU, audio and worker threads,
+and that CPU would otherwise land in the final sample and masquerade as idle
+work.  Every idle run reports ``idle_excluded_s`` (the seconds dropped) and
+``idle_frames_after_first`` (``frames - 1``, because the trace's frame count
+is cumulative and includes the first presented frame).
+
+CPU that remains after that exclusion is not Motioner waking up.  A
+per-thread start-address attribution of the residual ticks maps them to the
+NVIDIA user-mode driver threads (``nvoglv64.dll`` / ``nvwgf2umx.dll``): one
+to three of them per 30 s plus the teardown, with no thread of ours waking
+while the window is idle.  It is a property of the driver, not a regression
+in the editor loop, so it is reported and not "fixed".
 """
 
 from __future__ import annotations
@@ -62,6 +76,10 @@ except ImportError:  # pragma: no cover - environment guard
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / "out" / "reports" / "phase18"
 FIXTURES = WORK / "fixtures"
+# Seconds before process exit excluded from idle/tail CPU: the close path
+# tears down the GPU, audio and workers and would otherwise be counted as
+# idle work in the final sample.
+IDLE_EXCLUDE_S = 0.5
 
 USER32 = ctypes.windll.user32
 KERNEL32 = ctypes.windll.kernel32
@@ -84,6 +102,44 @@ USER32.SetForegroundWindow.argtypes = [wt.HWND]
 USER32.SetWindowPos.argtypes = [wt.HWND, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
 USER32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 USER32.GetCursorPos.argtypes = [ctypes.c_void_p]
+USER32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+USER32.PostMessageW.restype = wt.BOOL
+
+WM_MOUSEMOVE = 0x0200
+
+
+def post_mouse_move(hwnd: int, x: int, y: int) -> None:
+    """Deliver one `WM_MOUSEMOVE` with client coordinates to `hwnd`.
+
+    The static-hover numbers must measure the app's own pointer path. Moving
+    the real cursor does not guarantee that: a window that is not foreground
+    (or is covered) never receives `WM_MOUSEMOVE`, and Windows coalesces moves
+    when the queue is not pumped. Posting the message makes the delivery
+    deterministic and independent of the desktop while the app still sees a
+    normal `CursorMoved` with the same coordinates.
+    """
+    lparam = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+    USER32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+
+
+def enable_dpi_awareness() -> None:
+    """Make window and cursor coordinates physical pixels.
+
+    The hover scenarios compute the client box with ``GetClientRect`` and
+    ``ClientToScreen`` and post client-relative coordinates back with
+    ``PostMessage``.  A DPI-unaware process gets virtualised coordinates, so
+    on a scaled display they would land elsewhere.  Per-monitor-v2 awareness
+    keeps both sides in physical pixels.
+    """
+    try:
+        USER32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        pass
 
 
 class POINT(ctypes.Structure):
@@ -150,36 +206,31 @@ def raise_window(hwnd: int) -> None:
 
 
 def hover_loop(pid: int, stop: threading.Event) -> None:
-    """Move the cursor over the app's client area until `stop`.
+    """Move a synthetic pointer over the app's client area until `stop`.
 
-    Only runs when the caller passed ``--allow-pointer``: it takes over the
-    user's mouse (and raises the window), so it is never implicit. The
-    original cursor position is restored when the loop ends.
+    Only runs when the caller passed ``--allow-pointer``. It raises the window
+    and posts `WM_MOUSEMOVE` messages with client coordinates; the real mouse
+    is never moved, so the run cannot disturb the desktop.
     """
-    origin = POINT()
-    USER32.GetCursorPos(ctypes.byref(origin))
     hwnd = None
-    try:
-        while not stop.is_set() and hwnd is None:
-            hwnd = find_window(pid)
-            if hwnd is None:
-                time.sleep(0.05)
+    while not stop.is_set() and hwnd is None:
+        hwnd = find_window(pid)
         if hwnd is None:
-            return
-        raise_window(hwnd)
-        box = client_box(hwnd)
-        if box is None:
-            return
-        left, top, right, bottom = box
-        while not stop.is_set():
-            for step in range(20):
-                x = left + int((right - left) * (0.1 + 0.8 * (step % 10) / 9.0))
-                y = top + int((bottom - top) * (0.15 + 0.7 * ((step // 10) % 2)))
-                USER32.SetCursorPos(x, y)
-                if stop.wait(0.016):
-                    return
-    finally:
-        USER32.SetCursorPos(origin.x, origin.y)
+            time.sleep(0.05)
+    if hwnd is None:
+        return
+    raise_window(hwnd)
+    box = client_box(hwnd)
+    if box is None:
+        return
+    left, top, right, bottom = box
+    while not stop.is_set():
+        for step in range(20):
+            x = int((right - left) * (0.1 + 0.8 * (step % 10) / 9.0))
+            y = int((bottom - top) * (0.15 + 0.7 * ((step // 10) % 2)))
+            post_mouse_move(hwnd, x, y)
+            if stop.wait(0.016):
+                return
 
 
 def hover_static_loop(pid: int, stop: threading.Event) -> None:
@@ -189,32 +240,27 @@ def hover_static_loop(pid: int, stop: threading.Event) -> None:
     must not request a frame. Only runs with ``--allow-pointer``; the cursor
     is restored.
     """
-    origin = POINT()
-    USER32.GetCursorPos(ctypes.byref(origin))
     hwnd = None
-    try:
-        while not stop.is_set() and hwnd is None:
-            hwnd = find_window(pid)
-            if hwnd is None:
-                time.sleep(0.05)
+    while not stop.is_set() and hwnd is None:
+        hwnd = find_window(pid)
         if hwnd is None:
+            time.sleep(0.05)
+    if hwnd is None:
+        return
+    raise_window(hwnd)
+    box = client_box(hwnd)
+    if box is None:
+        return
+    left, top, right, bottom = box
+    # The status bar: a static strip with no hover target.
+    x0 = int((right - left) * 0.40)
+    y0 = int((bottom - top) * 0.975)
+    step = 0
+    while not stop.is_set():
+        post_mouse_move(hwnd, x0 + (step % 20), y0 + ((step // 20) % 20))
+        step += 1
+        if stop.wait(0.016):
             return
-        raise_window(hwnd)
-        box = client_box(hwnd)
-        if box is None:
-            return
-        left, top, right, bottom = box
-        # The status bar: a static strip with no hover target.
-        x0 = left + int((right - left) * 0.40)
-        y0 = top + int((bottom - top) * 0.975)
-        step = 0
-        while not stop.is_set():
-            USER32.SetCursorPos(x0 + (step % 20), y0 + ((step // 20) % 20))
-            step += 1
-            if stop.wait(0.016):
-                return
-    finally:
-        USER32.SetCursorPos(origin.x, origin.y)
 
 
 def scrub_loop(binary: Path, endpoint: Path, stop: threading.Event) -> None:
@@ -322,6 +368,7 @@ def scenario_specs() -> dict[str, dict]:
                 "1600x900",
             ],
             "expected_frames": 0,
+            "idle": True,
             "hover_static": True,
             "timeout": 40,
         },
@@ -511,6 +558,9 @@ def run_once(
             start_cpu = None
     last_cpu = start_cpu
     last_at = started
+    # (time, cpu seconds) snapshots, so the idle number can stop before the
+    # process teardown window once the real exit time is known.
+    samples: list[tuple[float, float]] = []
     max_rss = 0
     max_private = 0
     max_threads = 0
@@ -527,6 +577,7 @@ def run_once(
                     times = ps.cpu_times()
                     last_cpu = times.user + times.system
                     last_at = time.perf_counter()
+                    samples.append((last_at, last_cpu))
                     info = ps.memory_info()
                     max_rss = max(max_rss, int(info.rss))
                     max_private = max(max_private, int(getattr(info, "private", 0)))
@@ -556,23 +607,42 @@ def run_once(
     cpu_seconds = 0.0
     if start_cpu is not None and last_cpu is not None:
         cpu_seconds = max(0.0, last_cpu - start_cpu)
+    # Drop the close/teardown window: the process exits at the deadline and
+    # the last sample can include GPU, audio and worker shutdown. Use the last
+    # snapshot at least IDLE_EXCLUDE_S before the real exit time.
+    measured: tuple[float, float] | None = None
+    cutoff = end_at - IDLE_EXCLUDE_S
+    for sample_at, sample_cpu in reversed(samples):
+        if sample_at <= cutoff:
+            measured = (sample_at, sample_cpu)
+            break
+    if measured is None and samples:
+        measured = samples[-1]
+    idle_excluded_s = None
+    if spec.get("idle"):
+        if measured is not None:
+            idle_excluded_s = max(0.0, end_at - measured[0])
+        else:
+            idle_excluded_s = 0.0
     idle_cpu_s = None
     idle_cpu_percent = None
     if (
         first_frame_at[0] is not None
         and cpu_at_first[0] is not None
-        and last_cpu is not None
+        and measured is not None
     ):
-        idle_span = last_at - first_frame_at[0]
+        measured_at, measured_cpu = measured
+        idle_span = measured_at - first_frame_at[0]
         if idle_span > 0.0:
-            idle_cpu_s = max(0.0, last_cpu - cpu_at_first[0])
+            idle_cpu_s = max(0.0, measured_cpu - cpu_at_first[0])
             idle_cpu_percent = idle_cpu_s / idle_span * 100.0
     tail_cpu_s = None
     tail_cpu_percent = None
-    if tail_cpu is not None and tail_at is not None and last_cpu is not None:
-        tail_span = last_at - tail_at
+    if tail_cpu is not None and tail_at is not None and measured is not None:
+        measured_at, measured_cpu = measured
+        tail_span = measured_at - tail_at
         if tail_span > 0.0:
-            tail_cpu_s = max(0.0, last_cpu - tail_cpu)
+            tail_cpu_s = max(0.0, measured_cpu - tail_cpu)
             tail_cpu_percent = tail_cpu_s / tail_span * 100.0
     frame, memory = parse_json_lines("".join(output_lines))
     frames = 0
@@ -601,6 +671,11 @@ def run_once(
     expected = int(spec.get("expected_frames", 0))
     if spec.get("export"):
         frames = expected
+    # The trace reports frames cumulatively (the first presented frame counts
+    # as one), so on idle-style runs this is the interesting "after the first"
+    # number: 0 when the window presented nothing since it settled.
+    idle_like = spec.get("idle") or spec.get("hover_static")
+    idle_frames_after_first = max(0, frames - 1) if idle_like else None
     result = {
         "scenario": name,
         "wall_s": round(wall, 3),
@@ -617,6 +692,10 @@ def run_once(
         "tail_cpu_percent": (
             round(tail_cpu_percent, 3) if tail_cpu_percent is not None else None
         ),
+        "idle_excluded_s": (
+            round(idle_excluded_s, 3) if idle_excluded_s is not None else None
+        ),
+        "idle_frames_after_first": idle_frames_after_first,
         "expected_frames": expected,
         "dropped_frames": max(0, expected - frames),
         "fps": round(frames / wall, 3) if wall > 0 else 0.0,
@@ -692,6 +771,8 @@ def aggregate(runs: list[dict]) -> dict:
         "idle_cpu_percent": med("idle_cpu_percent"),
         "tail_cpu_s": med("tail_cpu_s"),
         "tail_cpu_percent": med("tail_cpu_percent"),
+        "idle_excluded_s": med("idle_excluded_s"),
+        "idle_frames_after_first": med("idle_frames_after_first"),
         "dropped_frames": med("dropped_frames"),
         "fps": med("fps"),
         "working_set_mb": maximum("working_set_mb"),
@@ -732,6 +813,13 @@ def print_result(name: str, description: str, result: dict) -> None:
         f"submits {result['gpu_submits']}  dropped {result['dropped_frames']}  "
         f"fps {result['fps']}"
     )
+    if result.get("idle_frames_after_first") is not None:
+        print(f"  frames after the first: {result['idle_frames_after_first']}")
+    if result.get("idle_excluded_s") is not None:
+        print(
+            f"  idle window excludes the last {result['idle_excluded_s']} s "
+            "before exit (teardown)"
+        )
     if result["idle_cpu_percent"] is not None:
         print(
             f"  idle cpu {result['idle_cpu_percent']}% of a core  "
@@ -817,9 +905,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--allow-pointer",
         action="store_true",
-        help="allow the hover scenario to move the real cursor (and restore it)",
+        help="run the hover scenarios (they post synthetic pointer moves to the app window)",
     )
     args = parser.parse_args(argv)
+    enable_dpi_awareness()
     if args.runs < 1:
         raise SystemExit("--runs must be at least 1")
     if not args.binary.is_file():

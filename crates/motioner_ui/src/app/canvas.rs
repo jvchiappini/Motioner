@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use ferrous_renderer::Renderer;
 use motioner_core::{NodeId, OverrideAction, Vec2};
-use motioner_render::{ImageData, ImageSet, TextExtent, ViewFit};
+use motioner_render::{ImageData, ImageSet, ProxyTarget, TextExtent, ViewFit};
 
 use super::PreviewApp;
 use crate::bounds::{self, Bounds};
@@ -107,6 +107,13 @@ impl PreviewApp {
             return (out, None);
         };
         let rect = view.rect;
+        // Review of prompt 18 P3: a fit-to-canvas proxy made images blurry
+        // after a zoom or a node scale-up, and the CPU pixels are released
+        // after the upload, so a sharper upload was impossible. Keep full
+        // resolution until P4 sizes proxies per drawn image and can re-decode.
+        if let Some(painter) = self.painter.as_mut() {
+            painter.set_proxy_target(ProxyTarget::Full);
+        }
         let stale = self.editor.session().plan_frame() != Some(frame);
         let started = Instant::now();
         // Only a click needs the lock states; do not copy the set every frame.
@@ -186,6 +193,13 @@ impl PreviewApp {
                     paint_error = Some(error.to_string());
                 }
             }
+        }
+        // The textures now hold every drawn image. The interactive preview
+        // does not need the decoded CPU copies again (export reads its own
+        // renderer), so release them; a new image or revision installs fresh
+        // bytes before the next upload.
+        if let Some(painter) = self.painter.as_mut() {
+            painter.release_image_cpu_pixels();
         }
         let _bounds_span = ferrous_engine::startup::span("motioner: selection bounds");
         let painter = self.painter.as_ref();

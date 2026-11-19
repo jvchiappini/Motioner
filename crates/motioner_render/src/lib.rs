@@ -23,6 +23,7 @@ mod fonts;
 mod frame;
 mod gradients;
 mod paths;
+mod proxy;
 mod shapes;
 mod space;
 mod text;
@@ -38,9 +39,12 @@ pub use paths::path_bounds;
 pub use space::{linear_rgba, srgb_to_linear};
 
 use rustc_hash::FxHashMap as HashMap;
+use std::cell::{Cell, RefCell};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrous_2d::render::{FontId2d, ShapeInstance};
+use ferrous_core::memory::{self, Subsystem};
 use ferrous_font::{LineMetrics, TextAlign as EngineTextAlign};
 use ferrous_renderer::headless::Pure2dHarness;
 use motioner_core::Document;
@@ -53,6 +57,101 @@ pub(crate) const ROBOTO: &[u8] =
 
 /// Default image-texture budget: 512 MiB of resident GPU bytes.
 pub const DEFAULT_TEXTURE_BUDGET: u64 = 512 * 1024 * 1024;
+
+/// Default CPU budget for decoded image pixels held by the interactive
+/// painter: 256 MiB.
+///
+/// The headless renderer keeps every decoded pixel (export and goldens never
+/// trade resolution for memory).  The preview enforces this budget once the
+/// textures exist, dropping the least recently used resident copies first.
+pub const DEFAULT_IMAGE_CPU_BUDGET: u64 = 256 * 1024 * 1024;
+
+/// How large the GPU copies of decoded images may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProxyTarget {
+    /// Upload every decoded image at its natural size (headless, export and
+    /// the default everywhere).
+    #[default]
+    Full,
+    /// Downscale an image that does not fit `max_width x max_height`.
+    ///
+    /// The preview passes the composition's displayed pixel size here, so a
+    /// 4K photo shown in a 1080p canvas is uploaded at 1080p instead of 4K.
+    /// UVs stay normalised, so the image still maps 1:1 at 100 % zoom.  Above
+    /// 100 % zoom the GPU magnifies this smaller texture (bilinear), so the
+    /// image looks softer than an export while shapes and text stay exact.
+    Fit {
+        /// Largest texture width to upload.
+        max_width: u32,
+        /// Largest texture height to upload.
+        max_height: u32,
+    },
+}
+
+impl ProxyTarget {
+    /// The upload size for `image`, or `None` when it fits unchanged.
+    #[must_use]
+    pub(crate) fn size_for(self, image: &ImageData) -> Option<(u32, u32)> {
+        match self {
+            Self::Full => None,
+            Self::Fit {
+                max_width,
+                max_height,
+            } => proxy::fit_size(image.width, image.height, max_width, max_height),
+        }
+    }
+}
+
+/// Owner tag for image CPU entries, so two painters do not unregister each
+/// other's inventory rows.
+fn next_image_owner() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Registers and unregisters the CPU pixels one painter/renderer owns.
+#[derive(Debug)]
+struct ImageInventory {
+    owner: u64,
+}
+
+impl ImageInventory {
+    fn new() -> Self {
+        Self {
+            owner: next_image_owner(),
+        }
+    }
+
+    /// Inventory label of one image's CPU pixels.
+    fn label(&self, key: &motioner_core::ImageKey) -> String {
+        format!("motioner:image-cpu#{}:{}", self.owner, key)
+    }
+
+    /// Registers the resident pixels of `image` (a no-op when dropped).
+    #[allow(clippy::cast_lossless)] // usize -> u64 is lossless on supported targets
+    fn register(&self, image: &ImageData) {
+        if image.rgba8.is_empty() {
+            return;
+        }
+        memory::register_cpu(
+            self.label(&image.key),
+            image.rgba8.len() as u64,
+            Subsystem::Assets,
+        );
+    }
+
+    /// Removes the entry for `key` (removal, resize or a pixel drop).
+    fn unregister(&self, key: &motioner_core::ImageKey) {
+        memory::unregister_cpu(&self.label(key), Subsystem::Assets);
+    }
+
+    /// Removes every entry this owner registered for `images`.
+    fn unregister_all(&self, images: &ImageSet) {
+        for key in images.keys() {
+            memory::unregister_cpu(&self.label(key), Subsystem::Assets);
+        }
+    }
+}
 
 /// A mask request in Motioner terms.
 ///
@@ -82,9 +181,16 @@ pub struct ImageData {
 }
 
 /// Every decoded image a renderer may draw, keyed by content hash.
+///
+/// The set also remembers a least-recently-used order for the CPU pixels, so
+/// the renderer can release old copies once their GPU texture exists.
+/// Lookups through [`Self::get`] count as use.
 #[derive(Debug, Clone, Default)]
 pub struct ImageSet {
     images: HashMap<motioner_core::ImageKey, ImageData>,
+    /// Last-use clock per key, for the CPU-pixel LRU.
+    last_use: RefCell<HashMap<motioner_core::ImageKey, u64>>,
+    clock: Cell<u64>,
 }
 
 impl ImageSet {
@@ -96,13 +202,16 @@ impl ImageSet {
 
     /// Adds (or replaces) one image.
     pub fn insert(&mut self, image: ImageData) {
+        self.touch(&image.key);
         self.images.insert(image.key, image);
     }
 
-    /// The image for `key`, when present.
+    /// The image for `key`, when present.  Counts as a use for the LRU.
     #[must_use]
     pub fn get(&self, key: &motioner_core::ImageKey) -> Option<&ImageData> {
-        self.images.get(key)
+        let image = self.images.get(key)?;
+        self.touch(key);
+        Some(image)
     }
 
     /// Number of images.
@@ -120,6 +229,81 @@ impl ImageSet {
     /// Every image in the set.
     pub fn iter(&self) -> impl Iterator<Item = (&motioner_core::ImageKey, &ImageData)> {
         self.images.iter()
+    }
+
+    /// Every key in the set.
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &motioner_core::ImageKey> {
+        self.images.keys()
+    }
+
+    /// Resident CPU bytes of every decoded image.
+    #[must_use]
+    #[allow(clippy::cast_lossless)] // usize -> u64 is lossless on supported targets
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.images
+            .values()
+            .map(|image| image.rgba8.len() as u64)
+            .sum()
+    }
+
+    /// Releases the pixels of `key`, keeping its key, size and revision.
+    ///
+    /// Returns whether anything was resident.  The matching texture must
+    /// already exist; the caller unregisters the inventory row.
+    pub(crate) fn drop_pixels(&mut self, key: &motioner_core::ImageKey) -> bool {
+        let Some(image) = self.images.get_mut(key) else {
+            return false;
+        };
+        let resident = !image.rgba8.is_empty();
+        image.rgba8 = Vec::new();
+        resident
+    }
+
+    /// Drops least-recently-used resident pixels until `total_bytes <= budget`.
+    ///
+    /// `is_uploaded` must answer `true` only for keys whose GPU texture exists;
+    /// an image evicted before its upload could never be drawn.  `out` receives
+    /// the dropped keys, oldest first, so the caller can unregister them.
+    #[allow(clippy::cast_lossless)] // usize -> u64 is lossless on supported targets
+    pub(crate) fn evict_over_budget_into(
+        &mut self,
+        budget: u64,
+        is_uploaded: impl Fn(&motioner_core::ImageKey) -> bool,
+        out: &mut Vec<motioner_core::ImageKey>,
+    ) {
+        out.clear();
+        let mut total = self.total_bytes();
+        while total > budget {
+            let Some(key) = self.oldest_resident(&is_uploaded) else {
+                break;
+            };
+            let released = self
+                .images
+                .get_mut(&key)
+                .map_or(0, |image| image.rgba8.len() as u64);
+            let _ = self.drop_pixels(&key);
+            total = total.saturating_sub(released);
+            self.last_use.borrow_mut().remove(&key);
+            out.push(key);
+        }
+    }
+
+    fn touch(&self, key: &motioner_core::ImageKey) {
+        let next = self.clock.get().wrapping_add(1);
+        self.clock.set(next);
+        self.last_use.borrow_mut().insert(*key, next);
+    }
+
+    fn oldest_resident(
+        &self,
+        is_uploaded: &impl Fn(&motioner_core::ImageKey) -> bool,
+    ) -> Option<motioner_core::ImageKey> {
+        let order = self.last_use.borrow();
+        self.images
+            .iter()
+            .filter(|(key, image)| !image.rgba8.is_empty() && is_uploaded(key))
+            .min_by_key(|(key, _)| order.get(*key).copied().unwrap_or(0))
+            .map(|(key, _)| *key)
     }
 }
 
@@ -168,11 +352,15 @@ trait Canvas2d {
 
     /// Uploads one image texture and returns its engine texture id.
     ///
+    /// `rgba8` is straight-alpha sRGB with exactly `width * height * 4` bytes;
+    /// proxy resampling happens above this trait.
+    ///
     /// # Errors
     ///
     /// Returns [`RenderError::Image`] when the pinned engine has no image
     /// support or the upload fails.
-    fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError>;
+    fn register_image(&mut self, width: u32, height: u32, rgba8: &[u8])
+        -> Result<u32, RenderError>;
 
     /// Rewrites an existing image texture in place (same dimensions).
     ///
@@ -180,7 +368,13 @@ trait Canvas2d {
     ///
     /// Returns [`RenderError::Image`] when the pinned engine rejects the
     /// update.
-    fn update_image(&mut self, texture_id: u32, image: &ImageData) -> Result<(), RenderError>;
+    fn update_image(
+        &mut self,
+        texture_id: u32,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+    ) -> Result<(), RenderError>;
 
     /// Frees an image texture so a resized frame can be registered again.
     fn free_image(&mut self, texture_id: u32);
@@ -308,11 +502,16 @@ impl Canvas2d for Pure2dHarness {
         self.draw_glyphs(font, glyphs);
     }
 
-    fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError> {
+    fn register_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+    ) -> Result<u32, RenderError> {
         self.register_texture_2d(
-            image.width,
-            image.height,
-            &image.rgba8,
+            width,
+            height,
+            rgba8,
             ferrous_2d::render::TextureOptions2d::photo(),
         )
         .map_err(|error| RenderError::Image {
@@ -320,9 +519,15 @@ impl Canvas2d for Pure2dHarness {
         })
     }
 
-    fn update_image(&mut self, texture_id: u32, image: &ImageData) -> Result<(), RenderError> {
+    fn update_image(
+        &mut self,
+        texture_id: u32,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+    ) -> Result<(), RenderError> {
         self.renderer_mut()
-            .update_sprite_texture(texture_id, image.width, image.height, &image.rgba8)
+            .update_sprite_texture(texture_id, width, height, rgba8)
             .map_err(|error| RenderError::Image {
                 message: error.to_string(),
             })
@@ -437,11 +642,16 @@ impl Canvas2d for ferrous_renderer::Renderer {
         ferrous_renderer::Renderer::draw_glyphs_2d(self, font, glyphs);
     }
 
-    fn register_image(&mut self, image: &ImageData) -> Result<u32, RenderError> {
+    fn register_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+    ) -> Result<u32, RenderError> {
         self.register_texture_2d(
-            image.width,
-            image.height,
-            &image.rgba8,
+            width,
+            height,
+            rgba8,
             ferrous_2d::render::TextureOptions2d::photo(),
         )
         .map_err(|error| RenderError::Image {
@@ -449,17 +659,17 @@ impl Canvas2d for ferrous_renderer::Renderer {
         })
     }
 
-    fn update_image(&mut self, texture_id: u32, image: &ImageData) -> Result<(), RenderError> {
-        ferrous_renderer::Renderer::update_sprite_texture(
-            self,
-            texture_id,
-            image.width,
-            image.height,
-            &image.rgba8,
-        )
-        .map_err(|error| RenderError::Image {
-            message: error.to_string(),
-        })
+    fn update_image(
+        &mut self,
+        texture_id: u32,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+    ) -> Result<(), RenderError> {
+        ferrous_renderer::Renderer::update_sprite_texture(self, texture_id, width, height, rgba8)
+            .map_err(|error| RenderError::Image {
+                message: error.to_string(),
+            })
     }
 
     fn free_image(&mut self, texture_id: u32) {
@@ -553,6 +763,12 @@ pub struct FrameRenderer {
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
     image_revisions: HashMap<motioner_core::ImageKey, u64>,
+    /// Upload size policy; the headless/export default is [`ProxyTarget::Full`].
+    proxy: ProxyTarget,
+    /// Reused buffer for a proxy downscale (never touched by `Full`).
+    image_scratch: Vec<u8>,
+    /// Inventory rows for this renderer's decoded-image CPU pixels.
+    image_inventory: ImageInventory,
     /// Reused mesh vertex scratch and one index buffer per topology.
     mesh_vertices: Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: HashMap<(u32, u32), Vec<u32>>,
@@ -776,10 +992,19 @@ impl FrameRenderer {
     /// Replaces the decoded images this renderer may draw (D-0035).
     ///
     /// Call it after loading a document; textures are registered lazily on the
-    /// first frame that uses each key and reused by key afterwards.
+    /// first frame that uses each key and reused by key afterwards.  The CPU
+    /// pixels stay resident: the headless path is the export path.
     pub fn set_images(&mut self, images: ImageSet) {
+        self.image_inventory.unregister_all(&self.images);
+        for image in images.iter().map(|(_, image)| image) {
+            self.image_inventory.register(image);
+        }
         self.images = images;
-        self.image_textures.clear();
+        // Dropping the ids without freeing them leaked one GPU texture per
+        // image on every reload; the engine owns them until told otherwise.
+        for (_, texture) in self.image_textures.drain() {
+            self.harness.free_image(texture);
+        }
         self.image_revisions.clear();
     }
 
@@ -787,7 +1012,42 @@ impl FrameRenderer {
     /// textures. A live video calls this every displayed frame; a newer
     /// `revision` rewrites the same texture in place.
     pub fn set_image(&mut self, image: ImageData) {
+        let key = image.key;
+        self.image_inventory.unregister(&key);
         self.images.insert(image);
+        if let Some(stored) = self.images.get(&key) {
+            self.image_inventory.register(stored);
+        }
+    }
+
+    /// The current upload size policy.
+    #[must_use]
+    pub const fn proxy_target(&self) -> ProxyTarget {
+        self.proxy
+    }
+
+    /// Changes the upload size policy for images uploaded from now on.
+    ///
+    /// The headless renderer defaults to [`ProxyTarget::Full`] and the export
+    /// path never changes it.  Existing textures keep their size; replacing
+    /// the image set or bumping a revision applies the new policy.
+    pub fn set_proxy_target(&mut self, target: ProxyTarget) {
+        self.proxy = target;
+    }
+
+    /// Drops every CPU pixel copy whose GPU texture already exists.
+    ///
+    /// The headless and export paths must not call this: they are the
+    /// documented owners of the decoded pixels.  It exists for an interactive
+    /// offscreen renderer (the motion-blur preview) that wants the same
+    /// release the live painter performs.
+    pub fn release_image_cpu_pixels(&mut self) {
+        let keys: Vec<motioner_core::ImageKey> = self.image_textures.keys().copied().collect();
+        for key in keys {
+            if self.images.drop_pixels(&key) {
+                self.image_inventory.unregister(&key);
+            }
+        }
     }
 
     /// The configured image-texture budget in bytes.
@@ -882,6 +1142,12 @@ impl FrameRenderer {
     }
 }
 
+impl Drop for FrameRenderer {
+    fn drop(&mut self) {
+        self.image_inventory.unregister_all(&self.images);
+    }
+}
+
 /// Paints plans into a live [`ferrous_renderer::Renderer`].
 ///
 /// This is the only public API of this crate that names an engine type; it is
@@ -903,12 +1169,27 @@ pub struct LivePainter {
     images: ImageSet,
     image_textures: HashMap<motioner_core::ImageKey, u32>,
     image_revisions: HashMap<motioner_core::ImageKey, u64>,
+    /// Upload size policy; the app opts into [`ProxyTarget::Fit`].
+    proxy: ProxyTarget,
+    /// Reused buffer for a proxy downscale.
+    image_scratch: Vec<u8>,
+    /// Textures whose image set was replaced, freed on the next paint.
+    pending_image_frees: Vec<u32>,
+    /// CPU budget for decoded-image pixels in the interactive preview.
+    image_cpu_budget: u64,
+    /// Reused key list for a budget release.
+    image_drop_scratch: Vec<motioner_core::ImageKey>,
+    /// Inventory rows for this painter's decoded-image CPU pixels.
+    image_inventory: ImageInventory,
     /// Reused mesh vertex scratch and one index buffer per topology.
     mesh_vertices: Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: HashMap<(u32, u32), Vec<u32>>,
-    /// Resolved document faces, cached by document pointer (prompt 18 P2).
-    faces_key: Option<usize>,
+    /// Resolved document faces, cached by font-set revision and a hash of the
+    /// document's text faces (prompt 18 P2/P3).
+    faces_key: Option<(u64, u64)>,
     faces_cache: Vec<(String, u16)>,
+    /// Bumped by [`Self::set_fonts`], so the face cache sees the new set.
+    fonts_revision: u64,
 }
 
 #[cfg(feature = "live")]
@@ -983,10 +1264,17 @@ impl LivePainter {
             images: ImageSet::new(),
             image_textures: HashMap::default(),
             image_revisions: HashMap::default(),
+            proxy: ProxyTarget::Full,
+            image_scratch: Vec::new(),
+            pending_image_frees: Vec::new(),
+            image_cpu_budget: DEFAULT_IMAGE_CPU_BUDGET,
+            image_drop_scratch: Vec::new(),
+            image_inventory: ImageInventory::new(),
             mesh_vertices: Vec::new(),
             mesh_indices: HashMap::default(),
             faces_key: None,
             faces_cache: Vec::new(),
+            fonts_revision: 0,
         })
     }
 
@@ -1003,7 +1291,12 @@ impl LivePainter {
     /// re-uploads a face the engine already has.
     pub fn set_fonts(&mut self, fonts: FontSet) {
         self.faces_key = None;
+        self.fonts_revision = self.fonts_revision.wrapping_add(1);
         self.fonts = fonts;
+        // A new project may ship different bytes under the same family and
+        // weight. The engine dedupes by font key, so registering again is
+        // cheap and returns the right atlas instead of the previous project's.
+        self.font_ids.clear();
     }
 
     /// Whether a resolved face is registered with the engine.
@@ -1067,7 +1360,10 @@ impl LivePainter {
         document: &Document,
         _plan: &RenderPlan,
     ) -> Result<(), RenderError> {
-        let key = std::ptr::from_ref(document).addr();
+        // The key covers both inputs `document_faces` reads: the document's
+        // text faces (content hash, not a pointer, so a new document at a
+        // recycled address cannot hit the old list) and the font set revision.
+        let key = (self.fonts_revision, text_face_fingerprint(document));
         if self.faces_key != Some(key) {
             self.faces_cache = document_faces(document, &self.fonts);
             self.faces_key = Some(key);
@@ -1091,15 +1387,97 @@ impl LivePainter {
     }
 
     /// Replaces the decoded images the preview may draw.
+    ///
+    /// The caller (the app) enables [`ProxyTarget::Fit`] before the first
+    /// paint and may release the CPU pixels once the textures exist; see
+    /// [`Self::release_image_cpu_pixels`].
     pub fn set_images(&mut self, images: ImageSet) {
+        self.image_inventory.unregister_all(&self.images);
+        for image in images.iter().map(|(_, image)| image) {
+            self.image_inventory.register(image);
+        }
         self.images = images;
-        self.image_textures.clear();
+        // No renderer here: queue the old textures for the next paint.
+        self.pending_image_frees
+            .extend(self.image_textures.drain().map(|(_, texture)| texture));
         self.image_revisions.clear();
     }
 
     /// Adds or replaces one image without dropping the other textures.
     pub fn set_image(&mut self, image: ImageData) {
+        let key = image.key;
+        self.image_inventory.unregister(&key);
         self.images.insert(image);
+        if let Some(stored) = self.images.get(&key) {
+            self.image_inventory.register(stored);
+        }
+    }
+
+    /// The current upload size policy.
+    #[must_use]
+    pub const fn proxy_target(&self) -> ProxyTarget {
+        self.proxy
+    }
+
+    /// Changes the upload size policy for images uploaded from now on.
+    ///
+    /// The app passes [`ProxyTarget::Fit`] with the canvas's displayed pixel
+    /// size; the headless renderer keeps [`ProxyTarget::Full`].  Existing
+    /// textures keep their size until the next upload (a new image set or a
+    /// revision bump), so a zoom that changes this policy never re-uploads
+    /// bytes that [`Self::release_image_cpu_pixels`] already dropped.
+    pub fn set_proxy_target(&mut self, target: ProxyTarget) {
+        self.proxy = target;
+    }
+
+    /// The CPU budget for decoded-image pixels.
+    #[must_use]
+    pub const fn image_cpu_budget(&self) -> u64 {
+        self.image_cpu_budget
+    }
+
+    /// Sets the CPU budget; [`DEFAULT_IMAGE_CPU_BUDGET`] is 256 MiB.
+    pub fn set_image_cpu_budget(&mut self, bytes: u64) {
+        self.image_cpu_budget = bytes;
+    }
+
+    /// Drops every CPU pixel copy whose GPU texture already exists.
+    ///
+    /// This is the interactive-preview release.  Whoever still needs the
+    /// pixels must not call it:
+    ///
+    /// - **export** (`FrameRenderer::render*`) reads the renderer's own
+    ///   `ImageSet`, never this painter's;
+    /// - **readback** reads the rendered target, not the source images;
+    /// - **re-pack** (a `revision` bump or a new image set) installs fresh
+    ///   pixels before the upload, so dropped bytes are never reused; a static
+    ///   image whose texture exists is not uploaded again;
+    /// - **mesh UV sampling** reads only the UVs, which stay normalised.
+    ///
+    /// The GPU texture is untouched, so the next frame draws the same pixels.
+    pub fn release_image_cpu_pixels(&mut self) {
+        self.release_pixels(0);
+    }
+
+    /// Drops least-recently-used pixels until the CPU budget is met.
+    fn enforce_image_cpu_budget(&mut self) {
+        if self.images.total_bytes() <= self.image_cpu_budget {
+            return;
+        }
+        self.release_pixels(self.image_cpu_budget);
+    }
+
+    fn release_pixels(&mut self, budget: u64) {
+        let mut dropped = std::mem::take(&mut self.image_drop_scratch);
+        self.images.evict_over_budget_into(
+            budget,
+            |key| self.image_textures.contains_key(key),
+            &mut dropped,
+        );
+        for key in &dropped {
+            self.image_inventory.unregister(key);
+        }
+        self.image_drop_scratch = dropped;
     }
 
     /// Drops the cached per-node missing-glyph counts.
@@ -1157,6 +1535,9 @@ impl LivePainter {
         if !fit.is_drawable() {
             return Ok(PaintStats::default());
         }
+        for texture in self.pending_image_frees.drain(..) {
+            renderer.free_sprite_texture(texture);
+        }
         self.ensure_faces(renderer, document, plan)?;
         let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
         let gradients = {
@@ -1165,7 +1546,7 @@ impl LivePainter {
             renderer.set_2d_gradient_table(gradients.slots());
             gradients
         };
-        Ok(frame::paint_plan(
+        let stats = frame::paint_plan(
             renderer,
             document,
             plan,
@@ -1180,8 +1561,12 @@ impl LivePainter {
             &mut self.image_revisions,
             &mut self.mesh_vertices,
             &mut self.mesh_indices,
+            self.proxy,
+            &mut self.image_scratch,
             None,
-        ))
+        );
+        self.enforce_image_cpu_budget();
+        Ok(stats)
     }
 
     /// [`Self::paint`] that skips the given nodes and their subtrees.
@@ -1203,6 +1588,9 @@ impl LivePainter {
         if !fit.is_drawable() {
             return Ok(PaintStats::default());
         }
+        for texture in self.pending_image_frees.drain(..) {
+            renderer.free_sprite_texture(texture);
+        }
         self.ensure_faces(renderer, document, plan)?;
         let flip = fit.transform(space::composition_flip(plan.width(), plan.height()));
         let gradients = {
@@ -1211,7 +1599,7 @@ impl LivePainter {
             renderer.set_2d_gradient_table(gradients.slots());
             gradients
         };
-        Ok(frame::paint_plan(
+        let stats = frame::paint_plan(
             renderer,
             document,
             plan,
@@ -1226,9 +1614,41 @@ impl LivePainter {
             &mut self.image_revisions,
             &mut self.mesh_vertices,
             &mut self.mesh_indices,
+            self.proxy,
+            &mut self.image_scratch,
             Some(hidden),
-        ))
+        );
+        self.enforce_image_cpu_budget();
+        Ok(stats)
     }
+}
+
+#[cfg(feature = "live")]
+impl Drop for LivePainter {
+    fn drop(&mut self) {
+        self.image_inventory.unregister_all(&self.images);
+    }
+}
+
+/// A hash of every text face a document uses, in node order.
+///
+/// This is the document half of the [`LivePainter`] face-cache key.  It reads
+/// only what `document_faces` reads (each text node's `font` and `weight`),
+/// and hashes lengths between fields so two different node lists cannot
+/// collide.
+#[cfg(feature = "live")]
+fn text_face_fingerprint(document: &Document) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = rustc_hash::FxHasher::default();
+    for node in document.nodes() {
+        let motioner_core::NodeContent::Text(content) = node.content() else {
+            continue;
+        };
+        hasher.write_usize(content.font.len());
+        hasher.write(content.font.as_bytes());
+        hasher.write_u16(content.weight);
+    }
+    hasher.finish()
 }
 
 /// Registers one face with the engine, mapping its error to [`RenderError`].
@@ -1244,4 +1664,77 @@ fn register_face(
         .map_err(|error| RenderError::Font {
             message: error.to_string(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use motioner_core::ImageKey;
+
+    fn image(marker: u8, pixels: u32) -> ImageData {
+        ImageData {
+            key: ImageKey::from_bytes([marker; 32]),
+            width: pixels,
+            height: 1,
+            rgba8: vec![0; usize::try_from(pixels * 4).unwrap_or(0)],
+            revision: 0,
+        }
+    }
+
+    #[test]
+    fn image_cpu_budget_evicts_least_recently_used_pixels() {
+        let mut set = ImageSet::new();
+        let (a, b, c) = (image(1, 1), image(2, 1), image(3, 1));
+        let (ka, kb, kc) = (a.key, b.key, c.key);
+        set.insert(a);
+        set.insert(b);
+        set.insert(c);
+        // Touching `a` makes `b` the least recently used.
+        assert!(set.get(&ka).is_some());
+        let mut dropped = Vec::new();
+        set.evict_over_budget_into(8, |_| true, &mut dropped);
+        assert_eq!(dropped, vec![kb]);
+        assert!(set.get(&ka).is_some_and(|image| !image.rgba8.is_empty()));
+        assert!(set.get(&kb).is_some_and(|image| image.rgba8.is_empty()));
+        assert!(set.get(&kc).is_some_and(|image| !image.rgba8.is_empty()));
+        assert_eq!(set.total_bytes(), 8);
+    }
+
+    #[test]
+    fn image_cpu_budget_never_evicts_an_unuploaded_image() {
+        let mut set = ImageSet::new();
+        let a = image(4, 1);
+        let key = a.key;
+        set.insert(a);
+        let mut dropped = Vec::new();
+        set.evict_over_budget_into(0, |_| false, &mut dropped);
+        assert!(dropped.is_empty());
+        assert!(set.get(&key).is_some_and(|image| !image.rgba8.is_empty()));
+    }
+
+    #[cfg(feature = "live")]
+    fn document(font: &str, weight: u16) -> motioner_core::Document {
+        let source = format!(
+            "comp(name=\"T\", width=100, height=100, fps=60, duration=1)\n\
+             t = text(\"a\", \"{font}\", 20, \"#ffffff\", \"left\", {weight})\n"
+        );
+        motioner_dsl::run(&source, &motioner_dsl::Limits::default()).unwrap()
+    }
+
+    #[cfg(feature = "live")]
+    #[test]
+    fn the_face_cache_key_covers_the_document_faces() {
+        let roboto = document("Roboto", 400);
+        let inter = document("Inter", 400);
+        let bold = document("Roboto", 700);
+        assert_eq!(
+            text_face_fingerprint(&roboto),
+            text_face_fingerprint(&document("Roboto", 400))
+        );
+        assert_ne!(
+            text_face_fingerprint(&roboto),
+            text_face_fingerprint(&inter)
+        );
+        assert_ne!(text_face_fingerprint(&roboto), text_face_fingerprint(&bold));
+    }
 }

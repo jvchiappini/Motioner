@@ -199,6 +199,9 @@ impl Editor {
             }
             Command::ShowShy(on) => {
                 self.show_shy = *on;
+                // `show_shy` is part of `preview_hidden`, so caches that key
+                // on the solo/shy revision must see the change (prompt 18 P3).
+                self.layer_flags_revision = self.layer_flags_revision.wrapping_add(1);
                 Ok(Outcome::done(format!("show shy {}", on_off(*on))))
             }
             Command::FilterLayers(text) => {

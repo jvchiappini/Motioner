@@ -157,6 +157,9 @@ pub(crate) struct PreviewApp {
     start_hover: Option<crate::StartAction>,
     /// Start-screen target under the pressed button.
     start_pressed: Option<crate::StartAction>,
+    /// Start-screen layout cached by the inputs [`PreviewApp::start_layout`]
+    /// reads: the window size, the DPI scale, the mode and the list lengths.
+    start_layout_cache: Option<(StartLayoutKey, Rc<crate::StartLayout>)>,
     /// Whether the File menu is open.
     menu_open: bool,
     /// Whether the Add Layer menu is open.
@@ -208,6 +211,16 @@ pub(crate) struct PreviewApp {
     /// `frame_facts` cached by document revision and view geometry.
     facts_cache: RefCell<Option<(FactsKey, Rc<FrameFacts>)>>,
 }
+
+/// Identity of the inputs of [`PreviewApp::start_layout`].
+type StartLayoutKey = (
+    u32,              // window width in physical pixels
+    u32,              // window height in physical pixels
+    u32,              // DPI scale bits
+    usize,            // recent-project row count
+    usize,            // example row count
+    crate::StartMode, // home list or New project dialog
+);
 
 /// Identity of the inputs of [`PreviewApp::frame_facts`].
 type FactsKey = (
@@ -314,6 +327,7 @@ impl PreviewApp {
             start,
             start_hover: None,
             start_pressed: None,
+            start_layout_cache: None,
             menu_open: false,
             add_menu_open: false,
             add_menu_hover: None,
@@ -1732,11 +1746,46 @@ impl FerrousApp for PreviewApp {
         ctx: &mut AppContext<'_>,
     ) {
         let ferrous_engine::winit::event::WindowEvent::CursorMoved { .. } = event else {
+            if matches!(
+                event,
+                ferrous_engine::winit::event::WindowEvent::CursorLeft { .. }
+            ) {
+                // Prompt 18 P3: leaving the window clears the hover, but only
+                // a hover that was set needs a frame.
+                let changed =
+                    self.start_hover.take().is_some() || self.pointer.hover.take().is_some();
+                if changed {
+                    ctx.request_redraw();
+                }
+            }
             return;
         };
         let (mx, my) = ctx.input.mouse_pos_f32();
         if let Some(screen) = self.start.take() {
-            let layout = self.start_layout(ctx, &screen);
+            // Prompt 18 P3: a pointer move over the start screen only needs
+            // rectangle tests. Rebuilding the layout on every move was the
+            // cost; reuse it while the window size, the DPI scale, the mode
+            // and the recent/example counts are unchanged.
+            let key: StartLayoutKey = (
+                ctx.window_size.0,
+                ctx.window_size.1,
+                self.scale(ctx).to_bits(),
+                screen.recents.len(),
+                screen.examples.len(),
+                screen.mode(),
+            );
+            let cached = self
+                .start_layout_cache
+                .as_ref()
+                .filter(|(cached, _)| *cached == key)
+                .map(|(_, layout)| Rc::clone(layout));
+            let layout = if let Some(layout) = cached {
+                layout
+            } else {
+                let layout = Rc::new(self.start_layout(ctx, &screen));
+                self.start_layout_cache = Some((key, Rc::clone(&layout)));
+                layout
+            };
             let hover = screen.action_at(&layout, mx, my);
             if hover != self.start_hover {
                 ctx.request_redraw();
@@ -1875,5 +1924,102 @@ fn modifiers(ctx: &AppContext<'_>) -> Modifiers {
         ctrl: ctx.input.is_key_down(KeyCode::ControlLeft)
             || ctx.input.is_key_down(KeyCode::ControlRight),
         alt: ctx.input.is_key_down(KeyCode::AltLeft) || ctx.input.is_key_down(KeyCode::AltRight),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use super::{PreviewApp, PreviewOptions};
+    use crate::command::Command;
+    use crate::editor::Editor;
+    use crate::layout::{Layout, PanelSizes};
+
+    const HELLO: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hello.motion"
+    ));
+
+    /// A private folder for one test's copy of the example program.
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// An editor on a private copy of `examples/hello.motion`.
+    fn hello_editor(name: &str) -> Result<(Editor, TempDir), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("motioner_app_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("hello.motion");
+        std::fs::write(&path, HELLO)?;
+        Ok((Editor::open(&path)?, TempDir(dir)))
+    }
+
+    fn preview(editor: Editor) -> PreviewApp {
+        PreviewApp::new(
+            editor,
+            PreviewOptions::default(),
+            None,
+            Rc::new(RefCell::new(None)),
+            "frame facts".to_owned(),
+        )
+    }
+
+    #[test]
+    fn frame_facts_cache_covers_every_input() -> Result<(), Box<dyn std::error::Error>> {
+        let (editor, _dir) = hello_editor("facts")?;
+        let mut app = preview(editor);
+        let layout = Layout::compute(1600.0, 900.0, 1.0, PanelSizes::default());
+        let facts = app.frame_facts(&layout);
+        assert!(
+            Rc::ptr_eq(&facts, &app.frame_facts(&layout)),
+            "unchanged inputs must reuse the cache"
+        );
+
+        let generation = app.editor.session().generation();
+        app.editor.reload(Duration::ZERO);
+        assert!(app.editor.session().generation() > generation);
+        let after = app.frame_facts(&layout);
+        assert!(
+            !Rc::ptr_eq(&facts, &after),
+            "a new session generation must refresh the facts"
+        );
+        let facts = after;
+
+        app.editor.view_mut().zoom = Some(2.0);
+        let after = app.frame_facts(&layout);
+        assert!(
+            !Rc::ptr_eq(&facts, &after),
+            "a view-geometry change must refresh the facts"
+        );
+        let facts = after;
+
+        let id = app.editor.outline()[0].identity.clone();
+        app.run(&Command::Solo {
+            id: id.clone(),
+            on: true,
+        });
+        let after = app.frame_facts(&layout);
+        assert!(
+            !Rc::ptr_eq(&facts, &after),
+            "toggling solo must refresh the facts"
+        );
+        let facts = after;
+
+        app.run(&Command::Shy { id, on: true });
+        let after = app.frame_facts(&layout);
+        assert!(
+            !Rc::ptr_eq(&facts, &after),
+            "toggling shy must refresh the facts"
+        );
+        Ok(())
     }
 }
