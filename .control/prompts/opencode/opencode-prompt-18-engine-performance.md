@@ -267,6 +267,35 @@ depends on, all zero-cost when disabled.
   P0 binary, the P1 binary and the current binary back to back in the same
   session. If the current binary is slower, bisect it.
 
+## Review findings after P3 (apply in the phase named)
+
+- **Reverted in review: the canvas image proxy.** `ProxyTarget::Fit` used
+  the composition rect at fit zoom. The CPU pixels were then released, so
+  zooming to 100 % or more, or a node that scales an image up, showed a
+  blurry texture that could never be re-uploaded sharper. The editor
+  canvas and the blur preview are back on `ProxyTarget::Full`; the CPU
+  release stays. **P4 first:** size proxies per drawn image as world scale
+  × view zoom × DPI, capped at the source size. Re-upload when the needed
+  size grows past the texture (with hysteresis, for example ×1.25). If the
+  CPU pixels were released, re-decode from the source on a worker. Add a
+  test: a 4K image at 400 % zoom matches the `Full` render pixel for pixel
+  in the visible region.
+- **Disk.** C: reached 0 GB during P3. The main agent checks the free space
+  before every build and keeps one target dir at a time. At the end of a
+  phase, delete the phase binaries under `%TEMP%\opencode`
+  (`motioner-p*-bin`, `motioner-p3-baseline-bin`, scratch worktrees) after
+  copying any number the report needs. Report the free space before and
+  after.
+- **P4: MemoryHints.** `MemoryUsage` trades allocation-block size for more
+  allocations. Report the frame-time p99 and the allocation count of
+  wgpu-hal (or the device allocation count, where available) for playback
+  and heavy_composition, before and after the hint. Check also that resize
+  and layer-heavy scenes do not stall.
+- **P4: hover between panels.** Moving across panels costs 4.59 % of a core
+  with 1067 frames in 30 s. A frame is right when the highlight changes, but
+  that frame must be cheap: with retained commands (P4), a hover change
+  repaints only the affected widgets.
+
 ## Execution model from P3 on (parallel subagents)
 
 Phases P3 to P7 run with subagents to cut wall time. The main agent

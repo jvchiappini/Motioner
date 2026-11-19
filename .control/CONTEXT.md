@@ -7,12 +7,43 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0, P1 and P2 done; P3-P7 pending.**
-Engine through **`c577877`** (`23278a2..c577877`, 8 commits, not pushed); the
-Motioner submodule is checked out at `c577877` and the parent pin is **not
-committed**. No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md`,
-`PHASE-18-P1-REPORT.md` and `PHASE-18-P2-REPORT.md` (Spanish); ledger
+Session `S-2026-11-17-001` (open). **P0-P3 done; P4-P7 pending.**
+Engine through **`5c2fd29`** (`23278a2..5c2fd29`, 12 commits, not pushed); the
+Motioner submodule is checked out at `5c2fd29` and the parent pin is **not
+committed**. No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md`
+through `PHASE-18-P3-REPORT.md` (Spanish); ledger
 `out/reports/phase18/ledger.md`.
+
+P3 (2026-11-19) ? bytes, layout and ownership (five parallel lanes):
+
+- **`MemoryHints`**: `EngineContext::from_adapter_with(hints)`; `AppConfig`
+  resolves `MemoryUsage` for Flat2D/Pure2D and `Performance` for Game3D. wgpu-hal 23
+  reserved 128 MB free-list chunks per memory type; the Flat2D renderer build falls
+  427.6 -> 265.3 MB private with identical pixels. Start idle **465.0 -> 331.0 MB
+  private (-28.8 %), WS 324.1 -> 204.3**; editor 490.1 -> 354.8; playback 597.8 ->
+  435.0; heavy UI 557.9 -> 477.0; showcase 594.7 -> 400.2. Real dedicated GPU memory
+  (editor) **160.2 -> 144.0 MB (-10 %)**. Halving is not reachable: 126 MB is the
+  Vulkan driver floor (instance 88 + adapter 24 + device 14) and ~124 MB are the
+  4x MSAA HDR target + GUI depth at 1600x900 (P5 owns MSAA/resolution).
+- **Inventory**: `Subsystem::RenderTarget`; render-target attachments, the 3-D group
+  and the 2-D layer/effect pools are registered and released; flat-inventory test
+  `ferrous_renderer/tests/memory_flat.rs` (256 B tolerance over 30 frames).
+- **Fonts**: per-atlas layout LRU (16 MiB) + table budget + CPU inventory; heavy UI
+  collection **19.47 -> 4.49 ms/frame**, 16.1 -> 18.2 fps.
+- **Motioner**: decoded-image CPU LRU (256 MiB) with inventory and release, `ProxyTarget`
+  (Fit in the canvas, Full headless), image textures freed on set replacement, face ids
+  cleared on font-set change, P2 cache keys audited with tests (`cache_keys.rs`).
+- **Idle**: 1 frame / 1 submit; residual 0.1-0.4 % of a core attributed by thread start
+  address to NVIDIA driver threads (`nvoglv64.dll`/`nvwgf2umx.dll`), 1-4 quanta/15 s;
+  the harness now excludes teardown, is DPI-aware and injects pointer moves.
+- **Hover**: static 2.52 % total -> **0.52 % tail, 12 frames/30 s**; moving 6.54 -> 4.59 %
+  tail. `CursorEntered`/`CursorLeft` follow the pointer opt-out (engine `a13c9d3`).
+- **Lanes** (wall 46 min vs 2 h 29 min sequential, -69 %): L1 formats 18m52, L2 textures
+  44m34, L3 ownership 28m39, L4 Motioner bytes 38m44, L5 idle/hover 18m.
+- **Gate**: Motioner fmt, clippy, **87 test groups**, doc, boundaries, encoding, machete,
+  validate, refs; engine check, clippy (touched crates + no-default engine), tests,
+  `memory_flat`, wasm, doc, touched-file rustfmt. Goldens byte-identical. **C: 2.0 GB free**
+  at the gate; cleaned both targets at close (9.48 GB free).
 
 P2 (2026-11-18) — zero allocations per frame:
 
@@ -715,9 +746,9 @@ Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
 `5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed),
 `493619f` (S5), `c2196d0` (S6), `23278a2` (P0), `9c3d6e3` (P1: 7022976,
-ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3) and **`c577877`** (P2: e9761db,
-c577877). The submodule is checked out at
-`c577877`; the parent pin is not committed. The reviewer pushes the engine and
+ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3), **`c577877`** (P2: e9761db,
+c577877) and **`5c2fd29`** (P3: cd547de, a13c9d3, a46a82e, 5c2fd29). The submodule is
+checked out at `5c2fd29`; the parent pin is not committed. The reviewer pushes the engine and
 bumps the pin. **No pin bump in this session.** Never edit `engine/ferrous`.
 The `svgparser 0.8.1` future-incompat warning predates this work. Engine
 pre-existing debt remains: crate-wide rustfmt diffs (`asset_bridge.rs`,
@@ -742,12 +773,13 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 
 ## Last session
 
-`S-2026-11-17-001` (prompt 18): P0 instruments/baseline; P1 on-demand redraw
-(idle = 1 startup frame, 0 after; <=0.06 % of a core on a 45 s tail; 0 submits);
-P2 zero allocations per frame (heavy-UI memory jump closed; per-thread alloc
-counters; 0 allocs in the four frame tests; editor caches; hover suppression;
-notify watcher; harness naming). Gate green, C: 13.57 GB. Next: P3 (bytes and
-ownership).
+`S-2026-11-17-001` (prompt 18): P0 instruments/baseline; P1 on-demand redraw;
+P2 zero allocations per frame; **P3 bytes/layout/ownership** (memory hints for 2-D
+devices, complete GPU inventory with a flat test, font layout LRU and budgets, lazy id
+target, image CPU LRU + proxies, image texture freeing, cache-key audit, pointer
+enter/leave opt-out, DPI-aware harness with injected moves). Start idle 465 -> 331 MB
+private, editor VRAM -10 %, heavy UI collection 19.47 -> 4.49 ms, static hover 2.52 -> 0.52 %.
+Gate green, goldens byte-identical, C: 9.48 GB free after cleaning. Next: P4 (CPU algorithms).
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
 pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the
