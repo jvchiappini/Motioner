@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-18
+actualizado: 2026-11-20
 actualizado_por: agente
 version_schema: 1
 ---
@@ -7,12 +7,54 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0-P5 done; P6-P7 pending.**
-Engine through **`db776bb`** (`23278a2..db776bb`, 19 commits, not pushed); the
-Motioner submodule is checked out at `db776bb` and the parent pin is **not
-committed**. No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md`
-through `PHASE-18-P5-REPORT.md` (Spanish); ledger
-`out/reports/phase18/ledger.md`.
+Session `S-2026-11-17-001` (open). **P0-P6 done; P7 pending.**
+Engine through **`7e623a9`** (P6, on top of `db776bb`; the whole run
+`23278a2..7e623a9` is not pushed); the Motioner submodule is checked out at
+`7e623a9` and the parent pin is **not committed**. No Motioner commits. Reports:
+`out/reports/PHASE-18-P0-REPORT.md` through `PHASE-18-P6-REPORT.md` (Spanish);
+ledger `out/reports/phase18/ledger.md`.
+
+P6 (2026-11-20) — Motioner hot paths (six parallel lanes + integration):
+
+- **heavy_ui_list (3,000 layers, scrolled)**: collection **0.232 ms** (<=2 ms target)
+  and flat vs 1,000 (0.155 ms, delta 0.077); the pre-P6 binary never reached a steady
+  frame (~57 s to the first: 27.5 s MDF compile + 29 s asset usage compile, the latter
+  memoised and moved off the first frame now).
+- **Retained panels** (`paint.rs` `PanelCache`, `GuiBatch::extend_from`, per-row keys
+  with the exact sub-widget hit and timeline duration/rate): hover **695 frames /
+  6.896 % [4.943-7.005]** (P3 720 / 8.67, met), static hover 12 frames / 2.783 %.
+  Scrub **8.759 % [8.242-9.269]**, collection **2.866 ms** (P3 7.23 %, 1.769 ms: missed;
+  the timeline repaints every scrub frame and pays the batch copy).
+- **Culling O(items)** via a per-item effect-layer flag in the plan (rotated rect, sharp
+  miter, masked item and missing path/mesh tests); eval static-subtree cache keyed by the
+  session generation (heavy_composition collection 0.164 -> **0.085 ms**, CPU 13.16 ->
+  11.58 %).
+- **Lazy 2D target** (engine): VRAM start 18.6 -> **7.6 MB**, editor 30.3 -> 19.3,
+  hover 32.2 -> 21.2, scrub 35.3 -> 24.3, playback 37.5 -> 21.7, showcase 61.8 -> 50.8.
+  Adaptive blur-first layer scale (K = 9 px keeps the 9 px golden byte-identical; showcase
+  has no blur-first layer).
+- **Playback** paced by the composition period on a wake chain: 60 fps during the 6 s demo
+  (361 frames in 6.79 s wall incl. startup), 0 dropped, p99 2.37 ms. **Export 14.95 ->
+  17.19 fps** with the readback ring in pipeline.
+- **Damage** (chrome-only): hover 100 %, scrub 41.6 %, playback 39.8 %, heavy_ui 3.3 %.
+  PersistentUiTarget fed but **not wired** (hover above the 71-74 % break-even; needs an
+  offscreen whole-composition present, P7). Input-to-present: hover p50 0.98/p99 1.76 ms,
+  scrub p50 3.86/p99 5.66 ms.
+- **heavy_ui collection 4.688 vs 4.281 ms** (same throughput 17.20 vs 16.96 fps): the
+  overdraw fixture repaints the composition every frame and the chrome cache is copied;
+  segments 12 -> 38. P7 backlog with the UiSystem alternative.
+- **Gate** in a clean worktree (`git worktree add ../Motioner-gate HEAD` + the P6 patch +
+  submodule 7e623a9): fmt, clippy `-D warnings`, 88 test groups, doc `-D warnings`,
+  boundaries, encoding, machete, validate, refs — all exit 0; goldens byte-identical.
+  Engine: check of the touched crates, clippy no new warnings in touched files, tests
+  (core 38, 2d 41, renderer 18+3+6, ui_render 40, engine 79), touched-file rustfmt, docs
+  without new warnings; wasm still blocked (P7).
+- **Disk**: lowest free space seen **5.60 GB** (release build + measurement with both
+  targets alive), then cleaned; 53.82 GB free at close. Peak commit ~15.3 GB (8 GB RAM +
+  pagefile peak 7.27 GB, best available; the harness does not sample commit).
+- **Left for P7**: scrub collection, heavy_ui 4.7 -> 2 ms (single-batch retention/UiSystem),
+  persistent target wiring, MDF compile of 3,000-node programs, real counting-allocator
+  tests for the eval cache, engine lint/wasm debt.
 
 P5 (2026-11-20) — GPU efficiency (six parallel lanes, engine + Motioner):
 
