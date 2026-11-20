@@ -7,12 +7,56 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0-P4 done; P5-P7 pending.**
-Engine through **`bd41224`** (`23278a2..bd41224`, 18 commits, not pushed); the
-Motioner submodule is checked out at `bd41224` and the parent pin is **not
+Session `S-2026-11-17-001` (open). **P0-P5 done; P6-P7 pending.**
+Engine through **`db776bb`** (`23278a2..db776bb`, 19 commits, not pushed); the
+Motioner submodule is checked out at `db776bb` and the parent pin is **not
 committed**. No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md`
-through `PHASE-18-P4-REPORT.md` (Spanish); ledger
+through `PHASE-18-P5-REPORT.md` (Spanish); ledger
 `out/reports/phase18/ledger.md`.
+
+P5 (2026-11-20) — GPU efficiency (six parallel lanes, engine + Motioner):
+
+- **Instruments**: per-frame `gpu_frame` in the frame trace (draw calls, passes,
+  pipeline/BG/buffer binds, scissors, GUI segments), parsed by the harness;
+  `MAX_PASSES` 8 -> 24. The GPU is **not** the bottleneck in any Motioner
+  scenario (2 passes, <2 ms); heavy UI is 4.1 ms of collection.
+- **State binds**: the GUI pass hoists BG0/quad VB/index per pass and reuses the
+  pipeline for icons; `DrawState2d` skips unchanged 2D binds. Hover 27 draws with
+  **73 -> 25 buffer binds, 52 -> 26 BG binds** (pixels identical); heavy UI
+  68 -> 22. Draw calls unchanged (22-30).
+- **VRAM**: the 2D modes disable the inert GUI depth (-5.76 MB; pipelines are
+  rebuilt with/without depth): start 24.1 -> **18.6 MB**, editor 35.8 -> 30.3,
+  showcase 67.3 -> 61.8. Motioner runs Pure2D at `sample_count = 1`: there is no
+  4x MSAA/HDR target in the live app. `RenderTarget` color+depth (11.52 MB) is
+  still eager in 2D (`LazyRenderTarget` exists, unwired; P6).
+- **Layers**: `Pure2D Layered Main` is timed (0.406 ms; GUI 0.276). Opt-in
+  `layer_resolution_scale` / `FERROUS_LAYER_SCALE=0.5`: showcase VRAM 61.8 ->
+  **37.1 MB**, private 403.7 -> 379.9, same fps (softer text; not default).
+- **Partial redraw**: `PersistentUiTarget` + `partial_redraw` example: 1600x900
+  full 0.455 vs 0.025 ms (18.45x), 4K 2.597 vs 0.025 (102x), break-even damage
+  ~71-74% of the window. **Rejected wiring**: Motioner damage is the whole window
+  until per-panel damage (P6).
+- **Overdraw**: additive debug view (`FERROUS_OVERDRAW=1`) and `Layer2d::bounds`.
+  Front-to-back early-z and covered-node skip are rejected (painter order; no
+  per-quad bounds/identity in the direct-paint path).
+- **Present**: `PresentMode` + `FERROUS_PRESENT_MODE` (Fifo/FifoRelaxed/Mailbox/
+  AutoNoVsync). Playback: all 55-57 fps, 0 dropped; Mailbox p99 2.07 ms but CPU
+  20.8% vs Fifo 17.4%. Keep **Fifo**.
+- **P4 regressions**: not reproducible. Hover 720/720/728 frames and 6.67-6.93%
+  (P4 reported 1124); scrub 8.41% median inside the 5.63-13.49% spread. Lane F
+  still removes the 25 ms image-reload wake (video keys are never "missing",
+  failures are sticky, the wake only re-arms while a decode is in flight) and
+  culls items outside the canvas.
+- **Heavy UI**: all 3,000 rows are inside 1600x900; only 120 distinct positions,
+  painted 25x each. It is overdraw, not off-screen work; no cull can help.
+- **Gate**: Motioner fmt, clippy `-D warnings`, full tests (**goldens
+  byte-identical**), doc `-D warnings`, boundaries, encoding, machete, validate,
+  refs. Engine: clippy on touched crates (no new warnings), tests for
+  renderer/ui_render/core/2d/engine, touched-file rustfmt, docs without new
+  warnings; wasm blocked by the pre-existing getrandom/feature issue.
+- **Lanes**: six in parallel, 22 min wall (23:30-23:52); integration + measures
+  + gate ~3 h 15. C: hit **0 bytes** during the engine test link (5.2 + 5.9 GB
+  cleaned); **5.43 GB free** at close; peak: 31.3 GB RAM, 5.91 GB target.
 
 P4 (2026-11-19) - CPU algorithms (five parallel lanes, engine + Motioner):
 
@@ -784,9 +828,11 @@ Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed),
 `493619f` (S5), `c2196d0` (S6), `23278a2` (P0), `9c3d6e3` (P1: 7022976,
 ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3), `c577877` (P2: e9761db,
-c577877), `5c2fd29` (P3: cd547de, a13c9d3, a46a82e, 5c2fd29) and **`bd41224`**
-(P4: e8ed036, 3415098, 8b0e273, 56855c6, 48ca25b, bd41224). The submodule is
-checked out at `bd41224`; the parent pin is not committed. The reviewer pushes the engine and
+c577877), `5c2fd29` (P3: cd547de, a13c9d3, a46a82e, 5c2fd29), `bd41224`
+(P4: e8ed036, 3415098, 8b0e273, 56855c6, 48ca25b, bd41224) and **`db776bb`**
+(P5: GPU counters, state hoisting, overdraw view, damage-copy target, layered
+pass timing, present modes, layer scale, 2D GUI-depth policy). The submodule is
+checked out at `db776bb`; the parent pin is not committed. The reviewer pushes the engine and
 bumps the pin. **No pin bump in this session.** Never edit `engine/ferrous`.
 The `svgparser 0.8.1` future-incompat warning predates this work. Engine
 pre-existing debt remains: crate-wide rustfmt diffs (`asset_bridge.rs`,
@@ -818,7 +864,14 @@ per-image proxies with live-frame bypass and re-decode, O(1) layout cache, ASCII
 path, retained engine batches, layout early-out, tessellation cache, atlas occupancy).
 Heavy UI 3,154 -> 154 allocs/frame and 4.49 -> 4.06 ms collection; scrub back to
 1.78 ms; MemoryHints A/B keeps 434/399 MB. Gate green, goldens byte-identical,
-C: 5.63 GB free after cleaning both targets. Next: P5 (GPU efficiency).
+C: 5.63 GB free after cleaning both targets. **P5 GPU efficiency** (engine
+`db776bb`): per-frame GPU counters, GUI/2D state hoisting (hover buffer binds
+73 -> 25), 2D GUI depth off (-5.76 MB; start 18.6 MB VRAM), layered pass timing,
+opt-in layer scale (showcase 61.8 -> 37.1 MB at 0.5), overdraw view, damage-copy
+target (18.45x at 1600x900 / 102x at 4K for a 4% damage, rejected for now),
+present modes (Fifo kept), and Motioner reload hygiene. P4 regressions do not
+reproduce (720 frames hover, 8.41% scrub). Gate green, goldens byte-identical,
+C: 5.43 GB free after cleaning both targets. Next: P6 (Motioner hot paths).
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
 pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the
