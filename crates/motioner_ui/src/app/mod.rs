@@ -417,11 +417,16 @@ impl PreviewApp {
         let Some(painter) = self.painter.as_ref() else {
             return;
         };
+        // A dynamic key is a live video frame; the worker only decodes project
+        // images. The painter already filters it out of `missing`, and the
+        // failed-key cache there keeps a doomed key from being requested
+        // again, so this is only a defensive filter.
         let missing: Vec<motioner_core::ImageKey> = painter
             .missing_image_pixels()
             .iter()
             .copied()
             .filter(|key| !self.image_reloads_in_flight.contains(key))
+            .filter(|key| !painter.is_dynamic_image(key))
             .collect();
         if missing.is_empty() {
             return;
@@ -448,37 +453,52 @@ impl PreviewApp {
     /// Returns whether the worker is still running, so the caller can schedule
     /// a short wake instead of a continuous loop.
     fn poll_image_reloads(&mut self) -> bool {
-        let (done, pending) = match self.image_reloads.as_ref() {
+        let (done, pending) = match self.image_reloads.as_mut() {
             Some(reloads) => reloads.poll(),
             None => return false,
         };
+        if !done.is_empty() && self.painter.is_none() {
+            self.reset_image_reloads();
+            return false;
+        }
         if !done.is_empty() {
-            let Some(painter) = self.painter.as_mut() else {
-                self.image_reloads = None;
-                return false;
-            };
-            for reload in done {
-                self.image_reloads_in_flight.remove(&reload.key);
-                let Some(image) = reload.image else {
-                    // The source could not be recovered: keep the resident
-                    // texture and do not ask for this key again.
-                    continue;
-                };
-                painter.set_image(motioner_render::ImageData {
-                    key: reload.key,
-                    width: image.asset.width,
-                    height: image.asset.height,
-                    rgba8: image.rgba8,
-                    revision: 0,
-                });
+            if let Some(painter) = self.painter.as_mut() {
+                for reload in done {
+                    self.image_reloads_in_flight.remove(&reload.key);
+                    let Some(image) = reload.image else {
+                        // The source could not be recovered: keep the resident
+                        // texture and record the key as failed so the next paint
+                        // does not request (and spawn a worker for) it again.
+                        painter.mark_image_reload_failed(reload.key);
+                        continue;
+                    };
+                    painter.set_image(motioner_render::ImageData {
+                        key: reload.key,
+                        width: image.asset.width,
+                        height: image.asset.height,
+                        rgba8: image.rgba8,
+                        revision: 0,
+                    });
+                }
             }
         }
         if !pending {
-            // The worker finished every key it was given; nothing is in flight.
-            self.image_reloads_in_flight.clear();
-            self.image_reloads = None;
+            // The worker finished every key it was given; nothing is in flight,
+            // so the caller must not keep re-arming the short wake.
+            self.reset_image_reloads();
         }
         pending
+    }
+
+    /// Drops the current re-decode worker and its bookkeeping.
+    ///
+    /// Dropping the receiver stops a worker that is still running (its next
+    /// send fails), and the painter's own failure cache is cleared when its
+    /// image set is replaced. Call this whenever the image set is replaced so
+    /// keys from the old document can never suppress the new ones.
+    fn reset_image_reloads(&mut self) {
+        self.image_reloads = None;
+        self.image_reloads_in_flight.clear();
     }
 
     /// Uploads the atlases the worker finished, on the frame thread.

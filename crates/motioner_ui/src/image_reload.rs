@@ -34,6 +34,9 @@ pub struct ReloadedImage {
 /// A running re-decode of the keys the canvas is missing.
 pub struct ImageReloads {
     receiver: Receiver<ReloadedImage>,
+    /// Keys the worker has not reported yet. Zero means nothing is in flight,
+    /// so the frame loop must stop scheduling the short poll wake.
+    remaining: usize,
 }
 
 impl ImageReloads {
@@ -50,6 +53,7 @@ impl ImageReloads {
         if keys.is_empty() {
             return None;
         }
+        let remaining = keys.len();
         let (sender, receiver) = mpsc::channel();
         thread::Builder::new()
             .name("motioner-images".to_owned())
@@ -66,21 +70,33 @@ impl ImageReloads {
                 waker.wake();
             })
             .ok()?;
-        Some(Self { receiver })
+        Some(Self {
+            receiver,
+            remaining,
+        })
     }
 
     /// The images that finished since the last call; never blocks.
     ///
-    /// The flag is `true` while the worker is still decoding (the channel is
-    /// empty but connected), so the caller can schedule a short wake.
+    /// The flag is `true` only while the worker still owes results. A
+    /// connected-but-empty channel after the last key is not "in flight": the
+    /// caller must not keep re-arming the 25 ms wake for it.
     #[must_use]
-    pub fn poll(&self) -> (Vec<ReloadedImage>, bool) {
+    pub fn poll(&mut self) -> (Vec<ReloadedImage>, bool) {
         let mut images = Vec::new();
         loop {
             match self.receiver.try_recv() {
-                Ok(image) => images.push(image),
-                Err(mpsc::TryRecvError::Empty) => return (images, true),
-                Err(mpsc::TryRecvError::Disconnected) => return (images, false),
+                Ok(image) => {
+                    self.remaining = self.remaining.saturating_sub(1);
+                    images.push(image);
+                }
+                Err(mpsc::TryRecvError::Empty) => return (images, self.remaining > 0),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // A worker that died early (a panic, or the window closed)
+                    // left nothing to wait for.
+                    self.remaining = 0;
+                    return (images, false);
+                }
             }
         }
     }
@@ -121,7 +137,7 @@ mod tests {
     fn a_worker_returns_the_requested_pixels() {
         let decoded = image();
         let key = decoded.asset.key;
-        let Some(reloads) = ImageReloads::spawn(
+        let Some(mut reloads) = ImageReloads::spawn(
             Box::new(Fake {
                 image: decoded.clone(),
             }),
@@ -132,15 +148,44 @@ mod tests {
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let (done, _pending) = reloads.poll();
+            let (done, pending) = reloads.poll();
             if let Some(result) = done.into_iter().next() {
                 assert_eq!(result.key, key);
                 assert_eq!(result.image, Some(decoded.clone()));
+                // The only key was delivered: nothing is in flight any more,
+                // even if the worker thread is still winding down.
+                assert!(!pending, "a completed worker is not in flight");
                 break;
             }
             assert!(Instant::now() < deadline, "the decode finishes");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn polling_with_no_worker_reports_nothing_in_flight() {
+        // No spawn at all is the `None` case; this covers the state the app
+        // holds once a worker finished: `poll` must say "not pending".
+        let decoded = image();
+        let key = decoded.asset.key;
+        let mut reloads = ImageReloads::spawn(
+            Box::new(Fake { image: decoded }),
+            vec![key],
+            Waker::default(),
+        )
+        .expect("the worker starts");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut received = 0;
+        while Instant::now() < deadline {
+            let (done, pending) = reloads.poll();
+            received += done.len();
+            if received == 1 {
+                assert!(!pending);
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the decode finishes");
     }
 
     struct Missing;
@@ -154,7 +199,7 @@ mod tests {
     #[test]
     fn a_key_that_cannot_be_decoded_is_still_reported() {
         let key = image().asset.key;
-        let Some(reloads) = ImageReloads::spawn(Box::new(Missing), vec![key], Waker::default())
+        let Some(mut reloads) = ImageReloads::spawn(Box::new(Missing), vec![key], Waker::default())
         else {
             panic!("the worker starts");
         };

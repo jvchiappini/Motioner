@@ -653,6 +653,7 @@ def run_once(
     presented = 0
     gpu_submits = 0
     gpu = {}
+    gpu_frame = {}
     stages = {}
     allocs = None
     alloc_bytes = None
@@ -667,6 +668,11 @@ def run_once(
             pass_name: float(value.get("median_ms", 0.0))
             for pass_name, value in frame.get("gpu_passes", {}).items()
             if isinstance(value, dict)
+        }
+        gpu_frame = {
+            key: int(value)
+            for key, value in (frame.get("gpu_frame", {}) or {}).items()
+            if isinstance(value, (int, float))
         }
         alloc_entry = frame.get("allocations_per_frame", {})
         if frame.get("alloc_stats") and isinstance(alloc_entry, dict):
@@ -727,6 +733,7 @@ def run_once(
             }.items()
             if value is not None
         },
+        "gpu_frame": gpu_frame,
         "allocations_per_frame": allocs,
         "allocated_bytes_per_frame": alloc_bytes,
         "frame_ms_median": _round_or_none(frame_ms.get("median_ms")),
@@ -769,6 +776,7 @@ def aggregate(runs: list[dict]) -> dict:
 
     gpu_keys = sorted({key for run in runs for key in run.get("gpu_passes_ms", {})})
     stage_keys = sorted({key for run in runs for key in run.get("stages_ms", {})})
+    gpu_frame_keys = sorted({key for run in runs for key in run.get("gpu_frame", {})})
     return {
         "runs": len(runs),
         "cpu_percent": med("cpu_percent"),
@@ -801,6 +809,14 @@ def aggregate(runs: list[dict]) -> dict:
                 4,
             )
             for key in gpu_keys
+        },
+        "gpu_frame": {
+            key: int(
+                statistics.median(
+                    [run["gpu_frame"][key] for run in runs if key in run.get("gpu_frame", {})]
+                )
+            )
+            for key in gpu_frame_keys
         },
         "stages_ms": {
             key: round(
@@ -860,6 +876,14 @@ def print_result(name: str, description: str, result: dict) -> None:
     if result["gpu_passes_ms"]:
         passes = ", ".join(f"{key} {value:.3f} ms" for key, value in result["gpu_passes_ms"].items())
         print(f"  GPU passes: {passes}")
+    if result.get("gpu_frame"):
+        gf = result["gpu_frame"]
+        print(
+            f"  GPU frame: {gf.get('draw_calls')} draw calls, "
+            f"{gf.get('gpu_passes')} passes, {gf.get('pipeline_binds')} pipeline binds, "
+            f"{gf.get('bind_group_binds')} bind-group binds, {gf.get('buffer_binds')} buffer binds, "
+            f"{gf.get('ui_segments')} GUI segments, {gf.get('scissor_changes')} scissors"
+        )
     if result["stages_ms"]:
         stages = ", ".join(f"{key} {value:.3f}" for key, value in result["stages_ms"].items())
         print(f"  stages (ms): {stages}")

@@ -112,8 +112,16 @@ impl PreviewApp {
         // sharper texture instead of magnifying the fit-sized one.  Pixels
         // that were released after the first upload are re-fetched through
         // `LivePainter::missing_image_pixels` (see the app worker wiring).
+        //
+        // Prompt 18 P5: also tell the painter which slice of the composition
+        // the canvas actually shows, so an item entirely off-screen is skipped
+        // before it is laid out or drawn. The rectangle is conservative (a
+        // window-pixel of margin on every side) and clipped to the
+        // composition: an item that can touch the visible area is kept.
+        let visible = visible_composition_rect(&view, layout.canvas);
         if let Some(painter) = self.painter.as_mut() {
             painter.set_proxy_target(ProxyTarget::PerImage);
+            painter.set_visible_composition_rect(visible);
         }
         let stale = self.editor.session().plan_frame() != Some(frame);
         let started = Instant::now();
@@ -121,6 +129,9 @@ impl PreviewApp {
         let overrides = pick.map(|_| self.editor.session().overrides().clone());
         let generation = self.editor.session().generation();
         if self.painter_generation != Some(generation) {
+            // Keys belong to the old image set; their failures and in-flight
+            // requests must not leak into the new one.
+            self.reset_image_reloads();
             // Prompt 17 S2: decoding the composition's images is first-frame
             // work; it is measured here until S5 moves it off the path.
             let _span = ferrous_engine::startup::span("motioner: decode images");
@@ -347,6 +358,46 @@ impl PreviewApp {
             })
             .collect()
     }
+}
+
+/// The composition-space region the canvas area shows, clipped to the
+/// composition.
+///
+/// This is the cull rectangle the painter uses. It is deliberately
+/// conservative: the visible area is padded by at least one window pixel
+/// (converted to composition pixels) plus one composition pixel, so rounding
+/// at the viewport edges can never cull a sliver that is still on screen.
+/// `None` means the visible area does not overlap the composition (nothing to
+/// draw) or the viewport is degenerate; the painter then keeps its previous
+/// behaviour of drawing everything, which is always correct.
+fn visible_composition_rect(view: &Viewport, area: Rect) -> Option<[f64; 4]> {
+    if !(view.scale.is_finite() && view.scale > 0.0) {
+        return None;
+    }
+    let min = view.to_composition(area.x, area.y);
+    let max = view.to_composition(area.x + area.w, area.y + area.h);
+    if !(min.x.is_finite()
+        && min.y.is_finite()
+        && max.x.is_finite()
+        && max.y.is_finite()
+        && view.width.is_finite()
+        && view.height.is_finite()
+        && view.width > 0.0
+        && view.height > 0.0)
+    {
+        return None;
+    }
+    // One window pixel (rounding) plus one composition pixel (anti-aliasing
+    // and stroke ink that the item bounds may not model exactly) of margin.
+    let margin = 1.0 / view.scale + 1.0;
+    let x0 = (min.x.min(max.x) - margin).max(0.0);
+    let y0 = (min.y.min(max.y) - margin).max(0.0);
+    let x1 = (min.x.max(max.x) + margin).min(view.width);
+    let y1 = (min.y.max(max.y) + margin).min(view.height);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some([x0, y0, x1 - x0, y1 - y0])
 }
 
 /// The canvas area the composition is fitted into: the canvas inset by a

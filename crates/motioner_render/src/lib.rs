@@ -317,6 +317,20 @@ pub(crate) struct ImageTexture {
     pub(crate) revision: u64,
 }
 
+/// Why a key cannot be recovered by the background re-decode worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadFailure {
+    /// A live video frame: the worker re-decodes project images only, so it
+    /// can never return fresh pixels for this key.
+    Dynamic,
+    /// The source could not be decoded again (removed, unreadable, ...).
+    Unavailable,
+}
+
+/// Upper bound on the sticky negative cache, so a document that keeps changing
+/// image sets cannot grow it without limit.
+pub(crate) const MAX_RELOAD_FAILURES: usize = 256;
+
 /// Per-key image textures plus the keys whose CPU pixels are needed again.
 ///
 /// The size is tracked next to the revision so a zoom can decide whether the
@@ -330,6 +344,10 @@ pub(crate) struct ImageTextures {
     /// them: resampling a full frame on the frame thread costs more than the
     /// texture saves.
     dynamic: std::collections::HashSet<motioner_core::ImageKey>,
+    /// Sticky negative cache: a key that already failed a re-decode (or can
+    /// never be re-decoded) is not reported as missing again. Cleared when the
+    /// image set is replaced, and per key when fresh pixels arrive.
+    failed: Vec<(motioner_core::ImageKey, ReloadFailure)>,
 }
 
 impl ImageTextures {
@@ -359,6 +377,7 @@ impl ImageTextures {
     ) -> impl Iterator<Item = (motioner_core::ImageKey, ImageTexture)> + '_ {
         self.missing.clear();
         self.dynamic.clear();
+        self.failed.clear();
         self.entries.drain()
     }
 
@@ -383,10 +402,52 @@ impl ImageTextures {
     }
 
     /// Records that `key` needs a fresh decode before it can be re-uploaded.
+    ///
+    /// A dynamic key (live video frame) and a key already known to be
+    /// unrecoverable are never reported: the worker cannot help with either,
+    /// so reporting them would only spawn (and re-spawn) a doomed decode.
     pub(crate) fn mark_missing(&mut self, key: motioner_core::ImageKey) {
+        if self.dynamic.contains(&key) || self.failure(&key).is_some() {
+            return;
+        }
         if !self.missing.contains(&key) {
             self.missing.push(key);
         }
+    }
+
+    /// Records that `key` cannot be re-decoded, so it is never reported again
+    /// until the image set is replaced or fresh pixels arrive for it.
+    pub(crate) fn mark_failure(&mut self, key: motioner_core::ImageKey, reason: ReloadFailure) {
+        self.missing.retain(|candidate| *candidate != key);
+        if let Some(entry) = self
+            .failed
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == key)
+        {
+            entry.1 = reason;
+            return;
+        }
+        if self.failed.len() >= MAX_RELOAD_FAILURES {
+            // Bounded: evict one entry rather than grow without limit. Which
+            // one is immaterial; a stale key simply gets one more attempt.
+            self.failed.swap_remove(0);
+        }
+        self.failed.push((key, reason));
+    }
+
+    /// Forgets the failure of `key`: fresh pixels arrived, so a later release
+    /// may ask for it again.
+    pub(crate) fn clear_failure(&mut self, key: &motioner_core::ImageKey) {
+        self.failed.retain(|(candidate, _)| candidate != key);
+    }
+
+    /// The recorded failure for `key`, when it is not recoverable.
+    #[must_use]
+    pub(crate) fn failure(&self, key: &motioner_core::ImageKey) -> Option<ReloadFailure> {
+        self.failed
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, reason)| *reason)
     }
 
     /// Keys whose texture needs an upload but whose pixels were released.
@@ -437,7 +498,16 @@ pub(crate) fn ensure_image_texture(
         // The interactive preview released the CPU pixels after its first
         // upload.  Keep drawing the resident texture and let the app fetch the
         // pixels for this key off the frame thread.
-        textures.mark_missing(key);
+        //
+        // A dynamic key (live video frame) is the exception: the re-decode
+        // worker only reads project images, so reporting it as missing would
+        // spawn a doomed worker on every paint. The video path supplies its
+        // pixels through `set_image` instead.
+        if dynamic {
+            textures.mark_failure(key, ReloadFailure::Dynamic);
+        } else {
+            textures.mark_missing(key);
+        }
         return Ok(current.map(|texture| texture.id));
     }
     let upload = proxy::prepare_at(image, size.0, size.1, scratch);
@@ -1191,6 +1261,7 @@ impl FrameRenderer {
         self.image_inventory.unregister(&key);
         self.images.insert(image);
         self.image_textures.clear_missing_key(&key);
+        self.image_textures.clear_failure(&key);
         if let Some(stored) = self.images.get(&key) {
             self.image_inventory.register(stored);
         }
@@ -1362,6 +1433,10 @@ pub struct LivePainter {
     image_targets: HashMap<motioner_core::ImageKey, (u32, u32)>,
     /// Upload size policy; the app opts into [`ProxyTarget::PerImage`].
     proxy: ProxyTarget,
+    /// Composition-space region the current view shows (`[x, y, w, h]`).
+    /// Items whose conservative bounds are entirely outside it are skipped.
+    /// `None` draws every item (tests and any caller without a viewport).
+    visible: Option<[f64; 4]>,
     /// Reused buffer for a proxy downscale.
     image_scratch: Vec<u8>,
     /// Textures whose image set was replaced, freed on the next paint.
@@ -1456,6 +1531,7 @@ impl LivePainter {
             image_textures: ImageTextures::default(),
             image_targets: HashMap::default(),
             proxy: ProxyTarget::Full,
+            visible: None,
             image_scratch: Vec::new(),
             pending_image_frees: Vec::new(),
             image_cpu_budget: DEFAULT_IMAGE_CPU_BUDGET,
@@ -1599,6 +1675,7 @@ impl LivePainter {
         self.image_inventory.unregister(&key);
         self.images.insert(image);
         self.image_textures.clear_missing_key(&key);
+        self.image_textures.clear_failure(&key);
         if let Some(stored) = self.images.get(&key) {
             self.image_inventory.register(stored);
         }
@@ -1622,6 +1699,17 @@ impl LivePainter {
         self.proxy = target;
     }
 
+    /// Sets the composition-space region the view shows (`[x, y, width,
+    /// height]`).
+    ///
+    /// [`Self::paint`] and [`Self::paint_visible`] skip an item only when its
+    /// conservative bounds are *entirely* outside this rectangle; an item that
+    /// intersects it is drawn exactly as before. `None` (the default) disables
+    /// culling, which is what the tests and any caller without a viewport use.
+    pub fn set_visible_composition_rect(&mut self, visible: Option<[f64; 4]>) {
+        self.visible = visible;
+    }
+
     /// Image keys whose texture needs a larger upload but whose CPU pixels
     /// were already released.
     ///
@@ -1632,6 +1720,25 @@ impl LivePainter {
     #[must_use]
     pub fn missing_image_pixels(&self) -> &[motioner_core::ImageKey] {
         self.image_textures.missing()
+    }
+
+    /// Whether `key` is a live frame (a video) whose pixels change every
+    /// frame. Such a key is never a candidate for a background re-decode: the
+    /// worker reads project images, not decoded video frames.
+    #[must_use]
+    pub fn is_dynamic_image(&self, key: &motioner_core::ImageKey) -> bool {
+        self.image_textures.is_dynamic(key)
+    }
+
+    /// Remembers that a background re-decode of `key` failed.
+    ///
+    /// The key is not reported through [`Self::missing_image_pixels`] again
+    /// until fresh pixels arrive for it ([`Self::set_image`]) or the image set
+    /// is replaced ([`Self::set_images`]); this is what stops a
+    /// permanently-unrecoverable key from spawning a worker on every paint.
+    pub fn mark_image_reload_failed(&mut self, key: motioner_core::ImageKey) {
+        self.image_textures
+            .mark_failure(key, ReloadFailure::Unavailable);
     }
 
     /// The CPU budget for decoded-image pixels.
@@ -1762,6 +1869,7 @@ impl LivePainter {
             self.proxy,
             fit.scale(),
             None,
+            self.visible,
             &mut self.image_scratch,
         );
         let stats = frame::paint_plan(
@@ -1779,6 +1887,7 @@ impl LivePainter {
             &mut self.mesh_vertices,
             &mut self.mesh_indices,
             None,
+            self.visible,
         );
         self.enforce_image_cpu_budget();
         Ok(stats)
@@ -1823,6 +1932,7 @@ impl LivePainter {
             self.proxy,
             fit.scale(),
             Some(hidden),
+            self.visible,
             &mut self.image_scratch,
         );
         let stats = frame::paint_plan(
@@ -1840,6 +1950,7 @@ impl LivePainter {
             &mut self.mesh_vertices,
             &mut self.mesh_indices,
             Some(hidden),
+            self.visible,
         );
         self.enforce_image_cpu_budget();
         Ok(stats)
@@ -2275,6 +2386,151 @@ mod tests {
         assert_eq!(textures.missing()[0], key);
         assert_eq!(canvas.registered.len(), 1, "no blurry upscale upload");
         assert!(canvas.updated.is_empty());
+    }
+
+    #[test]
+    fn a_dynamic_key_is_never_reported_missing() {
+        let mut canvas = RecordingCanvas::new();
+        let mut textures = ImageTextures::default();
+        let mut scratch = Vec::new();
+        let mut image = pixel_image(400, 200);
+        let key = image.key;
+
+        // The first upload is a still; a revision bump marks the key dynamic.
+        ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (400, 200),
+            &mut scratch,
+        )
+        .expect("register succeeds");
+        image.revision = 1;
+        ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (400, 200),
+            &mut scratch,
+        )
+        .expect("live frame uploads");
+        assert!(textures.is_dynamic(&key));
+
+        // The preview released the pixels; a later live frame bumps the
+        // revision again. The worker cannot decode a video frame, so the key
+        // must not be reported (that would spawn a doomed worker every paint).
+        image.revision = 2;
+        image.rgba8.clear();
+        let kept = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (400, 200),
+            &mut scratch,
+        )
+        .expect("a missing live buffer is not an upload error")
+        .expect("the resident texture is still usable");
+        assert_eq!(Some(kept), canvas.registered.last().map(|(id, ..)| *id));
+        assert!(
+            textures.missing().is_empty(),
+            "a dynamic key is never re-decodable"
+        );
+    }
+
+    #[test]
+    fn a_failed_key_is_not_requested_again_until_pixels_arrive() {
+        let mut canvas = RecordingCanvas::new();
+        let mut textures = ImageTextures::default();
+        let mut scratch = Vec::new();
+        let mut image = pixel_image(400, 200);
+        let key = image.key;
+
+        // Upload once, then release the pixels so a larger target reports it.
+        ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (400, 200),
+            &mut scratch,
+        )
+        .expect("register succeeds");
+        image.rgba8.clear();
+        ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (800, 400),
+            &mut scratch,
+        )
+        .expect("released pixels are not an error");
+        assert_eq!(textures.missing().len(), 1);
+        assert_eq!(textures.missing()[0], key);
+
+        // The worker failed: the key is cached and must stay out of `missing`
+        // on every later paint, or the app would spawn a worker per paint.
+        textures.mark_failure(key, ReloadFailure::Unavailable);
+        assert_eq!(textures.failure(&key), Some(ReloadFailure::Unavailable));
+        assert!(textures.missing().is_empty());
+
+        textures.clear_missing();
+        ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (800, 400),
+            &mut scratch,
+        )
+        .expect("a known failure is not an upload error");
+        assert!(
+            textures.missing().is_empty(),
+            "a failed key is sticky across paints"
+        );
+
+        // Fresh pixels clear the failure, so a later release can retry.
+        textures.clear_failure(&key);
+        textures.clear_missing();
+        ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (800, 400),
+            &mut scratch,
+        )
+        .expect("released pixels are not an error");
+        assert_eq!(textures.missing().len(), 1);
+        assert_eq!(textures.missing()[0], key);
+    }
+
+    #[test]
+    fn replacing_the_image_set_clears_the_failure_cache() {
+        let mut textures = ImageTextures::default();
+        let key = ImageKey::from_bytes([9; 32]);
+        textures.mark_failure(key, ReloadFailure::Dynamic);
+        assert_eq!(textures.failure(&key), Some(ReloadFailure::Dynamic));
+        let _ = textures.drain().count();
+        assert_eq!(textures.failure(&key), None);
+        assert!(textures.missing().is_empty());
+    }
+
+    #[test]
+    fn the_failure_cache_is_bounded() {
+        let mut textures = ImageTextures::default();
+        for index in 0..u32::try_from(MAX_RELOAD_FAILURES + 32).unwrap_or(0) {
+            let key = ImageKey::from_bytes({
+                let mut bytes = [0_u8; 32];
+                bytes[..4].copy_from_slice(&index.to_le_bytes());
+                bytes
+            });
+            textures.mark_failure(key, ReloadFailure::Unavailable);
+        }
+        assert_eq!(textures.failed.len(), MAX_RELOAD_FAILURES);
     }
 
     #[cfg(feature = "live")]
