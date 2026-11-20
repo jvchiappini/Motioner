@@ -398,6 +398,71 @@ depends on, all zero-cost when disabled.
   or the right feature on the crate that pulls it in) and adds the wasm
   check to the engine gate.
 
+## Review findings after P6 (P7 starts with these fix lanes)
+
+P7 runs in two steps: first the fix lanes below, measured against
+`p6-after.json`, then the guards, docs and report of the P7 section. The
+guards must cover the new code, so the fixes come first.
+
+- **Fix 1: hover damages 100 % of the window.** Per-panel damage exists,
+  but a hover change still marks the whole window. Moving between two
+  widgets must damage only their panels (or rows). Hover CPU went from
+  5.87 % to 6.90 % against the P6 baseline. Being below the P3 number does
+  not make that a pass. Target: hover damage ≤ 10 % of the window and CPU at
+  or below 5.87 % (median of three).
+- **Fix 2: scrub regressed** (collection 1.77 → 2.87 ms, CPU 8.24 → 8.76 %).
+  The timeline panel key changes every scrub frame, so the retained range
+  misses and also pays the copy. Draw the playhead, the time readouts and
+  any other per-frame part of the timeline as a separate small range, and
+  keep them out of the panel key. Rows then hit the cache while scrubbing.
+  Target: collection ≤ 1.8 ms and CPU ≤ 7.23 % (P3).
+- **Fix 3: draw calls went back up.** heavy_ui went from 22 to 61 draws and
+  from 12 to 38 segments, which undoes the P5 work. `GuiBatch::extend_from`
+  appends the copied segments as they are. Merge a copied segment with the
+  previous one when the pipeline, texture slot set and clip match, so the
+  frame has as few segments as one fresh batch. Fix the 0.4 ms collection
+  regression (4.28 → 4.69 ms) at the same time. Target: draws and binds at
+  or below the P5 numbers in every scenario.
+- **Fix 4: prove the evaluation cache.** `evaluate_cached` is tested only on
+  small hand-built documents. Add a test that evaluates every example,
+  golden and perf fixture document frame by frame, cached and uncached, and
+  requires equal plans. Cover:
+  - overrides and inspector edits;
+  - hot reload;
+  - rigs and state machines;
+  - video items, text animations and expression-driven properties.
+
+  Add a test that every session mutation bumps `generation`. An input that
+  changes the plan but is not in the cache key is a correctness bug: fix it
+  in the key, never in the test.
+- **Fix 5: the DSL compile does not scale.** The 3,000-layer fixture takes
+  28.6 s in the MDF compiler before the first frame, and at most 3,000 nodes
+  should not take seconds. Profile it, remove the super-linear step, and add
+  a scaling test: 3,000 nodes compile in under 3.5× the time of 1,000, and
+  under 1 s in release.
+- **Fix 6: memory of the long list.** heavy_ui_list with 3,000 layers uses
+  793 MB private. Report the bytes per layer by owner (document, plan,
+  panel cache, text cache, GPU staging) and remove what does not scale with
+  the visible rows. Target: ≤ 400 MB, and private memory with 3,000 layers
+  within 50 MB of the number with 1,000.
+- **Fix 7: what P6.4 asked for and the report left out.**
+  - dropped frames for 4K30 playback (proxy);
+  - the decode-ahead hit rate for 1080p60 and 4K30.
+- **Fix 8: partial redraw, last call.** Damage is 41.6 % of the window while
+  scrubbing and 39.8 % during playback, below the 71 % break-even. Expose an
+  offscreen-present path in the engine runner (composition and GUI into the
+  persistent target, then copy the damaged rects and present) and wire
+  `PersistentUiTarget` for frames whose damage is under the measured
+  break-even. Pixels must stay identical (goldens plus a scrub screenshot
+  test). If the measured win on scrub is under 10 % of CPU, keep it off by
+  default and say so with the numbers.
+- **Disk floor broken again.** The lowest free space was 5.60 GB with a
+  12 GB floor. The floor is a stop rule, not a number to report: check
+  before every build, and free space before going on.
+- **UiSystem vs retained ranges.** The comparison asked for after P4 was
+  not made. Retained ranges stay, and D-0063 records the reason and what
+  would change the choice.
+
 ## Execution model from P3 on (parallel subagents)
 
 Phases P3 to P7 run with subagents to cut wall time. The main agent
