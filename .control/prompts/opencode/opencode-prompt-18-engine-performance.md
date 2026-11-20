@@ -332,6 +332,72 @@ depends on, all zero-cost when disabled.
   - Report the peak commit (RAM + page file) of the phase next to the free
     space on C:.
 
+## Review findings after P5 (apply in the phase named)
+
+- **Fixed in review: the gate was not green.** `cargo fmt -- --check`
+  failed on `motioner_render/src/frame.rs`, and the doc comment of
+  `item_bounds` had been merged into the one of `local_bounds`, so
+  `item_bounds` had no doc. Both are fixed in `3e7864f`. From P6 on, the
+  report pastes the last line of each gate command, run in the clean
+  worktree (`git worktree add ../Motioner-gate HEAD`), not in the working
+  tree.
+- **P6: headline numbers need three runs.** The P5 table is one run per
+  binary, and hover (6.67 → 8.11 %), scrub (7.49 → 8.87 %) and playback
+  (18.0 → 19.0 %) all went up while binds went down. The three-run check
+  was done for the P4 regressions only. From P6 on, every CPU % in a
+  before/after table is the median of three back-to-back runs, with the
+  range next to it. P6 ends with hover and scrub at or below the P3 numbers
+  (720 frames / 8.67 %, 7.23 %).
+- **P6: the idle metric is still one number.** The P4 finding asked for
+  both idle values, labelled: the whole run and the tail after the first
+  frame. A tail above 0.1 % is a finding.
+- **P6: a real heavy-UI fixture.** The `heavy_ui` fixture paints 120
+  positions 25 times each, so it measures overdraw, not a long list. Keep
+  it for continuity and add `heavy_ui_list`: a timeline/layers panel with
+  3,000 distinct layers in a scroll view taller than the window, scrolled
+  at a steady rate in the scenario. P6.3 (virtualisation) and the retained
+  per-panel ranges are measured on it. Target: collection ≤ 2 ms and the
+  cost flat in the number of layers (1,000 vs 3,000 within noise).
+- **P6: culling cost.** `in_effected_layer` walks every layer for each
+  off-screen item, so a plan with many off-screen items and many layers is
+  O(items × layers) per frame. Compute the "inside an effect layer" flag
+  once per plan (a bit per item, or the layer ranges walked in order next
+  to the items) and keep culling O(items). Add tests for a rotated rect
+  that crosses the edge, a stroked path with a sharp miter just outside
+  the edge, and a masked item. `image_reload.rs` has a test named
+  `polling_with_no_worker_reports_nothing_in_flight` that repeats the test
+  above it; rename it to what it checks or remove it.
+- **P6: per-panel damage, then decide partial redraw again.** The
+  persistent target wins up to ~71 % damage, and Motioner's damage is the
+  whole window only because it repaints all its chrome. With the retained
+  per-panel ranges (P4 finding), report the damaged fraction of the
+  window for hover, scrub and playback. Wire `PersistentUiTarget` when the
+  median damage is below the break-even point, and keep the pixels
+  identical (golden + a hover screenshot test).
+- **P6 (engine lane): wire `LazyRenderTarget`** in Pure2D/Flat2D, so the
+  unused 11.52 MB colour+depth target is not allocated until a pass needs
+  it. Report VRAM before and after for every scenario.
+- **P6 (engine lane): adaptive layer scale.** A global 0.5 softens text,
+  but a layer whose effect chain starts with a blur of radius r loses
+  nothing visible at a scale of about `min(1, k / r)`. Render such layers
+  at the reduced scale by default (k measured so the blurred output stays
+  within the golden tolerance), keep `FERROUS_LAYER_SCALE` as an override,
+  and report VRAM and the layered pass time on the showcase.
+- **P6: playback latency.** Input-to-photon cannot be measured here, but
+  input-to-present can: timestamp the input event and the return of
+  `present()` in the frame trace, and report the p50/p99 per present mode
+  for scrub. Keep Fifo unless the numbers change the decision.
+- **Disk: third time at 0 bytes.** Before every cargo build, the main
+  agent checks the free space on C: and stops below 12 GB to free space
+  first (`cargo clean` of the target dir not in use, phase binaries,
+  `%TEMP%\opencode`). Build the engine tests with one target dir at a
+  time, crate by crate if needed. The report gives the lowest free space
+  seen, not only the end value.
+- **P7: wasm build.** The wasm check is blocked by `getrandom` features.
+  The engine must run everywhere, so P7 fixes it (the `wasm_js` backend
+  or the right feature on the crate that pulls it in) and adds the wasm
+  check to the engine gate.
+
 ## Execution model from P3 on (parallel subagents)
 
 Phases P3 to P7 run with subagents to cut wall time. The main agent
