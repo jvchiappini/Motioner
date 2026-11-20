@@ -82,20 +82,9 @@ pub(crate) struct Aabb {
     pub max_y: f64,
 }
 
-/// The conservative composition-space AABB of one plan item, or `None` when
-/// the plan has no cheap bound for it (text needs measurement, and a missing
-/// path/mesh is not culled either).
-///
-/// The box is always at least as large as what the item draws: the local
-/// bounds include the stroke, an image mesh takes the hull of its points, and
-/// the item transform is applied to the local box corners (the AABB of a
-/// transformed box contains the transformed contents for any affine).
 /// The item's local box (before the item transform) and the outward pad a
 /// non-scaling stroke needs in composition space.
-fn local_bounds(
-    item: &RenderItem,
-    plan: &RenderPlan,
-) -> Option<(CoreVec2, CoreVec2, f64)> {
+fn local_bounds(item: &RenderItem, plan: &RenderPlan) -> Option<(CoreVec2, CoreVec2, f64)> {
     let (local_min, local_max, non_scaling) = match item.shape {
         ItemShape::Rect {
             width,
@@ -177,6 +166,14 @@ fn local_bounds(
     Some((local_min, local_max, non_scaling))
 }
 
+/// The conservative composition-space AABB of one plan item, or `None` when
+/// the plan has no cheap bound for it (text needs measurement, and a missing
+/// path/mesh is not culled either).
+///
+/// The box is always at least as large as what the item draws: the local
+/// bounds include the stroke, an image mesh takes the hull of its points, and
+/// the item transform is applied to the local box corners (the AABB of a
+/// transformed box contains the transformed contents for any affine).
 pub(crate) fn item_bounds(item: &RenderItem, plan: &RenderPlan) -> Option<Aabb> {
     let (local_min, local_max, non_scaling) = local_bounds(item, plan)?;
     let transform = item.transform;
