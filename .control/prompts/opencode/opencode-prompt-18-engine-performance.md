@@ -296,6 +296,42 @@ depends on, all zero-cost when disabled.
   that frame must be cheap: with retained commands (P4), a hover change
   repaints only the affected widgets.
 
+## Review findings after P4 (apply in the phase named)
+
+- **P5 first: Motioner does not use the P4 engine wins.** Lanes A and B
+  (incremental layout, clip-aware index, retained batch ranges, single-node
+  hover repaint) live in `UiSystem`, but the Motioner editor paints panels
+  straight into `GuiBatch`, so heavy UI only gained from text. Fix this in
+  P6, planned now: either give Motioner's panel painter retained per-panel
+  (or per-row) batch ranges keyed by the revision of what each panel
+  shows, or move the panels onto `UiSystem`. Measure both on heavy UI and
+  keep the winner. An engine capability that no consumer uses is not a
+  finished optimisation.
+- **P5: heavy UI "3,000 visible rows".** 3,000 rows cannot all be visible
+  in a 900 px window. If they overlap or sit outside the panel clip, the
+  scenario is drawing invisible work: cull rows outside the scroll clip and
+  the window in the painter, then re-measure. If they really are visible,
+  explain the geometry. The 2 ms target stands.
+- **P5: regressions to explain.**
+  - Hover between panels went from 720 to 1,124 frames in 30 s, CPU from
+    8.67 % to 9.56 % and collection from 0.168 to 0.240 ms.
+  - Scrub CPU went from 7.23 % to 9.70 % with unchanged collection.
+
+  Find the cause of each (the per-image proxy bookkeeping, the dynamic-key
+  detection, `image_reload` polling, hover requests) and fix it, or prove
+  it is noise with three back-to-back runs per binary.
+- **Idle metric.** P1 reported idle CPU as the tail after the first frame
+  (0.03 %); P4 reports 1.70 % / 2.01 % for the whole run. Every report from
+  now on gives both, labelled, and treats a tail above 0.1 % as a finding.
+- **Machine: disk and RAM.** C: reached 0 bytes during the review gate. The
+  Windows page file (`pagefile.sys`, automatic) grew to 27 GB after a 28 GB
+  commit peak, and the opencode session database is 18.6 GB.
+  - Never run two cargo processes at the same time; that includes harness
+    builds during a gate.
+  - Keep `-j 2`, and kill harness and app processes when a measurement ends.
+  - Report the peak commit (RAM + page file) of the phase next to the free
+    space on C:.
+
 ## Execution model from P3 on (parallel subagents)
 
 Phases P3 to P7 run with subagents to cut wall time. The main agent

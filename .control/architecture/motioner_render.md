@@ -45,8 +45,9 @@ documented `LivePainter` exception.
   the points move to composition space first and are stroked there, so a
   non-uniform node scale cannot squash one side of the outline (E0):
   `crates/motioner_render/src/paths.rs:30-195`.
-- `text` — glyph models and missing-glyph counting:
-  `crates/motioner_render/src/text.rs`.
+- `text` - glyph models and missing-glyph counting; the count is a
+  character scan with no layout or allocation
+  (`crates/motioner_render/src/text.rs:53-60`).
 - `fonts` — `FontSet` lookup (project faces first, bundled Inter/Roboto last),
   nearest-weight warnings, and `CpuTextMetrics`, the GPU-free
   `motioner_core::TextMetrics` implementation used by `text_width`/`text_bounds`
@@ -56,9 +57,17 @@ documented `LivePainter` exception.
   `crates/motioner_render/src/frame.rs`.
 - Image and video textures carry a `revision`; the painter rewrites a
   same-size frame with `Renderer::update_sprite_texture` and only frees and
-  re-registers when a proxy/original size changes
-  (`crates/motioner_render/src/shapes.rs:213-262`,
-  `crates/motioner_render/src/frame.rs:64-90`).
+  re-registers when a size changes (`crates/motioner_render/src/lib.rs:405-500`,
+  `crates/motioner_render/src/frame.rs:82-150`).
+- Per-image proxies (prompt 18 P4): the canvas (`ProxyTarget::PerImage`) sizes
+  each still from the texels it actually draws (crop x node scale x view zoom
+  x DPI, capped at the source) with 1.25x grow / 2x shrink hysteresis
+  (`crates/motioner_render/src/proxy.rs:97-170`). A key whose revision changes
+  under the same key is a live frame: it is marked dynamic and uploaded at
+  natural size, so a video is never resampled to a proxy once per frame
+  (`crates/motioner_render/src/lib.rs:325-340`). Release/export keep
+  `Full`. The 4K-at-400 % equivalence test is
+  `crates/motioner_render/tests/per_image_proxy.rs`.
 - Deformed image/video meshes (D-0061) leave the sprite path: the painter
   builds MeshVertex2d from the plan's MeshSample, remaps the [0, 1] mesh UVs
   into the node crop and draws through the engine's generic textured triangle

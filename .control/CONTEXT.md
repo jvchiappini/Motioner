@@ -7,12 +7,49 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0-P3 done; P4-P7 pending.**
-Engine through **`5c2fd29`** (`23278a2..5c2fd29`, 12 commits, not pushed); the
-Motioner submodule is checked out at `5c2fd29` and the parent pin is **not
+Session `S-2026-11-17-001` (open). **P0-P4 done; P5-P7 pending.**
+Engine through **`bd41224`** (`23278a2..bd41224`, 18 commits, not pushed); the
+Motioner submodule is checked out at `bd41224` and the parent pin is **not
 committed**. No Motioner commits. Reports: `out/reports/PHASE-18-P0-REPORT.md`
-through `PHASE-18-P3-REPORT.md` (Spanish); ledger
+through `PHASE-18-P4-REPORT.md` (Spanish); ledger
 `out/reports/phase18/ledger.md`.
+
+P4 (2026-11-19) - CPU algorithms (five parallel lanes, engine + Motioner):
+
+- **Lanes A/B (engine UI) do not run in Motioner**: the editor paints with
+  `GuiBatch` directly, never `UiSystem`/`RenderCollector`, so heavy UI is
+  Motioner's own painter plus `Renderer` text. Keep that in mind for P5-P7.
+- **Text allocations**: `draw_text_2d*` cloned `TextMetrics` per call (one alloc
+  per text per frame) and `count_missing` measured full text. New
+  `FontAtlas::layout_block_glyphs` (draw-only, no metrics copy) and
+  `count_missing` (char scan) plus `Renderer::missing_glyphs_2d` /
+  `Canvas2d::missing_glyphs`: heavy UI **3,154 -> 154 allocs/frame**, 135 -> 39.5 KB.
+- **Proxies**: `ProxyTarget::PerImage` sizes per axis (crop x node scale x zoom x
+  DPI, capped), 1.25x/2x hysteresis, 4K@400 % test `per_image_proxy.rs`. Keys
+  whose revision changes (video) become **dynamic** and upload at natural size
+  in place; without that every video frame was resampled on the frame thread
+  (scrub collection 1.79 -> 6.83 -> 1.78 ms). Re-decode worker
+  `motioner_ui/src/image_reload.rs` + `ProjectHost::image_worker`.
+- **Engine features**: `LayoutCache::get` O(1) (arena + intrusive LRU), ASCII
+  fast path with per-atlas tables, retained node batch ranges in `GuiBatch`
+  (hover rebuilds one node), layout early-out + rect diffing + clip-aware
+  spatial index, path tessellation cache by geometry hash, `AtlasOccupancy`
+  (best-fit packer measured and rejected for golden safety), `frame_ms` p99 in
+  the frame trace, `FERROUS_MEMORY_HINTS` override.
+- **Measured**: heavy UI collection 4.72/4.54 -> **4.06 ms**, 17.6 -> 18.3 fps
+  (the <2 ms target is not met: 3,000 visible rows, ~150k glyph instances, no
+  occlusion culling; P5/P6). Scrub collection back to 1.784. Playback 55.39 fps
+  p99 2.44; heavy composition p99 1.19. MemoryHints A/B: `performance` 568.9 /
+  532.1 MB vs `memory_usage` 434.0 / 398.7 MB private, p99 equal or better.
+- **Gate**: Motioner fmt, clippy, full tests (goldens byte-identical), doc,
+  boundaries, encoding, machete, validate, refs. Engine: workspace check, CI
+  clippy (-D warnings) + no-default lib/tests, tests for all touched crates,
+  wasm, docs without new warnings, touched-file rustfmt. Pre-existing debt
+  confirmed: no-default `--all-targets` clippy fails on `benches/subsystems.rs`
+  (imports optional `ferrous_ui_render`), `ferrous_ui_core` doctests with box
+  drawing characters, unused-import warnings in ferrous_web/editor/ecs.
+- **Lanes**: 2 h 12 min wall for five lanes; session ~4 h 45. C: 5.63 GB free at
+  close after cleaning both targets and deleting the phase binaries.
 
 P3 (2026-11-19) ? bytes, layout and ownership (five parallel lanes):
 
@@ -746,9 +783,10 @@ Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `6a30e7d`, `e482b3c`, `cab7035`, `6d1bc7a`, `5873863`, `a078f80`, `4582c42`,
 `5687d18`, `a3ee934`, `2c23263`, `47d0cbc`, `e530596`, `8338d1c` (S4, pushed),
 `493619f` (S5), `c2196d0` (S6), `23278a2` (P0), `9c3d6e3` (P1: 7022976,
-ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3), **`c577877`** (P2: e9761db,
-c577877) and **`5c2fd29`** (P3: cd547de, a13c9d3, a46a82e, 5c2fd29). The submodule is
-checked out at `5c2fd29`; the parent pin is not committed. The reviewer pushes the engine and
+ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3), `c577877` (P2: e9761db,
+c577877), `5c2fd29` (P3: cd547de, a13c9d3, a46a82e, 5c2fd29) and **`bd41224`**
+(P4: e8ed036, 3415098, 8b0e273, 56855c6, 48ca25b, bd41224). The submodule is
+checked out at `bd41224`; the parent pin is not committed. The reviewer pushes the engine and
 bumps the pin. **No pin bump in this session.** Never edit `engine/ferrous`.
 The `svgparser 0.8.1` future-incompat warning predates this work. Engine
 pre-existing debt remains: crate-wide rustfmt diffs (`asset_bridge.rs`,
@@ -774,12 +812,13 @@ Cargo needs `-j 1..2`; `CARGO_INCREMENTAL=0`.
 ## Last session
 
 `S-2026-11-17-001` (prompt 18): P0 instruments/baseline; P1 on-demand redraw;
-P2 zero allocations per frame; **P3 bytes/layout/ownership** (memory hints for 2-D
-devices, complete GPU inventory with a flat test, font layout LRU and budgets, lazy id
-target, image CPU LRU + proxies, image texture freeing, cache-key audit, pointer
-enter/leave opt-out, DPI-aware harness with injected moves). Start idle 465 -> 331 MB
-private, editor VRAM -10 %, heavy UI collection 19.47 -> 4.49 ms, static hover 2.52 -> 0.52 %.
-Gate green, goldens byte-identical, C: 9.48 GB free after cleaning. Next: P4 (CPU algorithms).
+P2 zero allocations per frame; P3 bytes/layout/ownership (memory hints, inventory,
+font LRU, proxies, pointer opt-out) and **P4 CPU algorithms** (text allocation path,
+per-image proxies with live-frame bypass and re-decode, O(1) layout cache, ASCII
+path, retained engine batches, layout early-out, tessellation cache, atlas occupancy).
+Heavy UI 3,154 -> 154 allocs/frame and 4.49 -> 4.06 ms collection; scrub back to
+1.78 ms; MemoryHints A/B keeps 434/399 MB. Gate green, goldens byte-identical,
+C: 5.63 GB free after cleaning both targets. Next: P5 (GPU efficiency).
 
 `S-2026-11-15-001` (prompt 17, open): S0 startup trace and bench (committed and
 pinned), S1 font atlases (pinned), S2 lazy fonts in Motioner plus the
