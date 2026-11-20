@@ -75,6 +75,25 @@ impl Host {
         self.video_cache.bytes()
     }
 
+    /// A `Send` image resolver a background worker can own to re-fetch one
+    /// released image's pixels by key.
+    ///
+    /// The frame thread only reports the keys; the worker calls
+    /// [`ImageResolver::decoded_image`] and sends the bytes back, so decoding
+    /// never blocks a frame.  The resolver is built from the project registry,
+    /// which maps content keys back to paths.
+    // The cross-lane request adds `ProjectHost::image_worker`, whose impl in
+    // this module forwards to this method.
+    #[must_use]
+    pub fn send_image_resolver(composition: &Path) -> Box<dyn ImageResolver + Send> {
+        match Project::open(composition) {
+            Ok(project) => Box::new(ProjectImages::new(&project)),
+            Err(_) => Box::new(ProjectImages::loose(
+                composition.parent().unwrap_or(Path::new(".")),
+            )),
+        }
+    }
+
     /// Opens a project, reusing the last one while its manifest is unchanged.
     fn project_for(&self, composition: &Path) -> Option<Project> {
         let root = motioner_io::project_root(composition)?;
@@ -364,6 +383,10 @@ impl ProjectHost for Host {
                 composition.parent().unwrap_or(Path::new(".")),
             )),
         }
+    }
+
+    fn image_worker(&self, composition: &Path) -> Option<Box<dyn ImageResolver + Send>> {
+        Some(Self::send_image_resolver(composition))
     }
 
     fn videos(&self, composition: &Path) -> Option<Rc<dyn motioner_core::VideoResolver>> {

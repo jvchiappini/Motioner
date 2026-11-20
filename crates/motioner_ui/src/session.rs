@@ -282,6 +282,19 @@ impl PreviewSession {
         self.images.decoded()
     }
 
+    /// The decoded pixels for one key, when the resolver can recover them.
+    ///
+    /// The live painter runs this off the frame thread, through the host's
+    /// worker resolver, after it released its CPU copies and needs a larger
+    /// proxy.
+    #[must_use]
+    pub fn decoded_image(
+        &self,
+        key: &motioner_core::ImageKey,
+    ) -> Option<motioner_core::DecodedImage> {
+        self.images.decoded_image(key)
+    }
+
     /// The overrides file path.
     #[must_use]
     pub fn overrides_path(&self) -> &Path {

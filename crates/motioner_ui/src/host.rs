@@ -109,6 +109,19 @@ pub trait ProjectHost {
     /// Image resolver for a composition.
     fn images(&self, composition: &Path) -> Rc<dyn ImageResolver>;
 
+    /// Image resolver that can be moved to a worker thread.
+    ///
+    /// The interactive preview releases decoded pixels after uploading, so a
+    /// proxy that has to grow past its texture asks a worker for the pixels
+    /// again. Only the pixel cache for one image is needed off the frame
+    /// thread, so the returned resolver is `Send` and the host may build a
+    /// fresh, bounded one. `None` disables the re-decode path (the canvas then
+    /// keeps the resident proxy).
+    fn image_worker(&self, composition: &Path) -> Option<Box<dyn ImageResolver + Send>> {
+        let _ = composition;
+        None
+    }
+
     /// Video metadata resolver for the same composition.
     fn videos(&self, composition: &Path) -> Option<Rc<dyn motioner_core::VideoResolver>> {
         let _ = composition;

@@ -478,6 +478,10 @@ def median_stage(stages: dict, name: str) -> float | None:
     return entry.get("median_ms")
 
 
+def _round_or_none(value: float | int | None) -> float | None:
+    return None if value is None else round(float(value), 3)
+
+
 def run_once(
     binary: Path,
     name: str,
@@ -652,11 +656,13 @@ def run_once(
     stages = {}
     allocs = None
     alloc_bytes = None
+    frame_ms = {}
     if frame is not None:
         frames = int(frame.get("frames", 0))
         presented = int(frame.get("presented", 0))
         gpu_submits = int(frame.get("gpu_submits", 0))
         stages = frame.get("stages", {})
+        frame_ms = frame.get("frame_ms", {}) or {}
         gpu = {
             pass_name: float(value.get("median_ms", 0.0))
             for pass_name, value in frame.get("gpu_passes", {}).items()
@@ -723,6 +729,9 @@ def run_once(
         },
         "allocations_per_frame": allocs,
         "allocated_bytes_per_frame": alloc_bytes,
+        "frame_ms_median": _round_or_none(frame_ms.get("median_ms")),
+        "frame_ms_p90": _round_or_none(frame_ms.get("p90_ms")),
+        "frame_ms_p99": _round_or_none(frame_ms.get("p99_ms")),
         "vram_mb": None,
         "gpu_bytes": None,
         "cpu_bytes": None,
@@ -780,6 +789,9 @@ def aggregate(runs: list[dict]) -> dict:
         "threads": maximum("threads"),
         "allocations_per_frame": med("allocations_per_frame"),
         "allocated_bytes_per_frame": med("allocated_bytes_per_frame"),
+        "frame_ms_median": med("frame_ms_median"),
+        "frame_ms_p90": med("frame_ms_p90"),
+        "frame_ms_p99": med("frame_ms_p99"),
         "vram_mb": maximum("vram_mb"),
         "gpu_passes_ms": {
             key: round(
@@ -835,6 +847,11 @@ def print_result(name: str, description: str, result: dict) -> None:
         f"{result['private_mb']} MB  threads {result['threads']}  "
         f"VRAM {result['vram_mb']} MB"
     )
+    if result.get("frame_ms_p99") is not None:
+        print(
+            f"  frame time median {result['frame_ms_median']} ms  p90 "
+            f"{result['frame_ms_p90']} ms  p99 {result['frame_ms_p99']} ms"
+        )
     if result["allocations_per_frame"] is not None:
         print(
             f"  allocations/frame {result['allocations_per_frame']}  "

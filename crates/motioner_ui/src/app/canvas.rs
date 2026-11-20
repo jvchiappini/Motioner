@@ -107,12 +107,13 @@ impl PreviewApp {
             return (out, None);
         };
         let rect = view.rect;
-        // Review of prompt 18 P3: a fit-to-canvas proxy made images blurry
-        // after a zoom or a node scale-up, and the CPU pixels are released
-        // after the upload, so a sharper upload was impossible. Keep full
-        // resolution until P4 sizes proxies per drawn image and can re-decode.
+        // Prompt 18 P4: size each image texture from the item that draws it
+        // (crop, node scale, view zoom and DPI), so a zoom-in re-uploads a
+        // sharper texture instead of magnifying the fit-sized one.  Pixels
+        // that were released after the first upload are re-fetched through
+        // `LivePainter::missing_image_pixels` (see the app worker wiring).
         if let Some(painter) = self.painter.as_mut() {
-            painter.set_proxy_target(ProxyTarget::Full);
+            painter.set_proxy_target(ProxyTarget::PerImage);
         }
         let stale = self.editor.session().plan_frame() != Some(frame);
         let started = Instant::now();

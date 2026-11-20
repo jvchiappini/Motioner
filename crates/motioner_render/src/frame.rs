@@ -56,8 +56,8 @@ pub(crate) fn create(
         missing_glyphs: HashMap::default(),
         path_cache: PathCache::default(),
         images: crate::ImageSet::new(),
-        image_textures: HashMap::default(),
-        image_revisions: HashMap::default(),
+        image_textures: crate::ImageTextures::default(),
+        image_targets: HashMap::default(),
         proxy: crate::ProxyTarget::Full,
         image_scratch: Vec::new(),
         image_inventory: crate::ImageInventory::new(),
@@ -69,53 +69,82 @@ pub(crate) fn create(
     })
 }
 
-/// Uploads every decoded image once, before the plan is painted.
+/// Uploads the textures the plan draws, one per image key.
 ///
-/// `scratch` is reused for a proxy downscale; the headless path uses
-/// [`ProxyTarget::Full`], so it never touches it.
-fn prepare_images(
+/// `targets` is a reused per-key map, so a frame that draws several items of
+/// the same image uploads one texture sized for the largest of them.  With
+/// [`ProxyTarget::PerImage`] the size comes from
+/// [`crate::proxy::needed_size`]; `view_scale` is the composition-pixel to
+/// physical-pixel factor (1.0 for the headless target).  `hidden` matches
+/// [`paint_plan`]'s skip set, so a solo/shy preview never fetches an image it
+/// will not draw.  `scratch` is reused for a downscale.
+#[allow(clippy::too_many_arguments)] // the plan, the proxy and its scratch
+pub(crate) fn prepare_images(
     canvas: &mut impl Canvas2d,
     images: &crate::ImageSet,
-    textures: &mut HashMap<motioner_core::ImageKey, u32>,
-    revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    textures: &mut crate::ImageTextures,
+    targets: &mut HashMap<motioner_core::ImageKey, (u32, u32)>,
+    plan: &RenderPlan,
     proxy: ProxyTarget,
+    view_scale: f64,
+    hidden: Option<&std::collections::BTreeSet<NodeId>>,
     scratch: &mut Vec<u8>,
 ) -> Result<(), RenderError> {
-    for (key, image) in images.iter() {
-        if let Some(&id) = textures.get(key) {
-            if revisions
-                .get(key)
-                .is_none_or(|revision| *revision != image.revision)
-            {
-                let upload = proxy::prepare(image, proxy, scratch);
-                if canvas
-                    .update_image(id, upload.width, upload.height, upload.rgba8)
-                    .is_err()
-                {
-                    // A proxy or source-size change makes the in-place update
-                    // invalid; replace the texture at the new size.
-                    canvas.free_image(id);
-                    match canvas.register_image(upload.width, upload.height, upload.rgba8) {
-                        Ok(new_id) => {
-                            textures.insert(*key, new_id);
-                        }
-                        Err(error) => {
-                            textures.remove(key);
-                            revisions.remove(key);
-                            return Err(error);
-                        }
-                    }
-                }
-                revisions.insert(*key, image.revision);
+    textures.clear_missing();
+    targets.clear();
+    for item in plan.items() {
+        if hidden.is_some_and(|hidden| hidden.contains(&item.node)) {
+            continue;
+        }
+        let ItemShape::Image {
+            key: Some(key),
+            width,
+            height,
+            uv,
+            ..
+        } = item.shape
+        else {
+            continue;
+        };
+        let Some(image) = images.get(&key) else {
+            continue;
+        };
+        let target = match proxy {
+            ProxyTarget::PerImage => {
+                let (scale_x, scale_y) = space::world_axis_scales(item.transform);
+                proxy::needed_size(
+                    (image.width, image.height),
+                    uv,
+                    (width, height),
+                    (scale_x, scale_y),
+                    view_scale,
+                )
             }
-        } else {
-            let upload = proxy::prepare(image, proxy, scratch);
-            let id = canvas.register_image(upload.width, upload.height, upload.rgba8)?;
-            textures.insert(*key, id);
-            revisions.insert(*key, image.revision);
+            other => proxy::whole_image_size(image, other),
+        };
+        let slot = targets.entry(key).or_insert(target);
+        slot.0 = slot.0.max(target.0);
+        slot.1 = slot.1.max(target.1);
+    }
+    let mut first_error = None;
+    for (key, target) in targets.iter() {
+        let Some(image) = images.get(key) else {
+            continue;
+        };
+        if let Err(error) =
+            crate::ensure_image_texture(canvas, textures, *key, image, *target, scratch)
+        {
+            // Try every key, then report the first failure: one bad image must
+            // not stop the others from becoming drawable.
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
         }
     }
-    Ok(())
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn map_harness_error(error: HarnessError) -> RenderError {
@@ -167,8 +196,11 @@ fn render_plan_into_target(
         &mut renderer.harness,
         &renderer.images,
         &mut renderer.image_textures,
-        &mut renderer.image_revisions,
+        &mut renderer.image_targets,
+        plan,
         renderer.proxy,
+        1.0,
+        None,
         &mut renderer.image_scratch,
     )?;
     let stats = paint_plan(
@@ -182,12 +214,9 @@ fn render_plan_into_target(
         &mut renderer.path_cache,
         &gradients,
         &renderer.images,
-        &mut renderer.image_textures,
-        &mut renderer.image_revisions,
+        &renderer.image_textures,
         &mut renderer.mesh_vertices,
         &mut renderer.mesh_indices,
-        renderer.proxy,
-        &mut renderer.image_scratch,
         None,
     );
     let report = renderer.harness.render_frame();
@@ -419,12 +448,9 @@ pub(crate) fn paint_plan(
     path_cache: &mut PathCache,
     gradients: &crate::gradients::GradientTable,
     images: &crate::ImageSet,
-    image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
-    image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    image_textures: &crate::ImageTextures,
     mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
-    proxy: ProxyTarget,
-    image_scratch: &mut Vec<u8>,
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
 ) -> PaintStats {
     let mut total = 0u32;
@@ -546,11 +572,8 @@ pub(crate) fn paint_plan(
                     gradients,
                     images,
                     image_textures,
-                    image_revisions,
                     mesh_vertices,
                     mesh_indices,
-                    proxy,
-                    image_scratch,
                     item,
                     flip,
                     &mut z_index,
@@ -666,7 +689,7 @@ fn draw_text(
     let missing = if let Some(count) = missing_glyphs.get(&item.node).copied() {
         count
     } else {
-        let count = text::count_missing(canvas, font, &content.text, size);
+        let count = text::count_missing(canvas, font, &content.text);
         missing_glyphs.insert(item.node, count);
         count
     };

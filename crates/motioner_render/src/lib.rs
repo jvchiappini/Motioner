@@ -45,7 +45,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrous_2d::render::{FontId2d, ShapeInstance};
 use ferrous_core::memory::{self, Subsystem};
-use ferrous_font::{LineMetrics, TextAlign as EngineTextAlign};
+use ferrous_font::TextAlign as EngineTextAlign;
 use ferrous_renderer::headless::Pure2dHarness;
 use motioner_core::Document;
 use motioner_eval::RenderPlan;
@@ -75,31 +75,28 @@ pub enum ProxyTarget {
     Full,
     /// Downscale an image that does not fit `max_width x max_height`.
     ///
-    /// The preview passes the composition's displayed pixel size here, so a
-    /// 4K photo shown in a 1080p canvas is uploaded at 1080p instead of 4K.
-    /// UVs stay normalised, so the image still maps 1:1 at 100 % zoom.  Above
-    /// 100 % zoom the GPU magnifies this smaller texture (bilinear), so the
-    /// image looks softer than an export while shapes and text stay exact.
+    /// The preview can size a whole image to the composition rectangle this
+    /// way.  UVs stay normalised, so the image still maps 1:1 at 100 % zoom.
+    /// Above 100 % zoom the GPU magnifies this smaller texture (bilinear), so
+    /// the image looks softer than an export while shapes and text stay exact.
     Fit {
         /// Largest texture width to upload.
         max_width: u32,
         /// Largest texture height to upload.
         max_height: u32,
     },
-}
-
-impl ProxyTarget {
-    /// The upload size for `image`, or `None` when it fits unchanged.
-    #[must_use]
-    pub(crate) fn size_for(self, image: &ImageData) -> Option<(u32, u32)> {
-        match self {
-            Self::Full => None,
-            Self::Fit {
-                max_width,
-                max_height,
-            } => proxy::fit_size(image.width, image.height, max_width, max_height),
-        }
-    }
+    /// Size every texture from the item that draws it (the interactive
+    /// canvas).
+    ///
+    /// Each painted frame computes the texels each drawn item's crop, node
+    /// scale, view zoom and DPI can resolve and re-uploads a texture when it
+    /// is more than 1.25x too small.  A texture that becomes too large is kept
+    /// until it is past 2x, so zooming does not thrash.  When the CPU pixels
+    /// were released, the painter reports the key through
+    /// `LivePainter::missing_image_pixels` (compiled only with the `live`
+    /// feature) instead of uploading a blurry placeholder, and keeps drawing
+    /// the existing texture meanwhile.
+    PerImage,
 }
 
 /// Owner tag for image CPU entries, so two painters do not unregister each
@@ -307,6 +304,199 @@ impl ImageSet {
     }
 }
 
+/// One resident GPU image texture and the inputs it was built from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ImageTexture {
+    /// Engine texture handle.
+    pub(crate) id: u32,
+    /// Uploaded width in pixels.
+    pub(crate) width: u32,
+    /// Uploaded height in pixels.
+    pub(crate) height: u32,
+    /// Image revision the texels came from.
+    pub(crate) revision: u64,
+}
+
+/// Per-key image textures plus the keys whose CPU pixels are needed again.
+///
+/// The size is tracked next to the revision so a zoom can decide whether the
+/// resident texture already resolves the drawn pixels, instead of assuming a
+/// revision bump is the only reason to re-upload.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ImageTextures {
+    entries: HashMap<motioner_core::ImageKey, ImageTexture>,
+    missing: Vec<motioner_core::ImageKey>,
+    /// Keys whose pixels change every frame (a video). Proxies never apply to
+    /// them: resampling a full frame on the frame thread costs more than the
+    /// texture saves.
+    dynamic: std::collections::HashSet<motioner_core::ImageKey>,
+}
+
+impl ImageTextures {
+    /// The resident texture for `key`.
+    pub(crate) fn get(&self, key: &motioner_core::ImageKey) -> Option<&ImageTexture> {
+        self.entries.get(key)
+    }
+
+    /// Every resident texture key.
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &motioner_core::ImageKey> {
+        self.entries.keys()
+    }
+
+    /// Inserts (or replaces) one texture.
+    pub(crate) fn insert(&mut self, key: motioner_core::ImageKey, texture: ImageTexture) {
+        self.entries.insert(key, texture);
+    }
+
+    /// Removes one texture.
+    pub(crate) fn remove(&mut self, key: &motioner_core::ImageKey) {
+        self.entries.remove(key);
+    }
+
+    /// Takes every texture out; the caller frees the engine handles.
+    pub(crate) fn drain(
+        &mut self,
+    ) -> impl Iterator<Item = (motioner_core::ImageKey, ImageTexture)> + '_ {
+        self.missing.clear();
+        self.dynamic.clear();
+        self.entries.drain()
+    }
+
+    /// Whether `key` is a live frame whose pixels change every frame.
+    pub(crate) fn is_dynamic(&self, key: &motioner_core::ImageKey) -> bool {
+        self.dynamic.contains(key)
+    }
+
+    /// Marks `key` as a live frame; its texture is uploaded at natural size.
+    pub(crate) fn mark_dynamic(&mut self, key: motioner_core::ImageKey) {
+        self.dynamic.insert(key);
+    }
+
+    /// Forgets the previous frame's missing keys.
+    pub(crate) fn clear_missing(&mut self) {
+        self.missing.clear();
+    }
+
+    /// Forgets that `key` needs pixels (they arrived).
+    pub(crate) fn clear_missing_key(&mut self, key: &motioner_core::ImageKey) {
+        self.missing.retain(|candidate| candidate != key);
+    }
+
+    /// Records that `key` needs a fresh decode before it can be re-uploaded.
+    pub(crate) fn mark_missing(&mut self, key: motioner_core::ImageKey) {
+        if !self.missing.contains(&key) {
+            self.missing.push(key);
+        }
+    }
+
+    /// Keys whose texture needs an upload but whose pixels were released.
+    #[must_use]
+    pub(crate) fn missing(&self) -> &[motioner_core::ImageKey] {
+        &self.missing
+    }
+}
+
+/// Ensures the texture for `image` resolves `target` pixels, re-uploading only
+/// when the resident texture is too small, too large or from another revision.
+///
+/// Returns `Ok(Some(id))` when a texture can be drawn (possibly the previous,
+/// lower-resolution one while its pixels are being re-fetched), `Ok(None)`
+/// when nothing exists yet, and `Err` when the engine rejects the upload.
+pub(crate) fn ensure_image_texture(
+    canvas: &mut impl Canvas2d,
+    textures: &mut ImageTextures,
+    key: motioner_core::ImageKey,
+    image: &ImageData,
+    target: (u32, u32),
+    scratch: &mut Vec<u8>,
+) -> Result<Option<u32>, RenderError> {
+    let current = textures.get(&key).copied();
+    // A revision change under the same key means live pixels (a video frame):
+    // the first one marks the key dynamic and the texture moves to natural
+    // size, so later frames are rewritten in place instead of being resampled
+    // to a proxy on every frame.
+    let dynamic = textures.is_dynamic(&key)
+        || current.is_some_and(|texture| texture.revision != image.revision);
+    if dynamic {
+        textures.mark_dynamic(key);
+    }
+    let size = if dynamic {
+        (image.width, image.height)
+    } else {
+        proxy::target_size(
+            current.map(|texture| (texture.width, texture.height)),
+            target,
+        )
+    };
+    if let Some(texture) = current {
+        if texture.revision == image.revision && (texture.width, texture.height) == size {
+            return Ok(Some(texture.id));
+        }
+    }
+    if image.rgba8.is_empty() {
+        // The interactive preview released the CPU pixels after its first
+        // upload.  Keep drawing the resident texture and let the app fetch the
+        // pixels for this key off the frame thread.
+        textures.mark_missing(key);
+        return Ok(current.map(|texture| texture.id));
+    }
+    let upload = proxy::prepare_at(image, size.0, size.1, scratch);
+    // `prepare_at` falls back to the source when the buffer cannot be
+    // resampled (a malformed length).  A resident texture at that size already
+    // holds the best pixels available, so it is not re-uploaded every frame.
+    if (upload.width, upload.height) != size {
+        if let Some(texture) = current {
+            if (texture.width, texture.height) == (upload.width, upload.height) {
+                return Ok(Some(texture.id));
+            }
+        }
+    }
+    if let Some(texture) = current {
+        if (texture.width, texture.height) == (upload.width, upload.height) {
+            if canvas
+                .update_image(texture.id, upload.width, upload.height, upload.rgba8)
+                .is_ok()
+            {
+                textures.insert(
+                    key,
+                    ImageTexture {
+                        id: texture.id,
+                        width: upload.width,
+                        height: upload.height,
+                        revision: image.revision,
+                    },
+                );
+                return Ok(Some(texture.id));
+            }
+            canvas.free_image(texture.id);
+            textures.remove(&key);
+        } else {
+            // The engine cannot resize in place, so a size change frees and
+            // registers a new texture.
+            canvas.free_image(texture.id);
+            textures.remove(&key);
+        }
+    }
+    match canvas.register_image(upload.width, upload.height, upload.rgba8) {
+        Ok(id) => {
+            textures.insert(
+                key,
+                ImageTexture {
+                    id,
+                    width: upload.width,
+                    height: upload.height,
+                    revision: image.revision,
+                },
+            );
+            Ok(Some(id))
+        }
+        Err(error) => {
+            textures.remove(&key);
+            Err(error)
+        }
+    }
+}
+
 /// The single drawing surface abstraction shared by the headless and live
 /// paths.
 ///
@@ -317,14 +507,11 @@ trait Canvas2d {
     /// Submits one shape instance.
     fn shape(&mut self, instance: ShapeInstance);
 
-    /// Measures one text line for the missing-glyph counter.
-    fn measure(
-        &self,
-        font: FontId2d,
-        text: &str,
-        size_px: f32,
-        align: EngineTextAlign,
-    ) -> Option<LineMetrics>;
+    /// Characters `text` cannot draw with `font`.
+    ///
+    /// Allocation-free: the missing-glyph badge must not pay for a measure on
+    /// every text node of every frame.
+    fn missing_glyphs(&self, font: FontId2d, text: &str) -> u32;
 
     /// Lays out a whole styled block.
     fn layout_text(
@@ -466,14 +653,8 @@ impl Canvas2d for Pure2dHarness {
         self.draw_shape(instance);
     }
 
-    fn measure(
-        &self,
-        font: FontId2d,
-        text: &str,
-        size_px: f32,
-        align: EngineTextAlign,
-    ) -> Option<LineMetrics> {
-        self.measure_text(font, text, size_px, align)
+    fn missing_glyphs(&self, font: FontId2d, text: &str) -> u32 {
+        self.renderer().missing_glyphs_2d(font, text)
     }
 
     fn layout_text(
@@ -604,14 +785,8 @@ impl Canvas2d for ferrous_renderer::Renderer {
         self.draw_2d_shape(instance);
     }
 
-    fn measure(
-        &self,
-        font: FontId2d,
-        text: &str,
-        size_px: f32,
-        align: EngineTextAlign,
-    ) -> Option<LineMetrics> {
-        self.measure_text_2d(font, text, size_px, align)
+    fn missing_glyphs(&self, font: FontId2d, text: &str) -> u32 {
+        self.missing_glyphs_2d(font, text)
     }
 
     fn layout_text(
@@ -761,8 +936,9 @@ pub struct FrameRenderer {
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
     path_cache: paths::PathCache,
     images: ImageSet,
-    image_textures: HashMap<motioner_core::ImageKey, u32>,
-    image_revisions: HashMap<motioner_core::ImageKey, u64>,
+    image_textures: ImageTextures,
+    /// Reused per-key target sizes for one frame's image pre-pass.
+    image_targets: HashMap<motioner_core::ImageKey, (u32, u32)>,
     /// Upload size policy; the headless/export default is [`ProxyTarget::Full`].
     proxy: ProxyTarget,
     /// Reused buffer for a proxy downscale (never touched by `Full`).
@@ -1003,9 +1179,8 @@ impl FrameRenderer {
         // Dropping the ids without freeing them leaked one GPU texture per
         // image on every reload; the engine owns them until told otherwise.
         for (_, texture) in self.image_textures.drain() {
-            self.harness.free_image(texture);
+            self.harness.free_image(texture.id);
         }
-        self.image_revisions.clear();
     }
 
     /// Adds or replaces one decoded image without dropping the other
@@ -1015,6 +1190,7 @@ impl FrameRenderer {
         let key = image.key;
         self.image_inventory.unregister(&key);
         self.images.insert(image);
+        self.image_textures.clear_missing_key(&key);
         if let Some(stored) = self.images.get(&key) {
             self.image_inventory.register(stored);
         }
@@ -1029,8 +1205,10 @@ impl FrameRenderer {
     /// Changes the upload size policy for images uploaded from now on.
     ///
     /// The headless renderer defaults to [`ProxyTarget::Full`] and the export
-    /// path never changes it.  Existing textures keep their size; replacing
-    /// the image set or bumping a revision applies the new policy.
+    /// path never changes it.  [`ProxyTarget::PerImage`] is available for a
+    /// caller that draws into a view with a known scale.  Existing textures
+    /// keep their size; replacing the image set, bumping a revision or a
+    /// per-image target past the hysteresis applies the new policy.
     pub fn set_proxy_target(&mut self, target: ProxyTarget) {
         self.proxy = target;
     }
@@ -1048,6 +1226,18 @@ impl FrameRenderer {
                 self.image_inventory.unregister(&key);
             }
         }
+    }
+
+    /// Image keys a `PerImage` render needed at a larger size after the CPU
+    /// pixels had been released.
+    ///
+    /// The headless renderer normally keeps its pixels, and export uses
+    /// [`ProxyTarget::Full`], so this stays empty on those paths.  It is the
+    /// diagnostic counterpart of `LivePainter::missing_image_pixels` for a
+    /// caller that released pixels from an offscreen renderer.
+    #[must_use]
+    pub fn missing_image_pixels(&self) -> &[motioner_core::ImageKey] {
+        self.image_textures.missing()
     }
 
     /// The configured image-texture budget in bytes.
@@ -1167,9 +1357,10 @@ pub struct LivePainter {
     missing_glyphs: HashMap<motioner_core::NodeId, u32>,
     path_cache: paths::PathCache,
     images: ImageSet,
-    image_textures: HashMap<motioner_core::ImageKey, u32>,
-    image_revisions: HashMap<motioner_core::ImageKey, u64>,
-    /// Upload size policy; the app opts into [`ProxyTarget::Fit`].
+    image_textures: ImageTextures,
+    /// Reused per-key target sizes for one paint's image pre-pass.
+    image_targets: HashMap<motioner_core::ImageKey, (u32, u32)>,
+    /// Upload size policy; the app opts into [`ProxyTarget::PerImage`].
     proxy: ProxyTarget,
     /// Reused buffer for a proxy downscale.
     image_scratch: Vec<u8>,
@@ -1262,8 +1453,8 @@ impl LivePainter {
             missing_glyphs: HashMap::default(),
             path_cache: paths::PathCache::default(),
             images: ImageSet::new(),
-            image_textures: HashMap::default(),
-            image_revisions: HashMap::default(),
+            image_textures: ImageTextures::default(),
+            image_targets: HashMap::default(),
             proxy: ProxyTarget::Full,
             image_scratch: Vec::new(),
             pending_image_frees: Vec::new(),
@@ -1388,9 +1579,9 @@ impl LivePainter {
 
     /// Replaces the decoded images the preview may draw.
     ///
-    /// The caller (the app) enables [`ProxyTarget::Fit`] before the first
+    /// The caller (the app) selects [`ProxyTarget::PerImage`] before the first
     /// paint and may release the CPU pixels once the textures exist; see
-    /// [`Self::release_image_cpu_pixels`].
+    /// [`Self::release_image_cpu_pixels`] and [`Self::missing_image_pixels`].
     pub fn set_images(&mut self, images: ImageSet) {
         self.image_inventory.unregister_all(&self.images);
         for image in images.iter().map(|(_, image)| image) {
@@ -1399,8 +1590,7 @@ impl LivePainter {
         self.images = images;
         // No renderer here: queue the old textures for the next paint.
         self.pending_image_frees
-            .extend(self.image_textures.drain().map(|(_, texture)| texture));
-        self.image_revisions.clear();
+            .extend(self.image_textures.drain().map(|(_, texture)| texture.id));
     }
 
     /// Adds or replaces one image without dropping the other textures.
@@ -1408,6 +1598,7 @@ impl LivePainter {
         let key = image.key;
         self.image_inventory.unregister(&key);
         self.images.insert(image);
+        self.image_textures.clear_missing_key(&key);
         if let Some(stored) = self.images.get(&key) {
             self.image_inventory.register(stored);
         }
@@ -1421,13 +1612,26 @@ impl LivePainter {
 
     /// Changes the upload size policy for images uploaded from now on.
     ///
-    /// The app passes [`ProxyTarget::Fit`] with the canvas's displayed pixel
-    /// size; the headless renderer keeps [`ProxyTarget::Full`].  Existing
-    /// textures keep their size until the next upload (a new image set or a
-    /// revision bump), so a zoom that changes this policy never re-uploads
-    /// bytes that [`Self::release_image_cpu_pixels`] already dropped.
+    /// The canvas passes [`ProxyTarget::PerImage`] so each drawn image is
+    /// uploaded at the texels its crop, scale, zoom and DPI resolve, and a
+    /// zoom-in re-uploads a sharper texture past the hysteresis.  The
+    /// headless renderer and the motion-blur preview keep
+    /// [`ProxyTarget::Full`].  Existing textures keep their size until the
+    /// next draw decides they are too small or too large.
     pub fn set_proxy_target(&mut self, target: ProxyTarget) {
         self.proxy = target;
+    }
+
+    /// Image keys whose texture needs a larger upload but whose CPU pixels
+    /// were already released.
+    ///
+    /// The app fetches these off the frame thread and installs each one with
+    /// [`Self::set_image`]; until then the painter keeps drawing the resident
+    /// texture.  The list is rewritten on every paint, so a key disappears as
+    /// soon as its pixels arrive or its texture is large enough.
+    #[must_use]
+    pub fn missing_image_pixels(&self) -> &[motioner_core::ImageKey] {
+        self.image_textures.missing()
     }
 
     /// The CPU budget for decoded-image pixels.
@@ -1471,7 +1675,7 @@ impl LivePainter {
         let mut dropped = std::mem::take(&mut self.image_drop_scratch);
         self.images.evict_over_budget_into(
             budget,
-            |key| self.image_textures.contains_key(key),
+            |key| self.image_textures.get(key).is_some(),
             &mut dropped,
         );
         for key in &dropped {
@@ -1546,6 +1750,20 @@ impl LivePainter {
             renderer.set_2d_gradient_table(gradients.slots());
             gradients
         };
+        // Live paint never fails on an image upload: a rejected texture draws
+        // the placeholder and the next frame retries.  The headless path
+        // propagates the error instead.
+        let _ = frame::prepare_images(
+            renderer,
+            &self.images,
+            &mut self.image_textures,
+            &mut self.image_targets,
+            plan,
+            self.proxy,
+            fit.scale(),
+            None,
+            &mut self.image_scratch,
+        );
         let stats = frame::paint_plan(
             renderer,
             document,
@@ -1557,12 +1775,9 @@ impl LivePainter {
             &mut self.path_cache,
             &gradients,
             &self.images,
-            &mut self.image_textures,
-            &mut self.image_revisions,
+            &self.image_textures,
             &mut self.mesh_vertices,
             &mut self.mesh_indices,
-            self.proxy,
-            &mut self.image_scratch,
             None,
         );
         self.enforce_image_cpu_budget();
@@ -1599,6 +1814,17 @@ impl LivePainter {
             renderer.set_2d_gradient_table(gradients.slots());
             gradients
         };
+        let _ = frame::prepare_images(
+            renderer,
+            &self.images,
+            &mut self.image_textures,
+            &mut self.image_targets,
+            plan,
+            self.proxy,
+            fit.scale(),
+            Some(hidden),
+            &mut self.image_scratch,
+        );
         let stats = frame::paint_plan(
             renderer,
             document,
@@ -1610,12 +1836,9 @@ impl LivePainter {
             &mut self.path_cache,
             &gradients,
             &self.images,
-            &mut self.image_textures,
-            &mut self.image_revisions,
+            &self.image_textures,
             &mut self.mesh_vertices,
             &mut self.mesh_indices,
-            self.proxy,
-            &mut self.image_scratch,
             Some(hidden),
         );
         self.enforce_image_cpu_budget();
@@ -1710,6 +1933,348 @@ mod tests {
         set.evict_over_budget_into(0, |_| false, &mut dropped);
         assert!(dropped.is_empty());
         assert!(set.get(&key).is_some_and(|image| !image.rgba8.is_empty()));
+    }
+
+    /// A canvas that records the texture calls instead of drawing.
+    struct RecordingCanvas {
+        next_id: u32,
+        registered: Vec<(u32, u32, u32)>,
+        updated: Vec<(u32, u32, u32)>,
+        freed: Vec<u32>,
+    }
+
+    impl RecordingCanvas {
+        fn new() -> Self {
+            Self {
+                next_id: 1,
+                registered: Vec::new(),
+                updated: Vec::new(),
+                freed: Vec::new(),
+            }
+        }
+    }
+
+    impl Canvas2d for RecordingCanvas {
+        fn shape(&mut self, _instance: ShapeInstance) {}
+
+        fn missing_glyphs(&self, _font: FontId2d, _text: &str) -> u32 {
+            0
+        }
+
+        fn layout_text(
+            &self,
+            _font: FontId2d,
+            _text: &str,
+            _style: ferrous_2d::render::TextStyle2d,
+            _out: &mut Vec<ferrous_font::GlyphLayout>,
+        ) -> Option<ferrous_font::TextMetrics> {
+            None
+        }
+
+        fn text_styled(
+            &mut self,
+            _font: FontId2d,
+            _text: &str,
+            _transform: glam::Mat4,
+            _style: ferrous_2d::render::TextStyle2d,
+            _color: [f32; 4],
+            _gradient: Option<u32>,
+        ) {
+        }
+
+        fn glyphs(&mut self, _font: FontId2d, _glyphs: &[ferrous_2d::render::GlyphDraw2d]) {}
+
+        fn register_image(
+            &mut self,
+            width: u32,
+            height: u32,
+            _rgba8: &[u8],
+        ) -> Result<u32, RenderError> {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.registered.push((id, width, height));
+            Ok(id)
+        }
+
+        fn update_image(
+            &mut self,
+            texture_id: u32,
+            width: u32,
+            height: u32,
+            _rgba8: &[u8],
+        ) -> Result<(), RenderError> {
+            self.updated.push((texture_id, width, height));
+            Ok(())
+        }
+
+        fn free_image(&mut self, texture_id: u32) {
+            self.freed.push(texture_id);
+        }
+
+        fn draw_image(&mut self, _texture_id: u32, _instance: ferrous_2d::render::SpriteInstance) {}
+
+        fn draw_mesh(
+            &mut self,
+            _texture_id: u32,
+            _vertices: &[ferrous_2d::render::MeshVertex2d],
+            _indices: &[u32],
+            _transform: glam::Mat4,
+        ) {
+        }
+
+        fn push_layer(
+            &mut self,
+            _opacity: f64,
+            _blend: motioner_core::BlendMode,
+            _depth: f32,
+            _effects: &[ferrous_2d::render::Effect2d],
+        ) -> bool {
+            false
+        }
+
+        fn push_masked_layer(
+            &mut self,
+            _opacity: f64,
+            _blend: motioner_core::BlendMode,
+            _depth: f32,
+            _effects: &[ferrous_2d::render::Effect2d],
+            _mask: CanvasMask,
+        ) -> bool {
+            false
+        }
+
+        fn begin_mask(&mut self) {}
+
+        fn end_mask(&mut self) {}
+
+        fn pop_layer(&mut self) {}
+    }
+
+    fn pixel_image(width: u32, height: u32) -> ImageData {
+        ImageData {
+            key: ImageKey::from_bytes([7; 32]),
+            width,
+            height,
+            rgba8: vec![200; usize::try_from(width * height * 4).unwrap_or(0)],
+            revision: 0,
+        }
+    }
+
+    #[test]
+    fn a_live_frame_switches_to_natural_size_and_updates_in_place() {
+        let mut canvas = RecordingCanvas::new();
+        let mut textures = ImageTextures::default();
+        let mut scratch = Vec::new();
+        let mut image = pixel_image(400, 200);
+        let key = image.key;
+
+        // First frame: a proxy is fine for a still.
+        let first = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (200, 100),
+            &mut scratch,
+        )
+        .expect("upload succeeds")
+        .expect("texture exists");
+        assert_eq!(canvas.registered, vec![(first, 200, 100)]);
+
+        // A revision change marks the key as a live frame: the texture moves
+        // to natural size once, so later frames are not resampled per frame.
+        image.revision = 1;
+        let second = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (200, 100),
+            &mut scratch,
+        )
+        .expect("upload succeeds")
+        .expect("texture exists");
+        assert_eq!(canvas.freed, vec![first]);
+        assert_eq!(canvas.registered.last(), Some(&(second, 400, 200)));
+
+        // Later frames are rewritten in place at natural size.
+        image.revision = 2;
+        let third = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (200, 100),
+            &mut scratch,
+        )
+        .expect("update succeeds")
+        .expect("texture exists");
+        assert_eq!(third, second);
+        assert_eq!(canvas.updated, vec![(second, 400, 200)]);
+        assert_eq!(canvas.freed, vec![first]);
+    }
+
+    #[test]
+    fn a_malformed_source_is_uploaded_once_and_not_again() {
+        let mut canvas = RecordingCanvas::new();
+        let mut textures = ImageTextures::default();
+        let mut scratch = Vec::new();
+        let mut image = pixel_image(8, 8);
+        // A wrong RGBA length: `prepare_at` cannot resample and falls back to
+        // the source, so the texture is the source size and is not re-uploaded
+        // on every paint.
+        image.rgba8.truncate(16);
+        let key = image.key;
+
+        let first = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (4, 4),
+            &mut scratch,
+        )
+        .expect("upload succeeds")
+        .expect("texture exists");
+        assert_eq!(canvas.registered, vec![(first, 8, 8)]);
+
+        let again = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (4, 4),
+            &mut scratch,
+        )
+        .expect("reuse succeeds")
+        .expect("texture exists");
+        assert_eq!(again, first);
+        assert_eq!(canvas.registered.len(), 1, "no per-frame re-upload");
+        assert!(canvas.updated.is_empty() && canvas.freed.is_empty());
+    }
+
+    #[test]
+    fn a_zoomed_in_image_reuploads_past_the_hysteresis_and_keeps_the_larger_one_on_zoom_out() {
+        let mut canvas = RecordingCanvas::new();
+        let mut textures = ImageTextures::default();
+        let mut scratch = Vec::new();
+        let mut image = pixel_image(400, 200);
+        let key = image.key;
+
+        let first = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (200, 100),
+            &mut scratch,
+        )
+        .expect("register succeeds")
+        .expect("first upload");
+        assert_eq!(canvas.registered, vec![(first, 200, 100)]);
+        assert!(textures.missing().is_empty());
+
+        // Exactly 1.25x is the hysteresis boundary: reuse, no upload.
+        let same = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (250, 125),
+            &mut scratch,
+        )
+        .expect("reuse succeeds")
+        .expect("texture exists");
+        assert_eq!(same, first);
+        assert_eq!(canvas.registered.len(), 1);
+        assert!(canvas.updated.is_empty() && canvas.freed.is_empty());
+
+        // Past 1.25x: free and register at the larger size.
+        let larger = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (260, 130),
+            &mut scratch,
+        )
+        .expect("grow succeeds")
+        .expect("texture exists");
+        assert_ne!(larger, first);
+        assert_eq!(canvas.freed, vec![first]);
+        assert_eq!(canvas.registered.last(), Some(&(larger, 260, 130)));
+        assert!(canvas.updated.is_empty(), "a resize never updates in place");
+
+        // A revision change means live pixels: the key becomes dynamic and the
+        // texture moves to natural size once, so later frames are not
+        // resampled to a proxy on the frame thread.
+        image.revision = 1;
+        let natural = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (260, 130),
+            &mut scratch,
+        )
+        .expect("upload succeeds")
+        .expect("texture exists");
+        assert_ne!(natural, larger);
+        assert_eq!(canvas.freed, vec![first, larger]);
+        assert_eq!(canvas.registered.last(), Some(&(natural, 400, 200)));
+
+        // The next live frame is rewritten in place, proxies ignored.
+        image.revision = 2;
+        let rewritten = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (120, 60),
+            &mut scratch,
+        )
+        .expect("update succeeds")
+        .expect("texture exists");
+        assert_eq!(rewritten, natural);
+        assert_eq!(canvas.updated, vec![(natural, 400, 200)]);
+        assert_eq!(canvas.freed, vec![first, larger]);
+    }
+
+    #[test]
+    fn a_released_pixel_buffer_is_reported_instead_of_uploaded() {
+        let mut canvas = RecordingCanvas::new();
+        let mut textures = ImageTextures::default();
+        let mut scratch = Vec::new();
+        let mut image = pixel_image(400, 200);
+        let key = image.key;
+        let id = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (400, 200),
+            &mut scratch,
+        )
+        .expect("register succeeds")
+        .expect("first upload");
+
+        image.rgba8.clear();
+        // The resident texture is still drawn while the pixels are fetched.
+        let kept = ensure_image_texture(
+            &mut canvas,
+            &mut textures,
+            key,
+            &image,
+            (800, 400),
+            &mut scratch,
+        )
+        .expect("missing pixels are not an upload error")
+        .expect("the previous texture is still usable");
+        assert_eq!(kept, id);
+        assert_eq!(textures.missing().len(), 1);
+        assert_eq!(textures.missing()[0], key);
+        assert_eq!(canvas.registered.len(), 1, "no blurry upscale upload");
+        assert!(canvas.updated.is_empty());
     }
 
     #[cfg(feature = "live")]

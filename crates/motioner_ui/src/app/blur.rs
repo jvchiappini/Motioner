@@ -112,11 +112,12 @@ impl BlurPreview {
         if self.size != (width, height) || self.renderer.is_none() {
             match FrameRenderer::with_fonts(width, height, self.fonts.clone()) {
                 Ok(mut offscreen) => {
-                    // Full-size uploads: a node may scale an image above the
-                    // composition size, so a composition-sized proxy would
-                    // blur it (review of prompt 18 P3; P4 sizes proxies per
-                    // drawn image). The decoded CPU pixels can go once the
-                    // textures exist (the source set keeps its own copy).
+                    // Full-size uploads: the offscreen renderer draws at the
+                    // composition size, and a node may scale an image above
+                    // it.  The responsive canvas uses `PerImage` instead; the
+                    // blur preview keeps the export policy so it cannot drift
+                    // from `still`/`render`.  The decoded CPU pixels can go
+                    // once the textures exist (the source set keeps its own).
                     offscreen.set_proxy_target(ProxyTarget::Full);
                     offscreen.set_images(self.images.clone());
                     offscreen.release_image_cpu_pixels();

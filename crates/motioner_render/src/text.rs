@@ -16,7 +16,7 @@ use ferrous_font::TextAlign as EngineTextAlign;
 use motioner_core::TextAlign;
 use motioner_eval::Affine2;
 
-use crate::{space, Canvas2d};
+use crate::Canvas2d;
 
 /// Flips the engine's `y`-up text local space to Motioner's `y`-down local
 /// space.
@@ -46,19 +46,16 @@ pub(crate) fn align_to_engine(align: TextAlign) -> EngineTextAlign {
     }
 }
 
-/// Measures how many characters of `text` have no glyph.
+/// How many characters of `text` have no glyph in `font`.
 ///
-/// The engine reports the count in [`ferrous_font::LineMetrics`]. Returns zero
-/// when the font handle is unknown (which cannot happen for the embedded font).
+/// The engine answers with a character scan, without laying out or
+/// allocating; it returns zero for a stale font handle.
 pub(crate) fn count_missing(
     canvas: &impl Canvas2d,
     font: ferrous_2d::render::FontId2d,
     text: &str,
-    size: f64,
 ) -> u32 {
-    canvas
-        .measure(font, text, space::to_f32(size), EngineTextAlign::Left)
-        .map_or(0, |metrics| metrics.missing_glyphs)
+    canvas.missing_glyphs(font, text)
 }
 
 #[cfg(test)]

@@ -315,6 +315,9 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub struct ProjectImages {
     store: RefCell<crate::images::ImageStore>,
     aliases: HashMap<String, String>,
+    /// Content key to the project-relative path, for a worker that re-fetches
+    /// one image's released pixels.
+    by_key_path: HashMap<motioner_core::ImageKey, String>,
     videos: HashMap<String, (PathBuf, [u8; 32])>,
     root: PathBuf,
 }
@@ -324,6 +327,7 @@ impl std::fmt::Debug for ProjectImages {
         f.debug_struct("ProjectImages")
             .field("store", &self.store)
             .field("aliases", &self.aliases)
+            .field("by_key_path", &self.by_key_path)
             .field("videos", &self.videos)
             .field("root", &self.root)
             .finish()
@@ -335,6 +339,7 @@ impl ProjectImages {
     #[must_use]
     pub fn new(project: &Project) -> Self {
         let mut aliases = HashMap::new();
+        let mut by_key_path = HashMap::new();
         let mut videos = HashMap::new();
         for entry in project.assets() {
             if entry.kind == AssetKind::Video {
@@ -360,11 +365,15 @@ impl ProjectImages {
                 format!("assets/{}", entry.original).to_ascii_lowercase(),
                 relative.clone(),
             );
-            aliases.insert(entry.hash.clone(), relative);
+            aliases.insert(entry.hash.clone(), relative.clone());
+            if let Some(key) = image_key_from_hex(&entry.hash) {
+                by_key_path.insert(key, relative);
+            }
         }
         Self {
             store: RefCell::new(crate::images::ImageStore::new(project.root())),
             aliases,
+            by_key_path,
             videos,
             root: project.root().to_path_buf(),
         }
@@ -378,6 +387,7 @@ impl ProjectImages {
         Self {
             store: RefCell::new(store),
             aliases: HashMap::new(),
+            by_key_path: HashMap::new(),
             videos: HashMap::new(),
             root,
         }
@@ -474,6 +484,25 @@ impl ImageResolver for ProjectImages {
                 rgba8: image.rgba8,
             })
             .collect()
+    }
+
+    fn decoded_image(&self, key: &motioner_core::ImageKey) -> Option<motioner_core::DecodedImage> {
+        {
+            let store = self.store.borrow();
+            if let Some(image) = store.get(key) {
+                return Some(crate::images::core_decoded(image));
+            }
+        }
+        // A worker that owns its own resolver starts with an empty store; the
+        // registry maps the content key to the path, so loading it here is a
+        // real re-decode on that worker.
+        let source = self.by_key_path.get(key)?;
+        let asset = self.store.borrow_mut().load(source).ok()?;
+        if asset.key != *key {
+            return None;
+        }
+        let store = self.store.borrow();
+        store.get(key).map(crate::images::core_decoded)
     }
 }
 

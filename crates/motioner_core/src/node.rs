@@ -1266,6 +1266,21 @@ pub trait ImageResolver {
     fn decoded(&self) -> Vec<DecodedImage> {
         Vec::new()
     }
+
+    /// The decoded pixels for one key, if the resolver can recover them.
+    ///
+    /// The interactive preview releases its own CPU copies after uploading
+    /// them.  When a later zoom needs a sharper texture it asks for one key
+    /// here instead of cloning the whole set with [`Self::decoded`].  The
+    /// loader may return a cached copy or re-read and re-decode the source;
+    /// the caller runs this off the frame thread.
+    ///
+    /// `None` means the pixels are unavailable (a loose file with no registry
+    /// entry, or a file that changed since the key was computed); the preview
+    /// then keeps drawing its resident texture.
+    fn decoded_image(&self, _key: &ImageKey) -> Option<DecodedImage> {
+        None
+    }
 }
 
 /// Resolves project-relative video paths to content keys and metadata.

@@ -71,6 +71,17 @@ pub(crate) fn world_unit_scale(model: Affine2) -> f64 {
     model.determinant().abs().sqrt()
 }
 
+/// Per-axis world scale of an affine: the length of each transformed basis
+/// vector, `(|(a, b)|, |(c, d)|)`.
+///
+/// Image proxies use this instead of [`world_unit_scale`]: a node stretched on
+/// one axis only must upload the texels that axis actually resolves.  Corner
+/// radii and strokes still use the geometric mean, which is the documented
+/// approximation for a single scalar.
+pub(crate) fn world_axis_scales(model: Affine2) -> (f64, f64) {
+    (model.a.hypot(model.b), model.c.hypot(model.d))
+}
+
 /// Maps a draw index to a depth in the open window `(-50, 50)`.
 ///
 /// `z = -50 + (index + 0.5) * (100 / total)` is strictly increasing for

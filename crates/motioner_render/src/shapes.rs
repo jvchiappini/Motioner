@@ -17,7 +17,7 @@ use motioner_eval::{Affine2, ItemShape, RenderItem, RenderPlan, ResolvedFill, Re
 
 use crate::gradients::{self, GradientTable};
 use crate::paths::{self, PathCache};
-use crate::{proxy, space, Canvas2d, ProxyTarget};
+use crate::{space, Canvas2d};
 
 /// Colour, opacity and depth shared by one shape instance.
 #[derive(Clone, Copy)]
@@ -84,12 +84,9 @@ pub(crate) fn draw_item(
     cache: &mut PathCache,
     gradients: &GradientTable,
     images: &crate::ImageSet,
-    image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
-    image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    image_textures: &crate::ImageTextures,
     mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
-    proxy: ProxyTarget,
-    image_scratch: &mut Vec<u8>,
     item: &RenderItem,
     flip: Affine2,
     z_index: &mut u32,
@@ -178,11 +175,8 @@ pub(crate) fn draw_item(
             plan,
             images,
             image_textures,
-            image_revisions,
             mesh_vertices,
             mesh_indices,
-            proxy,
-            image_scratch,
             item,
             model,
             key,
@@ -202,12 +196,9 @@ fn draw_image(
     canvas: &mut impl Canvas2d,
     plan: &RenderPlan,
     images: &crate::ImageSet,
-    image_textures: &mut HashMap<motioner_core::ImageKey, u32>,
-    image_revisions: &mut HashMap<motioner_core::ImageKey, u64>,
+    image_textures: &crate::ImageTextures,
     mesh_vertices: &mut Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
-    proxy: ProxyTarget,
-    image_scratch: &mut Vec<u8>,
     item: &RenderItem,
     model: Affine2,
     key: Option<motioner_core::ImageKey>,
@@ -221,50 +212,16 @@ fn draw_image(
     let Some(key) = key else {
         return draw_placeholder(canvas, item, model, width, height, z_index, total);
     };
-    let Some(image) = images.get(&key) else {
+    if images.get(&key).is_none() {
         return 0;
+    }
+    // The painter's image pre-pass owns every upload; a missing texture here
+    // means the upload failed (or a released buffer has not been re-fetched
+    // yet), so draw the placeholder instead of a stale or blurry quad.
+    let Some(texture) = image_textures.get(&key) else {
+        return draw_placeholder(canvas, item, model, width, height, z_index, total);
     };
-    let texture_id = if let Some(&id) = image_textures.get(&key) {
-        if image_revisions
-            .get(&key)
-            .is_none_or(|revision| *revision != image.revision)
-        {
-            let upload = proxy::prepare(image, proxy, image_scratch);
-            if canvas
-                .update_image(id, upload.width, upload.height, upload.rgba8)
-                .is_err()
-            {
-                // A video switches between its original and proxy sizes;
-                // drop the stale texture and register the new frame.
-                canvas.free_image(id);
-                if let Ok(new_id) = canvas.register_image(upload.width, upload.height, upload.rgba8)
-                {
-                    image_textures.insert(key, new_id);
-                    image_revisions.insert(key, image.revision);
-                    new_id
-                } else {
-                    image_textures.remove(&key);
-                    image_revisions.remove(&key);
-                    return draw_placeholder(canvas, item, model, width, height, z_index, total);
-                }
-            } else {
-                image_revisions.insert(key, image.revision);
-                id
-            }
-        } else {
-            id
-        }
-    } else {
-        let upload = proxy::prepare(image, proxy, image_scratch);
-        match canvas.register_image(upload.width, upload.height, upload.rgba8) {
-            Ok(id) => {
-                image_textures.insert(key, id);
-                image_revisions.insert(key, image.revision);
-                id
-            }
-            Err(_) => return draw_placeholder(canvas, item, model, width, height, z_index, total),
-        }
-    };
+    let texture_id = texture.id;
     let z = space::z_for(*z_index, total);
     *z_index += 1;
     // A deformed mesh replaces the sprite quad.  Its points are already in

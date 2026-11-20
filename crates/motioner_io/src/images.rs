@@ -199,6 +199,10 @@ impl ImageResolver for ImageStore {
         let image = decode_png(&path, key, &bytes).map_err(|error| error.to_string())?;
         Ok(asset_of(&image))
     }
+
+    fn decoded_image(&self, key: &ImageKey) -> Option<motioner_core::DecodedImage> {
+        self.by_key.get(key).map(core_decoded)
+    }
 }
 
 /// A resolver that caches through a `RefCell`, for the `&self` trait.
@@ -241,11 +245,12 @@ impl ImageResolver for CachedImages {
             .borrow()
             .by_key
             .values()
-            .map(|image| motioner_core::DecodedImage {
-                asset: asset_of(image),
-                rgba8: image.rgba8.clone(),
-            })
+            .map(core_decoded)
             .collect()
+    }
+
+    fn decoded_image(&self, key: &ImageKey) -> Option<motioner_core::DecodedImage> {
+        self.store.borrow().get(key).map(core_decoded)
     }
 }
 
@@ -254,6 +259,14 @@ fn asset_of(image: &DecodedImage) -> ImageAsset {
         key: image.key,
         width: image.width,
         height: image.height,
+    }
+}
+
+/// Converts one cached image to the core upload record (clones the pixels).
+pub(crate) fn core_decoded(image: &DecodedImage) -> motioner_core::DecodedImage {
+    motioner_core::DecodedImage {
+        asset: asset_of(image),
+        rgba8: image.rgba8.clone(),
     }
 }
 
@@ -384,6 +397,23 @@ mod tests {
         let error = store.load("assets/nope.png").unwrap_err();
         let text = error.to_string();
         assert!(text.contains("nope.png"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_key_can_be_fetched_again_by_its_content_hash() {
+        let dir = temp_dir("one_key");
+        write_png(&dir.join("a.png"), 2, 1, &[255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
+        let mut store = ImageStore::new(&dir);
+        let asset = store.load("a.png").unwrap();
+        let image = store
+            .decoded_image(&asset.key)
+            .expect("the loaded key stays resident");
+        assert_eq!(image.asset, asset);
+        assert_eq!(image.rgba8, [255, 0, 0, 255, 0, 0, 255, 255]);
+        assert!(store
+            .decoded_image(&ImageKey::from_bytes([0; 32]))
+            .is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

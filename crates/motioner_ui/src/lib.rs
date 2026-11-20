@@ -45,6 +45,7 @@ mod gizmo;
 mod graph;
 mod host;
 mod icons;
+mod image_reload;
 mod input;
 mod inspect;
 mod json;

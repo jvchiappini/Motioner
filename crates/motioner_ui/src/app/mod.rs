@@ -208,6 +208,12 @@ pub(crate) struct PreviewApp {
     font_cache: Option<ferrous_font::AtlasCache>,
     /// Faces a worker is baking for the open document, when any.
     font_bakes: Option<crate::font_jobs::FontBakes>,
+    /// A worker re-decoding image pixels for proxies that outgrew their
+    /// texture (prompt 18 P4).
+    image_reloads: Option<crate::image_reload::ImageReloads>,
+    /// Keys already requested from the image worker, so a slow decode is not
+    /// requested again every frame.
+    image_reloads_in_flight: std::collections::HashSet<motioner_core::ImageKey>,
     /// `frame_facts` cached by document revision and view geometry.
     facts_cache: RefCell<Option<(FactsKey, Rc<FrameFacts>)>>,
 }
@@ -352,6 +358,8 @@ impl PreviewApp {
             last_scrub_audio: None,
             font_cache: ferrous_font::AtlasCache::from_config(&crate::window::font_cache_config()),
             font_bakes: None,
+            image_reloads: None,
+            image_reloads_in_flight: std::collections::HashSet::new(),
             facts_cache: RefCell::new(None),
         };
         app.start_font_bakes();
@@ -394,6 +402,83 @@ impl PreviewApp {
             self.editor.session().overrides_path(),
             waker,
         );
+    }
+
+    /// Starts a worker to re-decode the image proxies the last paint missed.
+    ///
+    /// The painter draws its resident (lower-resolution) texture meanwhile, so
+    /// this is a latency optimisation for a zoom-in, never a correctness
+    /// requirement. One worker runs at a time; a key already in flight is not
+    /// requested again.
+    fn start_image_reloads(&mut self, _ctx: &mut AppContext<'_>) {
+        if self.image_reloads.is_some() || self.options.hidden_window {
+            return;
+        }
+        let Some(painter) = self.painter.as_ref() else {
+            return;
+        };
+        let missing: Vec<motioner_core::ImageKey> = painter
+            .missing_image_pixels()
+            .iter()
+            .copied()
+            .filter(|key| !self.image_reloads_in_flight.contains(key))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        let path = self.editor.session().path().to_path_buf();
+        let Some(resolver) = host.image_worker(&path) else {
+            return;
+        };
+        let waker = self.waker.clone().unwrap_or_default();
+        let Some(reloads) =
+            crate::image_reload::ImageReloads::spawn(resolver, missing.clone(), waker)
+        else {
+            return;
+        };
+        self.image_reloads_in_flight.extend(missing);
+        self.image_reloads = Some(reloads);
+    }
+
+    /// Installs the pixels the image worker decoded.
+    ///
+    /// Returns whether the worker is still running, so the caller can schedule
+    /// a short wake instead of a continuous loop.
+    fn poll_image_reloads(&mut self) -> bool {
+        let (done, pending) = match self.image_reloads.as_ref() {
+            Some(reloads) => reloads.poll(),
+            None => return false,
+        };
+        if !done.is_empty() {
+            let Some(painter) = self.painter.as_mut() else {
+                self.image_reloads = None;
+                return false;
+            };
+            for reload in done {
+                self.image_reloads_in_flight.remove(&reload.key);
+                let Some(image) = reload.image else {
+                    // The source could not be recovered: keep the resident
+                    // texture and do not ask for this key again.
+                    continue;
+                };
+                painter.set_image(motioner_render::ImageData {
+                    key: reload.key,
+                    width: image.asset.width,
+                    height: image.asset.height,
+                    rgba8: image.rgba8,
+                    revision: 0,
+                });
+            }
+        }
+        if !pending {
+            // The worker finished every key it was given; nothing is in flight.
+            self.image_reloads_in_flight.clear();
+            self.image_reloads = None;
+        }
+        pending
     }
 
     /// Uploads the atlases the worker finished, on the frame thread.
@@ -936,6 +1021,9 @@ impl PreviewApp {
     /// wake (the asset worker also wakes the loop itself).
     fn poll_workers(&mut self, ctx: &mut AppContext<'_>, now: Instant) {
         if self.poll_font_bakes(ctx) && !self.options.hidden_window {
+            ctx.redraw_at(now + Duration::from_millis(25));
+        }
+        if self.poll_image_reloads() && !self.options.hidden_window {
             ctx.redraw_at(now + Duration::from_millis(25));
         }
         self.poll_assets();
@@ -1511,6 +1599,9 @@ impl PreviewApp {
             let _span = ferrous_engine::startup::span("motioner: canvas");
             self.paint_canvas(ctx.render.renderer_mut(), &layout, frame)
         };
+        // Prompt 18 P4: a proxy that outgrew its texture asked the worker for
+        // the pixels again on this frame.
+        self.start_image_reloads(ctx);
         if self.video_waiting && !self.options.hidden_window {
             // A decoded video frame is on its way; retry shortly instead of
             // holding the loop awake.
