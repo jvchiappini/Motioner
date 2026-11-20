@@ -1018,6 +1018,8 @@ pub struct FrameRenderer {
     /// Reused mesh vertex scratch and one index buffer per topology.
     mesh_vertices: Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: HashMap<(u32, u32), Vec<u32>>,
+    /// Reused cull flags, open-layer stack and animated-text buffers.
+    paint_scratch: frame::PaintScratch,
     texture_budget: u64,
     /// Reused across frame renders, so a preview does not rebuild the
     /// evaluator scratch or the plan's item buffers every call.
@@ -1362,6 +1364,56 @@ impl FrameRenderer {
         frame::render_frame(self, document, frame, out)
     }
 
+    /// Renders integer frame `frame` into the target without reading it back.
+    ///
+    /// The export loop uses this with [`Self::submit_readback`] and
+    /// [`Self::take_readback`] to overlap the GPU copy with the next frame's
+    /// render, so the GPU never waits for the CPU (prompt 18 P6). Motion blur
+    /// must keep using [`Self::render_frame`].
+    ///
+    /// # Errors
+    ///
+    /// Every error [`Self::render`] can return. The target is not read back.
+    pub fn render_frame_deferred(
+        &mut self,
+        document: &Document,
+        frame: motioner_core::Frame,
+    ) -> Result<FrameStats, RenderError> {
+        frame::render_frame_deferred(self, document, frame)
+    }
+
+    /// Records the current target into the engine readback ring.
+    ///
+    /// The copy is submitted and mapped asynchronously; the mapped pixels are
+    /// taken with [`Self::take_readback`], oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::Readback`] when every ring slot is still in flight or the
+    /// copy cannot be encoded.
+    pub fn submit_readback(&mut self) -> Result<(), RenderError> {
+        self.harness
+            .submit_readback()
+            .map(|_index| ())
+            .map_err(|error| RenderError::Readback {
+                message: error.to_string(),
+            })
+    }
+
+    /// Copies the oldest submitted readback into `out`; `false` when none is
+    /// pending yet.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::Readback`] when the map failed for the oldest frame.
+    pub fn take_readback(&mut self, out: &mut Vec<u8>) -> Result<bool, RenderError> {
+        self.harness
+            .take_readback(out)
+            .map_err(|error| RenderError::Readback {
+                message: error.to_string(),
+            })
+    }
+
     /// Renders `frame` through the motion-blur accumulation pass with an
     /// explicit sample count, regardless of the composition's own flag.
     ///
@@ -1450,6 +1502,8 @@ pub struct LivePainter {
     /// Reused mesh vertex scratch and one index buffer per topology.
     mesh_vertices: Vec<ferrous_2d::render::MeshVertex2d>,
     mesh_indices: HashMap<(u32, u32), Vec<u32>>,
+    /// Reused cull flags, open-layer stack and animated-text buffers.
+    paint_scratch: frame::PaintScratch,
     /// Resolved document faces, cached by font-set revision and a hash of the
     /// document's text faces (prompt 18 P2/P3).
     faces_key: Option<(u64, u64)>,
@@ -1539,6 +1593,7 @@ impl LivePainter {
             image_inventory: ImageInventory::new(),
             mesh_vertices: Vec::new(),
             mesh_indices: HashMap::default(),
+            paint_scratch: frame::PaintScratch::default(),
             faces_key: None,
             faces_cache: Vec::new(),
             fonts_revision: 0,
@@ -1871,6 +1926,7 @@ impl LivePainter {
             None,
             self.visible,
             &mut self.image_scratch,
+            &mut self.paint_scratch,
         );
         let stats = frame::paint_plan(
             renderer,
@@ -1888,6 +1944,7 @@ impl LivePainter {
             &mut self.mesh_indices,
             None,
             self.visible,
+            &mut self.paint_scratch,
         );
         self.enforce_image_cpu_budget();
         Ok(stats)
@@ -1934,6 +1991,7 @@ impl LivePainter {
             Some(hidden),
             self.visible,
             &mut self.image_scratch,
+            &mut self.paint_scratch,
         );
         let stats = frame::paint_plan(
             renderer,
@@ -1951,6 +2009,7 @@ impl LivePainter {
             &mut self.mesh_indices,
             Some(hidden),
             self.visible,
+            &mut self.paint_scratch,
         );
         self.enforce_image_cpu_budget();
         Ok(stats)

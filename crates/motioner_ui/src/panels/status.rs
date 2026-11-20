@@ -2,15 +2,56 @@
 //! readouts.
 
 use crate::icons::{self, Icon};
-use crate::layout::Rect;
-use crate::paint::Painter;
+use crate::layout::{Hit, Rect};
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
 
+/// Everything the status bar reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .bool(v.document.is_some())
+        .bool(v.motion_blur_preview)
+        .usize(v.video_bytes)
+        .f32(v.stats.ui_fps)
+        .f32(v.stats.eval_ms)
+        .u64(v.stats.dropped)
+        .u64(v.stats.allocations)
+        .f32(v.stats.blur_ms)
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.diagnostics.len())
+        .usize(v.warnings.len())
+        .bool(v.recovery.is_some());
+    for diagnostic in v.diagnostics {
+        rev = rev
+            .str(&diagnostic.message)
+            .u64(u64::from(diagnostic.line))
+            .u64(u64::from(diagnostic.column))
+            .bool(diagnostic.warning);
+    }
+    for warning in v.warnings {
+        rev = rev
+            .str(&warning.message)
+            .u64(u64::from(warning.line))
+            .u64(u64::from(warning.column))
+            .bool(warning.warning);
+    }
+    if let Some(recovery) = v.recovery {
+        rev = rev.str(&recovery.name).str(&recovery.detail);
+    }
+    rev.finish()
+}
+
 /// Draws the status bar.
-#[allow(clippy::too_many_lines)] // one immediate-mode strip
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::Status, revision(v), v.layout.status_bar);
+    p.panel(key, |p| draw_body(p, v));
+}
+
+#[allow(clippy::too_many_lines)] // one immediate-mode strip
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let bar = v.layout.status_bar;
     p.fill(bar, t.app);

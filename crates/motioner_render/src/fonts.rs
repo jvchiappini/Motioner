@@ -275,13 +275,17 @@ impl CpuTextMetrics {
 
     /// The layout tables of one resolved face, parsed on first use.
     fn layout_for(&self, family: &str, weight: u16, bytes: &[u8]) -> Option<Arc<FaceLayout>> {
-        let key = (family.to_owned(), weight);
+        // Look up without building an owned key: `measure` runs per text block
+        // and an owned `(String, u16)` here would allocate on every call.
         {
             let cache = self
                 .layouts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(layout) = cache.get(&key) {
+            if let Some((_, layout)) = cache
+                .iter()
+                .find(|((name, w), _)| *w == weight && name.eq_ignore_ascii_case(family))
+            {
                 return Some(Arc::clone(layout));
             }
         }
@@ -293,7 +297,7 @@ impl CpuTextMetrics {
             .layouts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(key, Arc::clone(&layout));
+        cache.insert((family.to_owned(), weight), Arc::clone(&layout));
         Some(layout)
     }
 }

@@ -155,37 +155,16 @@ mod tests {
                 // The only key was delivered: nothing is in flight any more,
                 // even if the worker thread is still winding down.
                 assert!(!pending, "a completed worker is not in flight");
+                // A finished worker keeps reporting "not pending" on every
+                // later poll, so the app never re-arms its short wake.
+                let (done, pending) = reloads.poll();
+                assert!(done.is_empty(), "no duplicate delivery");
+                assert!(!pending, "a finished worker stays not in flight");
                 break;
             }
             assert!(Instant::now() < deadline, "the decode finishes");
             thread::sleep(Duration::from_millis(5));
         }
-    }
-
-    #[test]
-    fn polling_with_no_worker_reports_nothing_in_flight() {
-        // No spawn at all is the `None` case; this covers the state the app
-        // holds once a worker finished: `poll` must say "not pending".
-        let decoded = image();
-        let key = decoded.asset.key;
-        let mut reloads = ImageReloads::spawn(
-            Box::new(Fake { image: decoded }),
-            vec![key],
-            Waker::default(),
-        )
-        .expect("the worker starts");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut received = 0;
-        while Instant::now() < deadline {
-            let (done, pending) = reloads.poll();
-            received += done.len();
-            if received == 1 {
-                assert!(!pending);
-                return;
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-        panic!("the decode finishes");
     }
 
     struct Missing;

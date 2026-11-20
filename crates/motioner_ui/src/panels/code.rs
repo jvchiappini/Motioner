@@ -4,8 +4,8 @@
 //! The model (lines and highlight ranges) lives in [`crate::CodePanel`]; this
 //! module only paints it.
 
-use crate::layout::Rect;
-use crate::paint::Painter;
+use crate::layout::{Hit, Rect};
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
@@ -13,8 +13,34 @@ use crate::theme::{size, type_scale};
 /// The line height in logical pixels.
 const LINE: f32 = 17.0;
 
+/// Everything the code panel reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .str(v.file_name)
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.code_panel.lines.len());
+    rev = match v.code_panel.highlight {
+        Some((first, last)) => rev.bool(true).usize(first).usize(last),
+        None => rev.bool(false),
+    };
+    for line in &v.code_panel.lines {
+        rev = rev
+            .usize(line.number)
+            .str(&line.text)
+            .bool(line.edited)
+            .bool(line.deleted);
+    }
+    rev.finish()
+}
+
 /// Draws the code panel.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::CodePanel, revision(v), v.layout.code_panel());
+    p.panel(key, |p| draw_body(p, v));
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let panel = v.layout.code_panel();
     if panel.w <= 0.0 || panel.h <= 0.0 {

@@ -494,6 +494,84 @@ pub enum Hit {
     },
 }
 
+impl Hit {
+    /// A stable numeric code for cache revisions.
+    ///
+    /// The value only has to distinguish the variants and their indices; it
+    /// is hashed into a `PanelKey` so a hover change invalidates exactly the
+    /// panel that reads it.
+    #[must_use]
+    pub fn stable_code(self) -> u64 {
+        fn pack(tag: u64, value: u64) -> u64 {
+            tag.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(value)
+        }
+        match self {
+            Self::Transport(button) => pack(1, button as u64),
+            Self::Toggle(toggle) => pack(2, toggle as u64),
+            Self::LayerRow(index) => pack(3, index as u64),
+            Self::LayerEye(index) => pack(4, index as u64),
+            Self::LayerLock(index) => pack(5, index as u64),
+            Self::LayerSolo(index) => pack(6, index as u64),
+            Self::LayerShy(index) => pack(7, index as u64),
+            Self::LayerFilter => pack(8, 0),
+            Self::ShowShy => pack(9, 0),
+            Self::Track(index) => pack(10, index as u64),
+            Self::Scrub => pack(11, 0),
+            Self::Splitter(splitter) => pack(12, splitter as u64),
+            Self::Canvas => pack(13, 0),
+            Self::Inspector => pack(14, 0),
+            Self::InspectField { item, field } => pack(15, ((item as u64) << 32) | field as u64),
+            Self::InspectStopwatch(item) => pack(16, item as u64),
+            Self::InspectDiamond(item) => pack(17, item as u64),
+            Self::InspectSegment { item, segment } => {
+                pack(18, ((item as u64) << 32) | segment as u64)
+            }
+            Self::InspectCopy => pack(19, 0),
+            Self::Gizmo(handle) => pack(20, handle as u64),
+            Self::SnapToggle => pack(21, 0),
+            Self::ZoomPill => pack(22, 0),
+            Self::FileMenu => pack(23, 0),
+            Self::ViewMenu => pack(24, 0),
+            Self::ViewMenuItem(index) => pack(25, index as u64),
+            Self::AddMenu => pack(26, 0),
+            Self::AddMenuItem(index) => pack(27, index as u64),
+            Self::OverridesChip => pack(28, 0),
+            Self::OverridesRow(index) => pack(29, index as u64),
+            Self::OverridesConvert(index) => pack(30, index as u64),
+            Self::OverridesConvertAll => pack(31, 0),
+            Self::OverridesClose => pack(32, 0),
+            Self::CodeClose => pack(33, 0),
+            Self::BakeConvert => pack(34, 0),
+            Self::BakeDismiss => pack(35, 0),
+            Self::RecoverRestore => pack(36, 0),
+            Self::RecoverDismiss => pack(37, 0),
+            Self::TimelineRow(index) => pack(38, index as u64),
+            Self::ClipBody(index) => pack(39, index as u64),
+            Self::ClipTrimStart(index) => pack(40, index as u64),
+            Self::ClipTrimEnd(index) => pack(41, index as u64),
+            Self::TimelineStopwatch(index) => pack(42, index as u64),
+            Self::LeftTab(tab) => pack(43, tab as u64),
+            Self::AssetRow(index) => pack(44, index as u64),
+            Self::AssetCell(index) => pack(45, index as u64),
+            Self::AssetAdd => pack(46, 0),
+            Self::AssetView(view) => pack(47, view as u64),
+            Self::AssetRemoveUnused => pack(48, 0),
+            Self::TimelinePrevKey(index) => pack(49, index as u64),
+            Self::TimelineKeyToggle(index) => pack(50, index as u64),
+            Self::TimelineNextKey(index) => pack(51, index as u64),
+            Self::TimelineField(index) => pack(52, index as u64),
+            Self::TimelineDiamond { row, frame } => pack(53, ((row as u64) << 32) ^ frame as u64),
+            Self::OrphanRow(index) => pack(54, index as u64),
+            Self::OrphanDelete(index) => pack(55, index as u64),
+            Self::OrphanRebind(index) => pack(56, index as u64),
+            Self::LayerChevron(index) => pack(57, index as u64),
+            Self::GraphPlot => pack(58, 0),
+            Self::GraphKey(index) => pack(59, index as u64),
+            Self::GraphHandle { segment, kind } => pack(60, ((segment as u64) << 32) | kind as u64),
+        }
+    }
+}
+
 /// A panel with a header strip and a body.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Panel {

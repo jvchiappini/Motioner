@@ -9,8 +9,9 @@
 //!
 //! While paused every sample is accumulated; while playing the editor caps the
 //! count at four (documented in `docs/agents.md`) so playback keeps a usable
-//! frame rate. The sample instants come from
-//! [`motioner_render::motion_blur_times`], shared with the render path.
+//! frame rate. The sample instants live in the render path
+//! (`motioner_render::frame::render_motion_blur_samples`), so the preview and
+//! `still`/`render` share them.
 
 use ferrous_2d::render::SpriteInstance;
 use ferrous_renderer::Renderer;

@@ -267,6 +267,11 @@ pub struct RenderPlan {
     pub(crate) gradients: Vec<ResolvedGradient>,
     /// Per-character animator lists referenced by [`ItemShape::Text`] items.
     pub(crate) text_animations: Vec<Vec<TextAnimator>>,
+    /// Derived per-item flag: the item lies inside a layer with effects.
+    ///
+    /// Computed once per evaluation, in paint order. It is derived data, so
+    /// it is equal exactly when the evaluated items and layers are equal.
+    pub(crate) effect_layer_items: Vec<bool>,
     /// Nodes skipped during the last evaluation because their resolved
     /// transform or opacity was not finite. Their subtrees were skipped
     /// too and are not counted individually.
@@ -308,6 +313,16 @@ impl RenderPlan {
     #[must_use]
     pub fn items(&self) -> &[RenderItem] {
         &self.items
+    }
+
+    /// Whether the item at `index` lies inside a layer with effects.
+    ///
+    /// The flag is computed once per evaluation from the plan layers, in paint
+    /// order. A layer that only carries a mask or a blend mode (no effects)
+    /// does not flag its items, and an out-of-range `index` returns `false`.
+    #[must_use]
+    pub fn item_in_effect_layer(&self, index: usize) -> bool {
+        self.effect_layer_items.get(index).copied().unwrap_or(false)
     }
 
     /// Offscreen layers wrapping item ranges, in opening order.

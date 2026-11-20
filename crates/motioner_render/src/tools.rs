@@ -883,13 +883,12 @@ impl TextlessFrame {
         frame: i64,
     ) -> Result<Self, RenderError> {
         let mut copy = document.clone();
-        let text_nodes: Vec<_> = copy
-            .nodes()
-            .filter(|node| matches!(node.content(), NodeContent::Text(_)))
-            .map(motioner_core::Node::id)
-            .collect();
-        for id in text_nodes {
-            let _ = copy.set_visible(id, false);
+        // Iterate the source document, not the clone: this avoids collecting
+        // the text node ids into a temporary vector on every call.
+        for node in document.nodes() {
+            if matches!(node.content(), NodeContent::Text(_)) {
+                let _ = copy.set_visible(node.id(), false);
+            }
         }
         let mut rgba = Vec::new();
         renderer.render_frame(&copy, frame, &mut rgba)?;
@@ -1001,6 +1000,24 @@ impl ImageCache {
     }
 }
 
+/// Renders `frame` at the composition size into a caller-owned pixel buffer.
+///
+/// `rgba` is resized by the renderer and reused across calls, so an export or
+/// bake loop does not allocate a fresh output vector per frame.
+///
+/// # Errors
+///
+/// Returns [`RenderError`] from the renderer.
+pub fn render_full_into(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    frame: i64,
+    rgba: &mut Vec<u8>,
+) -> Result<(), RenderError> {
+    renderer.render_frame(document, frame, rgba)?;
+    Ok(())
+}
+
 /// Renders `frame` at the composition size.
 ///
 /// # Errors
@@ -1012,7 +1029,7 @@ pub fn render_full(
     frame: i64,
 ) -> Result<ImageFrame, RenderError> {
     let mut rgba = Vec::new();
-    renderer.render_frame(document, frame, &mut rgba)?;
+    render_full_into(renderer, document, frame, &mut rgba)?;
     let composition = document.composition();
     Ok(ImageFrame {
         width: composition.width(),

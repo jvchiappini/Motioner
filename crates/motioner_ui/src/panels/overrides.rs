@@ -3,8 +3,8 @@
 //! The model (rows and command text) lives in
 //! [`crate::overrides_panel`](crate::OverrideRow); this module paints it.
 
-use crate::layout::Rect;
-use crate::paint::Painter;
+use crate::layout::{Hit, Rect};
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
@@ -31,8 +31,34 @@ pub fn draw_chip(p: &mut Painter<'_>, v: &View<'_>) {
     );
 }
 
+/// Hash of the pending-overrides rows.
+fn rows_revision(mut rev: PanelRevision, v: &View<'_>) -> PanelRevision {
+    rev = rev
+        .usize(v.override_rows.len())
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code));
+    for row in v.override_rows {
+        rev = rev.str(&row.command);
+        match &row.reason {
+            Some(reason) => rev = rev.bool(true).str(reason),
+            None => rev = rev.bool(false),
+        }
+    }
+    rev
+}
+
 /// Draws the pending-overrides list.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let list = v.layout.overrides_list();
+    let key = p.panel_key(
+        PanelKind::OverridesList,
+        rows_revision(PanelRevision::new(), v).finish(),
+        list,
+    );
+    p.panel(key, |p| draw_body(p, v));
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let list = v.layout.overrides_list();
     if list.w <= 0.0 || list.h <= 0.0 {
@@ -122,6 +148,16 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
 
 /// Draws the one-time convert-on-open banner.
 pub fn draw_banner(p: &mut Painter<'_>, v: &View<'_>) {
+    let banner = v.layout.bake_banner();
+    let key = p.panel_key(
+        PanelKind::OverridesBanner,
+        rows_revision(PanelRevision::new(), v).finish(),
+        banner,
+    );
+    p.panel(key, |p| draw_banner_body(p, v));
+}
+
+fn draw_banner_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let banner = v.layout.bake_banner();
     if banner.w <= 0.0 {

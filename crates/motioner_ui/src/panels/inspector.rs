@@ -5,14 +5,156 @@
 use crate::icons::{self, Icon};
 use crate::inspect::{FieldTarget, Item, Row, RowValue};
 use crate::layout::{Hit, Rect};
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
 use crate::widgets::{self, KeyMark};
 
+/// Hash of one field.
+fn field_revision(mut rev: PanelRevision, field: &crate::inspect::Field) -> PanelRevision {
+    rev = rev
+        .str(&field.label)
+        .str(&field.text)
+        .f64(field.value)
+        .f64(field.factor)
+        .str(field.suffix);
+    rev
+}
+
+/// Hash of one row value.
+fn value_revision(mut rev: PanelRevision, value: &RowValue) -> PanelRevision {
+    match value {
+        RowValue::Pair { left, right } => {
+            rev = field_revision(rev, left);
+            field_revision(rev, right)
+        }
+        RowValue::Single(field) => field_revision(rev, field),
+        RowValue::Color { color, text, .. } => rev
+            .u64(u64::from(color.r))
+            .u64(u64::from(color.g))
+            .u64(u64::from(color.b))
+            .u64(u64::from(color.a))
+            .str(text),
+        RowValue::Text { text, .. } | RowValue::ReadOnly(text) => rev.str(text),
+        RowValue::Blend { mode, .. } => rev.u64(*mode as u64),
+        RowValue::EffectOps { kind } => rev.u64(*kind as u64),
+        RowValue::EffectAdd => rev.u64(1),
+        RowValue::TextAnimRemove { index } => rev.usize(*index),
+        RowValue::TextAnimAdd => rev.u64(2),
+        RowValue::MaskSource { current, .. } => match current {
+            Some(current) => rev.bool(true).str(current),
+            None => rev.bool(false),
+        },
+        RowValue::MaskMode { mode, invert, .. } | RowValue::MaskInvert { mode, invert, .. } => {
+            rev.u64(*mode as u64).bool(*invert)
+        }
+        RowValue::Toggle { on, .. } => rev.bool(*on),
+        RowValue::Align { align, .. } => rev.u64(*align as u64),
+        RowValue::Cycle { current, .. } => rev.str(current),
+        RowValue::Ease { current } => match current {
+            Some(ease) => rev.bool(true).hashable(ease),
+            None => rev.bool(false),
+        },
+    }
+}
+
+/// Hash of the inspector model the panel draws.
+fn model_revision(mut rev: PanelRevision, model: &crate::inspect::Model) -> PanelRevision {
+    rev = match &model.header {
+        Some(header) => rev
+            .bool(true)
+            .str(&header.name)
+            .str(header.kind)
+            .str(&header.identity)
+            .bool(header.explicit),
+        None => rev.bool(false),
+    };
+    rev = rev.usize(model.rows.len());
+    for row in &model.rows {
+        rev = rev.str(row.section).str(&row.label);
+        rev = value_revision(rev, &row.value);
+        rev = match &row.channel {
+            Some(channel) => rev
+                .bool(true)
+                .bool(channel.keyed)
+                .bool(channel.on_key)
+                .hashable(&channel.frames),
+            None => rev.bool(false),
+        };
+    }
+    rev
+}
+
+/// Everything the inspector reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .u64(v.selected.map_or(u64::MAX, |index| index as u64))
+        .f32(v.inspector_scroll)
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .bool(v.copied)
+        .bool(v.inspector_field_error.is_some())
+        .f32(v.inspector_layout.height)
+        .usize(v.inspector_layout.items.len());
+    rev = model_revision(rev, v.inspector);
+    rev = match v.editing {
+        Some(editing) => rev
+            .bool(true)
+            .str(&format!("{:?}", editing.target))
+            .str(editing.editor.text())
+            .usize(editing.editor.caret())
+            .bool(editing.invalid),
+        None => rev.bool(false),
+    };
+    if let Some(error) = v.inspector_field_error {
+        rev = rev.str(&format!("{error:?}"));
+    }
+    if let Some(index) = v.selected {
+        if let Some(row) = v.outline.get(index) {
+            rev = rev.u64(row.kind as u64);
+        }
+    }
+    for item in &v.inspector_layout.items {
+        rev = match item {
+            Item::Header { rect, copy } => rev.rect(*rect).rect(*copy),
+            Item::Section { title, rect } => rev.str(title).rect(*rect),
+            Item::Row {
+                rect,
+                label,
+                stopwatch,
+                diamond,
+                fields,
+                segments,
+                ..
+            } => {
+                rev = rev.rect(*rect).rect(*label).usize(fields.len());
+                for (field, _) in fields {
+                    rev = rev.rect(*field);
+                }
+                rev = rev.usize(segments.len());
+                for segment in segments {
+                    rev = rev.rect(*segment);
+                }
+                rev = rev.bool(stopwatch.is_some()).bool(diamond.is_some());
+                rev
+            }
+        };
+    }
+    rev.finish()
+}
+
 /// Draws the inspector and returns the height of its content.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) -> f32 {
+    let key = p.panel_key(PanelKind::Inspector, revision(v), v.layout.inspector.rect);
+    let mut content_h = 0.0;
+    p.panel(key, |p| {
+        content_h = draw_body(p, v);
+    });
+    content_h
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) -> f32 {
     let t = *p.theme;
     let panel = v.layout.inspector;
     p.fill(panel.rect, t.panel);

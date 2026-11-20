@@ -5,13 +5,86 @@
 use crate::icons::{self, Icon};
 use crate::layout::{Hit, Rect};
 use crate::outline::OutlineRow;
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKey, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{over, size, type_scale};
 
 /// Draws the layers panel.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::Layers, revision(v), v.layout.layers.rect);
+    p.panel(key, |p| draw_body(p, v));
+}
+
+/// Everything the layers panel reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new();
+    rev = rev
+        .bool(v.document.is_some())
+        .bool(v.has_error())
+        .str(v.file_name)
+        .str(v.filter)
+        .str(v.layer_count)
+        .bool(v.show_shy)
+        .bool(v.add_menu_open)
+        .f32(v.layer_scroll)
+        .u64(v.selected.map_or(u64::MAX, |index| index as u64))
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.layer_rows.len())
+        .usize(v.orphans.len())
+        .u64(v.left_tab as u64);
+    rev = match v.editing {
+        Some(editing) if matches!(editing.target, crate::inspect::FieldTarget::Filter) => rev
+            .bool(true)
+            .str(editing.editor.text())
+            .usize(editing.editor.caret())
+            .bool(editing.invalid),
+        _ => rev.bool(false),
+    };
+    let body = v.layout.layers.body;
+    let first = visible_start(v.layout, v.layer_scroll, body);
+    let end = visible_end(v.layout, v.layer_scroll, body, v.layer_rows.len());
+    for &index in v
+        .layer_rows
+        .iter()
+        .skip(first)
+        .take(end.saturating_sub(first))
+    {
+        if let Some(row) = v.outline.get(index) {
+            let (visible, locked) = v.layer_states.get(index).copied().unwrap_or((true, true));
+            let (solo, shy) = v.layer_flags.get(index).copied().unwrap_or((false, false));
+            rev = rev
+                .usize(index)
+                .str(&row.name)
+                .str(&row.detail)
+                .str(&row.identity)
+                .u64(row.kind as u64)
+                .u64(row.mask_role as u64)
+                .usize(row.depth as usize)
+                .bool(row.has_children)
+                .bool(row.has_next_sibling)
+                .bool(v.selected == Some(index))
+                .bool(row_hovered(v, index))
+                .bool(v.expanded.contains(&index))
+                .bool(visible)
+                .bool(locked)
+                .bool(solo)
+                .bool(shy);
+        }
+    }
+    for orphan in v.orphans {
+        rev = rev.str(&orphan.id).str(&orphan.property);
+        if let Some(suggestion) = &orphan.suggestion {
+            rev = rev.bool(true).str(suggestion);
+        } else {
+            rev = rev.bool(false);
+        }
+    }
+    rev.finish()
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let panel = v.layout.layers;
     p.fill(panel.rect, t.panel);
@@ -34,13 +107,21 @@ pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
 
     p.push_clip(body);
     let first = visible_start(v.layout, v.layer_scroll, body);
-    for (position, &index) in v.layer_rows.iter().enumerate().skip(first) {
+    let end = visible_end(v.layout, v.layer_scroll, body, v.layer_rows.len());
+    for position in first..end {
+        let Some(&index) = v.layer_rows.get(position) else {
+            break;
+        };
         let rect = v.layout.layer_row(position, v.layer_scroll);
+        if rect.bottom() < body.y {
+            continue;
+        }
         if rect.y > body.bottom() {
             break;
         }
         if let Some(row) = v.outline.get(index) {
-            draw_row(p, v, index, row, rect);
+            let key = row_key(p, v, index, row, rect);
+            p.row(key, |p| draw_row(p, v, index, row, rect));
         }
     }
     orphans(p, v, body);
@@ -54,6 +135,79 @@ fn visible_start(layout: &crate::layout::Layout, scroll: f32, body: Rect) -> usi
     }
     let offset = body.y - layout.layers.body.y - layout.metrics.px(size::GRID) + scroll;
     usize::try_from((offset / layout.row_h).floor().max(0.0) as i64).unwrap_or(0)
+}
+
+/// One past the last layer row that can intersect the body.
+fn visible_end(layout: &crate::layout::Layout, scroll: f32, body: Rect, count: usize) -> usize {
+    if layout.row_h <= 0.0 {
+        return count;
+    }
+    let origin = body.y + layout.metrics.px(size::GRID) - scroll;
+    let rows = ((body.bottom() - origin) / layout.row_h).ceil();
+    if !rows.is_finite() {
+        return count;
+    }
+    (rows.max(0.0) as usize).saturating_add(1).min(count)
+}
+
+/// Whether a pointer hit belongs to layer row `index`.
+fn row_hovered(v: &View<'_>, index: usize) -> bool {
+    matches!(
+        v.hover,
+        Some(
+            Hit::LayerRow(i)
+                | Hit::LayerEye(i)
+                | Hit::LayerLock(i)
+                | Hit::LayerSolo(i)
+                | Hit::LayerShy(i)
+                | Hit::LayerChevron(i)
+        ) if i == index
+    )
+}
+
+/// The stable code of a hit when it belongs to layer row `index`.
+///
+/// The key must change when the pointer moves between a row's sub-widgets
+/// (body, eye, lock, solo, shy, chevron), not only when it enters another row:
+/// a boolean would replay the stale highlight.
+fn row_hit_code(hit: Option<Hit>, index: usize) -> u64 {
+    match hit {
+        Some(
+            hit @ (Hit::LayerRow(row)
+            | Hit::LayerEye(row)
+            | Hit::LayerLock(row)
+            | Hit::LayerSolo(row)
+            | Hit::LayerShy(row)
+            | Hit::LayerChevron(row)),
+        ) if row == index => Hit::stable_code(hit),
+        _ => u64::MAX,
+    }
+}
+
+/// The cache key of one layer row.
+fn row_key(p: &Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, rect: Rect) -> PanelKey {
+    let (visible, locked) = v.layer_states.get(index).copied().unwrap_or((true, true));
+    let (solo, shy) = v.layer_flags.get(index).copied().unwrap_or((false, false));
+    let revision = PanelRevision::new()
+        .usize(index)
+        .str(&row.identity)
+        .str(&row.name)
+        .str(&row.detail)
+        .u64(row.kind as u64)
+        .u64(row.mask_role as u64)
+        .usize(row.depth as usize)
+        .bool(row.has_children)
+        .bool(row.has_next_sibling)
+        .bool(v.selected == Some(index))
+        .u64(row_hit_code(v.hover, index))
+        .u64(row_hit_code(v.pressed, index))
+        .bool(v.expanded.contains(&index))
+        .bool(visible)
+        .bool(locked)
+        .bool(solo)
+        .bool(shy)
+        .finish();
+    p.panel_key(PanelKind::Row, revision, rect)
 }
 
 /// The filter box in the layers header; typing goes to `FieldTarget::Filter`.
@@ -125,6 +279,24 @@ fn add_button(p: &mut Painter<'_>, v: &View<'_>) {
 
 /// The Add Layer dropdown, drawn above the editor.
 pub fn draw_add_menu(p: &mut Painter<'_>, v: &View<'_>) {
+    let items = v.layout.add_menu_items();
+    let first = items[0];
+    let last = items[items.len() - 1];
+    let panel = Rect::new(
+        first.x,
+        first.y - p.m.px(4.0),
+        first.w,
+        last.bottom() - first.y + p.m.px(8.0),
+    );
+    let revision = PanelRevision::new()
+        .u64(v.add_menu_hover.map_or(u64::MAX, |index| index as u64))
+        .bool(v.add_menu_open)
+        .finish();
+    let key = p.panel_key(PanelKind::AddMenu, revision, panel);
+    p.panel(key, |p| draw_add_menu_body(p, v));
+}
+
+fn draw_add_menu_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let items = v.layout.add_menu_items();
     let first = items[0];
@@ -167,17 +339,7 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
     let indent = p.m.px(size::INDENT);
     let chevron_side = p.m.px(12.0);
     let selected = v.selected == Some(index);
-    let hovered = matches!(
-        v.hover,
-        Some(
-            Hit::LayerRow(i)
-                | Hit::LayerEye(i)
-                | Hit::LayerLock(i)
-                | Hit::LayerSolo(i)
-                | Hit::LayerShy(i)
-                | Hit::LayerChevron(i)
-        ) if i == index
-    );
+    let hovered = row_hovered(v, index);
     let (visible, locked) = v.layer_states.get(index).copied().unwrap_or((true, true));
     let (solo, shy) = v.layer_flags.get(index).copied().unwrap_or((false, false));
     let highlight = rect.inset_xy(p.m.px(size::GRID), 0.0);
@@ -508,7 +670,34 @@ fn empty_state(p: &mut Painter<'_>, body: Rect, v: &View<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use super::label_rooms;
+    use super::{label_rooms, visible_end, visible_start};
+    use crate::layout::{Layout, PanelSizes, Rect};
+
+    #[test]
+    fn a_nine_hundred_pixel_body_paints_only_the_rows_that_intersect_it() {
+        let layout = Layout::compute(1600.0, 900.0, 1.0, PanelSizes::default());
+        let body = Rect::new(0.0, 100.0, 300.0, 900.0);
+        let first = visible_start(&layout, 0.0, body);
+        let end = visible_end(&layout, 0.0, body, 3_000);
+        assert_eq!(first, 0);
+        assert!(
+            end <= 36,
+            "a 900 px body needs at most the visible rows: {end}"
+        );
+        assert!(end > 0);
+    }
+
+    #[test]
+    fn scrolling_bounds_the_same_window_of_rows() {
+        let layout = Layout::compute(1600.0, 900.0, 1.0, PanelSizes::default());
+        let body = Rect::new(0.0, 100.0, 300.0, 900.0);
+        let scroll = 2_000.0;
+        let first = visible_start(&layout, scroll, body);
+        let end = visible_end(&layout, scroll, body, 3_000);
+        assert!(first > 0);
+        assert!(end - first <= 36, "{} rows", end - first);
+        assert!(end <= 3_000);
+    }
 
     #[test]
     fn a_long_name_never_reaches_the_row_actions() {

@@ -258,6 +258,28 @@ pub fn sample_at<T: Interpolate>(value: &Animatable<T>, time: f64) -> T {
     T::interpolate(a.value, b.value, ease(b.ease, t))
 }
 
+/// Whether every value of `value` is constant over `from..=to`.
+///
+/// The check is O(1): a track is constant over the range when it has no keys,
+/// when its last key is at or before `from` (the value holds), or when its
+/// first key is at or after `to` (the value holds). A track with keys on both
+/// sides of the range still changes inside it, even when no key falls in the
+/// range, so this deliberately returns `false` for that case. An empty range
+/// (`from == to`) is always constant; the bounds may be given in either order.
+#[must_use]
+pub fn keys_outside_range<T: Copy>(value: &Animatable<T>, from: Frame, to: Frame) -> bool {
+    if from == to {
+        return true;
+    }
+    let (from, to) = if from < to { (from, to) } else { (to, from) };
+    match (value.keys().first(), value.keys().last()) {
+        (Some(_), Some(last)) if last.frame <= from => true,
+        (Some(first), _) if first.frame >= to => true,
+        (None, _) => true,
+        _ => false,
+    }
+}
+
 /// Converts an integer frame to the fractional time domain exactly.
 fn frame_time(frame: Frame) -> f64 {
     #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
@@ -380,6 +402,50 @@ mod tests {
             assert_eq!(sample(&value, frame), sample_at(&value, time));
         }
         assert!((sample_at(&value, 5.5) - 0.55).abs() < 1e-12);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // exact equality is the point
+    fn keys_outside_range_marks_constant_tracks() {
+        let before = animated(&[(0, 2.0, Ease::Linear), (10, 4.0, Ease::Linear)]);
+        assert!(keys_outside_range(&before, 20, 30));
+        for frame in 20..=30 {
+            assert_eq!(sample(&before, frame), 4.0);
+        }
+
+        let after = animated(&[(20, 2.0, Ease::Linear), (30, 4.0, Ease::Linear)]);
+        assert!(keys_outside_range(&after, 0, 10));
+        for frame in 0..=10 {
+            assert_eq!(sample(&after, frame), 2.0);
+        }
+
+        let inside = animated(&[(0, 2.0, Ease::Linear), (20, 4.0, Ease::Linear)]);
+        assert!(!keys_outside_range(&inside, 5, 15));
+        assert_eq!(sample(&inside, 10), 3.0);
+
+        let both_sides = animated(&[(0, 2.0, Ease::Linear), (20, 4.0, Ease::Linear)]);
+        assert!(
+            !keys_outside_range(&both_sides, 5, 15),
+            "a segment crossing the range changes even without a key inside"
+        );
+
+        assert!(keys_outside_range(&Animatable::new(3.0), 0, 10));
+    }
+
+    #[test]
+    fn keys_on_the_range_boundaries_hold() {
+        let key = animated(&[(10, 7.0, Ease::Linear)]);
+        assert!(keys_outside_range(&key, 10, 20), "last key at from holds");
+        assert!(keys_outside_range(&key, 0, 10), "first key at to holds");
+        assert!(!keys_outside_range(&key, 5, 15), "a key inside the range");
+        assert!(
+            keys_outside_range(&key, 12, 12),
+            "an empty range is constant"
+        );
+
+        let crossing = animated(&[(0, 0.0, Ease::Linear), (10, 1.0, Ease::Linear)]);
+        assert!(keys_outside_range(&crossing, 10, 20));
+        assert!(!keys_outside_range(&crossing, 9, 10));
     }
 
     #[test]

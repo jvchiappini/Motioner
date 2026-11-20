@@ -1926,44 +1926,9 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
     renderer.set_images(image_set(&images));
     let mut encoder =
         Mp4Encoder::start_with_audio(&args.output, &settings, &location, wav.as_deref())?;
-    let mut rgba = Vec::new();
 
-    let total = u64::try_from(to - from).unwrap_or(0);
     let started = Instant::now();
-    let mut render_time = Duration::ZERO;
-    let mut encode_time = Duration::ZERO;
-    let mut missing_glyphs = 0_u64;
-    let mut completed = 0_u64;
-
-    for frame in from..to {
-        let render_start = Instant::now();
-        for image in video_images(&images, &document, frame)? {
-            renderer.set_image(image);
-        }
-        let stats = renderer.render_frame(&document, frame, &mut rgba)?;
-        render_time += render_start.elapsed();
-        missing_glyphs = missing_glyphs.saturating_add(u64::from(stats.missing_glyphs));
-
-        let encode_start = Instant::now();
-        encoder.push_frame(&rgba)?;
-        encode_time += encode_start.elapsed();
-
-        completed += 1;
-        if completed.is_multiple_of(30) {
-            let percent = if total == 0 {
-                100.0
-            } else {
-                #[allow(clippy::cast_precision_loss)] // progress display only
-                let value = completed as f64 / total as f64 * 100.0;
-                value
-            };
-            println!(
-                "frame {completed}/{total} ({percent:.1}%) elapsed {:.2} s",
-                started.elapsed().as_secs_f64()
-            );
-        }
-    }
-
+    let streamed = stream_frames(&mut renderer, &mut encoder, &document, &images, from, to)?;
     let encode = encoder.finish()?;
     if let Some(path) = wav {
         let _ = std::fs::remove_file(path);
@@ -1971,14 +1936,117 @@ fn run_render(args: &RenderArgs) -> std::result::Result<(), Failure> {
     let elapsed = started.elapsed();
     let seconds = elapsed.as_secs_f64();
     println!(
-        "Rendered {completed} frames in {seconds:.3} s ({} encoded)",
-        encode.frames
+        "Rendered {} frames in {seconds:.3} s ({} encoded)",
+        streamed.completed, encode.frames
     );
-    print_average("render+readback", render_time, completed);
-    print_average("encode", encode_time, completed);
+    print_average("render", streamed.render_time, streamed.completed);
+    print_average("encode", streamed.encode_time, streamed.completed);
     println!("Adapter: {}", renderer.adapter_name());
-    println!("Missing glyphs: {missing_glyphs}");
+    println!("Missing glyphs: {}", streamed.missing_glyphs);
     println!("Output: {}", args.output.display());
+    Ok(())
+}
+
+/// Counters of [`stream_frames`].
+struct Streamed {
+    /// Frames encoded into the MP4.
+    completed: u64,
+    /// Time spent rendering frames (readback wait excluded).
+    render_time: Duration,
+    /// Time spent pushing frames into the encoder.
+    encode_time: Duration,
+    /// Glyphs the frames needed and the atlas did not have.
+    missing_glyphs: u64,
+}
+
+/// Renders `[from, to)` and streams the frames, in order, to `encoder`.
+///
+/// Motion blur composites sub-frame readbacks, so it keeps the synchronous
+/// path. Everything else pipelines the engine readback ring: render the frame,
+/// submit the target, and encode the oldest mapped frame while the next one
+/// renders, so the GPU never waits on the CPU (prompt 18 P6).
+fn stream_frames(
+    renderer: &mut FrameRenderer,
+    encoder: &mut Mp4Encoder,
+    document: &Document,
+    images: &ProjectImages,
+    from: motioner_core::Frame,
+    to: motioner_core::Frame,
+) -> std::result::Result<Streamed, Failure> {
+    let total = u64::try_from(to - from).unwrap_or(0);
+    let started = Instant::now();
+    let mut streamed = Streamed {
+        completed: 0,
+        render_time: Duration::ZERO,
+        encode_time: Duration::ZERO,
+        missing_glyphs: 0,
+    };
+    let mut rgba = Vec::new();
+    let pipelined = !document.composition().motion_blur();
+    let ring = 3_usize;
+    let mut pending = 0_usize;
+    for frame in from..to {
+        let render_start = Instant::now();
+        for image in video_images(images, document, frame)? {
+            renderer.set_image(image);
+        }
+        let stats = if pipelined {
+            let stats = renderer.render_frame_deferred(document, frame)?;
+            renderer.submit_readback()?;
+            pending += 1;
+            stats
+        } else {
+            renderer.render_frame(document, frame, &mut rgba)?
+        };
+        streamed.render_time += render_start.elapsed();
+        streamed.missing_glyphs = streamed
+            .missing_glyphs
+            .saturating_add(u64::from(stats.missing_glyphs));
+        if pipelined {
+            while pending >= ring {
+                if renderer.take_readback(&mut rgba)? {
+                    pending -= 1;
+                    push_frame(encoder, &rgba, &mut streamed)?;
+                }
+            }
+        } else {
+            push_frame(encoder, &rgba, &mut streamed)?;
+        }
+        if streamed.completed.is_multiple_of(30) {
+            let percent = if total == 0 {
+                100.0
+            } else {
+                #[allow(clippy::cast_precision_loss)] // progress display only
+                let value = streamed.completed as f64 / total as f64 * 100.0;
+                value
+            };
+            println!(
+                "frame {}/{} ({percent:.1}%) elapsed {:.2} s",
+                streamed.completed,
+                total,
+                started.elapsed().as_secs_f64()
+            );
+        }
+    }
+    while pending > 0 {
+        if renderer.take_readback(&mut rgba)? {
+            pending -= 1;
+            push_frame(encoder, &rgba, &mut streamed)?;
+        }
+    }
+    Ok(streamed)
+}
+
+/// Pushes one frame into the encoder and accounts for it.
+fn push_frame(
+    encoder: &mut Mp4Encoder,
+    rgba: &[u8],
+    streamed: &mut Streamed,
+) -> std::result::Result<(), Failure> {
+    let encode_start = Instant::now();
+    encoder.push_frame(rgba)?;
+    streamed.encode_time += encode_start.elapsed();
+    streamed.completed += 1;
     Ok(())
 }
 

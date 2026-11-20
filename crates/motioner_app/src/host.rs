@@ -41,6 +41,13 @@ pub struct Host {
     /// The last opened project and its manifest mtime, so the per-frame video
     /// path does not re-read and validate `project.motion` 60 times a second.
     project_cache: RefCell<Option<(PathBuf, Option<std::time::SystemTime>, Project)>>,
+    /// Layer counts per asset key, memoised by the composition source files.
+    ///
+    /// Building them means compiling every composition, which is not a per-frame
+    /// cost: a 3,000-layer project took ~30 s to recompile on every asset
+    /// refresh (prompt 18 P6). The key covers every composition file's path,
+    /// modified time and length.
+    used_keys_cache: RefCell<Option<(UsedKeysKey, HashMap<String, usize>)>>,
 }
 
 impl Host {
@@ -60,6 +67,7 @@ impl Host {
             asset_job: RefCell::new(None),
             waker: RefCell::new(None),
             project_cache: RefCell::new(None),
+            used_keys_cache: RefCell::new(None),
         }
     }
 
@@ -67,6 +75,34 @@ impl Host {
     #[must_use]
     pub fn state(&self) -> AppState {
         self.state.borrow().clone()
+    }
+
+    /// Layer counts per asset key, recomputed only when a composition changed.
+    ///
+    /// Compiling every composition costs far more than the asset panel needs
+    /// (a 3,000-layer project recompiled for ~30 s on every refresh), so the
+    /// result is memoised on each composition file's path, modified time and
+    /// length. Any edit changes at least the modified time or the length.
+    fn used_keys(&self, project: &Project) -> HashMap<String, usize> {
+        let key: UsedKeysKey = project
+            .compositions()
+            .iter()
+            .map(|composition| {
+                let path = project.composition_path(&composition.slug);
+                let metadata = std::fs::metadata(&path).ok();
+                let modified = metadata.as_ref().and_then(|data| data.modified().ok());
+                let len = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+                (path, modified, len)
+            })
+            .collect();
+        if let Some((cached, map)) = self.used_keys_cache.borrow().as_ref() {
+            if *cached == key {
+                return map.clone();
+            }
+        }
+        let map = used_keys_uncached(project);
+        *self.used_keys_cache.borrow_mut() = Some((key, map.clone()));
+        map
     }
 
     /// Decoded-video bytes resident in the bounded cache.
@@ -143,7 +179,7 @@ impl Host {
             .spawn(move || {
                 let _span = motioner_ui::startup::span("motioner: assets enrich (worker)");
                 if let Ok(project) = Project::open(&root) {
-                    let used = used_keys(&project);
+                    let used = used_keys_uncached(&project);
                     let entries: Vec<AssetSummary> = project
                         .assets()
                         .iter()
@@ -409,13 +445,14 @@ impl ProjectHost for Host {
         let Ok(project) = Project::open(composition) else {
             return Vec::new();
         };
-        // Cheap facts only: registry, size, usage and cached audio peaks. Video
+        // Cheap facts only: registry, size and cached audio peaks. Video
         // durations and thumbnails need ffprobe/ffmpeg and run on a worker
-        // (prompt 17 S5); the panel receives them through `poll_assets`.
-        let used = {
-            let _span = motioner_ui::startup::span("motioner: assets used keys");
-            used_keys(&project)
-        };
+        // (prompt 17 S5); the panel receives them through `poll_assets`. The
+        // per-key layer counts compile every composition, so they are not
+        // computed here either: the worker below already builds them and the
+        // panel swaps in the enriched list when it finishes (prompt 18 P6: a
+        // 3,000-layer fixture spent ~29 s compiling them before its first frame).
+        let used: HashMap<String, usize> = HashMap::new();
         let _span = motioner_ui::startup::span("motioner: asset summaries");
         let entries: Vec<AssetSummary> = project
             .assets()
@@ -521,7 +558,7 @@ impl ProjectHost for Host {
                 &ffmpeg,
             );
         }
-        let used = used_keys(&project);
+        let used = self.used_keys(&project);
         Ok(summary(
             &project,
             &entry,
@@ -675,7 +712,10 @@ impl ProjectHost for Host {
 
     fn unused_assets(&self, composition: &Path) -> Result<Vec<String>, String> {
         let project = Project::open(composition).map_err(|error| error.to_string())?;
-        let used = used_keys(&project);
+        // A destructive decision must not trust a memo keyed only on the
+        // composition files: a manifest or registry change that leaves them
+        // untouched would make a used asset look unused.
+        let used = used_keys_uncached(&project);
         Ok(project
             .assets()
             .iter()
@@ -686,7 +726,8 @@ impl ProjectHost for Host {
 
     fn remove_unused_assets(&self, composition: &Path) -> Result<usize, String> {
         let mut project = Project::open(composition).map_err(|error| error.to_string())?;
-        let used = used_keys(&project);
+        // Destructive: recompute instead of trusting the composition-file memo.
+        let used = used_keys_uncached(&project);
         let unused: Vec<String> = project
             .assets()
             .iter()
@@ -977,8 +1018,14 @@ fn summary(
     }
 }
 
+/// Identity of the composition sources a `used_keys` result depends on.
+type UsedKeysKey = Vec<(PathBuf, Option<std::time::SystemTime>, u64)>;
+
 /// Number of layers per asset key across every composition.
-fn used_keys(project: &Project) -> HashMap<String, usize> {
+///
+/// Compiles every composition, so callers go through [`Host::used_keys`],
+/// which memoises the result on the source files' identity.
+fn used_keys_uncached(project: &Project) -> HashMap<String, usize> {
     let mut used = HashMap::new();
     for composition in project.compositions() {
         let path = project.composition_path(&composition.slug);

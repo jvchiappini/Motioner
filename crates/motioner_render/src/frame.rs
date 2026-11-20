@@ -63,6 +63,7 @@ pub(crate) fn create(
         image_inventory: crate::ImageInventory::new(),
         mesh_vertices: Vec::new(),
         mesh_indices: HashMap::default(),
+        paint_scratch: PaintScratch::default(),
         texture_budget: crate::DEFAULT_TEXTURE_BUDGET,
         evaluator: motioner_eval::Evaluator::new(),
         plan: RenderPlan::new(),
@@ -114,17 +115,22 @@ fn local_bounds(item: &RenderItem, plan: &RenderPlan) -> Option<(CoreVec2, CoreV
             let path = plan.path(index)?;
             let bounds = crate::path_bounds(path)?;
             let stroke = path.paint.stroke;
+            // A non-scaling stroke is stroked at `width x placement scale` in
+            // composition space (paths.rs), so its world footprint is not the
+            // local box times the node transform: a node at 6 % scale would
+            // under-estimate it by 16x and cull a visible edge. No cheap bound
+            // -> never cull (prompt 18 P6 review).
+            if stroke.is_some_and(|stroke| stroke.non_scaling.is_some()) {
+                return None;
+            }
             // `path_bounds` covers half the stroke width. A sharp miter join can
             // reach up to twice the width past the centreline, so pad the local
             // box by that much rather than under-estimating an off-screen edge.
             let miter = stroke.map_or(0.0, |stroke| stroke.width.abs() * 2.0);
-            let grow = stroke
-                .and_then(|stroke| stroke.non_scaling)
-                .map_or(0.0, |width| width.abs() * 0.5);
             (
                 CoreVec2::new(bounds[0] - miter, bounds[1] - miter),
                 CoreVec2::new(bounds[2] + miter, bounds[3] + miter),
-                grow,
+                0.0,
             )
         }
         ItemShape::Image {
@@ -133,14 +139,16 @@ fn local_bounds(item: &RenderItem, plan: &RenderPlan) -> Option<(CoreVec2, CoreV
             mesh,
             ..
         } => {
-            if let Some(sample) = mesh.and_then(|index| plan.mesh(index)) {
-                if sample.points.is_empty() {
-                    (
-                        CoreVec2::new(-width.abs() * 0.5, -height.abs() * 0.5),
-                        CoreVec2::new(width.abs() * 0.5, height.abs() * 0.5),
-                        0.0,
-                    )
-                } else {
+            // A plain sprite's box is its own `width x height` rectangle.  A
+            // deformed mesh takes the hull of its sample points.  An item that
+            // names a mesh the plan does not carry has no cheap bound (the
+            // sampler may not be the rectangle), so it is never culled.
+            let sample = match mesh {
+                Some(index) => Some(plan.mesh(index)?),
+                None => None,
+            };
+            match sample {
+                Some(sample) if !sample.points.is_empty() => {
                     let mut min = sample.points[0];
                     let mut max = sample.points[0];
                     for point in &sample.points[1..] {
@@ -151,12 +159,11 @@ fn local_bounds(item: &RenderItem, plan: &RenderPlan) -> Option<(CoreVec2, CoreV
                     }
                     (min, max, 0.0)
                 }
-            } else {
-                (
+                _ => (
                     CoreVec2::new(-width.abs() * 0.5, -height.abs() * 0.5),
                     CoreVec2::new(width.abs() * 0.5, height.abs() * 0.5),
                     0.0,
-                )
+                ),
             }
         }
         // Text bounds need the measured glyph layout; culling it would need a
@@ -207,28 +214,82 @@ pub(crate) fn item_bounds(item: &RenderItem, plan: &RenderPlan) -> Option<Aabb> 
     Some(aabb)
 }
 
-/// Whether the item at `index` belongs to a layer with an effect chain.
+/// Per-item "inside a masked layer" flags for one plan.
 ///
-/// A blur, glow or drop shadow can bleed ink from outside its source item's
-/// bounds, so culling such an item would change pixels near the edge. Those
-/// items are always kept.
-fn in_effected_layer(index: usize, plan: &RenderPlan) -> bool {
-    plan.layers()
-        .iter()
-        .any(|layer| !layer.effects.is_empty() && layer.start <= index && index < layer.end)
+/// The effect-layer half of the cull is O(1) per item through
+/// [`RenderPlan::item_in_effect_layer`].  Masked layers need the same
+/// conservative treatment but the plan has no per-item accessor for them, so
+/// this scratch turns their ranges into one bit per item once per plan.  It is
+/// empty (and costs one layer scan) when the plan has no masks.
+#[derive(Debug, Default)]
+pub(crate) struct CullScratch {
+    /// Difference array over item indices; after [`Self::prepare`] a positive
+    /// entry means the item is inside at least one masked layer.
+    masked: Vec<i32>,
+}
+
+impl CullScratch {
+    /// Rebuilds the flags for `plan`.
+    fn prepare(&mut self, plan: &RenderPlan) {
+        self.masked.clear();
+        if !plan.layers().iter().any(|layer| layer.mask.is_some()) {
+            return;
+        }
+        let len = plan.items().len();
+        self.masked.resize(len + 1, 0);
+        for layer in plan.layers() {
+            if layer.mask.is_some() {
+                let start = layer.start.min(len);
+                let end = layer.end.min(len);
+                if start < end {
+                    if let Some(slot) = self.masked.get_mut(start) {
+                        *slot += 1;
+                    }
+                    if let Some(slot) = self.masked.get_mut(end) {
+                        *slot -= 1;
+                    }
+                }
+            }
+        }
+        let mut running = 0;
+        for slot in &mut self.masked {
+            running += *slot;
+            *slot = running;
+        }
+    }
+
+    /// Whether the item at `index` is inside a masked layer.
+    fn is_masked(&self, index: usize) -> bool {
+        self.masked.get(index).is_some_and(|count| *count > 0)
+    }
+}
+
+/// Reused per-frame scratch for plan painting.
+///
+/// It holds the cull flags, the open-layer stack and the animated-text
+/// buffers, so a steady-state paint reuses the same allocations instead of
+/// growing new ones.  The renderer and the live painter each own one.
+#[derive(Debug, Default)]
+pub(crate) struct PaintScratch {
+    cull: CullScratch,
+    open_layers: Vec<OpenLayer>,
+    glyph_layout: Vec<ferrous_font::GlyphLayout>,
+    glyph_draws: Vec<ferrous_2d::render::GlyphDraw2d>,
+    blur_times: Vec<f64>,
 }
 
 /// Whether the item at `index` is entirely outside `visible` (`[x, y, width,
 /// height]`, in composition pixels) and can be skipped.
 ///
 /// Only a *strict* separation culls: an item that touches or crosses the
-/// boundary is kept, and an item with no cheap bound (text, or one inside an
-/// effect layer) is always kept.
+/// boundary is kept, and an item with no cheap bound (text, a missing path or
+/// mesh) or one inside an effect or masked layer is always kept.
 pub(crate) fn item_is_culled(
     index: usize,
     item: &RenderItem,
     plan: &RenderPlan,
     visible: [f64; 4],
+    cull: &CullScratch,
 ) -> bool {
     if !(visible[0].is_finite()
         && visible[1].is_finite()
@@ -247,9 +308,10 @@ pub(crate) fn item_is_culled(
         || bounds.min_x > right
         || bounds.max_y < visible[1]
         || bounds.min_y > bottom;
-    // Only a candidate (already fully outside) needs the effect-layer check,
-    // which walks the layer list; items on screen never pay for it.
-    separated && !in_effected_layer(index, plan)
+    // Only a candidate (already fully outside) needs either guard: the effect
+    // flag is O(1) per item and the masked bit is O(1) too, so items on screen
+    // never pay for the layer walk.
+    separated && !plan.item_in_effect_layer(index) && !cull.is_masked(index)
 }
 
 /// Uploads the textures the plan draws, one per image key.
@@ -275,12 +337,22 @@ pub(crate) fn prepare_images(
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
     visible: Option<[f64; 4]>,
     scratch: &mut Vec<u8>,
+    paint_scratch: &mut PaintScratch,
 ) -> Result<(), RenderError> {
     textures.clear_missing();
     targets.clear();
+    // No decoded images means no image item can draw, so the item scan (one
+    // step per plan item) is skipped entirely.
+    if images.is_empty() {
+        return Ok(());
+    }
+    if visible.is_some() {
+        paint_scratch.cull.prepare(plan);
+    }
     for (index, item) in plan.items().iter().enumerate() {
         if hidden.is_some_and(|hidden| hidden.contains(&item.node))
-            || visible.is_some_and(|rect| item_is_culled(index, item, plan, rect))
+            || visible
+                .is_some_and(|rect| item_is_culled(index, item, plan, rect, &paint_scratch.cull))
         {
             continue;
         }
@@ -391,6 +463,7 @@ fn render_plan_into_target(
         None,
         None,
         &mut renderer.image_scratch,
+        &mut renderer.paint_scratch,
     )?;
     let stats = paint_plan(
         &mut renderer.harness,
@@ -408,12 +481,28 @@ fn render_plan_into_target(
         &mut renderer.mesh_indices,
         None,
         None,
+        &mut renderer.paint_scratch,
     );
     let report = renderer.harness.render_frame();
     Ok((stats, report))
 }
 
 fn read_target(renderer: &mut FrameRenderer, out: &mut Vec<u8>) -> Result<(), RenderError> {
+    check_texture_budget(renderer)?;
+    renderer
+        .harness
+        .read_pixels_into(out)
+        .map_err(|error| RenderError::Readback {
+            message: error.to_string(),
+        })
+}
+
+/// Rejects a frame whose textures exceed the configured budget.
+///
+/// Both the synchronous and the pipelined (deferred) export paths check it, so
+/// the deferred path cannot bypass the guard just because it does not read the
+/// target back yet.
+fn check_texture_budget(renderer: &mut FrameRenderer) -> Result<(), RenderError> {
     let bytes = renderer.harness.renderer().texture_bytes_2d();
     if bytes > renderer.texture_budget {
         return Err(RenderError::TextureBudget {
@@ -421,12 +510,7 @@ fn read_target(renderer: &mut FrameRenderer, out: &mut Vec<u8>) -> Result<(), Re
             limit: renderer.texture_budget,
         });
     }
-    renderer
-        .harness
-        .read_pixels_into(out)
-        .map_err(|error| RenderError::Readback {
-            message: error.to_string(),
-        })
+    Ok(())
 }
 
 fn stats_from(paint: PaintStats, report: ferrous_renderer::headless::FrameReport) -> FrameStats {
@@ -480,24 +564,60 @@ pub(crate) fn render_frame(
     stats
 }
 
-/// The sub-frame sampling times of a motion-blurred frame (D-0037).
+/// Renders integer frame `frame` into the target **without** reading it back.
 ///
-/// Exposed so the editor preview accumulates exactly the same instants as
-/// `still` and `render`.
-pub fn motion_blur_times(document: &Document, frame: Frame, samples: u32) -> Vec<f64> {
+/// Used by the export loop, which submits the target to the engine readback
+/// ring (`Pure2dHarness::submit_readback`) and reads an older frame while the
+/// next one renders, so the GPU never waits for the CPU (prompt 18 P6).
+/// Motion blur keeps the synchronous path: it reads sub-frames back to
+/// composite them.
+pub(crate) fn render_frame_deferred(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    frame: Frame,
+) -> Result<FrameStats, RenderError> {
+    let mut evaluator = std::mem::take(&mut renderer.evaluator);
+    let mut plan = std::mem::take(&mut renderer.plan);
+    let stats = deferred_inner(renderer, document, frame, &mut evaluator, &mut plan);
+    renderer.evaluator = evaluator;
+    renderer.plan = plan;
+    stats
+}
+
+/// The body of [`render_frame_deferred`], split out so the scratch buffers can
+/// be moved back into the renderer on every return path.
+fn deferred_inner(
+    renderer: &mut FrameRenderer,
+    document: &Document,
+    frame: Frame,
+    evaluator: &mut motioner_eval::Evaluator,
+    plan: &mut RenderPlan,
+) -> Result<FrameStats, RenderError> {
+    evaluator.evaluate(document, frame, plan);
+    let (paint, report) = render_plan_into_target(renderer, document, plan)?;
+    check_texture_budget(renderer)?;
+    Ok(stats_from(paint, report))
+}
+
+/// The sub-frame sampling times of a motion-blurred frame (D-0037), into a
+/// reused buffer.
+///
+/// The editor preview and `still`/`render` share these instants so they
+/// accumulate exactly the same sub-frames.
+fn motion_blur_times_into(times: &mut Vec<f64>, document: &Document, frame: Frame, samples: u32) {
     let composition = document.composition();
     let shutter = composition.shutter();
     let samples = samples.clamp(1, 64);
-    (0..samples)
-        .map(|index| {
-            let subframe = f64::from(index);
-            let offset = (shutter / 360.0) * ((subframe + 0.5) / f64::from(samples) - 0.5);
-            #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
-            {
-                frame as f64 + offset
-            }
-        })
-        .collect()
+    times.clear();
+    times.reserve(usize::try_from(samples).unwrap_or_default());
+    for index in 0..samples {
+        let subframe = f64::from(index);
+        let offset = (shutter / 360.0) * ((subframe + 0.5) / f64::from(samples) - 0.5);
+        #[allow(clippy::cast_precision_loss)] // frames are bounded by 2^31
+        {
+            times.push(frame as f64 + offset);
+        }
+    }
 }
 
 fn render_motion_blur(
@@ -521,7 +641,10 @@ pub(crate) fn render_motion_blur_samples(
     plan: &mut RenderPlan,
     out: &mut Vec<u8>,
 ) -> Result<FrameStats, RenderError> {
-    let times = motion_blur_times(document, frame, samples);
+    // Reuse the time buffer; `render_plan_into_target` borrows the renderer
+    // again, so the scratch is taken out and put back after the loop.
+    let mut times = std::mem::take(&mut renderer.paint_scratch.blur_times);
+    motion_blur_times_into(&mut times, document, frame, samples);
     renderer
         .harness
         .begin_accumulation_2d()
@@ -529,7 +652,7 @@ pub(crate) fn render_motion_blur_samples(
             message: error.to_string(),
         })?;
     let mut last = FrameStats::default();
-    for time in times {
+    for &time in &times {
         evaluator.evaluate_fractional(document, frame, time, plan);
         let (paint, report) = render_plan_into_target(renderer, document, plan)?;
         renderer
@@ -540,6 +663,7 @@ pub(crate) fn render_motion_blur_samples(
             })?;
         last = stats_from(paint, report);
     }
+    renderer.paint_scratch.blur_times = times;
     renderer
         .harness
         .resolve_accumulation_2d()
@@ -581,11 +705,12 @@ fn prepare_fonts(
         let resolved = fonts
             .resolve(family, weight)
             .map_err(RenderError::FontFamily)?;
-        let key = (resolved.family.to_owned(), resolved.weight);
-        if font_ids
-            .iter()
-            .any(|((family, weight), _)| *weight == key.1 && family.eq_ignore_ascii_case(&key.0))
-        {
+        // Compare before allocating the key: this runs once per text item per
+        // frame, so an owned `(String, u16)` here would allocate on every text
+        // of an export frame.
+        if font_ids.iter().any(|((name, w), _)| {
+            *w == resolved.weight && name.eq_ignore_ascii_case(resolved.family)
+        }) {
             continue;
         }
         let id = harness
@@ -593,7 +718,7 @@ fn prepare_fonts(
             .map_err(|error| RenderError::Font {
                 message: error.to_string(),
             })?;
-        font_ids.push((key, id));
+        font_ids.push(((resolved.family.to_owned(), resolved.weight), id));
     }
     Ok(())
 }
@@ -612,8 +737,10 @@ fn font_for(
 }
 
 /// One layer open during the paint loop.
-struct OpenLayer<'a> {
-    layer: &'a motioner_eval::PlanLayer,
+#[derive(Debug)]
+struct OpenLayer {
+    /// Index into [`RenderPlan::layers`].
+    layer: usize,
     /// Whether the engine accepted the push (a rejected layer is never popped).
     pushed: bool,
     /// Whether the mask source layer is open.
@@ -624,7 +751,8 @@ struct OpenLayer<'a> {
 ///
 /// `flip` maps composition pixels to world space, including any [`crate::ViewFit`]
 /// letterboxing. `font` and `missing_glyphs` are owned by the caller so the
-/// per-node glyph measurement cache survives across frames.
+/// per-node glyph measurement cache survives across frames.  `scratch` owns
+/// the reused cull flags, open-layer stack and animated-text buffers.
 #[allow(clippy::too_many_arguments)] // the plan, the canvas, the font table and its caches
 #[allow(clippy::too_many_lines)] // the plan walk: open, draw, masks, close
 pub(crate) fn paint_plan(
@@ -643,10 +771,18 @@ pub(crate) fn paint_plan(
     mesh_indices: &mut HashMap<(u32, u32), Vec<u32>>,
     hidden: Option<&std::collections::BTreeSet<NodeId>>,
     visible: Option<[f64; 4]>,
+    scratch: &mut PaintScratch,
 ) -> PaintStats {
+    if visible.is_some() {
+        scratch.cull.prepare(plan);
+    }
+    let cull_flags: &CullScratch = &scratch.cull;
+    let open_layers = &mut scratch.open_layers;
+    let glyph_layout = &mut scratch.glyph_layout;
+    let glyph_draws = &mut scratch.glyph_draws;
     let culled = |index: usize, item: &RenderItem| {
         hidden.is_some_and(|hidden| hidden.contains(&item.node))
-            || visible.is_some_and(|rect| item_is_culled(index, item, plan, rect))
+            || visible.is_some_and(|rect| item_is_culled(index, item, plan, rect, cull_flags))
     };
     let mut total = 0u32;
     {
@@ -670,16 +806,16 @@ pub(crate) fn paint_plan(
     let effect_scale = space::to_f32(space::world_unit_scale(flip));
     // Each open layer remembers whether the engine accepted it, so a rejected
     // push (invalid effect) is never popped, and whether its mask source layer
-    // is open.
-    let mut open: Vec<OpenLayer<'_>> = Vec::new();
+    // is open.  The stack buffer is reused across frames.
+    open_layers.clear();
     let mut next_layer = 0usize;
     for (item_index, item) in plan.items().iter().enumerate() {
         // A mask source starts after all of the layer's content, so the top
         // open layer is the masked one; begin its source before opening the
         // layers that start at this index (the source's own effect layers).
-        if let Some(entry) = open.last_mut() {
+        if let Some(entry) = open_layers.last_mut() {
             if entry.pushed && !entry.mask_open {
-                if let Some(mask) = entry.layer.mask {
+                if let Some(mask) = plan.layers().get(entry.layer).and_then(|layer| layer.mask) {
                     if mask.start == item_index && mask.end > mask.start {
                         canvas.begin_mask();
                         entry.mask_open = true;
@@ -714,8 +850,8 @@ pub(crate) fn paint_plan(
                     &effects[..count],
                 ),
             };
-            open.push(OpenLayer {
-                layer,
+            open_layers.push(OpenLayer {
+                layer: next_layer,
                 pushed,
                 mask_open: false,
             });
@@ -755,6 +891,8 @@ pub(crate) fn paint_plan(
                     missing_glyphs,
                     &mut z_index,
                     total,
+                    glyph_layout,
+                    glyph_draws,
                 ) {
                     stats.text_draws += 1;
                     stats.missing_glyphs = stats.missing_glyphs.saturating_add(missing);
@@ -778,12 +916,15 @@ pub(crate) fn paint_plan(
                 );
             }
         }
-        while let Some(entry) = open.last() {
-            if entry.layer.end != item_index + 1 {
+        while let Some(entry) = open_layers.last() {
+            let Some(layer) = plan.layers().get(entry.layer) else {
+                break;
+            };
+            if layer.end != item_index + 1 {
                 break;
             }
             if entry.pushed {
-                if entry.layer.mask.is_some() {
+                if layer.mask.is_some() {
                     // An empty source (start == end) never reached the
                     // mid-stream begin above; begin it here so the engine
                     // still composes a deterministic transparent mask.
@@ -794,7 +935,7 @@ pub(crate) fn paint_plan(
                 }
                 canvas.pop_layer();
             }
-            open.pop();
+            open_layers.pop();
         }
     }
     stats
@@ -876,6 +1017,8 @@ fn draw_text(
     missing_glyphs: &mut HashMap<NodeId, u32>,
     z_index: &mut u32,
     total: u32,
+    glyph_layout: &mut Vec<ferrous_font::GlyphLayout>,
+    glyph_draws: &mut Vec<ferrous_2d::render::GlyphDraw2d>,
 ) -> Option<u32> {
     let node = document.node(item.node)?;
     let NodeContent::Text(content) = node.content() else {
@@ -902,19 +1045,20 @@ fn draw_text(
         line_height: to_f32(line_height),
     };
     if let Some(index) = animations {
-        let mut layout = Vec::new();
-        let _ = canvas.layout_text(font, &content.text, style, &mut layout);
+        glyph_layout.clear();
+        let _ = canvas.layout_text(font, &content.text, style, glyph_layout);
         let animators = plan.text_animations(index).unwrap_or(&[]);
-        let draws = animated_draws(
+        animated_draws(
             item,
-            &layout,
+            glyph_layout,
             animators,
             plan.frame(),
             color,
             gradient,
             &transform,
+            glyph_draws,
         );
-        canvas.glyphs(font, &draws);
+        canvas.glyphs(font, glyph_draws);
     } else {
         canvas.text_styled(
             font,
@@ -940,7 +1084,8 @@ fn frame_f64(frames: Frame) -> f64 {
 }
 
 /// Builds one per-glyph draw per laid-out character, applying every animator
-/// in order (D-0034).
+/// in order (D-0034).  `out` is cleared and refilled so the animated text
+/// path reuses its buffer across frames.
 #[allow(clippy::too_many_arguments)] // the item, its layout and the frame
 fn animated_draws(
     item: &RenderItem,
@@ -950,56 +1095,55 @@ fn animated_draws(
     base_color: Color,
     gradient: Option<u32>,
     base_transform: &glam::Mat4,
-) -> Vec<ferrous_2d::render::GlyphDraw2d> {
+    out: &mut Vec<ferrous_2d::render::GlyphDraw2d>,
+) {
     let count = layout.len();
     let centre = (glyph_rank(count) - 1.0) * 0.5;
-    layout
-        .iter()
-        .enumerate()
-        .map(|(index, glyph)| {
-            let mut state = GlyphState::default();
-            for animator in animators {
-                let rank = match animator.order {
-                    CharOrder::Forward => glyph_rank(index),
-                    CharOrder::Reverse => glyph_rank(count - 1 - index),
-                    CharOrder::Center => (glyph_rank(index) - centre).abs(),
-                };
-                let local = frame_f64(frame - animator.start) - rank * animator.stagger;
-                let progress = (local / animator.duration).clamp(0.0, 1.0);
-                state.apply(animator, motioner_eval::ease(animator.ease, progress));
-            }
-            let color = match state.color {
-                Some(animated) => space::linear_rgba(animated, item.opacity * state.opacity),
-                None => space::linear_rgba(base_color, item.opacity * state.opacity),
+    out.clear();
+    out.reserve(count);
+    for (index, glyph) in layout.iter().enumerate() {
+        let mut state = GlyphState::default();
+        for animator in animators {
+            let rank = match animator.order {
+                CharOrder::Forward => glyph_rank(index),
+                CharOrder::Reverse => glyph_rank(count - 1 - index),
+                CharOrder::Center => (glyph_rank(index) - centre).abs(),
             };
-            let gradient = if state.color.is_some() {
-                None
-            } else {
-                gradient
-            };
-            let transform = if state.is_identity() {
-                *base_transform
-            } else {
-                let pivot = glam::Vec3::new(glyph.x, glyph.baseline_y, 0.0);
-                let offset = glam::Vec3::new(to_f32(state.offset.x), -to_f32(state.offset.y), 0.0);
-                let local = glam::Mat4::from_translation(pivot + offset)
-                    * glam::Mat4::from_rotation_z(to_f32(state.rotation).to_radians())
-                    * glam::Mat4::from_scale(glam::Vec3::new(
-                        to_f32(state.scale),
-                        to_f32(state.scale),
-                        1.0,
-                    ))
-                    * glam::Mat4::from_translation(-pivot);
-                *base_transform * local
-            };
-            ferrous_2d::render::GlyphDraw2d {
-                glyph: glyph.clone(),
-                transform,
-                color,
-                gradient,
-            }
-        })
-        .collect()
+            let local = frame_f64(frame - animator.start) - rank * animator.stagger;
+            let progress = (local / animator.duration).clamp(0.0, 1.0);
+            state.apply(animator, motioner_eval::ease(animator.ease, progress));
+        }
+        let color = match state.color {
+            Some(animated) => space::linear_rgba(animated, item.opacity * state.opacity),
+            None => space::linear_rgba(base_color, item.opacity * state.opacity),
+        };
+        let gradient = if state.color.is_some() {
+            None
+        } else {
+            gradient
+        };
+        let transform = if state.is_identity() {
+            *base_transform
+        } else {
+            let pivot = glam::Vec3::new(glyph.x, glyph.baseline_y, 0.0);
+            let offset = glam::Vec3::new(to_f32(state.offset.x), -to_f32(state.offset.y), 0.0);
+            let local = glam::Mat4::from_translation(pivot + offset)
+                * glam::Mat4::from_rotation_z(to_f32(state.rotation).to_radians())
+                * glam::Mat4::from_scale(glam::Vec3::new(
+                    to_f32(state.scale),
+                    to_f32(state.scale),
+                    1.0,
+                ))
+                * glam::Mat4::from_translation(-pivot);
+            *base_transform * local
+        };
+        out.push(ferrous_2d::render::GlyphDraw2d {
+            glyph: glyph.clone(),
+            transform,
+            color,
+            gradient,
+        });
+    }
 }
 
 /// Per-glyph animated state, starting from the identity.
@@ -1080,31 +1224,56 @@ mod tests {
 
     const VISIBLE: [f64; 4] = [0.0, 0.0, 100.0, 100.0];
 
+    fn cull_scratch(plan: &RenderPlan) -> CullScratch {
+        let mut scratch = CullScratch::default();
+        scratch.prepare(plan);
+        scratch
+    }
+
     #[test]
     fn a_fully_off_canvas_item_is_culled() {
         let plan = RenderPlan::new();
+        let scratch = cull_scratch(&plan);
         let right = rect_item(Vec2::new(200.0, 50.0), 10.0, 10.0);
-        assert!(item_is_culled(0, &right, &plan, VISIBLE));
+        assert!(item_is_culled(0, &right, &plan, VISIBLE, &scratch));
         let above = rect_item(Vec2::new(50.0, -200.0), 10.0, 10.0);
-        assert!(item_is_culled(0, &above, &plan, VISIBLE));
+        assert!(item_is_culled(0, &above, &plan, VISIBLE, &scratch));
     }
 
     #[test]
     fn an_item_that_intersects_the_canvas_is_kept() {
         let plan = RenderPlan::new();
+        let scratch = cull_scratch(&plan);
         let inside = rect_item(Vec2::new(50.0, 50.0), 10.0, 10.0);
-        assert!(!item_is_culled(0, &inside, &plan, VISIBLE));
+        assert!(!item_is_culled(0, &inside, &plan, VISIBLE, &scratch));
         // Straddles the right edge: half in, half out.
         let edge = rect_item(Vec2::new(99.0, 50.0), 10.0, 10.0);
-        assert!(!item_is_culled(0, &edge, &plan, VISIBLE));
+        assert!(!item_is_culled(0, &edge, &plan, VISIBLE, &scratch));
         // Exactly touching the edge still counts as visible.
         let touching = rect_item(Vec2::new(105.0, 50.0), 10.0, 10.0);
-        assert!(!item_is_culled(0, &touching, &plan, VISIBLE));
+        assert!(!item_is_culled(0, &touching, &plan, VISIBLE, &scratch));
+    }
+
+    #[test]
+    fn a_rotated_item_that_crosses_the_edge_is_kept() {
+        let plan = RenderPlan::new();
+        let scratch = cull_scratch(&plan);
+        // Unrotated, this box is strictly right of the canvas (min_x = 101).
+        let axis_aligned = rect_item(Vec2::new(106.0, 50.0), 10.0, 10.0);
+        assert!(item_is_culled(0, &axis_aligned, &plan, VISIBLE, &scratch));
+        // Rotated 45 degrees, one corner reaches back inside (min_x ~ 98.9),
+        // so the transformed AABB must keep it.
+        let mut rotated = axis_aligned;
+        rotated.transform =
+            Affine2::layer(Vec2::new(106.0, 50.0), 45.0, Vec2::splat(1.0), Vec2::ZERO);
+        assert!(item_bounds(&rotated, &plan).is_some_and(|bounds| bounds.min_x < 100.0));
+        assert!(!item_is_culled(0, &rotated, &plan, VISIBLE, &scratch));
     }
 
     #[test]
     fn an_item_without_a_cheap_bound_is_never_culled() {
         let plan = RenderPlan::new();
+        let scratch = cull_scratch(&plan);
         let text = RenderItem {
             node: NodeId::from_raw(2),
             transform: Affine2::translation(Vec2::new(10_000.0, 10_000.0)),
@@ -1123,7 +1292,79 @@ mod tests {
             },
         };
         assert!(item_bounds(&text, &plan).is_none());
-        assert!(!item_is_culled(0, &text, &plan, VISIBLE));
+        assert!(!item_is_culled(0, &text, &plan, VISIBLE, &scratch));
+    }
+
+    #[test]
+    fn an_item_with_a_missing_path_or_mesh_is_never_culled() {
+        let plan = RenderPlan::new();
+        let scratch = cull_scratch(&plan);
+        let off_screen = Affine2::translation(Vec2::new(10_000.0, 10_000.0));
+        let path = RenderItem {
+            node: NodeId::from_raw(3),
+            transform: off_screen,
+            opacity: 1.0,
+            blend: motioner_core::BlendMode::Normal,
+            shape: ItemShape::Path { index: 7 },
+        };
+        assert!(item_bounds(&path, &plan).is_none());
+        assert!(!item_is_culled(0, &path, &plan, VISIBLE, &scratch));
+        let image = RenderItem {
+            node: NodeId::from_raw(4),
+            transform: off_screen,
+            opacity: 1.0,
+            blend: motioner_core::BlendMode::Normal,
+            shape: ItemShape::Image {
+                key: None,
+                width: 10.0,
+                height: 10.0,
+                uv: [0.0, 0.0, 1.0, 1.0],
+                mesh: Some(7),
+            },
+        };
+        assert!(item_bounds(&image, &plan).is_none());
+        assert!(!item_is_culled(0, &image, &plan, VISIBLE, &scratch));
+    }
+
+    #[test]
+    fn a_sharp_miter_just_outside_the_edge_is_kept() {
+        // A 20 px stroke around a sharp V whose centreline starts at x = 111.
+        // `path_bounds` (half the stroke) puts it at x = 101, strictly outside
+        // the canvas, but the miter tip reaches back to x ~ 92; `local_bounds`
+        // pads by twice the width, so the conservative box must keep it.
+        let source = "comp(name=\"C\", width=100, height=100, fps=60, duration=1)\n\
+                      p = path([(160, 20), (111, 50), (160, 80)], \
+                      stroke=\"#FFFFFF\", stroke_width=20, join=\"miter\")\n";
+        let document = motioner_dsl::run(source, &motioner_dsl::Limits::default())
+            .expect("the miter test document builds");
+        let mut plan = RenderPlan::new();
+        motioner_eval::Evaluator::new().evaluate(&document, 0, &mut plan);
+        let index = plan
+            .items()
+            .iter()
+            .position(|item| matches!(item.shape, ItemShape::Path { .. }))
+            .expect("the path item exists");
+        let ItemShape::Path { index: path_index } = plan.items()[index].shape else {
+            unreachable!("the item is a path")
+        };
+        let bare = crate::path_bounds(plan.path(path_index).expect("the path is in the plan"))
+            .expect("the path has bounds");
+        assert!(
+            bare[0] > VISIBLE[0] + VISIBLE[2],
+            "the bare path is off-screen: {bare:?}"
+        );
+        let scratch = cull_scratch(&plan);
+        assert!(
+            item_bounds(&plan.items()[index], &plan).is_some_and(|bounds| bounds.min_x <= 100.0),
+            "the miter pad must reach the canvas"
+        );
+        assert!(!item_is_culled(
+            index,
+            &plan.items()[index],
+            &plan,
+            VISIBLE,
+            &scratch
+        ));
     }
 
     #[test]
@@ -1141,6 +1382,37 @@ mod tests {
         motioner_eval::Evaluator::new().evaluate(&document, 0, &mut plan);
         assert!(!plan.items().is_empty());
         assert!(!plan.layers().is_empty());
-        assert!(!item_is_culled(0, &plan.items()[0], &plan, VISIBLE));
+        let scratch = cull_scratch(&plan);
+        assert!(plan.item_in_effect_layer(0));
+        assert!(!item_is_culled(
+            0,
+            &plan.items()[0],
+            &plan,
+            VISIBLE,
+            &scratch
+        ));
+    }
+
+    #[test]
+    fn an_off_canvas_item_inside_a_masked_layer_is_kept() {
+        // A masked layer is protected like an effect layer, even without an
+        // effect chain: both its content and its mask source are kept.
+        let source = "comp(name=\"C\", width=100, height=100, fps=60, duration=1)\n\
+                      card = rect(10, 10)\n\
+                      card.pos = (1000, 1000)\n\
+                      cutout = rect(20, 20)\n\
+                      cutout.pos = (1000, 1000)\n\
+                      card.mask(cutout)\n";
+        let document = motioner_dsl::run(source, &motioner_dsl::Limits::default())
+            .expect("the mask test document builds");
+        let mut plan = RenderPlan::new();
+        motioner_eval::Evaluator::new().evaluate(&document, 0, &mut plan);
+        assert_eq!(plan.items().len(), 2);
+        let scratch = cull_scratch(&plan);
+        for (index, item) in plan.items().iter().enumerate() {
+            assert!(item_bounds(item, &plan).is_some());
+            assert!(scratch.is_masked(index), "item {index} is inside the mask");
+            assert!(!item_is_culled(index, item, &plan, VISIBLE, &scratch));
+        }
     }
 }

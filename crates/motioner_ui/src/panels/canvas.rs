@@ -13,7 +13,7 @@ use motioner_render::linear_rgba;
 
 use crate::icons::{self, Icon};
 use crate::layout::{Hit, Rect};
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale, Theme};
@@ -94,8 +94,68 @@ fn push_rect(
     renderer.draw_2d_shape(shape);
 }
 
+/// Everything the canvas overlays read, except the theme and DPI (in the key).
+///
+/// `time` only animates the loading dots, so it is hashed only while the
+/// loading card is the one on screen.
+fn revision(v: &View<'_>, time: f32) -> u64 {
+    let mut rev = PanelRevision::new()
+        .bool(v.comp_rect.is_some())
+        .bool(v.safe_area)
+        .bool(v.document.is_some())
+        .bool(v.document.is_some_and(motioner_core::Document::is_empty))
+        .bool(v.has_error())
+        .f64(v.zoom)
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.guides.len())
+        .usize(v.diagnostics.len())
+        .str(v.file_name);
+    if let Some(comp) = v.comp_rect {
+        rev = rev.rect(comp);
+    }
+    rev = match v.hover_bounds {
+        Some(bounds) => rev.bool(true).rect(bounds),
+        None => rev.bool(false),
+    };
+    rev = match v.selection_bounds {
+        Some(bounds) => rev.bool(true).rect(bounds),
+        None => rev.bool(false),
+    };
+    rev = match v.selection_size {
+        Some((width, height)) => rev.bool(true).f64(width).f64(height),
+        None => rev.bool(false),
+    };
+    rev = match v.marquee {
+        Some(rect) => rev.bool(true).rect(rect),
+        None => rev.bool(false),
+    };
+    for guide in v.guides {
+        rev = rev.bool(guide.vertical).f64(guide.at);
+    }
+    if let Some(diagnostic) = v.diagnostics.first() {
+        rev = rev
+            .str(&diagnostic.message)
+            .u64(u64::from(diagnostic.line))
+            .u64(u64::from(diagnostic.column));
+    }
+    if v.document.is_none() && !v.has_error() {
+        rev = rev.f32(time);
+    }
+    rev.finish()
+}
+
 /// Draws the overlays above the composition, clipped to the canvas.
 pub fn draw_overlays(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
+    let key = p.panel_key(
+        PanelKind::CanvasOverlays,
+        revision(v, time),
+        v.layout.canvas,
+    );
+    p.panel(key, |p| draw_overlays_body(p, v, time));
+}
+
+fn draw_overlays_body(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
     let t = *p.theme;
     let canvas = v.layout.canvas;
     p.push_clip(canvas);

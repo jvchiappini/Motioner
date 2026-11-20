@@ -778,12 +778,16 @@ impl PreviewSession {
     ///
     /// The plan is reused when neither the frame index nor the document
     /// generation changed, so a paused window does not re-evaluate every frame.
+    /// The evaluator also caches static subtrees between frames, keyed by the
+    /// generation (prompt 18 P6): a root whose tracks have no key in the
+    /// traversed window is reused instead of re-sampled.
     #[must_use]
     pub fn evaluate(&mut self, frame: i64) -> Option<(&Document, &RenderPlan)> {
         let document = self.document.as_ref()?;
         let stale = self.plan_frame != Some(frame) || self.plan_generation != self.generation;
         if stale {
-            self.evaluator.evaluate(document, frame, &mut self.plan);
+            self.evaluator
+                .evaluate_cached(document, self.generation, frame, &mut self.plan);
             self.plan_frame = Some(frame);
             self.plan_generation = self.generation;
         }

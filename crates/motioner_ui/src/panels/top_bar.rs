@@ -3,7 +3,7 @@
 
 use crate::icons::{self, Icon};
 use crate::layout::{Hit, MenuAction, Rect, TopBarToggle};
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
@@ -11,6 +11,47 @@ use crate::widgets::{self, ButtonKind};
 
 /// Draws the top bar.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::TopBar, revision(v), v.layout.top_bar);
+    p.panel(key, |p| draw_body(p, v));
+}
+
+/// Everything the top bar reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new();
+    rev = rev
+        .str(v.file_name)
+        .bool(v.has_error())
+        .bool(v.document.is_some())
+        .bool(v.menu_open)
+        .bool(v.view_menu_open)
+        .bool(v.safe_area)
+        .bool(v.snap)
+        .bool(v.motion_blur_preview)
+        .f32(v.reload_pulse)
+        .f64(v.zoom)
+        .bool(v.comp_rect.is_some())
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.override_rows.len())
+        .bool(v.overrides_open)
+        .bool(v.proxy_status.is_some());
+    if let Some(progress) = v.proxy_status {
+        rev = rev.str(progress);
+    }
+    if let Some(document) = v.document {
+        let comp = document.composition();
+        let rate = comp.frame_rate();
+        rev = rev
+            .u64(u64::from(comp.width()))
+            .u64(u64::from(comp.height()))
+            .i64(comp.duration())
+            .u64(u64::from(rate.numerator()))
+            .u64(u64::from(rate.denominator()));
+    }
+    rev.finish()
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let bar = v.layout.top_bar;
     p.fill(bar, t.panel);
@@ -188,18 +229,34 @@ fn right_side(p: &mut Painter<'_>, v: &View<'_>) {
     p.text_in(&zoom_text, zoom, Align::Center, &style);
 }
 
-/// Draws the File dropdown above the editor.
-pub fn draw_menu(p: &mut Painter<'_>, v: &View<'_>) {
-    let t = *p.theme;
-    let items = v.layout.menu_items();
-    let first = items[0].1;
-    let last = items[items.len() - 1].1;
-    let panel = Rect::new(
+/// The dropdown rectangle of a menu strip.
+fn menu_rect(p: &Painter<'_>, first: Rect, last: Rect) -> Rect {
+    Rect::new(
         first.x,
         first.y - p.m.px(4.0),
         first.w,
         last.bottom() - first.y + p.m.px(8.0),
-    );
+    )
+}
+
+/// Draws the File dropdown above the editor.
+pub fn draw_menu(p: &mut Painter<'_>, v: &View<'_>) {
+    let items = v.layout.menu_items();
+    let panel = menu_rect(p, items[0].1, items[items.len() - 1].1);
+    let revision = PanelRevision::new()
+        .u64(v.menu_hover.map_or(u64::MAX, |action| action as u64))
+        .usize(v.override_rows.len())
+        .finish();
+    let key = p.panel_key(PanelKind::FileMenu, revision, panel);
+    p.panel(key, |p| draw_menu_body(p, v));
+}
+
+fn draw_menu_body(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let items = v.layout.menu_items();
+    let first = items[0].1;
+    let last = items[items.len() - 1].1;
+    let panel = menu_rect(p, first, last);
     p.shadow(
         panel,
         p.m.px(6.0),
@@ -243,16 +300,21 @@ pub fn draw_menu(p: &mut Painter<'_>, v: &View<'_>) {
 
 /// Draws the View dropdown above the editor.
 pub fn draw_view_menu(p: &mut Painter<'_>, v: &View<'_>) {
+    let items = v.layout.view_menu_items();
+    let panel = menu_rect(p, items[0].1, items[items.len() - 1].1);
+    let revision = PanelRevision::new()
+        .u64(v.view_menu_hover.map_or(u64::MAX, |action| action as u64))
+        .finish();
+    let key = p.panel_key(PanelKind::ViewMenu, revision, panel);
+    p.panel(key, |p| draw_view_menu_body(p, v));
+}
+
+fn draw_view_menu_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let items = v.layout.view_menu_items();
     let first = items[0].1;
     let last = items[items.len() - 1].1;
-    let panel = Rect::new(
-        first.x,
-        first.y - p.m.px(4.0),
-        first.w,
-        last.bottom() - first.y + p.m.px(8.0),
-    );
+    let panel = menu_rect(p, first, last);
     p.shadow(
         panel,
         p.m.px(6.0),

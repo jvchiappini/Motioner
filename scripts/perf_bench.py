@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Measure Motioner release scenarios (prompt 18 P0).
+"""Measure Motioner release scenarios (prompt 18 P6).
 
-Runs the eight baseline scenarios, samples the process with ``psutil`` and
+Runs the eleven baseline scenarios, samples the process with ``psutil`` and
 parses the engine's ``frame-trace``/``memory-report`` JSON lines.  For every
 scenario it reports CPU % of one core, frames drawn, GPU ms per pass, the
 per-stage medians, allocations per frame (with a bench build), working set,
@@ -22,27 +22,68 @@ Usage:
 
 The scenarios:
 
-1. start screen idle 10 s;
-2. editor with ``examples/demo.motioner`` idle 10 s;
+1. start screen idle 30 s;
+2. editor with ``examples/demo.motioner`` idle 30 s;
 3. editor hover (the cursor is moved across the window);
-4. timeline scrubbing through the control endpoint;
-5. 1080p playback of the demo for 10 s;
-6. heavy UI (a generated 3000-row text composition);
-7. heavy composition (``examples/showcase_pro.motion``);
-8. export of 120 frames.
+4. editor hover inside one static panel area;
+5. timeline scrubbing through the control endpoint;
+6. 1080p playback of the demo for 10 s;
+7. heavy UI (a generated 3000-row text composition);
+8. heavy UI layers list: a generated 3000-layer ``.motioner`` project whose
+   layers panel is scrolled at a steady rate for 30 s (target collection
+   <= 2 ms; flat 1k vs 3k);
+9. heavy UI layers list, 1000 layers: the same project at a tenth of the row
+   count, to check that collection stays flat;
+10. heavy composition (``examples/showcase_pro.motion``);
+11. export of 120 frames.
 
 All scenarios run in release.  ``--warmup`` runs (default 1) are discarded.
 The frame trace is enabled with ``FERROUS_TRACE_FRAMES=1``; the engine prints
 one summary at exit and one memory inventory line.
 
+Three-run rule: the P6 numbers are medians of three back-to-back measured
+runs (``--runs 3``).  ``aggregate`` keeps the median in the existing scalar
+fields and adds a ``ranges`` object with the ``min``/``max`` of every scalar
+metric across those runs.  ``print_result`` always prints CPU %, fps and
+collection as ``median [min-max]``; a bare CPU % is never printed.
+
 Idle accounting excludes the last ``IDLE_EXCLUDE_S`` seconds before the
 process exits: the close path tears down the GPU, audio and worker threads,
 and that CPU would otherwise land in the final sample and masquerade as idle
-work.  Every idle run reports ``idle_excluded_s`` (the seconds dropped) and
-``idle_frames_after_first`` (``frames - 1``, because the trace's frame count
-is cumulative and includes the first presented frame).
+work.  Both idle numbers are reported and labelled explicitly:
 
-CPU that remains after that exclusion is not Motioner waking up.  A
+- ``idle_after_first_cpu_percent`` (alias ``idle_cpu_percent``): CPU after the
+  first presented frame, up to the end of the measured window;
+- ``idle_tail_cpu_percent`` (alias ``tail_cpu_percent``): CPU over the last
+  measured tail (the final 15 s of a 30 s run).
+
+The same result carries ``idle_excluded_s`` (teardown seconds dropped, alias
+``idle_excluded_teardown_s``) and ``idle_frames_after_first`` (``frames - 1``,
+alias ``idle_after_first_frames``, because the trace's frame count is
+cumulative and includes the first presented frame).  A tail above 0.1 % of a
+core is printed as an explicit FINDING line.
+
+P6 trace fields: the engine adds ``input_to_present_ms``
+(``{median, p50, p90, p99, samples}``) and ``ui_damage``
+(``{median, p90, p99}``) to the frame-trace JSON.  The harness parses them
+into ``input_to_present`` / ``damage_fraction`` (plus flat scalar fields for
+aggregation and ranges) and prints the damaged fraction as a percentage of
+the window and the input-to-present p50/p99 in ms.  When an older binary does
+not emit the fields the harness prints ``not reported`` instead of failing.
+
+The heavy UI layers fixtures are generated under ``FIXTURES`` as real
+``.motioner`` project directories (``project.motion`` plus
+``compositions/main.motion``): one hidden rect node per layer row, no
+grouping.  They are driven with ``preview --paused --continuous
+--exit-after-seconds 30 --window-size 1600x900``; while the window is raised
+the harness posts ``WM_MOUSEWHEEL`` messages over the layers panel every
+~16 ms (gated on ``--allow-pointer``, like the hover scenarios).  The run is
+steady, one wheel event per tick, not a burst.
+
+``--check`` compares the aggregate against a budget JSON.  A baseline output
+is never overwritten implicitly: an existing ``--json-out`` needs ``--force``.
+
+CPU that remains after the teardown exclusion is not Motioner waking up.  A
 per-thread start-address attribution of the residual ticks maps them to the
 NVIDIA user-mode driver threads (``nvoglv64.dll`` / ``nvwgf2umx.dll``): one
 to three of them per 30 s plus the teardown, with no thread of ours waking
@@ -106,6 +147,12 @@ USER32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
 USER32.PostMessageW.restype = wt.BOOL
 
 WM_MOUSEMOVE = 0x0200
+WM_MOUSEWHEEL = 0x020A
+WHEEL_DELTA = 120
+# Wheel lines per event. One row per event at one event per 16 ms is a steady
+# ~62 rows/s: the 3000-row list stays inside its scroll range for the whole
+# 30 s run and the 1000-row list for about half of it.
+WHEEL_LINES = 1
 
 
 def post_mouse_move(hwnd: int, x: int, y: int) -> None:
@@ -263,6 +310,63 @@ def hover_static_loop(pid: int, stop: threading.Event) -> None:
             return
 
 
+def post_mouse_wheel(hwnd: int, screen_x: int, screen_y: int, delta: int) -> None:
+    """Deliver one `WM_MOUSEWHEEL` with screen coordinates to `hwnd`.
+
+    The wheel delta sits in the high word of ``wparam`` and the cursor
+    position in screen coordinates in ``lparam``; this is what winit reads
+    when it turns the message into a ``MouseWheel`` event. Only runs with
+    ``--allow-pointer`` because the real cursor is parked over the panel.
+    """
+    wparam = (delta & 0xFFFF) << 16
+    lparam = ((screen_y & 0xFFFF) << 16) | (screen_x & 0xFFFF)
+    USER32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+
+
+def scroll_layers_loop(pid: int, stop: threading.Event) -> None:
+    """Scroll the layers panel at a steady rate until `stop`.
+
+    Raises the window, parks the real cursor over the layers body (left
+    panel, above the timeline) and posts one wheel event per ~16 ms.  The
+    original cursor position is restored on the way out. Only runs with
+    ``--allow-pointer``.
+    """
+    hwnd = None
+    while not stop.is_set() and hwnd is None:
+        hwnd = find_window(pid)
+        if hwnd is None:
+            time.sleep(0.05)
+    if hwnd is None:
+        return
+    raise_window(hwnd)
+    box = client_box(hwnd)
+    if box is None:
+        return
+    left, top, right, bottom = box
+    width = right - left
+    height = bottom - top
+    # Left panel (264 logical px) over its body; any layer row hit works.
+    client_x = max(24, int(width * 0.08))
+    client_y = max(96, int(height * 0.30))
+    screen_x = left + client_x
+    screen_y = top + client_y
+    original = POINT()
+    have_original = bool(USER32.GetCursorPos(ctypes.byref(original)))
+    try:
+        USER32.SetCursorPos(screen_x, screen_y)
+        post_mouse_move(hwnd, client_x, client_y)
+        # Negative delta scrolls the list down (a positive wheel step would
+        # clamp at the top and never move the rows).
+        delta = -WHEEL_DELTA * WHEEL_LINES
+        while not stop.is_set():
+            post_mouse_wheel(hwnd, screen_x, screen_y, delta)
+            if stop.wait(0.016):
+                return
+    finally:
+        if have_original:
+            USER32.SetCursorPos(original.x, original.y)
+
+
 def scrub_loop(binary: Path, endpoint: Path, stop: threading.Event) -> None:
     """Send seek() commands through the control endpoint until `stop`."""
     deadline = time.perf_counter() + 8.0
@@ -307,11 +411,48 @@ def heavy_ui_fixture() -> Path:
     return path
 
 
+def heavy_ui_list_fixture(count: int) -> Path:
+    """Generate a real ``.motioner`` project with `count` layer rows.
+
+    Every row is its own root rect node (no grouping), so the layers panel
+    lists exactly `count` rows. The nodes are hidden with the MDF override
+    ``<name>.visible = False`` (the same syntax the DSL writes and the bake
+    path emits): a hidden node still has an outline row and is never painted,
+    which keeps the fixture cheap while the panel does the real work.
+    """
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    label = "heavy_ui_list" if count == 3000 else f"heavy_ui_list_{count}"
+    root = FIXTURES / f"{label}.motioner"
+    compositions = root / "compositions"
+    compositions.mkdir(parents=True, exist_ok=True)
+    title = f"Heavy UI List {count}"
+    project = (
+        f'project(version=1, name="{title}", width=1600, height=900, fps=60, '
+        'duration=36000, background="#101014", main="main")\n'
+        'composition(slug="main", title="Main")\n'
+    )
+    lines = [
+        f'comp(name="{title}", width=1600, height=900, fps=60, duration=600, '
+        'background="#101014")',
+    ]
+    for index in range(count):
+        name = f"row_{index:04d}"
+        lines.append(f'{name} = rect(6, 6, fill="#141820")')
+        lines.append(f"{name}.visible = False")
+    (root / "project.motion").write_text(project, encoding="utf-8", newline="\n")
+    (compositions / "main.motion").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+    )
+    return root
+
+
 # ── scenario definitions ───────────────────────────────────────────────────
 
 
 def scenario_specs() -> dict[str, dict]:
     heavy = heavy_ui_fixture()
+    heavy_list = heavy_ui_list_fixture(3000)
+    heavy_list_1000 = heavy_ui_list_fixture(1000)
     tmp = Path(tempfile.gettempdir()) / "motioner-p0"
     tmp.mkdir(parents=True, exist_ok=True)
     return {
@@ -418,6 +559,45 @@ def scenario_specs() -> dict[str, dict]:
             "expected_frames": 600,
             "timeout": 90,
         },
+        "heavy_ui_list": {
+            "description": (
+                "heavy UI layers list: 3000 layers scrolled for 75 s "
+                "(the program takes ~28 s to compile, so ~45 s are measured; "
+                "collection target <= 2 ms; flat 1k vs 3k)"
+            ),
+            "args": lambda _p: [
+                "preview",
+                str(heavy_list),
+                "--paused",
+                "--continuous",
+                "--exit-after-seconds",
+                "75",
+                "--window-size",
+                "1600x900",
+            ],
+            "expected_frames": 0,
+            "wheel": True,
+            "timeout": 110,
+        },
+        "heavy_ui_list_1000": {
+            "description": (
+                "heavy UI layers list: 1000 layers scrolled for 45 s "
+                "(flatness check vs 3000; collection target <= 2 ms)"
+            ),
+            "args": lambda _p: [
+                "preview",
+                str(heavy_list_1000),
+                "--paused",
+                "--continuous",
+                "--exit-after-seconds",
+                "45",
+                "--window-size",
+                "1600x900",
+            ],
+            "expected_frames": 0,
+            "wheel": True,
+            "timeout": 90,
+        },
         "heavy_composition": {
             "description": "heavy composition: showcase_pro",
             "args": lambda _p: [
@@ -482,6 +662,64 @@ def _round_or_none(value: float | int | None) -> float | None:
     return None if value is None else round(float(value), 3)
 
 
+def trace_stat(entry: object, *keys: str) -> float | None:
+    """Read the first numeric field from a trace stats object."""
+    if not isinstance(entry, dict):
+        return None
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def trace_present_mode(frame: dict) -> str | None:
+    """Return the trace's present mode, when the engine reports one."""
+    value = frame.get("present_mode")
+    if value is None:
+        value = frame.get("present-mode")
+    if isinstance(value, dict):
+        value = value.get("mode", value.get("name"))
+    return value if isinstance(value, str) and value else None
+
+
+def trace_input_to_present(frame: dict) -> tuple[dict | None, dict[str, float | None]]:
+    """Parse ``input_to_present_ms`` into a result dict and flat scalars."""
+    entry = frame.get("input_to_present_ms")
+    if entry is None:
+        entry = frame.get("input_to_present")
+    scalars = {
+        "median": trace_stat(entry, "median", "median_ms", "p50", "p50_ms"),
+        "p50": trace_stat(entry, "p50", "p50_ms", "median", "median_ms"),
+        "p90": trace_stat(entry, "p90", "p90_ms"),
+        "p99": trace_stat(entry, "p99", "p99_ms"),
+        "samples": trace_stat(entry, "samples", "sample_count"),
+    }
+    if all(value is None for value in scalars.values()):
+        return None, scalars
+    parsed = {
+        "median": _round_or_none(scalars["median"]),
+        "p50": _round_or_none(scalars["p50"]),
+        "p90": _round_or_none(scalars["p90"]),
+        "p99": _round_or_none(scalars["p99"]),
+        "samples": None if scalars["samples"] is None else int(scalars["samples"]),
+    }
+    return parsed, scalars
+
+
+def trace_damage(frame: dict) -> tuple[float | None, float | None, float | None]:
+    """Parse ``ui_damage`` into (median, p90, p99) fractions of the window."""
+    entry = frame.get("ui_damage")
+    if entry is None and isinstance(frame.get("damage_fraction"), (int, float)):
+        median = float(frame["damage_fraction"])
+        return (median, None, None)
+    return (
+        trace_stat(entry, "median", "median_fraction", "p50"),
+        trace_stat(entry, "p90", "p90_fraction"),
+        trace_stat(entry, "p99", "p99_fraction"),
+    )
+
+
 def run_once(
     binary: Path,
     name: str,
@@ -543,6 +781,10 @@ def run_once(
     if spec.get("hover_static") and allow_pointer:
         workers.append(
             threading.Thread(target=hover_static_loop, args=(process.pid, stop), daemon=True)
+        )
+    if spec.get("wheel") and allow_pointer:
+        workers.append(
+            threading.Thread(target=scroll_layers_loop, args=(process.pid, stop), daemon=True)
         )
     if spec.get("control"):
         workers.append(
@@ -658,6 +900,16 @@ def run_once(
     allocs = None
     alloc_bytes = None
     frame_ms = {}
+    input_to_present = None
+    input_to_present_median = None
+    input_to_present_p50 = None
+    input_to_present_p90 = None
+    input_to_present_p99 = None
+    input_to_present_samples = None
+    damage_fraction = None
+    damage_fraction_p90 = None
+    damage_fraction_p99 = None
+    present_mode = None
     if frame is not None:
         frames = int(frame.get("frames", 0))
         presented = int(frame.get("presented", 0))
@@ -680,6 +932,14 @@ def run_once(
         bytes_entry = frame.get("bytes_per_frame", {})
         if frame.get("alloc_stats") and isinstance(bytes_entry, dict):
             alloc_bytes = float(bytes_entry.get("median", 0.0))
+        input_to_present, ip_scalars = trace_input_to_present(frame)
+        input_to_present_median = ip_scalars["median"]
+        input_to_present_p50 = ip_scalars["p50"]
+        input_to_present_p90 = ip_scalars["p90"]
+        input_to_present_p99 = ip_scalars["p99"]
+        input_to_present_samples = ip_scalars["samples"]
+        damage_fraction, damage_fraction_p90, damage_fraction_p99 = trace_damage(frame)
+        present_mode = trace_present_mode(frame)
     expected = int(spec.get("expected_frames", 0))
     if spec.get("export"):
         frames = expected
@@ -688,6 +948,32 @@ def run_once(
     # number: 0 when the window presented nothing since it settled.
     idle_like = spec.get("idle") or spec.get("hover_static")
     idle_frames_after_first = max(0, frames - 1) if idle_like else None
+    idle_percent_value = (
+        round(idle_cpu_percent, 3) if idle_cpu_percent is not None else None
+    )
+    tail_percent_value = (
+        round(tail_cpu_percent, 3) if tail_cpu_percent is not None else None
+    )
+    excluded_value = round(idle_excluded_s, 3) if idle_excluded_s is not None else None
+    stages_ms = {
+        key: round(value, 4)
+        for key, value in {
+            stage: median_stage(stages, stage)
+            for stage in (
+                "event handling",
+                "app update",
+                "ui layout",
+                "render-command collection",
+                "batch build",
+                "prepare/upload",
+                "encode",
+                "submit",
+                "present/wait",
+            )
+        }.items()
+        if value is not None
+    }
+    collection_ms = stages_ms.get("render-command collection")
     result = {
         "scenario": name,
         "wall_s": round(wall, 3),
@@ -697,17 +983,15 @@ def run_once(
         "presented": presented,
         "gpu_submits": gpu_submits,
         "idle_cpu_s": round(idle_cpu_s, 4) if idle_cpu_s is not None else None,
-        "idle_cpu_percent": (
-            round(idle_cpu_percent, 3) if idle_cpu_percent is not None else None
-        ),
+        "idle_cpu_percent": idle_percent_value,
+        "idle_after_first_cpu_percent": idle_percent_value,
         "tail_cpu_s": round(tail_cpu_s, 4) if tail_cpu_s is not None else None,
-        "tail_cpu_percent": (
-            round(tail_cpu_percent, 3) if tail_cpu_percent is not None else None
-        ),
-        "idle_excluded_s": (
-            round(idle_excluded_s, 3) if idle_excluded_s is not None else None
-        ),
+        "tail_cpu_percent": tail_percent_value,
+        "idle_tail_cpu_percent": tail_percent_value,
+        "idle_excluded_s": excluded_value,
+        "idle_excluded_teardown_s": excluded_value,
         "idle_frames_after_first": idle_frames_after_first,
+        "idle_after_first_frames": idle_frames_after_first,
         "expected_frames": expected,
         "dropped_frames": max(0, expected - frames),
         "fps": round(frames / wall, 3) if wall > 0 else 0.0,
@@ -715,30 +999,26 @@ def run_once(
         "private_mb": round(max_private / (1024 * 1024), 1),
         "threads": max_threads,
         "gpu_passes_ms": {key: round(value, 4) for key, value in gpu.items()},
-        "stages_ms": {
-            key: round(value, 4)
-            for key, value in {
-                stage: median_stage(stages, stage)
-                for stage in (
-                    "event handling",
-                    "app update",
-                    "ui layout",
-                    "render-command collection",
-                    "batch build",
-                    "prepare/upload",
-                    "encode",
-                    "submit",
-                    "present/wait",
-                )
-            }.items()
-            if value is not None
-        },
+        "stages_ms": stages_ms,
+        "collection_ms": _round_or_none(collection_ms),
         "gpu_frame": gpu_frame,
         "allocations_per_frame": allocs,
         "allocated_bytes_per_frame": alloc_bytes,
         "frame_ms_median": _round_or_none(frame_ms.get("median_ms")),
         "frame_ms_p90": _round_or_none(frame_ms.get("p90_ms")),
         "frame_ms_p99": _round_or_none(frame_ms.get("p99_ms")),
+        "input_to_present": input_to_present,
+        "input_to_present_median": _round_or_none(input_to_present_median),
+        "input_to_present_p50": _round_or_none(input_to_present_p50),
+        "input_to_present_p90": _round_or_none(input_to_present_p90),
+        "input_to_present_p99": _round_or_none(input_to_present_p99),
+        "input_to_present_samples": (
+            None if input_to_present_samples is None else int(input_to_present_samples)
+        ),
+        "damage_fraction": _round_or_none(damage_fraction),
+        "damage_fraction_p90": _round_or_none(damage_fraction_p90),
+        "damage_fraction_p99": _round_or_none(damage_fraction_p99),
+        "present_mode": present_mode,
         "vram_mb": None,
         "gpu_bytes": None,
         "cpu_bytes": None,
@@ -761,6 +1041,45 @@ def run_once(
     return result
 
 
+RANGE_METRICS = (
+    "cpu_percent",
+    "idle_cpu_s",
+    "idle_cpu_percent",
+    "idle_after_first_cpu_percent",
+    "tail_cpu_s",
+    "tail_cpu_percent",
+    "idle_tail_cpu_percent",
+    "idle_excluded_s",
+    "idle_excluded_teardown_s",
+    "idle_frames_after_first",
+    "idle_after_first_frames",
+    "dropped_frames",
+    "fps",
+    "working_set_mb",
+    "private_mb",
+    "threads",
+    "vram_mb",
+    "collection_ms",
+    "frame_ms_median",
+    "frame_ms_p90",
+    "frame_ms_p99",
+    "allocations_per_frame",
+    "allocated_bytes_per_frame",
+    "damage_fraction",
+    "damage_fraction_p90",
+    "damage_fraction_p99",
+    "input_to_present_median",
+    "input_to_present_p50",
+    "input_to_present_p90",
+    "input_to_present_p99",
+    "input_to_present_samples",
+    "wall_s",
+    "frames",
+    "presented",
+    "gpu_submits",
+)
+
+
 def aggregate(runs: list[dict]) -> dict:
     def med(key: str) -> float | int | None:
         values = [run[key] for run in runs if run.get(key) is not None]
@@ -774,9 +1093,26 @@ def aggregate(runs: list[dict]) -> dict:
             return None
         return max(values)
 
+    def spread(key: str) -> dict | None:
+        values = [run[key] for run in runs if run.get(key) is not None]
+        if not values:
+            return None
+        return {"min": round(min(values), 3), "max": round(max(values), 3)}
+
     gpu_keys = sorted({key for run in runs for key in run.get("gpu_passes_ms", {})})
     stage_keys = sorted({key for run in runs for key in run.get("stages_ms", {})})
     gpu_frame_keys = sorted({key for run in runs for key in run.get("gpu_frame", {})})
+    input_to_present = {
+        "median": med("input_to_present_median"),
+        "p50": med("input_to_present_p50"),
+        "p90": med("input_to_present_p90"),
+        "p99": med("input_to_present_p99"),
+        "samples": med("input_to_present_samples"),
+    }
+    if all(value is None for value in input_to_present.values()):
+        input_to_present = None
+    elif input_to_present["samples"] is not None:
+        input_to_present["samples"] = int(input_to_present["samples"])
     return {
         "runs": len(runs),
         "cpu_percent": med("cpu_percent"),
@@ -786,10 +1122,14 @@ def aggregate(runs: list[dict]) -> dict:
         "gpu_submits": med("gpu_submits"),
         "idle_cpu_s": med("idle_cpu_s"),
         "idle_cpu_percent": med("idle_cpu_percent"),
+        "idle_after_first_cpu_percent": med("idle_after_first_cpu_percent"),
         "tail_cpu_s": med("tail_cpu_s"),
         "tail_cpu_percent": med("tail_cpu_percent"),
+        "idle_tail_cpu_percent": med("idle_tail_cpu_percent"),
         "idle_excluded_s": med("idle_excluded_s"),
+        "idle_excluded_teardown_s": med("idle_excluded_teardown_s"),
         "idle_frames_after_first": med("idle_frames_after_first"),
+        "idle_after_first_frames": med("idle_after_first_frames"),
         "dropped_frames": med("dropped_frames"),
         "fps": med("fps"),
         "working_set_mb": maximum("working_set_mb"),
@@ -797,10 +1137,26 @@ def aggregate(runs: list[dict]) -> dict:
         "threads": maximum("threads"),
         "allocations_per_frame": med("allocations_per_frame"),
         "allocated_bytes_per_frame": med("allocated_bytes_per_frame"),
+        "collection_ms": med("collection_ms"),
         "frame_ms_median": med("frame_ms_median"),
         "frame_ms_p90": med("frame_ms_p90"),
         "frame_ms_p99": med("frame_ms_p99"),
         "vram_mb": maximum("vram_mb"),
+        "input_to_present": input_to_present,
+        "input_to_present_median": med("input_to_present_median"),
+        "input_to_present_p50": med("input_to_present_p50"),
+        "input_to_present_p90": med("input_to_present_p90"),
+        "input_to_present_p99": med("input_to_present_p99"),
+        "input_to_present_samples": med("input_to_present_samples"),
+        "damage_fraction": med("damage_fraction"),
+        "damage_fraction_p90": med("damage_fraction_p90"),
+        "damage_fraction_p99": med("damage_fraction_p99"),
+        "present_mode": runs[-1].get("present_mode"),
+        "ranges": {
+            key: value
+            for key in RANGE_METRICS
+            if (value := spread(key)) is not None
+        },
         "gpu_passes_ms": {
             key: round(
                 statistics.median(
@@ -834,30 +1190,64 @@ def aggregate(runs: list[dict]) -> dict:
 
 
 def print_result(name: str, description: str, result: dict) -> None:
+    ranges = result.get("ranges", {})
+
+    def ranged(key: str, value: float | int | None, unit: str = "") -> str:
+        if value is None:
+            return "n/a"
+        spread = ranges.get(key)
+        if not spread:
+            return f"{value}{unit}"
+        return f"{value}{unit} [{spread['min']}-{spread['max']}{unit}]"
+
+    def fraction_percent(value: float | None) -> float | None:
+        if value is None:
+            return None
+        return value * 100.0 if abs(value) <= 1.0 else value
+
     print(f"\n{name}: {description}")
     print(
-        f"  cpu {result['cpu_percent']}%  wall {result['wall_s']} s  "
-        f"frames {result['frames']}  presented {result['presented']}  "
-        f"submits {result['gpu_submits']}  dropped {result['dropped_frames']}  "
-        f"fps {result['fps']}"
+        f"  cpu {ranged('cpu_percent', result['cpu_percent'], '%')}  "
+        f"wall {result['wall_s']} s  frames {result['frames']}  "
+        f"presented {result['presented']}  submits {result['gpu_submits']}  "
+        f"dropped {result['dropped_frames']}  fps {ranged('fps', result['fps'])}"
     )
-    if result.get("idle_frames_after_first") is not None:
-        print(f"  frames after the first: {result['idle_frames_after_first']}")
-    if result.get("idle_excluded_s") is not None:
+    frames_after_first = result.get(
+        "idle_after_first_frames", result.get("idle_frames_after_first")
+    )
+    if frames_after_first is not None:
         print(
-            f"  idle window excludes the last {result['idle_excluded_s']} s "
-            "before exit (teardown)"
+            "  frames after the first "
+            f"(idle_after_first_frames): {frames_after_first}"
         )
-    if result["idle_cpu_percent"] is not None:
+    excluded = result.get("idle_excluded_teardown_s", result.get("idle_excluded_s"))
+    if excluded is not None:
         print(
-            f"  idle cpu {result['idle_cpu_percent']}% of a core  "
-            f"({result['idle_cpu_s']} s after the first frame)"
+            "  idle window excludes the last "
+            f"{excluded} s before exit (idle_excluded_teardown_s, teardown)"
         )
-    if result["tail_cpu_percent"] is not None:
+    idle_after_first = result.get(
+        "idle_after_first_cpu_percent", result.get("idle_cpu_percent")
+    )
+    if idle_after_first is not None:
         print(
-            f"  idle tail {result['tail_cpu_percent']}% of a core  "
+            "  idle after first frame (idle_after_first_cpu_percent) "
+            f"{ranged('idle_after_first_cpu_percent', idle_after_first, '%')} "
+            f"of a core  ({result['idle_cpu_s']} s after the first frame)"
+        )
+    idle_tail = result.get("idle_tail_cpu_percent", result.get("tail_cpu_percent"))
+    if idle_tail is not None:
+        print(
+            "  idle tail (idle_tail_cpu_percent) "
+            f"{ranged('idle_tail_cpu_percent', idle_tail, '%')} of a core  "
             f"({result['tail_cpu_s']} s in the measured tail)"
         )
+        if idle_tail > 0.1:
+            print(
+                "  FINDING: idle tail "
+                f"{ranged('idle_tail_cpu_percent', idle_tail, '%')} of a core "
+                "is above 0.1 % (the window is not sleeping)"
+            )
     print(
         f"  working set {result['working_set_mb']} MB  private "
         f"{result['private_mb']} MB  threads {result['threads']}  "
@@ -868,11 +1258,46 @@ def print_result(name: str, description: str, result: dict) -> None:
             f"  frame time median {result['frame_ms_median']} ms  p90 "
             f"{result['frame_ms_p90']} ms  p99 {result['frame_ms_p99']} ms"
         )
+    if result.get("collection_ms") is not None:
+        print(
+            "  collection (render-command) "
+            f"{ranged('collection_ms', result['collection_ms'], ' ms')}"
+        )
     if result["allocations_per_frame"] is not None:
         print(
             f"  allocations/frame {result['allocations_per_frame']}  "
             f"bytes/frame {result['allocated_bytes_per_frame']}"
         )
+    present_mode = result.get("present_mode")
+    present_label = f" (present mode {present_mode})" if present_mode else ""
+    input_to_present = result.get("input_to_present")
+    if input_to_present and (
+        input_to_present.get("p50") is not None
+        or input_to_present.get("p99") is not None
+    ):
+        print(
+            f"  input-to-present{present_label}: "
+            f"p50 {input_to_present.get('p50')} ms  "
+            f"p99 {input_to_present.get('p99')} ms  "
+            f"(samples {input_to_present.get('samples')})"
+        )
+    else:
+        print(f"  input-to-present{present_label}: not reported")
+    damage = result.get("damage_fraction")
+    if damage is not None:
+        p90 = fraction_percent(result.get("damage_fraction_p90"))
+        p99 = fraction_percent(result.get("damage_fraction_p99"))
+        detail = ""
+        if p90 is not None:
+            detail += f"  p90 {p90:.2f}%"
+        if p99 is not None:
+            detail += f"  p99 {p99:.2f}%"
+        print(
+            f"  damaged fraction {fraction_percent(damage):.2f}% of the window"
+            f"{detail}"
+        )
+    else:
+        print("  damaged fraction: not reported")
     if result["gpu_passes_ms"]:
         passes = ", ".join(f"{key} {value:.3f} ms" for key, value in result["gpu_passes_ms"].items())
         print(f"  GPU passes: {passes}")
@@ -946,7 +1371,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--allow-pointer",
         action="store_true",
-        help="run the hover scenarios (they post synthetic pointer moves to the app window)",
+        help=(
+            "run the pointer scenarios (hover and layers scroll post synthetic "
+            "pointer/wheel messages to the app window)"
+        ),
     )
     args = parser.parse_args(argv)
     enable_dpi_awareness()
@@ -972,8 +1400,13 @@ def main(argv: list[str]) -> int:
     results: dict[str, dict] = {}
     for name in names:
         spec = specs[name]
-        if (spec.get("hover") or spec.get("hover_static")) and not args.allow_pointer:
-            print(f"\n{name}: skipped (needs --allow-pointer: it moves the real mouse)")
+        if (
+            spec.get("hover") or spec.get("hover_static") or spec.get("wheel")
+        ) and not args.allow_pointer:
+            print(
+                f"\n{name}: skipped "
+                "(needs --allow-pointer: it moves the real mouse and wheel)"
+            )
             continue
         endpoint = Path(tempfile.gettempdir()) / f"motioner-p0-{name}.ctl"
         if endpoint.exists():

@@ -3,7 +3,7 @@
 
 use crate::assets::{AssetKindUi, AssetSummary, AssetView};
 use crate::layout::{Hit, LeftTab, Rect};
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
@@ -45,8 +45,48 @@ pub fn tabs(p: &mut Painter<'_>, v: &View<'_>, count: Option<&str>) {
     p.hline(header.x, header.right(), header.bottom(), t.hairline);
 }
 
+/// Everything the assets panel reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .u64(v.left_tab as u64)
+        .u64(v.assets.view() as u64)
+        .u64(v.assets.selected.map_or(u64::MAX, |index| index as u64))
+        .str(v.filter)
+        .f32(v.layer_scroll)
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.assets.entries.len())
+        .usize(v.assets.entries.as_ptr() as usize);
+    for entry in &v.assets.entries {
+        rev = rev
+            .str(&entry.key)
+            .str(&entry.original)
+            .u64(entry.kind as u64)
+            .u64(entry.size_bytes)
+            .f64(entry.duration.unwrap_or(-1.0))
+            .usize(entry.used_by)
+            .usize(entry.peaks.len())
+            .usize(entry.peak_levels.len());
+        for peak in &entry.peaks {
+            rev = rev.f32(*peak);
+        }
+        for level in &entry.peak_levels {
+            rev = rev.usize(level.len());
+            for peak in level {
+                rev = rev.f32(*peak);
+            }
+        }
+    }
+    rev.finish()
+}
+
 /// Draws the assets panel.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::Assets, revision(v), v.layout.layers.rect);
+    p.panel(key, |p| draw_body(p, v));
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let panel = v.layout.layers;
     p.fill(panel.rect, t.panel);

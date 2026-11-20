@@ -25,7 +25,7 @@ use ferrous_engine::{
     AppContext, Color as EngineColor, DrawContext, FerrousApp, FileDropEvent, FileDropKind,
     KeyCode, Screenshot,
 };
-use motioner_core::{Frame, NodeId};
+use motioner_core::{Frame, FrameRate, NodeId};
 use motioner_render::LivePainter;
 
 use crate::capture::Capture;
@@ -216,6 +216,22 @@ pub(crate) struct PreviewApp {
     image_reloads_in_flight: std::collections::HashSet<motioner_core::ImageKey>,
     /// `frame_facts` cached by document revision and view geometry.
     facts_cache: RefCell<Option<(FactsKey, Rc<FrameFacts>)>>,
+    /// Batch ranges reused frame to frame, so a panel whose content did not
+    /// change is not rebuilt (prompt 18 P6).
+    panel_cache: crate::paint::PanelCache,
+    /// Inputs the panel cache was last built for; a change starts it over.
+    panel_cache_key: Option<PanelCacheKey>,
+    /// Damage the chrome reports this frame, kept for the engine to enable a
+    /// partial present later (prompt 18 P6).
+    ui_target: Option<UiDamageTarget>,
+    /// Reused file-name label for the chrome paint, so drawing a frame does
+    /// not allocate a `String` for the title bar.
+    file_name: String,
+    /// Previous wake of the playback chain; the next one is one period later.
+    last_playback_wake: Option<Instant>,
+    /// Wake chosen for the current frame, so the several scheduling points in
+    /// one frame do not advance the chain more than once.
+    scheduled_wake: Option<Instant>,
 }
 
 /// Identity of the inputs of [`PreviewApp::start_layout`].
@@ -241,6 +257,50 @@ type FactsKey = (
     u32, // canvas width bits
     u32, // canvas height bits
 );
+
+/// Inputs that force the per-panel batch cache to start over: a resize, a DPI
+/// change or a theme swap.
+type PanelCacheKey = (
+    u32,                   // window width in physical pixels
+    u32,                   // window height in physical pixels
+    crate::theme::Metrics, // DPI metrics
+    [f32; 4],              // pasteboard (theme anchor)
+    [f32; 4],              // accent (theme anchor)
+);
+
+/// Damage the chrome reported on the last frame.
+///
+/// This mirrors the damage contract of `ferrous_ui_render::PersistentUiTarget`
+/// (`invalidate`, `invalidate_all`, rectangles in physical pixels, Y-down) so
+/// the engine can consume the rectangles once it owns an off-screen UI target.
+/// `motioner_ui` does not depend on `ferrous_ui_render` yet; the hand-off asks
+/// the engine lane to expose the target through `ferrous_gui` and this type is
+/// replaced by it (prompt 18 P6). It reuses its vector, so steady state does
+/// not allocate.
+#[derive(Default)]
+#[allow(dead_code)] // written now, read by the engine's partial-present wiring (P6)
+struct UiDamageTarget {
+    /// The damage rectangles of the last frame, in physical pixels.
+    rects: Vec<Rect>,
+    /// Whether the last frame damaged the whole target (first frame, resize or
+    /// theme change), so a consumer must repaint everything.
+    full: bool,
+}
+
+impl UiDamageTarget {
+    /// Records one frame's damage, reusing the previous frame's capacity.
+    fn record(&mut self, rects: &[Rect], full: bool) {
+        self.rects.clear();
+        self.rects.extend_from_slice(rects);
+        self.full = full;
+    }
+
+    /// Marks the whole target damaged (resize or theme change).
+    fn invalidate_all(&mut self) {
+        self.rects.clear();
+        self.full = true;
+    }
+}
 
 impl PreviewApp {
     #[allow(clippy::too_many_lines)] // one struct literal; the fields are the window's state
@@ -361,6 +421,12 @@ impl PreviewApp {
             image_reloads: None,
             image_reloads_in_flight: std::collections::HashSet::new(),
             facts_cache: RefCell::new(None),
+            panel_cache: crate::paint::PanelCache::new(),
+            panel_cache_key: None,
+            ui_target: None,
+            file_name: String::new(),
+            last_playback_wake: None,
+            scheduled_wake: None,
         };
         app.start_font_bakes();
         app
@@ -536,16 +602,28 @@ impl PreviewApp {
         pending
     }
 
+    /// Resets the per-frame playback pacing state.
+    ///
+    /// `scheduled_wake` memoises the wake of the current frame for the several
+    /// scheduling points below; the wake chain restarts when playback stops.
+    fn begin_frame_timing(&mut self) {
+        self.scheduled_wake = None;
+        if !self.editor.transport().is_playing() {
+            self.last_playback_wake = None;
+        }
+    }
+
     /// Schedules the wakes that keep the window correct while it is idle:
     /// playback, a device that is still opening, an animation pulse, a
     /// debounced write and the session heartbeat.
     fn schedule_idle_work(&mut self, ctx: &mut AppContext<'_>) {
         let now = Instant::now();
         if self.editor.transport().is_playing() {
-            // An animation runs at the display's pace, but never faster: an
-            // occluded window may not block on vsync, and a 300 fps playback
-            // would burn a core for frames nobody sees.
-            ctx.redraw_at(now + FRAME_BUDGET);
+            // Pace the loop on the composition's own frame boundary against
+            // the presentation clock, not a fixed 16 ms budget: 60 fps content
+            // presents at 60 fps, and an occluded window still waits at least
+            // one frame period instead of spinning.
+            ctx.redraw_at(self.playback_deadline(now));
         }
         if self.start_playing || (self.audio_started && !self.audio_aligned) {
             ctx.redraw_at(now + Duration::from_millis(50));
@@ -559,11 +637,14 @@ impl PreviewApp {
         }
         // A frame limit is checked by the next `update`; on-demand mode must
         // ask for that next frame or a `--exit-after-frames 1` run would
-        // present once and then sleep forever.
-        if self
-            .options
-            .exit_after_frames
-            .is_some_and(|limit| self.frames_presented < limit)
+        // present once and then sleep forever. While playing, the playback
+        // deadline above already supplies that wake, so a 16 ms timer must not
+        // undercut the composition's own pacing.
+        if !self.editor.transport().is_playing()
+            && self
+                .options
+                .exit_after_frames
+                .is_some_and(|limit| self.frames_presented < limit)
         {
             ctx.redraw_at(now + FRAME_BUDGET);
         }
@@ -585,6 +666,32 @@ impl PreviewApp {
                 ctx.redraw_at(next);
             }
         }
+    }
+
+    /// The wake that presents the composition's next frame.
+    ///
+    /// The cadence is anchored on the previous wake, not on "now + period": the
+    /// time a frame spends drawing and presenting is absorbed by the next
+    /// target, so 60 fps content keeps a 16.667 ms cadence even when a frame
+    /// takes 2 ms. A boundary computed from the transport anchor is wrong here
+    /// because the audio path re-anchors the transport to the audio clock
+    /// (measured: 97 fps on 60 fps content). If a frame overruns the period, or
+    /// playback just resumed, the chain restarts from `now` so an occluded
+    /// window does not burst to catch up.
+    fn playback_deadline(&mut self, now: Instant) -> Instant {
+        if let Some(at) = self.scheduled_wake {
+            return at;
+        }
+        let period = playback_period(self.editor.transport().frame_rate());
+        // Continue the chain unless the loop is a full period late (a stall or
+        // a resume), which would otherwise make it render a burst to catch up.
+        let target = match self.last_playback_wake {
+            Some(previous) if now.saturating_duration_since(previous) < period => previous + period,
+            _ => now + period,
+        };
+        self.last_playback_wake = Some(target);
+        self.scheduled_wake = Some(target);
+        target
     }
 
     fn scale(&self, ctx: &AppContext<'_>) -> f32 {
@@ -957,6 +1064,10 @@ impl PreviewApp {
         for pending in server.poll() {
             match pending.request.clone() {
                 Ok(Request::Command(command)) => {
+                    // Prompt 18 P6: a control command is input too; the scrub
+                    // benchmark drives `seek` through the endpoint, and this is
+                    // the instant its presented frame answers.
+                    ferrous_core::frame_trace::record_input(Instant::now());
                     let result = self.editor.execute(&command, self.clock);
                     match result {
                         Ok(outcome) => {
@@ -1053,6 +1164,7 @@ impl PreviewApp {
         if self.exit_requested(ctx) {
             return;
         }
+        self.begin_frame_timing();
         // Playback, an opening audio device and the debounced write keep the
         // loop awake on their own; everything else sleeps.
         self.schedule_idle_work(ctx);
@@ -1576,12 +1688,12 @@ impl PreviewApp {
         });
         let ui_fps = ctx.time.fps;
         self.frames_presented = self.frames_presented.saturating_add(1);
-        if let Some(path) = self.options.screenshot.clone() {
+        if let Some(path) = self.options.screenshot.as_ref() {
             if !self.screenshot_queued
                 && self.frames_presented >= self.options.exit_after_frames.unwrap_or(1)
             {
                 self.screenshot_queued = true;
-                self.capture.request(path);
+                self.capture.request(path.clone());
             }
         }
         if self.capture.poll(self.frames_presented) {
@@ -1633,8 +1745,9 @@ impl PreviewApp {
             .path()
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("untitled")
-            .to_owned();
+            .unwrap_or("untitled");
+        self.file_name.clear();
+        self.file_name.push_str(file_name);
         let facts = self.frame_facts(&layout);
         let reload_pulse = self.last_reload.map_or(0.0, |at| {
             1.0 - (at.elapsed().as_secs_f32() / RELOAD_PULSE.as_secs_f32()).min(1.0)
@@ -1664,7 +1777,7 @@ impl PreviewApp {
         let transport = editor.transport();
         let mut view = View {
             layout: &layout,
-            file_name: &file_name,
+            file_name: &self.file_name,
             document: editor.session().document(),
             outline: editor.outline(),
             layer_rows: editor.visible_outline(),
@@ -1736,7 +1849,31 @@ impl PreviewApp {
             tooltip,
         };
 
-        let mut p = Painter::new(dc.gui, dc.font, &self.theme, layout.metrics);
+        // Prompt 18 P6: a resize, a DPI change or a theme swap starts the
+        // per-panel cache and the damage target over; every other frame reuses
+        // the batch ranges of the panels whose content did not change.
+        let cache_key: PanelCacheKey = (
+            ctx.window_size.0,
+            ctx.window_size.1,
+            layout.metrics,
+            self.theme.pasteboard,
+            self.theme.accent,
+        );
+        if self.panel_cache_key != Some(cache_key) {
+            self.panel_cache_key = Some(cache_key);
+            self.panel_cache.invalidate_all();
+            if let Some(target) = self.ui_target.as_mut() {
+                target.invalidate_all();
+            }
+        }
+        self.panel_cache.begin_frame();
+        let mut p = Painter::cached(
+            dc.gui,
+            dc.font,
+            &self.theme,
+            layout.metrics,
+            &mut self.panel_cache,
+        );
         {
             // Prompt 17 S2: the chrome's first-frame layout and text, measured.
             let _span = ferrous_engine::startup::span("motioner: panels");
@@ -1797,6 +1934,20 @@ impl PreviewApp {
                 request.shortcut,
             );
         }
+        // Prompt 18 P6: report how much of the window this frame repainted and
+        // keep the damage rectangles for an off-screen UI target. The engine
+        // reads the fraction from the frame trace (lane F parses it); the
+        // rectangles are held here until the engine exposes `PersistentUiTarget`
+        // through `ferrous_gui` (see the hand-off), so partial present stays
+        // off this phase.
+        let damage = p.damage();
+        let (width, height) = ctx.window_size;
+        if width > 0 && height > 0 {
+            let fraction = damage.damaged_fraction(width as f32, height as f32) as f32;
+            ferrous_core::frame_trace::record_ui_damage(fraction);
+        }
+        let target = self.ui_target.get_or_insert_with(UiDamageTarget::default);
+        target.record(&damage.rects, damage.full);
     }
 }
 
@@ -1856,6 +2007,13 @@ impl FerrousApp for PreviewApp {
         event: &ferrous_engine::winit::event::WindowEvent,
         ctx: &mut AppContext<'_>,
     ) {
+        // Prompt 18 P6: timestamp every input that starts a frame, so the
+        // engine reports input-to-present. A pointer move only starts one when
+        // it changes what is drawn (its branches below record it); a wake
+        // scheduled with `redraw_at` has no input and never counts as one.
+        if is_immediate_redraw_input(event) {
+            ferrous_core::frame_trace::record_input(Instant::now());
+        }
         let ferrous_engine::winit::event::WindowEvent::CursorMoved { .. } = event else {
             if matches!(
                 event,
@@ -1866,6 +2024,7 @@ impl FerrousApp for PreviewApp {
                 let changed =
                     self.start_hover.take().is_some() || self.pointer.hover.take().is_some();
                 if changed {
+                    ferrous_core::frame_trace::record_input(Instant::now());
                     ctx.request_redraw();
                 }
             }
@@ -1899,6 +2058,7 @@ impl FerrousApp for PreviewApp {
             };
             let hover = screen.action_at(&layout, mx, my);
             if hover != self.start_hover {
+                ferrous_core::frame_trace::record_input(Instant::now());
                 ctx.request_redraw();
             }
             self.start = Some(screen);
@@ -1906,16 +2066,19 @@ impl FerrousApp for PreviewApp {
         }
         let Some(layout) = self.layout else {
             // The first frame has not laid the editor out yet.
+            ferrous_core::frame_trace::record_input(Instant::now());
             ctx.request_redraw();
             return;
         };
         let hover = self.hover_at(&layout, mx, my);
         if hover != self.pointer.hover {
             // The highlight, cursor or the hovered canvas node changed.
+            ferrous_core::frame_trace::record_input(Instant::now());
             ctx.request_redraw();
         } else if hover == Some(Hit::Canvas) {
             // The canvas hover overlay follows the pointer even when the hit
             // kind is unchanged.
+            ferrous_core::frame_trace::record_input(Instant::now());
             ctx.request_redraw();
         } else if self.tooltip(&layout).is_some() {
             // The target has a tooltip: schedule the one wake that shows it.
@@ -2038,6 +2201,34 @@ fn modifiers(ctx: &AppContext<'_>) -> Modifiers {
     }
 }
 
+/// One frame period at `rate`, or the 60 fps budget for a degenerate rate.
+fn playback_period(rate: FrameRate) -> Duration {
+    let fps = rate.as_f64();
+    if fps.is_finite() && fps > 0.5 {
+        Duration::from_secs_f64(1.0 / fps)
+    } else {
+        FRAME_BUDGET
+    }
+}
+
+/// Whether a window event starts a frame without a hit test deciding it.
+///
+/// Presses, the wheel, keys, a resize and a scale change make the on-demand
+/// loop draw on their own. A pointer move is opt-out (prompt 18 P3), so its
+/// branches record the input only when they actually request a redraw and a
+/// move over a static area stays free.
+fn is_immediate_redraw_input(event: &ferrous_engine::winit::event::WindowEvent) -> bool {
+    use ferrous_engine::winit::event::WindowEvent;
+    matches!(
+        event,
+        WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Resized(_)
+            | WindowEvent::ScaleFactorChanged { .. }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -2045,10 +2236,11 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use super::{PreviewApp, PreviewOptions};
+    use super::{playback_period, PreviewApp, PreviewOptions, FRAME_BUDGET};
     use crate::command::Command;
     use crate::editor::Editor;
     use crate::layout::{Layout, PanelSizes};
+    use motioner_core::FrameRate;
 
     const HELLO: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -2132,5 +2324,18 @@ mod tests {
             "toggling shy must refresh the facts"
         );
         Ok(())
+    }
+
+    #[test]
+    fn playback_period_follows_the_composition_rate() {
+        assert_eq!(
+            playback_period(FrameRate::new(60, 1).unwrap()),
+            Duration::from_nanos(16_666_667)
+        );
+        // A degenerate rate falls back to the 60 fps budget.
+        assert_eq!(
+            playback_period(FrameRate::new(1, 4000).unwrap()),
+            FRAME_BUDGET
+        );
     }
 }

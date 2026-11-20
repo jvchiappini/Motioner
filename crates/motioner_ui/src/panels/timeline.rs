@@ -7,13 +7,299 @@ use motioner_core::{Frame, FrameRate};
 
 use crate::icons::{self, Icon};
 use crate::layout::{Hit, Rect, TransportButton};
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKey, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale};
 use crate::timeline::{frame_to_x, tick_spacing, TickUnit, MIN_TICK_SPACING_PX};
 use crate::timeline_model::{RowKind, TimelineRow};
 use crate::widgets::{self, ButtonKind, KeyMark};
+
+/// Everything the timeline reads, except the theme and DPI (in the key).
+#[allow(clippy::too_many_lines)] // one input per line: the whole key in one place
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .bool(v.document.is_some())
+        .i64(v.frame)
+        .i64(v.duration)
+        .u64(u64::from(v.rate.numerator()))
+        .u64(u64::from(v.rate.denominator()))
+        .bool(v.playing)
+        .bool(v.looping)
+        .u64(v.selected.map_or(u64::MAX, |index| index as u64))
+        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .bool(v.retime_delta.is_some())
+        .u64(v.retime_delta.map_or(0, |delta| delta as u64))
+        .str(&v.chrome.timecode)
+        .str(&v.chrome.counter)
+        .str(&v.chrome.info)
+        .str(&v.chrome.selected)
+        .str(&v.chrome.head)
+        .str(&v.chrome.end_label)
+        .f32(v.chrome.end_x)
+        .usize(v.selected_keys.len())
+        .usize(v.timeline_layout.rows.len())
+        .f32(v.timeline_layout.height)
+        .usize(v.expanded.len())
+        .bool(v.graph.is_some())
+        .rect(v.layout.timeline.names)
+        .rect(v.layout.timeline.tracks)
+        .rect(v.layout.timeline.ruler)
+        .rect(v.layout.timeline.scrub);
+    for (x, label) in &v.chrome.ruler {
+        rev = rev.f32(*x).str(label);
+    }
+    rev = rev.u64(selected_keys_revision(v));
+    if let Some(graph) = v.graph {
+        rev = rev
+            .str(&graph.id)
+            .str(&graph.property)
+            .i64(graph.duration)
+            .f64(graph.min)
+            .f64(graph.max)
+            .f64(graph.zoom_x)
+            .f64(graph.zoom_y)
+            .f64(graph.pan_x)
+            .f64(graph.pan_y)
+            .str(&graph.caption)
+            .usize(graph.keys.len());
+        for key in &graph.keys {
+            rev = rev.i64(key.frame).f64(key.value).hashable(&key.ease);
+        }
+    }
+    for &index in v.expanded {
+        rev = rev.usize(index);
+    }
+    let assets_revision = assets_revision(v.assets);
+    for row_rect in &v.timeline_layout.rows {
+        rev = rev
+            .usize(row_rect.row)
+            .rect(row_rect.rect)
+            .rect(row_rect.name);
+        if let Some(rect) = row_rect.stopwatch {
+            rev = rev.rect(rect);
+        }
+        if let Some(rect) = row_rect.field {
+            rev = rev.rect(rect);
+        }
+        for rect in [row_rect.prev, row_rect.key, row_rect.next, row_rect.chevron]
+            .into_iter()
+            .flatten()
+        {
+            rev = rev.rect(rect);
+        }
+        let Some(row) = v.timeline.rows().get(row_rect.row) else {
+            continue;
+        };
+        rev = row_revision(rev, v, row, row_rect.row);
+        if let Some(value) = v.timeline_values.get(row_rect.row) {
+            rev = rev.str(value);
+        }
+        rev = rev.u64(assets_revision);
+    }
+    rev.finish()
+}
+
+/// Visibility of one timeline row, without its rectangle (in the key).
+fn row_revision(
+    mut rev: PanelRevision,
+    v: &View<'_>,
+    row: &TimelineRow,
+    row_index: usize,
+) -> PanelRevision {
+    let outline = row.kind.outline();
+    let (visible, locked) = v
+        .layer_states
+        .get(outline)
+        .copied()
+        .unwrap_or((true, false));
+    rev = rev
+        .usize(outline)
+        .u64(u64::from(row.kind.is_layer()))
+        .usize(row.depth as usize)
+        .bool(row.animated)
+        .bool(row.on_key)
+        .str(&row.label)
+        .str(&row.channel)
+        .usize(row.visible.len())
+        .usize(row.summary.len())
+        .usize(row.inherited.len())
+        .usize(row.keys.len())
+        .hashable(&row.keys)
+        .hashable(&row.eases)
+        .bool(v.selected == Some(outline))
+        .bool(v.expanded.contains(&outline))
+        .u64(row_hit_code(v.hover, row_index))
+        .u64(row_hit_code(v.pressed, row_index))
+        .i64(v.duration)
+        .u64(u64::from(v.rate.numerator()))
+        .u64(u64::from(v.rate.denominator()))
+        .u64(selected_keys_revision(v))
+        .bool(visible)
+        .bool(locked);
+    if let Some(outline_row) = v.outline.get(outline) {
+        rev = rev
+            .str(&outline_row.name)
+            .str(&outline_row.identity)
+            .u64(outline_row.kind as u64);
+    } else {
+        rev = rev.bool(false);
+    }
+    rev = clip_revision(rev, v, row.node);
+    // Layer rows do not change with the playhead; property rows show the
+    // value at the playhead and the key toggle of that frame.
+    if !row.kind.is_layer() {
+        rev = rev.i64(v.frame);
+    }
+    for run in &row.visible {
+        rev = rev.i64(run.from).i64(run.to);
+    }
+    for key in &row.summary {
+        rev = rev.i64(key.frame).u64(u64::from(key.channels));
+    }
+    for frame in &row.inherited {
+        rev = rev.i64(*frame);
+    }
+    rev
+}
+
+/// The cache key of one timeline row.
+fn row_key(
+    p: &Painter<'_>,
+    v: &View<'_>,
+    row_rect: &crate::timeline_model::RowRect,
+    row: &TimelineRow,
+    assets: u64,
+) -> PanelKey {
+    let mut rev = row_revision(PanelRevision::new(), v, row, row_rect.row)
+        .usize(row_rect.row)
+        .rect(row_rect.rect)
+        .rect(row_rect.name)
+        .rect(v.layout.timeline.rect)
+        .rect(v.layout.timeline.scrub);
+    if let Some(rect) = row_rect.stopwatch {
+        rev = rev.rect(rect);
+    }
+    if let Some(rect) = row_rect.field {
+        rev = rev.rect(rect);
+    }
+    for rect in [row_rect.prev, row_rect.key, row_rect.next, row_rect.chevron]
+        .into_iter()
+        .flatten()
+    {
+        rev = rev.rect(rect);
+    }
+    if let Some(value) = v.timeline_values.get(row_rect.row) {
+        rev = rev.str(value);
+    }
+    rev = rev.u64(assets);
+    p.panel_key(PanelKind::Row, rev.finish(), row_rect.rect)
+}
+
+/// Hash of the audio/video values the clip strips read from the document.
+fn clip_revision(rev: PanelRevision, v: &View<'_>, node: motioner_core::NodeId) -> PanelRevision {
+    let Some(document) = v.document else {
+        return rev.bool(false);
+    };
+    let Some(content) = document.node(node).map(motioner_core::Node::content) else {
+        return rev.bool(false);
+    };
+    match content {
+        motioner_core::NodeContent::Audio(audio) => rev
+            .bool(true)
+            .str(&audio.source)
+            .f64(audio.in_point.value())
+            .f64(audio.out_point.value())
+            .f64(audio.gain.value())
+            .f64(audio.pan.value())
+            .i64(audio.start)
+            .f64(audio.fade_in)
+            .f64(audio.fade_out),
+        motioner_core::NodeContent::Video(video) => rev
+            .bool(true)
+            .str(&video.source)
+            .f64(video.in_point.value())
+            .f64(video.out_point.value())
+            .f64(video.gain.value())
+            .i64(video.start)
+            .f64(video.speed)
+            .f64(video.width.value())
+            .f64(video.height.value())
+            .bool(video.asset.is_some()),
+        _ => rev.bool(false),
+    }
+}
+
+/// The stable code of a hit when it belongs to timeline row `index`.
+///
+/// A row must rebuild when the pointer moves between its sub-widgets (body,
+/// stopwatch, key buttons, field, diamond, chevron), not only when it enters
+/// another row.
+fn row_hit_code(hit: Option<Hit>, index: usize) -> u64 {
+    match hit {
+        Some(
+            hit @ (Hit::TimelineRow(row)
+            | Hit::TimelineStopwatch(row)
+            | Hit::TimelinePrevKey(row)
+            | Hit::TimelineKeyToggle(row)
+            | Hit::TimelineNextKey(row)
+            | Hit::TimelineField(row)
+            | Hit::TimelineDiamond { row, .. }
+            | Hit::LayerChevron(row)),
+        ) if row == index => Hit::stable_code(hit),
+        _ => u64::MAX,
+    }
+}
+
+/// Hash of the selected keys, so a selection change repaints their diamonds.
+fn selected_keys_revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new().usize(v.selected_keys.len());
+    for key in v.selected_keys {
+        rev = rev.str(&key.id).str(&key.property).i64(key.frame);
+    }
+    rev.finish()
+}
+
+/// Hash of the asset summaries the audio/video strips read.
+fn assets_revision(assets: &crate::AssetsModel) -> u64 {
+    let mut rev = PanelRevision::new()
+        .usize(assets.entries.len())
+        .usize(assets.entries.as_ptr() as usize)
+        .u64(assets.view() as u64)
+        .u64(assets.selected.map_or(u64::MAX, |index| index as u64));
+    for entry in &assets.entries {
+        rev = rev
+            .str(&entry.key)
+            .str(&entry.original)
+            .u64(entry.kind as u64)
+            .u64(entry.size_bytes)
+            .f64(entry.duration.unwrap_or(-1.0))
+            .usize(entry.used_by)
+            .usize(entry.peaks.len())
+            .usize(entry.peak_levels.len())
+            .usize(entry.thumbs.len())
+            .usize(entry.thumbs.as_ptr() as usize);
+        for peak in &entry.peaks {
+            rev = rev.f32(*peak);
+        }
+        for level in &entry.peak_levels {
+            rev = rev.usize(level.len());
+            for peak in level {
+                rev = rev.f32(*peak);
+            }
+        }
+        for thumb in &entry.thumbs {
+            rev = rev
+                .u64(u64::from(thumb.width))
+                .u64(u64::from(thumb.height))
+                .f64(thumb.seconds)
+                .usize(thumb.rgba8.len())
+                .usize(thumb.rgba8.as_ptr() as usize);
+        }
+    }
+    rev.finish()
+}
 
 /// Timeline header and ruler strings, rewritten in place every frame.
 ///
@@ -121,6 +407,11 @@ impl ChromeText {
 
 /// Draws the timeline.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::Timeline, revision(v), v.layout.timeline.rect);
+    p.panel(key, |p| draw_body(p, v));
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let tl = v.layout.timeline;
     p.fill(tl.rect, t.panel);
@@ -325,6 +616,7 @@ fn rows(p: &mut Painter<'_>, v: &View<'_>) {
 
     let area = Rect::new(tl.names.x, tl.names.y, tl.rect.w, tl.names.h);
     p.push_clip(area);
+    let assets = assets_revision(v.assets);
     for row_rect in &v.timeline_layout.rows {
         if row_rect.rect.bottom() < area.y || row_rect.rect.y > area.bottom() {
             continue;
@@ -332,7 +624,8 @@ fn rows(p: &mut Painter<'_>, v: &View<'_>) {
         let Some(row) = v.timeline.rows().get(row_rect.row) else {
             continue;
         };
-        match row.kind {
+        let key = row_key(p, v, row_rect, row, assets);
+        p.row(key, |p| match row.kind {
             RowKind::Layer { outline } => track_row(p, v, row_rect.row, row, outline),
             RowKind::Transform { outline, .. } => {
                 property_row(p, v, row_rect.row, row, outline);
@@ -340,7 +633,7 @@ fn rows(p: &mut Painter<'_>, v: &View<'_>) {
             RowKind::Content { outline, field } => {
                 content_row(p, v, row_rect.row, row, outline, field);
             }
-        }
+        });
     }
     if v.timeline.is_empty() {
         let style = p.style(type_scale::CAPTION, t.text_disabled);

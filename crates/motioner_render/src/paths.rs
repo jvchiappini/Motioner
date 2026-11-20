@@ -40,10 +40,15 @@ pub(crate) struct PathMeshes {
     pub stroke: Vec<LocalTriangle>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Entry {
     key: u64,
     meshes: PathMeshes,
+    /// Key of the cached composition-space tessellation, which also covers the
+    /// item transform a non-scaling stroke depends on.
+    world_key: Option<u64>,
+    /// Composition-space triangles of a non-scaling stroke.
+    world: Vec<LocalTriangle>,
 }
 
 /// Per-renderer cache of path tessellations.
@@ -60,12 +65,34 @@ impl PathCache {
         let entry = self.entries.entry(node).or_insert_with(|| Entry {
             key,
             meshes: tessellate(path),
+            ..Entry::default()
         });
         if entry.key != key {
             entry.key = key;
             entry.meshes = tessellate(path);
         }
         &entry.meshes
+    }
+
+    /// The composition-space triangles of a non-scaling stroke.
+    ///
+    /// Unlike the local meshes, this result depends on `model`, so the key
+    /// hashes the transform too; a static node reuses the triangles, while an
+    /// animated one retessellates into the same buffer instead of returning a
+    /// fresh `Vec` every frame.
+    pub fn non_scaling_stroke(
+        &mut self,
+        node: NodeId,
+        path: &ResolvedPath,
+        model: Affine2,
+    ) -> &[LocalTriangle] {
+        let key = cache_key(path) ^ transform_key(model);
+        let entry = self.entries.entry(node).or_default();
+        if entry.world_key != Some(key) {
+            entry.world = non_scaling_stroke(path, model);
+            entry.world_key = Some(key);
+        }
+        &entry.world
     }
 }
 
@@ -104,6 +131,21 @@ fn cache_key(path: &ResolvedPath) -> u64 {
 
 fn hash_f64(hasher: &mut impl Hasher, value: f64) {
     value.to_bits().hash(hasher);
+}
+
+/// A hash of every component of `model`.
+///
+/// The composition-space non-scaling tessellation depends on the whole
+/// transform, so it must be part of that cache key.
+fn transform_key(model: Affine2) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hash_f64(&mut hasher, model.a);
+    hash_f64(&mut hasher, model.b);
+    hash_f64(&mut hasher, model.c);
+    hash_f64(&mut hasher, model.d);
+    hash_f64(&mut hasher, model.tx);
+    hash_f64(&mut hasher, model.ty);
+    hasher.finish()
 }
 
 fn hash_trim(hasher: &mut impl Hasher, trim: TrimSpec) {
@@ -154,8 +196,9 @@ fn tessellate(path: &ResolvedPath) -> PathMeshes {
 /// local space and transforming the triangles cannot do that: the scale would
 /// squash one side of the outline to a hairline. This transforms the path
 /// first, so the width stays in composition pixels; the caller submits the
-/// triangles with the identity transform. It is not cached because the result
-/// depends on the item's transform, which changes whenever the node animates.
+/// triangles with the identity transform. `PathCache::non_scaling_stroke`
+/// caches the result by geometry and transform, so a static node tessellates
+/// once and an animated node re-tessellates when its transform changes.
 pub(crate) fn non_scaling_stroke(path: &ResolvedPath, model: Affine2) -> Vec<LocalTriangle> {
     let Some(stroke) = path.paint.stroke.filter(|stroke| stroke.width > 0.0) else {
         return Vec::new();
@@ -475,6 +518,21 @@ mod tests {
         let meshes = tessellate(&resolved);
         assert!(meshes.fill.is_empty());
         assert!(meshes.stroke.is_empty());
+    }
+
+    #[test]
+    fn the_non_scaling_cache_reuses_until_the_transform_changes() {
+        let mut cache = PathCache::default();
+        let node = NodeId::from_raw(0);
+        let mut resolved = path(square(), false, Some(10.0));
+        resolved.paint.stroke.as_mut().unwrap().non_scaling = Some(1.0);
+        let model = Affine2::scale(Vec2::new(2.0, 0.1));
+        let first = cache.non_scaling_stroke(node, &resolved, model).to_vec();
+        let second = cache.non_scaling_stroke(node, &resolved, model).to_vec();
+        assert_eq!(first, second, "the same transform reuses the triangles");
+        let moved = Affine2::translation(Vec2::new(50.0, 0.0)).then(model);
+        let third = cache.non_scaling_stroke(node, &resolved, moved).to_vec();
+        assert_ne!(first, third, "a transform change retessellates");
     }
 
     #[test]

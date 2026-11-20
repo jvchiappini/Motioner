@@ -281,6 +281,38 @@ impl Transport {
         }
     }
 
+    /// The wall-clock instant at which the next composition frame begins.
+    ///
+    /// While playing, this is the first instant after `now` that maps to the
+    /// frame one past the one `now` shows:
+    /// `anchor_time + ceil((offset + 1) * fps_denominator * 1e9 / fps_numerator)`.
+    /// Pacing the redraw loop on this boundary (instead of a fixed ~16 ms
+    /// budget) presents a 60 fps composition at 60 fps, and an NTSC rate at
+    /// its own 23.976 fps, with no accumulated drift.
+    ///
+    /// Returns `None` while stopped or scrubbing, where the displayed frame
+    /// does not advance; the caller keeps its event-driven wake then.
+    #[must_use]
+    pub fn next_frame_at(&self, now: Duration) -> Option<Duration> {
+        let State::Playing { anchor_time, .. } = self.state else {
+            return None;
+        };
+        let elapsed = now.saturating_sub(anchor_time);
+        let offset = elapsed_frames(elapsed, self.rate);
+        // The next boundary is at least the first frame period; the offset is
+        // never negative because `elapsed_frames` clamps at zero.
+        let next = u128::from(u64::try_from(offset).unwrap_or(0)).saturating_add(1);
+        let numerator = u128::from(self.rate.numerator()).max(1);
+        let per_frame_ns = u128::from(self.rate.denominator()).saturating_mul(1_000_000_000);
+        // Ceiling division: the smallest elapsed time that reaches `next`.
+        let boundary_ns = next
+            .saturating_mul(per_frame_ns)
+            .saturating_add(numerator - 1)
+            / numerator;
+        let nanos = u64::try_from(boundary_ns).unwrap_or(u64::MAX);
+        Some(anchor_time + Duration::from_nanos(nanos))
+    }
+
     fn clamp(&self, frame: i64) -> i64 {
         frame.clamp(0, self.duration - 1)
     }
@@ -567,6 +599,52 @@ mod tests {
         assert_eq!(transport.follow_audio(1.0, true, at(1.0)), None);
         assert_eq!(transport.frame(), 59);
         assert!(!transport.is_playing());
+    }
+
+    #[test]
+    fn the_next_frame_deadline_lands_on_the_composition_boundary() {
+        let mut transport = Transport::new(rate_60(), 600);
+        transport.play(Duration::ZERO);
+        // 1/60 s = 16.666.. ms; the boundary is rounded up once, in integer
+        // nanoseconds, so the frame is never shown a nanosecond early.
+        let first = Duration::from_nanos(16_666_667);
+        assert_eq!(transport.next_frame_at(Duration::ZERO), Some(first));
+        // Anywhere inside frame 0 maps to the same next boundary.
+        assert_eq!(
+            transport.next_frame_at(Duration::from_millis(5)),
+            Some(first)
+        );
+        // On the boundary the frame has advanced, so the next one is a period
+        // later (2e9 / 60 rounded up).
+        assert_eq!(
+            transport.next_frame_at(first),
+            Some(Duration::from_nanos(33_333_334))
+        );
+        // The boundary is always strictly after the instant it was asked for.
+        let now = Duration::from_millis(17);
+        assert!(transport.next_frame_at(now).is_some_and(|next| next > now));
+    }
+
+    #[test]
+    fn the_next_frame_deadline_follows_ntsc_and_stops_when_paused() {
+        let mut transport = Transport::new(ntsc(), 600);
+        transport.play(Duration::ZERO);
+        // 1001 / 24000 s = 41_708_333.33 ns per frame, rounded up.
+        let first = Duration::from_nanos(41_708_334);
+        assert_eq!(transport.next_frame_at(Duration::ZERO), Some(first));
+        assert_eq!(
+            transport.next_frame_at(first),
+            Some(Duration::from_nanos(83_416_667))
+        );
+
+        transport.pause(Duration::from_millis(100));
+        assert_eq!(
+            transport.next_frame_at(Duration::from_millis(100)),
+            None,
+            "a paused transport has no next frame"
+        );
+        transport.begin_scrub();
+        assert_eq!(transport.next_frame_at(Duration::from_millis(100)), None);
     }
 
     #[test]

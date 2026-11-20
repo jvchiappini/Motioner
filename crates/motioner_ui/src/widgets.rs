@@ -6,7 +6,7 @@
 
 use crate::icons::{self, Icon};
 use crate::layout::Rect;
-use crate::paint::Painter;
+use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::text::{Align, TextStyle};
 use crate::theme::{over, size, type_scale};
 
@@ -154,14 +154,15 @@ pub fn pill_width(p: &Painter<'_>, text: &str, style: &TextStyle) -> f32 {
     (p.measure(text, style) + p.m.px(size::GRID * 2.0) * 2.0).round()
 }
 
-#[allow(clippy::many_single_char_names)] // p, t, x, y, w, h: painter, theme, geometry
-pub fn tooltip(
-    p: &mut Painter<'_>,
+/// Where a tooltip goes for `anchor` inside `bounds`.
+#[allow(clippy::many_single_char_names)] // anchor/width/height geometry
+fn tooltip_rect(
+    p: &Painter<'_>,
     anchor: Rect,
     bounds: Rect,
     label: &str,
     shortcut: Option<&str>,
-) {
+) -> Rect {
     let t = *p.theme;
     let pad_x = p.m.px(size::GRID * 2.0);
     let gap = p.m.px(size::GRID * 1.5);
@@ -169,7 +170,7 @@ pub fn tooltip(
     let label_style = p.style(type_scale::BODY, t.text);
     let key_style = p.style(type_scale::CAPTION, t.text_muted);
     let label_w = p.measure(label, &label_style);
-    let key_w = shortcut.map_or(0.0, |k| p.measure(k, &key_style) + pad_x * 1.5 + gap);
+    let key_w = shortcut.map_or(0.0, |key| p.measure(key, &key_style) + pad_x * 1.5 + gap);
     let w = (label_w + key_w + pad_x * 2.0).round();
     let mut x = (anchor.center_x() - w * 0.5).round();
     x = x.clamp(
@@ -182,7 +183,33 @@ pub fn tooltip(
     } else {
         anchor.bottom() + gap
     };
-    let rect = Rect::new(x, y.round(), w, h);
+    Rect::new(x, y.round(), w, h)
+}
+
+#[allow(clippy::many_single_char_names)] // p, t, x, y, w, h: painter, theme, geometry
+pub fn tooltip(
+    p: &mut Painter<'_>,
+    anchor: Rect,
+    bounds: Rect,
+    label: &str,
+    shortcut: Option<&str>,
+) {
+    let rect = tooltip_rect(p, anchor, bounds, label, shortcut);
+    let revision = PanelRevision::new()
+        .rect(anchor)
+        .rect(bounds)
+        .str(label)
+        .str(shortcut.unwrap_or(""))
+        .finish();
+    let key = p.panel_key(PanelKind::Tooltip, revision, rect);
+    p.panel(key, |p| tooltip_body(p, rect, label, shortcut));
+}
+
+fn tooltip_body(p: &mut Painter<'_>, rect: Rect, label: &str, shortcut: Option<&str>) {
+    let t = *p.theme;
+    let pad_x = p.m.px(size::GRID * 2.0);
+    let label_style = p.style(type_scale::BODY, t.text);
+    let key_style = p.style(type_scale::CAPTION, t.text_muted);
     p.shadow(
         rect,
         p.m.px(size::RADIUS_MD),
