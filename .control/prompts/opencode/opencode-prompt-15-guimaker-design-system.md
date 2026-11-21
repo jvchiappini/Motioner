@@ -37,15 +37,20 @@ be read with these changes in mind:
   - **Render flags, redraw scheduler and damage:** prompt 18 P1 and P5 did
     them (on-demand redraw, `redraw_at`, damage rects, `PersistentUiTarget`).
     GUIMaker emits damage through those APIs.
-  - **Spatial index and incremental layout:** prompt 18 P4 put
-    `spatial_index.rs`, incremental layout and retained batch ranges in
-    `ferrous_ui_core`.
-    - Decide in Phase 0 whether this code moves to a GPU-free engine crate
-      that GUIMaker depends on (the split table says the spatial index is
-      the engine's, in a GPU-free crate), or whether GUIMaker replaces it.
-      There must be one implementation, not two.
-    - `UiSystem` versus Motioner's retained ranges (D-0063) is the same
-      question: the outcome is that Motioner's panels move onto GUIMaker.
+  - **Spatial index, incremental layout and UI widgets:** prompt 18 P4 put
+    `spatial_index.rs`, incremental layout and retained batch ranges in the
+    engine (`ferrous_ui_core`). Under the user's rule below (the engine is
+    draw calls, GUIMaker has the controllers), Phase 0 moves the controller
+    side to GUIMaker:
+    - the spatial index, incremental layout and the `scroll_view`,
+      `virtual_list` and `tree_view` logic move to GUIMaker, keeping their
+      measured performance (prove it with the prompt 18 benches before and
+      after);
+    - the draw side (`GuiBatch`, retained batch ranges) stays in the
+      engine;
+    - one implementation is left;
+    - Motioner's panels move onto GUIMaker, which replaces the
+      `UiSystem`-versus-retained-ranges question from D-0063.
   - **Zero allocations per frame, byte budgets and the perf harness:**
     prompt 18 (D-0063). The resource budgets below are measured with
     `scripts/perf_bench.py` and the `alloc-stats` feature, not with a new
@@ -124,9 +129,9 @@ are different problems and live in different places:
 | Concern | Owner | Why |
 |---|---|---|
 | Window, raw input (pointer, keys, wheel, IME, clipboard, file drop), DPI | FerrousEngine (`ferrous_events`, runner) | platform layer, shared by everything |
-| **Gesture recognition**: click, double/triple click, long press, drag threshold, pointer coalescing, key repeat | FerrousEngine (`ferrous_events`) | the same semantics for canvas and UI; implemented once |
+| **Gesture recognition**: click, double/triple click, long press, drag threshold, pointer coalescing, key repeat | GUIMaker (`guimaker::input`) | a UI controller; the `canvas` element hands the same recognised gestures to the app, so it is still implemented once |
 | Render flags, redraw scheduler, damage regions (Phase 0B) | FerrousEngine | the engine owns frames |
-| Generic **spatial index** (grid/BVH over AABBs, incremental updates) | FerrousEngine, in a GPU-free crate | used by UI hit testing and by scene picking; one implementation |
+| **Hit testing and its spatial index** (grid/BVH over the laid-out rects, incremental updates), hover detection, scroll controllers (wheel, trackpad, inertia, scrollbars, auto-scroll), virtual lists | GUIMaker | UI controllers; engine scene picking may reuse the index as a GPU-free GUIMaker crate only if that avoids a second implementation |
 | **Scene / canvas picking**: objects with transforms and rotation, path fill containment, stroke distance, text bounds, clips and masks, z-order, ID-buffer picking, marquee and lasso queries, snapping queries, screen ↔ world transforms, pan/zoom-to-cursor camera helpers, 3D raycasts | FerrousEngine (2D scene / renderer crates) | it knows the geometry it draws |
 | UI tree: layout, responsive rules, tokens, components | GUIMaker | |
 | **UI routing**: which widget gets an event, hover/press state, focus and `Tab` order, shortcuts scopes, overlays and focus traps | GUIMaker | screen-space rects of its own tree |
@@ -135,8 +140,23 @@ are different problems and live in different places:
 | What a pick *means* (select an MDF node, drag a gizmo handle, edit a keyframe) | the app (Motioner) | domain logic |
 
 The GUIMaker core stays free of drawing crates, but it **may depend on the
-engine's GPU-free crates** (`ferrous_events`, the spatial index, math) so
-nothing is implemented twice.
+engine's GPU-free crates** (`ferrous_events` for raw input, math) so nothing
+is implemented twice.
+
+**The user's rule (2026-11-21):** GUIMaker exists so that building an
+interface is fast and efficient. **FerrousEngine is draw calls**: shapes,
+text, images, passes, plus the window and raw input. **GUIMaker has the
+controllers**: scroll, hit testing ("is the pointer on this element"),
+hover, press, drag, gestures, focus, text editing and layout. The UI widget
+and controller code that grew inside the engine moves to GUIMaker in Phase 0,
+with one implementation left:
+- `ferrous_ui_core` widgets such as `scroll_view`, `virtual_list` and
+  `tree_view`;
+- `spatial_index.rs`;
+- incremental layout.
+
+The engine keeps the draw-command side (`GuiBatch`, retained batch ranges,
+`ferrous_ui_render`).
 
 ### The goal
 
@@ -277,9 +297,10 @@ documented fallback and continue).
      `crates/guimaker_ferrous` (thin adapter: draw commands → engine API,
      input events in, text metrics from `ferrous_font`; no drawing logic of
      its own — if the adapter needs more than a mapping, the capability
-     belongs in the engine), `apps/gallery` (storybook), `apps/designer` (the old
-     designer, revived in Phase 9). The old `src/` moves or is deleted; no
-     dead code stays.
+     belongs in the engine), `apps/gallery` (storybook), and `apps/designer`. The old
+     `src/` designer moves there unchanged and stays out of the workspace
+     build: a separate Claude session rewrites its frontend after this
+     prompt (see Phase 11). Do not delete it.
    - **Programming model.** Recommended, justify or replace: a declarative
      tree rebuilt every frame from the app's state (cheap, no stale widgets,
      ideal for a model to write), laid out, then input is routed through
@@ -507,19 +528,22 @@ output pinned for a few deliberate mistakes.
 
 Follow the ownership table at the top. Motioner already has
 `crates/motioner_ui/src/text_edit.rs` and pointer/drag code in
-`app/pointer.rs`, `app/drag.rs`: read them, move gesture logic to the engine
-and UI logic to GUIMaker, and leave Motioner importing both (no copy
-remains). Engine parts first (dev clone, generic, documented), then GUIMaker
-on top:
+`app/pointer.rs`, `app/drag.rs`: read them, move gesture and UI logic to
+GUIMaker, and leave Motioner importing it (no copy remains). The engine only
+supplies raw events and the clock:
 
-- **Engine (`ferrous_events`)**: gesture recognition (click with the platform
-  double-click time and distance, double/triple, long press, drag start
-  threshold, pointer capture, coalescing, key repeat, modifier state) as a
-  pure, tested state machine fed by raw events and the injected clock; the
-  generic spatial index in a GPU-free crate.
-- **GUIMaker (`guimaker::input`)**: routing of those gestures through the UI
-  tree, hover/press/focus, shortcuts, overlays, drag and drop between UI
-  elements, and the text-editing engine.
+- **Engine (`ferrous_events`)**: raw events only (pointer, keys, wheel,
+  IME, clipboard, file drop, modifier state), the platform double-click time
+  and distance, and the injected clock.
+- **GUIMaker (`guimaker::input`)**:
+  - gesture recognition as a pure, tested state machine fed by those raw
+    events: click, double and triple click, long press, drag start
+    threshold, pointer capture, coalescing, key repeat;
+  - the hit-test spatial index;
+  - routing through the UI tree, hover, press and focus;
+  - scroll controllers;
+  - shortcuts, overlays, drag and drop between UI elements;
+  - the text-editing engine.
 
 - **Algorithms first** (this toolkit runs on every input event, so it must be
   the cheapest part of the frame; document the complexity of each in
@@ -803,18 +827,29 @@ Every gallery story and recipe must lint clean across the sweep.
    and 3840×2160, scale 1 and 1.5, plus lint clean on the start view across
    the sweep. Compare with Phase 0.
 
-## Phase 11 — Dogfood: the GUIMaker designer, and the backlog
+## Phase 11 — Backlog (the designer frontend is not part of this prompt)
 
-- Revive `apps/designer` on the library (it is the best stress test): canvas
-  with the app shell recipe, component palette, inspector built from forms,
-  live preview of the designed view rendered by the library itself, and
-  codegen that emits **GUIMaker builder code** (the old generator emitted
-  absolute positions — delete it). Keep scope to what the library proves; the
-  rest goes to the roadmap.
-- Backlog (GUIMaker `docs/roadmap.md` and Motioner tasks with
-  `pctl task-new`): migrating Motioner's inspector, layers list, top bar and
-  agent panel (prompt 14) onto GUIMaker; engine `ferrous_ui_core` pieces that
-  GUIMaker supersedes; accessibility tree export; RTL/IME text input.
+**Do not touch the GUIMaker designer app** (`src/main.rs`, `src/panels`,
+`src/scene.rs`, or `apps/designer` if Phase 0 moves it there). The user
+assigned its frontend rewrite to a separate Claude session after this
+prompt. Phase 0 only makes the repository a library workspace. The old
+designer may stay excluded from the workspace build until that session;
+say so in the report.
+
+To prepare that session, write `docs/designer-handoff.md` in GUIMaker:
+- the library APIs the designer will need: the canvas element, the
+  component palette data, the forms for an inspector, live preview,
+  serialising a view, and codegen to GUIMaker builder code;
+- the gaps the library still has for them;
+- a short list of the screens the designer needs.
+
+Backlog (GUIMaker `docs/roadmap.md`, and Motioner tasks through
+`pctl task-new`):
+- migrating Motioner's inspector, layers list, top bar and agent panel
+  (prompt 14) onto GUIMaker;
+- the `ferrous_ui_core` pieces left after the Phase 0 move;
+- accessibility tree export;
+- RTL and IME text input.
 
 ## Phase 12 — Report
 
