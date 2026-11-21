@@ -747,3 +747,26 @@ does not, keep the library and say so.
    - what was tried and rejected, with the numbers;
    - the engine commits to push;
    - the backlog, with reasons.
+
+## Review after P7 (prompt closed, 2026-11-21)
+
+The P7 gate was re-run green in a clean worktree. The engine (`d718a73`)
+and Motioner were merged into `main` through PR #1 in each repository.
+Prompt 18 is closed. These leftovers move to later prompts:
+
+- **Partial offscreen present.** `UiPresenter` stays off: it still repaints
+  and copies the whole frame (31.8 % worse in scrub, 66.8 % worse in hover).
+  A scissored partial repaint of the damaged rects is the change that would
+  make it win. This goes to GUIMaker's damage work in prompt 15, because
+  GUIMaker owns the damage rects.
+- **Heavy UI is one draw and two segments above P5** (23/14 against
+  22/12). Explain this in the prompt 19 frame debugger (draw-call
+  attribution) before changing anything.
+- **`alloc-stats` was not sampled in P7** (`alloc_binary = None`). The next
+  bench run must include it, so the allocation column holds real numbers
+  again.
+- **Pre-existing engine debt:** 27/13 clippy and 8/22 rustdoc warnings. New
+  GUIMaker crates must have none. The debt itself goes to a cleanup lane in
+  prompt 19 P8.
+- **The disk floor held** at 37.2 GB minimum, and `cargo clean` was used at
+  the end.
