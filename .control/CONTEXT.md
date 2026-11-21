@@ -8,10 +8,10 @@ version_schema: 1
 ## Prompt 15 status (GUIMaker design system)
 
 Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B,
-Phase 1 and Phase 2 done; stopped for review.** No commits. FerrousEngine
-`feat/guimaker` from `12319e7` (dev clone, local changes); the Motioner
-submodule stays at `d718a73` (no pin bump). Motioner `feat/guimaker` at
-`7e7c2be` + `docs/frontend-handoff.md` and `.control/`.
+Phase 1, Phase 2 and Phase 3 done; stopped for review.** No commits.
+FerrousEngine `feat/guimaker` from `59e1c3f` (dev clone, local changes); the
+Motioner submodule stays at `59e1c3f` (no pin bump). Motioner `feat/guimaker`
+at `40ef86d` + `.control/`.
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 
@@ -145,6 +145,48 @@ P2 (2026-11-21) — review fix lanes + view tree, layout and the controller move
 - **Report:** `out/reports/PHASE-15-P2-REPORT.md` (Spanish) + logs in
   `out/reports/phase15/`; `docs/frontend-handoff.md` lists the start-screen
   bugs for the Claude frontend session.
+
+P3 (2026-11-21) — review fix lanes + 100 % responsive:
+
+- **Engine idle proof** (`ferrous_layout`/`ferrous_ui_core`/`ferrous_gui`):
+  `LayoutEngine::passes()`, `UiTree::needs_layout()` (one root check;
+  `RenderCollector` clears the flags) and a single paint-or-layout dirty check
+  in `UiSystem::update` (plus `last_viewport`, `layout_passes()`). New
+  `crates/ferrous_gui/tests/layout_skip.rs`: clean frame 0 passes, paint 1,
+  viewport 1, added child 1. `ferrous_events::hit_test` keeps the
+  `TODO(prompt 15, phase 4)` marker. `docs/frontend-handoff.md` and Motioner
+  fmt untouched.
+- **Responsive core**: `theme::Breakpoint`/`Breakpoints` (480/768/1024/1440,
+  a `#[serde(default)]` theme field), `style::Responsive<T>` + `resp!` (the
+  container is the parent's content width), every spacing/size/align/direction/
+  radius/columns/scroll modifier takes a responsive value, `hidden_below`/
+  `hidden_above`, `SizeSpec::Fluid` + `FluidText` (`Cause::Fluid`),
+  `.priority(n)` text shrink and `align_self` for centred `max_width` columns.
+  Two passes at most: the first uses the previous rectangles, the second only
+  runs when a value moved; `LayoutStats::responsive_passes`.
+- **Patterns** (`guimaker::patterns`): collapsing sidebar, drawer, nav item,
+  overflowing toolbar with a caller "More", stacking split panes,
+  dialog-to-sheet and a table that hides each column below its breakpoint.
+- **Sweep** (`guimaker::sweep`): 10 widths (360…3840) x 4 scales (1/1.25/1.5/
+  2), overflow/overlap/grid/offscreen checks; the recipe and all five patterns
+  pass 40/40 (`tests/responsive.rs`, 19 tests).
+- **Measured (release)**: full layout 0.187 ms, hover 0.010 ms, relayout
+  0.036 ms, cold frame 0.497 ms (P2: 0.164/0.0075/0.023/0.300; the cold frame
+  pays the second pass and the recipe has fluid values). Per width 360…3840:
+  full 0.202-0.425 ms, warm relayout 0.196-0.219 ms. 0 allocations in steady
+  state. `perf_bench --check` (worktree with the local engine): start_idle
+  1.803 % / idle 0.107 %, editor_idle 1.754 % / 0.107 %, hover 5.509 % tail
+  3.408 %, heavy_ui 57.238 % / 4.344 ms; `heavy_ui` is over only on
+  `frame_ms_p99` (11.306 vs 11.231) and `input_to_present` (11.986 vs 8.494,
+  one sample).
+- **Gate**: GUIMaker fmt/clippy pedantic/rustdoc/110 tests/machete/literal
+  guard 18 files 0/boundaries green; engine `check --workspace --all-targets`
+  exit 0, both wasm checks exit 0, touched-crate tests green; Motioner in a
+  clean worktree with `engine/ferrous` junctioned to the dev engine: fmt,
+  clippy, tests (0 failures, goldens), doc, machete, boundaries, encoding,
+  validate and refs all exit 0. C: 25.35 GB free. No commits.
+- **Report:** `out/reports/PHASE-15-P3-REPORT.md` (Spanish) + the
+  `out/reports/phase15/p3-*.json` payloads.
 
 ## Prompt 18 status (engine performance)
 

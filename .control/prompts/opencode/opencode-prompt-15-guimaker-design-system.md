@@ -1007,3 +1007,48 @@ Phase 3 starts with these:
 4. **Motioner fmt.** In Motioner, run `cargo fmt -- --check`, never
    `--all`, and do not use a per-package list either. That is the gate
    command, and it does not reach `engine/ferrous`.
+
+## Review findings after Phase 3 (reviewer, 2026-11-21)
+
+Phase 3 is accepted:
+- the sweep passes 40/40 for the recipe and all five patterns;
+- the layout frame paths stay under 0.3 ms;
+- the engine idle proof holds (`layout_skip.rs`, and the idle start and
+  editor runs are inside their budgets).
+
+### Incident: the engine dev clone was deleted (new hard rule)
+
+In the gate worktree, `engine/ferrous` was a Windows junction pointing at
+the dev clone. `git worktree remove` followed it and deleted the dev
+clone. No commit was lost. Local files that were never pushed were lost,
+such as ignored notes and tools, and the `target` dir.
+
+From now on:
+- **Never create junctions, symlinks or directory links** to the dev
+  clone or to any working repository.
+- To gate Motioner against an engine that is not committed yet, init the
+  submodule normally in the worktree. Then copy the change into it:
+  `git -C <dev clone> diff HEAD --binary > %TEMP%\engine.patch`, apply it
+  inside the worktree's `engine/ferrous` with `git apply`, and copy the
+  untracked files. Or run `cargo check`/`test` against the dev clone from
+  its own directory.
+- Before any `git worktree remove` or `rm -rf`, list the target and check
+  that it holds no link (`dir /AL`). If it does, stop.
+
+### Fix lanes for Phase 4
+
+1. **Bench sample size.** `heavy_ui.input_to_present` failed the budget on
+   a **single** sample (11.986 against 8.494 ms). One sample is no
+   measurement.
+   - `perf_bench.py` must take at least 30 input-to-present samples per
+     run and report p50 and p99 from them.
+   - Phase 4 changes input routing, so this metric is its main proof.
+   - `heavy_ui.frame_ms_p99` (11.306 against 11.231, +0.7 %) is in the
+     noise. Re-check it in the same run.
+2. **Remove the linear hit test.** It is in `ferrous_events`, marked
+   `TODO(prompt 15, phase 4)`, and Phase 4 removes it, as required after
+   Phase 2.
+3. **Cold frame.** The cold frame (0.26–0.48 ms) pays a second responsive
+   pass because containers exist only after the first pass. That is fine
+   for now. Record it in `docs/responsive.md`, and revisit it in Phase 9B
+   if the start screen's first frame budget needs it.
