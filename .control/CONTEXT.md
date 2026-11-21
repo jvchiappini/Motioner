@@ -5,7 +5,66 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Prompt 15 status (GUIMaker design system)
+
+Session `S-2026-11-21-001` (open). **Phase 0 done; stopped for review.** No
+commits. FerrousEngine `feat/guimaker` from `558423d`; Motioner `feat/guimaker`
+at `a99b9ee`.
+
+P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
+
+- **Reports:** `out/reports/PHASE-15-P0-REPORT.md` (Spanish) and the four lane
+  audits in `out/reports/phase15/p0-*-audit.md`. Gate logs in the same folder.
+- **G-0001** (`FerrousEngine/crates/guimaker/docs/decisions/G-0001.md`): four
+  crates (`guimaker`, `guimaker_ferrous`, `guimaker_gallery`,
+  `guimaker_designer`); rebuild-on-change declarative model (arena + `taffy`
+  0.7.7 memoised by hash + keyed store + Elm-style `Vec<Msg>` + injected clock);
+  `TextSystem` trait in the core with a metrics table generated from real Inter;
+  engine-agnostic display list mapped onto `GuiBatch`; tokens/one `Color`;
+  controller move table; damage as GUIMaker output (scissored repaint replaces
+  the P7 whole-frame copy, enabled in phase 9B); no wrapping of
+  `ferrous_ui_core`.
+- **Boundary rule is executable:** `FerrousEngine/scripts/check_boundaries.py`
+  + 17 unittest fixtures + a CI step + a README note. No engine crate may
+  depend on `guimaker*` (any kind, renamed included); the core may only use
+  the GPU-free foundation (`CORE_ALLOWED_ENGINE`: ferrous_core, ferrous_ecs,
+  ferrous_ecs_macros, ferrous_events, ferrous_reflection, ferrous_state,
+  ferrous_asset_types); only `guimaker_ferrous`/gallery/designer may use the
+  drawing set; no egui/iced/Slint; the core may not take wgpu/winit directly.
+- **`.gitignore` fix:** `GUIMaker` → `/GUIMaker/` (the old pattern also hid
+  `crates/guimaker` on Windows).
+- **Docs nav:** `mkdocs.yml` gained a "GUIMaker - the UI library" section
+  (`guimaker/README.md`, `guimaker/decisions/...`); `build_docs.sh` already
+  copies `crates/*/docs` to `docs/<crate>/`.
+- **Before screenshots:** `out/ui/p15-00-before-start.png` (1600x900 in-app)
+  and `out/ui/p15-00-before-newproject.png` (1280x720 real screen, cropped;
+  the dialog card is transparent and the labels overlap the fields).
+- **Measured audit numbers:** Motioner's 11 UI files 7,630 lines / 99
+  `Rect::new` / 161 literal `px` / 25 colour literals / 47 tests; `start.rs`
+  973 lines / 28 `Rect::new` / 94 literal `px`; geometry encoded 4x. Engine
+  `ferrous_ui_core` 52 files / 12,345 lines; `Style` layout-only; text
+  estimated 8 px/char because `ferrous_font` is a `wgpu` crate. Retired
+  GUIMaker 16 files / 4,937 lines, absolute-`Vec` model, generator gone.
+- **Gate (engine, no Rust changed):** check exit 0; CI clippy scope exit 0;
+  wasm `ferrous_engine` and `ferrous_web` exit 0; boundaries + 17 tests exit 0;
+  `cargo test --workspace` 72 green but `-p ferrous_ui_core --doc` red
+  (pre-existing, 4 box-drawing doctests); **pre-existing debt:** fmt 727 files,
+  clippy 26 (ferrous_core 6 + ferrous_ui_core 20), rustdoc 22
+  (ferrous_renderer) — all routed to prompt 19 P8. C: 36.5 GB free.
+- **Known bug, not fixed here:** `start.rs:368-371` returns
+  `StartAction::Cancel` when a form field is clicked, so clicking "Name"
+  closes the dialog. Fixed with the phase 10 migration.
+- **Deliberate deviation:** the controller code move (spatial index,
+  incremental layout, scroll/virtual list/tree view) is decided in G-0001 and
+  lands in phase 2 (layout + index) and phase 4 (controls), because phase 0
+  explicitly writes no library code; benches from P18 before/after.
+- **Next:** Phase 1 — `guimaker::theme` (tokens, OKLCH colour roles from
+  seeds, three themes, WCAG/focus-ring/sRGB tests); the crate is born there,
+  with the strict gate (fmt, pedantic clippy `-D warnings`, rustdoc
+  `-D warnings`, machete, boundaries).
+
 ## Prompt 18 status (engine performance)
+
 
 Session `S-2026-11-17-001` (open). **P0-P7 done; final report written.**
 Engine through **`840a8b8`** (P7, on top of `7e623a9`; the whole run

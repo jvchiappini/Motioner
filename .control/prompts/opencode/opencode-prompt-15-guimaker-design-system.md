@@ -888,3 +888,43 @@ budget and against egui/Slint/WebView2, and Motioner's idle and startup
 numbers before and after; decisions (G-NNNN, Motioner ADR)
 and dependencies; engine changes waiting for a push and pin bump; gate
 results in every repository; free space on C:; what is left.
+
+## Review findings after Phase 0 (reviewer, 2026-11-21)
+
+Phase 0 is accepted. The engine part is pushed as `681888b` on
+`feat/guimaker`. Python boundary check plus its 17 tests are green, re-run
+by the reviewer. These rules now apply:
+
+- **Controller move timing: accepted.** The spatial index and incremental
+  layout move in Phase 2, and scroll, the lists, the tree and event routing
+  move in Phase 4, following G-0001's move table. Each move is measured
+  with the prompt 18 benches before and after. Each one deletes the old
+  implementation in `ferrous_ui_core`, so one implementation is left, and
+  Motioner must still build.
+- **GPU-free base usable by every GUIMaker crate: accepted** as G-0001
+  states it. Only `guimaker_ferrous` may touch the drawing crates.
+- **The `.gitignore` fix was a good catch.**
+- **The `StartScreen::action_at` bug** (clicking a form field returns
+  `Cancel`, at `start.rs:368-371`) is **not** a Phase 10 fix: Phase 10 does
+  no frontend work. List it in `docs/frontend-handoff.md` under "known
+  bugs", together with the transparent New project card, the labels that
+  overlap the fields and the clipped Create button seen in
+  `p15-00-before-newproject.png`. The Claude frontend session fixes them.
+- **Engine fmt debt.** The figure 727 counts `Diff in` hunks, not files;
+  report it that way. The debt itself stays out of scope, but every
+  GUIMaker crate must be fully fmt-clean:
+  `cargo fmt -p guimaker -p guimaker_ferrous -p guimaker_gallery -- --check`
+  goes into the phase gate as soon as a crate exists. So do
+  `cargo clippy -p <guimaker crates> --all-targets -- -D warnings -W clippy::pedantic`
+  and `cargo doc -p <guimaker crates> --no-deps` with
+  `RUSTDOCFLAGS=-D warnings`. Whole-workspace clippy and doc stay red only
+  from the known debt (26 clippy, 22 rustdoc, the 4 `ferrous_ui_core`
+  doctests); any new item in those lists fails the phase.
+- **Phase 0B was not reported.** It is a re-check only: run Motioner's
+  startup with the prompt 17 startup trace, three runs, and report
+  time-to-first-composed-frame and whether "Not responding" ever appears.
+  Run it at the start of the next phase.
+- **Scope check on taffy.** `taffy 0.7.7` is accepted because it is
+  already in the lock. Memoise the layout by hash as G-0001 says, and
+  report Phase 2 layout time for the start-screen recipe against the
+  0.3 ms fallback threshold.
