@@ -7,9 +7,10 @@ version_schema: 1
 
 ## Prompt 15 status (GUIMaker design system)
 
-Session `S-2026-11-21-001` (open). **Phase 0 done; stopped for review.** No
-commits. FerrousEngine `feat/guimaker` from `558423d`; Motioner `feat/guimaker`
-at `a99b9ee`.
+Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B and
+Phase 1 done; stopped for review.** No commits. FerrousEngine `feat/guimaker`
+from `681888b` (dev clone); the Motioner submodule stays at `d718a73` (no pin
+bump). Motioner `feat/guimaker` at `1ee429b`.
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 
@@ -58,10 +59,54 @@ P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
   incremental layout, scroll/virtual list/tree view) is decided in G-0001 and
   lands in phase 2 (layout + index) and phase 4 (controls), because phase 0
   explicitly writes no library code; benches from P18 before/after.
-- **Next:** Phase 1 — `guimaker::theme` (tokens, OKLCH colour roles from
-  seeds, three themes, WCAG/focus-ring/sRGB tests); the crate is born there,
-  with the strict gate (fmt, pedantic clippy `-D warnings`, rustdoc
-  `-D warnings`, machete, boundaries).
+
+P0B (2026-11-21) — startup re-check (no code):
+
+- Release `motioner.exe` built in 5m52s with `-j 2`. Three traced `--start
+  --exit-after-frames 1` runs: first frame **509.1 / 474.3 / 480.8 ms**,
+  median **480.8 ms**; wall 1064.7 / 668.2 / 670.1 ms; window visible at
+  526.6 / 493.1 / 502.0 ms, i.e. after the first frame in all three.
+- "Not responding": an 8 s `--start` run sampled 65 times at 100 ms; 0
+  non-responsive samples, main window at 555 ms, exit 0. No freeze.
+
+P1 (2026-11-21) — `guimaker::theme` (the crate is born):
+
+- **Crate:** `FerrousEngine/crates/guimaker` (workspace member) with
+  `Cargo.toml` (serde workspace + ron 0.8, both already in the lock),
+  `src/lib.rs`, `src/theme/{mod,color,tokens,roles}.rs`, `docs/theme.md`,
+  `docs/decisions/G-0002.md` (Inter + JetBrains Mono, OFL, real 400/500/600/
+  700) and `G-0003.md` (RON theme files). `mkdocs.yml`, the GUIMaker README and
+  decision index updated; `ci.yml` gained fmt/clippy/doc/machete steps for the
+  crate.
+- **Tokens:** 12 spacing steps on the 4 px grid; 11 type roles × 2 densities
+  (Compact 12/16 body, Comfortable 14/22); radii None/Xs/Sm/Md/Lg/Xl/Full =
+  0/2/4/6/8/12/half-side; borders 1/2; elevation 0-4 (key + ambient shadow and
+  a dark-mode surface tint); motion 0/90/140/240 ms plus linear/standard/
+  emphasized/overshoot cubic beziers.
+- **Colour:** one `Color` (linear-light storage; `srgb`, `srgba`, `linear`,
+  `lineara`, `oklch`, `oklcha`, `hex`, `hex_alpha` constructors; manual serde
+  as `#RRGGBB[AA]`; gamut-mapped OKLCH; WCAG luminance/contrast). `ColorSeed`
+  (neutral hue/chroma + accent hue/chroma) -> monotonic 12-step OKLCH neutral
+  ramp -> 25 roles; built-ins dark, light, high contrast, plus
+  `from_seed`/`high_contrast_with_seed`; any role overridable.
+- **Guarantees (all pass):** text >= 7:1, text_muted >= 4.5:1, text_faint >=
+  3:1, text_on_accent >= 4.5:1 on accent/hover/pressed, focus_ring >= 3:1 on
+  the four surfaces. Tightest values: dark text 17.24 on surface, muted 8.76,
+  faint 4.04, ring 13.08; light 17.24/5.50/3.62/9.74, text_on_accent 5.00/
+  5.89/4.60; high contrast 20.12/14.92/10.77/17.90, text_on_accent 10.26/
+  11.80/8.87. Semantic text stays >= 4.55 (light warning on sunken) and >= 5.15
+  (dark danger on raised). Theme RON round-trip is idempotent (colours are
+  8-bit hex); density switches typography only.
+- **Gate:** `cargo fmt -p guimaker -- --check` clean; pedantic clippy with
+  `-D warnings` clean; `RUSTDOCFLAGS=-D warnings cargo doc -p guimaker
+  --no-deps` clean; 33 unit + 2 doc tests green; `cargo machete
+  crates/guimaker` clean; `scripts/check_boundaries.py` sees `guimaker: 0
+  engine deps (core-only)` and the 17 fixtures pass; wasm `ferrous_web` and
+  `ferrous_engine` exit 0. Workspace debt unchanged: 26 clippy, 22 rustdoc,
+  4 `ferrous_ui_core` doctests, **0 guimaker items**. C: 35.13 GB free.
+- **Next:** Phase 2 — view tree, styling API and layout (taffy 0.7.7 memoised
+  by hash, display list, inspect/explain, spatial index and incremental layout
+  moved from `ferrous_ui_core` per G-0001 §6).
 
 ## Prompt 18 status (engine performance)
 
