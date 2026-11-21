@@ -8,7 +8,6 @@
 - **T-DSL-0011** — Spring eases and deterministic noise() for organic motion `[alta]` (actualizado 2026-11-04)
 - **T-NLE-0001** — NLE video: import, cut, trim, arrange and export with audio `[alta]` (actualizado 2026-11-03)
 - **T-NLE-0002** — NLE transitions: crossfade, dip to black and wipes on the timeline `[alta]` (actualizado 2026-11-04)
-- **T-PERF-0001** — Define performance budgets and benchmark plan `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0004** — FerrousEngine polish pass: overlapping readback, hard-edge band, font id generations `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0005** — FerrousEngine Pure2D compositing: premultiplied alpha, blend modes, offscreen layers `[alta]` (actualizado 2026-10-31)
 - **T-RENDER-0014** — 3D layers: glTF, cameras, lights, per-object shading (unlit, PBR, path traced) composited with 2D `[alta]` (actualizado 2026-11-04)

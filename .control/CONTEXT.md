@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-20
+actualizado: 2026-11-21
 actualizado_por: agente
 version_schema: 1
 ---
@@ -7,12 +7,72 @@ version_schema: 1
 
 ## Prompt 18 status (engine performance)
 
-Session `S-2026-11-17-001` (open). **P0-P6 done; P7 pending.**
-Engine through **`7e623a9`** (P6, on top of `db776bb`; the whole run
-`23278a2..7e623a9` is not pushed); the Motioner submodule is checked out at
-`7e623a9` and the parent pin is **not committed**. No Motioner commits. Reports:
-`out/reports/PHASE-18-P0-REPORT.md` through `PHASE-18-P6-REPORT.md` (Spanish);
-ledger `out/reports/phase18/ledger.md`.
+Session `S-2026-11-17-001` (open). **P0-P7 done; final report written.**
+Engine through **`840a8b8`** (P7, on top of `7e623a9`; the whole run
+`23278a2..840a8b8` is not pushed); the Motioner submodule is checked out at
+`840a8b8` and the parent pin is **not committed**. No Motioner commits. Reports:
+`out/reports/PHASE-18-P0-REPORT.md` through `PHASE-18-P7-REPORT.md` and
+`PHASE-18-REPORT.md` (Spanish); ledger `out/reports/phase18/ledger.md`.
+
+P7 (2026-11-21) — guards, docs, report (six fix lanes + integration):
+
+- **Fix 5/6, MDF compile**: `collect_assigned_later` was O(S^3) (S = statements)
+  and bloated the heap; rewritten to one reverse pass per block (O(S)) and the
+  origin lookups are indexed by node (O(1)). The 3,000-layer fixture compiles in
+  **0.46 s / 23 MB peak** (was 28.6 s / 488 MB). Scaling test: 3,000 < 3.5x
+  1,000 and < 1 s in release. heavy_ui_list 3,000 **333.0 MB private** (P6
+  798.5; target <=400) and 11.8 MB above the 1,000-layer run (target <=50).
+- **Fix 1/2, UI damage and scrub**: per-panel hover codes (a hit another panel
+  paints leaves the key at 0), a `panel_hover` path that damages the union of
+  the old/new hovered row/widget rects, and a `TimelineLive` panel for the
+  playhead/readouts/ruler labels split out of the Timeline key. Hover **5.776 %**
+  (target <=5.87), damage **3.3 %** (was 100 %); scrub collection **1.735 ms**
+  (target <=1.8) and CPU **6.955 %** in a clean A/B (target <=7.23; the full-run
+  sample read 8.031, machine state), damage 10.1 %.
+- **Fix 3, segment coalescing** (engine): `GuiBatch::extend_from`/`extend` merge
+  a copied segment with the previous one on the same scissor and contiguous
+  ranges, with a `layer_start` barrier. heavy_ui **23 draws / 14 segments** (was
+  62/38) and binds 18/20/20 (P5 20/22/22); collection 4.240 ms in a clean A/B
+  (P6 4.688). Draws are 1 over the P5 22; binds below.
+- **Fix 4, eval cache**: a testkit test evaluates 45 fixture documents
+  (~7-8k frames) cached vs uncached and requires equal plans, plus overrides and
+  a revision bump; a session test asserts every successful mutation bumps
+  `generation` exactly once and failed/persistence/frame paths do not. No key
+  bug found.
+- **Fix 7, playback**: 4K30 proxy scenario added (0 dropped, 27.8 fps, private
+  406 MB); decode-ahead hit rate **95.0 %** at 1080p60 and **89.6 %** at 4K30;
+  `memory-owners` per-owner line (document/plan/panel/video bytes).
+- **Fix 8, offscreen present** (engine): `AppConfig::persistent_ui` +
+  break-even and a `UiPresenter` that reprojects the whole frame into a
+  persistent texture and copies/blits it (pixel-identical, tested). It is **off
+  by default**: a clean back-to-back A/B measured it **31.8 % worse on scrub**
+  and **66.8 % worse on hover** (heavy_ui +2.4 %, noise), so a full repaint +
+  full copy is not a win; a true scissored partial update is the change that
+  would make it one.
+- **Wasm**: `getrandom`/`rand` removed from `ferrous_renderer` (deterministic
+  SSAO PRNG). `cargo check -p ferrous_engine --target wasm32-unknown-unknown`
+  and `-p ferrous_web` are green; the check joins the engine gate.
+- **Guards/docs**: `scripts/perf_budgets.json` (P7-after-clean medians + 15 %,
+  `--check` green) and `scripts/bench_baselines.json`; D-0063 "Performance
+  policy" (retained ranges chosen over `UiSystem`, with the numbers and what
+  would change it); T-PERF-0001 closed as superseded; engine `performance.md`
+  and `present.md` in the mkdocs nav; `docs/performance.md`; this section.
+- **Measured** (`p7-after-clean.json`, release 1600x900, median of 3): hover
+  5.776 % / 3.3 % damage / 719 frames; scrub 6.955 % / 1.735 ms / 10.1 %;
+  playback 1080p 18.234 % / 54.4 fps / 0 dropped; 4K30 11.963 % / 27.8 fps / 0
+  dropped; heavy_ui ~54.9 % / 4.240 ms / 23 draws; heavy_ui_list 3,000 9.236 % /
+  0.154 ms / 333 MB; heavy_composition 9.955 % / 0.103 ms / 50.8 MB; export
+  17.02 fps.
+- **Gate**: Motioner fmt, clippy `-D warnings`, tests (incl. the new eval-cache
+  and scaling tests), doc `-D warnings`, boundaries, encoding, machete, validate,
+  refs; engine workspace check, touched-crate tests, wasm, clippy no new
+  warnings (pre-existing 27/13 debt), touched-file rustfmt, docs. Goldens
+  byte-identical.
+- **Disk**: 47.9 GB at the P7 baseline; **lowest free space seen 37.2 GB**
+  (engine clone target + Motioner debug/release/doc simultaneously); `cargo
+  clean` at close removed 5.0 + 4.2 GiB and left **46.65 GB free**. The harness
+  does not sample commit: the largest private value is 333.0 MB (heavy_ui_list
+  3,000; P6 was 798.5) and WS 610.1 MB, so there is no reliable commit peak.
 
 P6 (2026-11-20) — Motioner hot paths (six parallel lanes + integration):
 
@@ -871,10 +931,13 @@ Pin `7e95367` on `feat/pure2d-text-and-readback`; dev clone through
 `493619f` (S5), `c2196d0` (S6), `23278a2` (P0), `9c3d6e3` (P1: 7022976,
 ee2b772, 9d6218c, 11a5b3c, 74e85a2, 9c3d6e3), `c577877` (P2: e9761db,
 c577877), `5c2fd29` (P3: cd547de, a13c9d3, a46a82e, 5c2fd29), `bd41224`
-(P4: e8ed036, 3415098, 8b0e273, 56855c6, 48ca25b, bd41224) and **`db776bb`**
+(P4: e8ed036, 3415098, 8b0e273, 56855c6, 48ca25b, bd41224), `db776bb`
 (P5: GPU counters, state hoisting, overdraw view, damage-copy target, layered
-pass timing, present modes, layer scale, 2D GUI-depth policy). The submodule is
-checked out at `db776bb`; the parent pin is not committed. The reviewer pushes the engine and
+pass timing, present modes, layer scale, 2D GUI-depth policy), `7e623a9`
+(P6: lazy 2D target, adaptive blur-first layer scale, input-to-present and UI
+damage trace, batched texture remap) and **`840a8b8`** (P7: segment coalescing,
+offscreen present path, wasm-safe SSAO). The submodule is
+checked out at `840a8b8`; the parent pin is not committed. The reviewer pushes the engine and
 bumps the pin. **No pin bump in this session.** Never edit `engine/ferrous`.
 The `svgparser 0.8.1` future-incompat warning predates this work. Engine
 pre-existing debt remains: crate-wide rustfmt diffs (`asset_bridge.rs`,

@@ -45,6 +45,7 @@
 - **T-FORMAT-0002** — Implement project load and save round-trip `[alta]` (actualizado 2026-11-11)
 - **T-IO-0001** — Project folder v1: model, I/O and CLI (prompt 11 phase 1) `[alta]` (actualizado 2026-11-03)
 - **T-IO-0002** — Autosave, backups and crash recovery (prompt 11 phase 4) `[alta]` (actualizado 2026-11-04)
+- **T-PERF-0001** — Define performance budgets and benchmark plan `[alta]` (actualizado 2026-11-21)
 - **T-PERF-0003** — Phase 11 review fixes: radial gradient alpha, Showcase Pro art pass and engine batch reuse `[alta]` (actualizado 2026-11-03)
 - **T-PERF-0004** — Video playback: decode-ahead worker and release performance (prompt 11 phase 7a) `[alta]` (actualizado 2026-11-04)
 - **T-RENDER-0001** — Spike offscreen deterministic still frame `[alta]` (actualizado 2026-11-11)
