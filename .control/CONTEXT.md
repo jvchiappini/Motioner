@@ -7,10 +7,11 @@ version_schema: 1
 
 ## Prompt 15 status (GUIMaker design system)
 
-Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B and
-Phase 1 done; stopped for review.** No commits. FerrousEngine `feat/guimaker`
-from `681888b` (dev clone); the Motioner submodule stays at `d718a73` (no pin
-bump). Motioner `feat/guimaker` at `1ee429b`.
+Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B,
+Phase 1 and Phase 2 done; stopped for review.** No commits. FerrousEngine
+`feat/guimaker` from `12319e7` (dev clone, local changes); the Motioner
+submodule stays at `d718a73` (no pin bump). Motioner `feat/guimaker` at
+`7e7c2be` + `docs/frontend-handoff.md` and `.control/`.
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 
@@ -104,9 +105,46 @@ P1 (2026-11-21) — `guimaker::theme` (the crate is born):
   engine deps (core-only)` and the 17 fixtures pass; wasm `ferrous_web` and
   `ferrous_engine` exit 0. Workspace debt unchanged: 26 clippy, 22 rustdoc,
   4 `ferrous_ui_core` doctests, **0 guimaker items**. C: 35.13 GB free.
-- **Next:** Phase 2 — view tree, styling API and layout (taffy 0.7.7 memoised
-  by hash, display list, inspect/explain, spatial index and incremental layout
-  moved from `ferrous_ui_core` per G-0001 §6).
+- **Next:** Phase 3 — 100 % responsive (container breakpoints, fluid values,
+  adaptive components, DPI sweep) on top of the phase 2 tree and layout.
+
+P2 (2026-11-21) — review fix lanes + view tree, layout and the controller move:
+
+- **Fix lanes:** `accent_fill`/`accent_fill_hover`/`accent_fill_pressed` +
+  `text_on_accent_fill` (29 roles; worst fill contrast 5.27:1; dark 0.480/
+  0.520/0.440, light and HC 0.500/0.540/0.460; `Theme::filled_action`);
+  `scripts/check_guimaker_literals.py` (16 files, 0 violations, 14 tests, CI
+  step); the full `contrast_table` in `docs/theme.md` and the report.
+- **Library:** `crates/guimaker` grew the view arena and builders, token style
+  API, taffy 0.7.7 layout memoised by content hash, text measurement (real
+  Inter advances in `src/text/metrics.rs` + `scripts/gen_guimaker_metrics.py`),
+  display list with per-command node attribution, keyed store, pointer routing,
+  uniform-grid spatial index, `inspect`/`explain` and `FrameDebug` data for
+  prompt 19. 79 tests (67 unit, 1 alloc, 9 layout, 2 doctests).
+- **Controller move:** `spatial_index.rs` deleted from `ferrous_ui_core`; its
+  grid (clips, front-to-back, last-hit cache) now lives in `guimaker::spatial`;
+  `ferrous_events` does a temporary linear hit walk until phase 4. The
+  incremental layout (hash, subtree skip, rect diff/damage) now lives in
+  `guimaker::layout`; the engine keeps a full pass, `UiTree` keeps paint flags
+  and `RenderCollector`; `damage_regions`/`DirtyFlags::layout`/layout
+  propagation removed. Motioner builds and passes its gate.
+- **Measured (release, median of 3):** engine `ui_layout_large_tree` 8,192
+  **6.545 → 6.328 ms** (-3.3 %); GUIMaker 8,192 **3.885 ms**; spatial query
+  before 37.0 ns / after 33.3 ns (the first before harness had a bad x range
+  and was discarded); start screen full layout **0.164 ms** (<0.3), hover
+  **0.0075 ms**, relayout **0.0228 ms**, cold frame 0.300 ms; steady state
+  **0 allocations / 0 bytes over 10 frames**.
+- **Gate:** GUIMaker fmt/clippy pedantic/doc/tests/machete/boundaries/literal
+  guard green. Engine touched crates check and tests green except the 4
+  `ferrous_ui_core` doctests; wasm `ferrous_engine`/`ferrous_web` exit 0.
+  Workspace clippy 19 `ferrous_ui_core` (one less), no new items in touched
+  files; rustdoc debt unchanged, nothing new in touched crates. Motioner, in a
+  clean worktree with `engine/ferrous` pointed at the local engine: fmt
+  members, clippy, tests (0 failures), build, doc, machete, boundaries,
+  encoding, validate and refs all exit 0. C: 32.85 GB free. No commits.
+- **Report:** `out/reports/PHASE-15-P2-REPORT.md` (Spanish) + logs in
+  `out/reports/phase15/`; `docs/frontend-handoff.md` lists the start-screen
+  bugs for the Claude frontend session.
 
 ## Prompt 18 status (engine performance)
 
