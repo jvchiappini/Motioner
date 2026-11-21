@@ -297,10 +297,9 @@ documented fallback and continue).
      `crates/guimaker_ferrous` (thin adapter: draw commands → engine API,
      input events in, text metrics from `ferrous_font`; no drawing logic of
      its own — if the adapter needs more than a mapping, the capability
-     belongs in the engine), `apps/gallery` (storybook), and `apps/designer`. The old
-     `src/` designer moves there unchanged and stays out of the workspace
-     build: a separate Claude session rewrites its frontend after this
-     prompt (see Phase 11). Do not delete it.
+     belongs in the engine), `apps/gallery` (storybook), and `apps/designer` (the old
+     designer, revived in Phase 11). The old `src/` moves or is deleted; no
+     dead code stays.
    - **Programming model.** Recommended, justify or replace: a declarative
      tree rebuilt every frame from the app's state (cheap, no stale widgets,
      ideal for a model to write), laid out, then input is routed through
@@ -788,68 +787,68 @@ Every gallery story and recipe must lint clean across the sweep.
 5. Optimise until every row of the budget table is met; the bench numbers go
    in the GUIMaker README.
 
-## Phase 10 — Motioner adopts GUIMaker (after prompt 11 is committed)
+## Phase 10 — Motioner on GUIMaker: the plumbing only (the frontend is not part of this prompt)
 
-1. Motioner ADR (`pctl decision-new`) **"Editor chrome on GUIMaker"**:
-   amends D-0004/D-0018/D-0020/D-0021 — GUIMaker pinned as a submodule
-   (e.g. `ui/guimaker`, shallow, documented in a README like
-   `engine/README.md`), the engine `[patch]` from G-0001 so one engine copy is
-   built, `scripts/check_boundaries.py` allows `guimaker*` only in
-   `motioner_ui`, and the plan for which panels migrate when.
-2. Motioner's theme becomes a GUIMaker `Theme` built from the D-0021 seeds
-   (same accent, compact density for the editor, comfortable for the start
-   screen). `theme.rs` keeps only what is Motioner-specific; the icons and
-   any token now in GUIMaker are deleted from Motioner.
-3. **Rebuild the start screen and the New project dialog** on GUIMaker,
-   following the launcher recipe, keeping `StartAction` (now the message
-   type) and every `Command` and parity test from prompt 11 working. Target
-   design: a comfortable-density centred column; wordmark + one-line tagline;
-   two large action cards (New project / Open project: icon, title, one-line
-   description, keyboard hint); "Recent projects" section as a responsive
-   grid of cards with the real 16:9 thumbnail from `cache/`, name, relative
-   time ("2 h ago"), middle-ellipsised path in `Mono`/faint, hover lift,
-   context menu (Open, Reveal in Explorer, Remove from list), missing entries
-   greyed with a Remove action; an Examples row; a quiet footer (version,
-   docs). Empty state when there are no recents. New project dialog: modal
-   with form rows, size presets (1080p, 4K, square, vertical) as a segmented
-   control plus custom fields, inline validation, Create as the only primary.
-4. Also move to GUIMaker every menu, dialog, tooltip and toast prompt 11 added
-   (File menu, import errors…) if it is self-contained. Delete
-   `StartLayout`, the hand-computed rects and any helper left without users.
-   Zero duplication: no Motioner widget may re-implement a GUIMaker one.
-5. Motioner's text fields (inspector, New project form, agent composer later)
-   use the GUIMaker text-editing engine; `text_edit.rs` and any duplicated
-   pointer/drag helpers are gone from Motioner. The composition canvas uses
-   the engine gestures and Phase 4B picking; the canvas sits in the GUIMaker
-   layout as a `canvas` element and its own clicks never go through UI
-   widget hit testing.
-6. Screenshots `out/ui/p15-10-after-*.png` at 800×600, 1280×800, 1920×1080
-   and 3840×2160, scale 1 and 1.5, plus lint clean on the start view across
-   the sweep. Compare with Phase 0.
+**The user assigned the Motioner frontend to a separate Claude session after
+this prompt.** That covers:
+- the start screen and the New project dialog;
+- the menus, dialogs, tooltips and toasts;
+- the redesign of the editor panels.
 
-## Phase 11 — Backlog (the designer frontend is not part of this prompt)
+Do not redesign or rebuild any Motioner screen here. This phase only makes
+the frontend session possible, with no duplicated code left:
 
-**Do not touch the GUIMaker designer app** (`src/main.rs`, `src/panels`,
-`src/scene.rs`, or `apps/designer` if Phase 0 moves it there). The user
-assigned its frontend rewrite to a separate Claude session after this
-prompt. Phase 0 only makes the repository a library workspace. The old
-designer may stay excluded from the workspace build until that session;
-say so in the report.
+1. **Motioner ADR** (`pctl decision-new`), **"Editor chrome on
+   GUIMaker"**:
+   - it amends D-0004, D-0018, D-0020 and D-0021;
+   - how Motioner depends on GUIMaker, following the repository decision
+     the reviewer gives in the start message;
+   - one engine copy is built;
+   - `scripts/check_boundaries.py` allows `guimaker*` only in
+     `motioner_ui`.
+2. **Theme.** Motioner's theme becomes a GUIMaker `Theme` built from the
+   D-0021 seeds: the same accent, compact density for the editor and
+   comfortable density for the start screen. `theme.rs` keeps only what is
+   Motioner-specific.
+3. **Controllers, one implementation.**
+   - Motioner's text fields use the GUIMaker text-editing engine, and
+     `text_edit.rs` is deleted.
+   - The pointer, drag and scroll helpers that GUIMaker now owns are
+     deleted from Motioner.
+   - The composition canvas is a GUIMaker `canvas` element: it receives
+     GUIMaker gestures in local coordinates and picks with the engine
+     (Phase 4B). Its clicks never go through UI widget hit testing.
+   - Every existing screen keeps working and looking as it does today; the
+     goldens and parity tests stay green.
+4. **Handoff for the frontend session.** Write
+   `docs/frontend-handoff.md` in Motioner, covering:
+   - the GUIMaker recipes and components each Motioner screen should use
+     (launcher, app shell, dialogs, inspector forms, lists, timeline rows);
+   - what is still hand-placed and where;
+   - the gaps the library has for those screens;
+   - screenshots `out/ui/p15-10-now-*.png` of every screen at 1280×800 and
+     1920×1080, at scale 1 and 1.5, as the "before" for that session.
 
-To prepare that session, write `docs/designer-handoff.md` in GUIMaker:
-- the library APIs the designer will need: the canvas element, the
-  component palette data, the forms for an inspector, live preview,
-  serialising a view, and codegen to GUIMaker builder code;
-- the gaps the library still has for them;
-- a short list of the screens the designer needs.
+## Phase 11 — Dogfood: the GUIMaker designer, and the backlog
 
-Backlog (GUIMaker `docs/roadmap.md`, and Motioner tasks through
-`pctl task-new`):
-- migrating Motioner's inspector, layers list, top bar and agent panel
-  (prompt 14) onto GUIMaker;
-- the `ferrous_ui_core` pieces left after the Phase 0 move;
-- accessibility tree export;
-- RTL and IME text input.
+- Revive `apps/designer` on the library, as the best stress test:
+  - a canvas with the app shell recipe;
+  - a component palette;
+  - an inspector built from forms;
+  - a live preview of the designed view, rendered by the library itself;
+  - codegen that emits **GUIMaker builder code**. The old generator emitted
+    absolute positions; delete it.
+
+  Keep the scope to what the library proves, and put the rest in the
+  roadmap.
+- Backlog (GUIMaker `docs/roadmap.md`, and Motioner tasks through
+  `pctl task-new`):
+  - the Motioner frontend (the Claude session, from
+    `docs/frontend-handoff.md`);
+  - the agent panel on GUIMaker (prompt 14);
+  - the `ferrous_ui_core` pieces left after the Phase 0 move;
+  - accessibility tree export;
+  - RTL and IME text input.
 
 ## Phase 12 — Report
 
