@@ -149,6 +149,13 @@ pub(crate) struct PreviewApp {
     video_waiting: bool,
     /// Decoded-video bytes reported by the host (the profiler readout).
     video_bytes: usize,
+    /// Whether the persistent offscreen UI path was opted into
+    /// (`MOTIONER_PERSISTENT_UI=1` or `--persistent-ui`).
+    persistent_ui: bool,
+    /// Frames whose damage was below the break-even point.
+    persistent_frames: u64,
+    /// Whether the last frame selected the persistent path.
+    persistent_last: bool,
     /// Proxy progress text for the top bar, when a job is running.
     proxy_status: Option<String>,
     /// The start screen, when it is open instead of the editor.
@@ -302,6 +309,64 @@ impl UiDamageTarget {
     }
 }
 
+/// Bytes attributed to each memory owner at exit (`memory-owners {json}`).
+///
+/// The counts and byte estimates let the P7 harness tell which owner grows
+/// with the layer count. The document and plan estimates use the item/node
+/// sizes; the panel cache and the render plan additionally report their real
+/// allocated bytes through the cross-lane helpers
+/// `PanelCache::byte_size()` and `RenderPlan::arena_bytes()`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MemoryOwners {
+    document_nodes: u64,
+    document_bytes_estimate: u64,
+    plan_items: u64,
+    plan_bytes_estimate: u64,
+    panel_batches: u64,
+    panel_bytes_estimate: u64,
+    video_cache_bytes: u64,
+    image_cpu_bytes: u64,
+    persistent_ui: bool,
+    persistent_ui_frames: u64,
+}
+
+impl MemoryOwners {
+    fn to_json(self) -> String {
+        let mut json = crate::Json::new();
+        json.begin_object();
+        json.key("document_nodes").int(as_i64(self.document_nodes));
+        json.key("document_bytes_estimate")
+            .int(as_i64(self.document_bytes_estimate));
+        json.key("plan_items").int(as_i64(self.plan_items));
+        json.key("plan_bytes_estimate")
+            .int(as_i64(self.plan_bytes_estimate));
+        json.key("panel_batches").int(as_i64(self.panel_batches));
+        json.key("panel_bytes_estimate")
+            .int(as_i64(self.panel_bytes_estimate));
+        json.key("video_cache_bytes")
+            .int(as_i64(self.video_cache_bytes));
+        json.key("image_cpu_bytes")
+            .int(as_i64(self.image_cpu_bytes));
+        json.key("persistent_ui").boolean(self.persistent_ui);
+        json.key("persistent_ui_frames")
+            .int(as_i64(self.persistent_ui_frames));
+        json.end_object();
+        json.finish()
+    }
+}
+
+/// Saturating conversion for the JSON writer.
+fn as_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+/// `FERROUS_TRACE_FRAMES=1` (the harness) or `MOTIONER_MEMORY_REPORT=1`
+/// (`--memory-report`) asks the window for the owner report at exit.
+fn memory_report_enabled() -> bool {
+    std::env::var("FERROUS_TRACE_FRAMES").is_ok_and(|value| value == "1")
+        || std::env::var("MOTIONER_MEMORY_REPORT").is_ok_and(|value| value == "1")
+}
+
 impl PreviewApp {
     #[allow(clippy::too_many_lines)] // one struct literal; the fields are the window's state
     pub(crate) fn new(
@@ -389,6 +454,9 @@ impl PreviewApp {
             video_last: None,
             video_waiting: false,
             video_bytes: 0,
+            persistent_ui: motioner_render::persistent_ui_opt_in(),
+            persistent_frames: 0,
+            persistent_last: false,
             proxy_status: None,
             start,
             start_hover: None,
@@ -1615,6 +1683,41 @@ impl PreviewApp {
             .unwrap_or_default()
     }
 
+    /// Bytes and counts per memory owner, for the P7 `memory-owners` line.
+    ///
+    /// Cross-lane helpers this calls: `PanelCache::byte_size()`/
+    /// `PanelCache::batch_count()` (Lane A's `paint.rs`) and
+    /// `RenderPlan::arena_bytes()` (`motioner_eval::plan`). The estimates are
+    /// deliberately coarse for the document/plan items; the harness only needs
+    /// to see which owner grows with the layer count.
+    fn memory_owners(&self) -> MemoryOwners {
+        let document = self.editor.session().document();
+        let document_nodes = document.map_or(0, motioner_core::Document::len);
+        let document_bytes_estimate = u64::try_from(document_nodes)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(std::mem::size_of::<motioner_core::Node>()).unwrap_or(0));
+        let plan = self.editor.session().plan();
+        let plan_items = plan.items().len();
+        MemoryOwners {
+            document_nodes: u64::try_from(document_nodes).unwrap_or(u64::MAX),
+            document_bytes_estimate,
+            plan_items: u64::try_from(plan_items).unwrap_or(u64::MAX),
+            plan_bytes_estimate: plan.arena_bytes(),
+            panel_batches: u64::try_from(self.panel_cache.batch_count()).unwrap_or(u64::MAX),
+            panel_bytes_estimate: u64::try_from(self.panel_cache.byte_size()).unwrap_or(u64::MAX),
+            video_cache_bytes: u64::try_from(
+                self.host().map_or(0, |host| host.video_cache_bytes()),
+            )
+            .unwrap_or(u64::MAX),
+            image_cpu_bytes: self
+                .painter
+                .as_ref()
+                .map_or(0, motioner_render::LivePainter::image_cpu_bytes),
+            persistent_ui: self.persistent_ui,
+            persistent_ui_frames: self.persistent_frames,
+        }
+    }
+
     fn frame_facts(&self, layout: &Layout) -> Rc<FrameFacts> {
         let view_state = self.editor.view();
         let key: FactsKey = (
@@ -1707,7 +1810,13 @@ impl PreviewApp {
         let frame = self.frame();
         if let Some(document) = self.editor.session().document() {
             let timeline = self.editor.timeline();
-            timeline.write_values(document, frame, &mut self.timeline_values);
+            write_visible_timeline_values(
+                timeline,
+                &self.timeline_layout.rows,
+                document,
+                frame,
+                &mut self.timeline_values,
+            );
         }
         self.layer_count.clear();
         {
@@ -1942,9 +2051,25 @@ impl PreviewApp {
         // off this phase.
         let damage = p.damage();
         let (width, height) = ctx.window_size;
+        #[allow(clippy::cast_possible_truncation)]
+        let fraction = damage.damaged_fraction(width as f32, height as f32) as f32;
         if width > 0 && height > 0 {
-            let fraction = damage.damaged_fraction(width as f32, height as f32) as f32;
             ferrous_core::frame_trace::record_ui_damage(fraction);
+        }
+        // Prompt 18 P7 Fix 8: the same measured fraction decides whether the
+        // engine's persistent offscreen target (when AppConfig opts in) may
+        // copy only the damaged rects. Off unless the user opted in; the
+        // engine wiring and the break-even live behind the flag.
+        if self.persistent_ui && width > 0 && height > 0 {
+            self.persistent_last = motioner_render::persistent_ui_within_break_even(
+                fraction,
+                motioner_render::PERSISTENT_UI_BREAK_EVEN,
+            );
+            if self.persistent_last {
+                self.persistent_frames = self.persistent_frames.saturating_add(1);
+            }
+        } else {
+            self.persistent_last = false;
         }
         let target = self.ui_target.get_or_insert_with(UiDamageTarget::default);
         target.record(&damage.rects, damage.full);
@@ -2145,6 +2270,12 @@ impl FerrousApp for PreviewApp {
             let deadline = Instant::now() + Duration::from_secs(1);
             self.editor.session_mut().flush_overrides(deadline);
         }
+        // Prompt 18 P7 Fix 6: one line per process with the bytes attributed
+        // to each owner. The harness parses `memory-owners ` and compares the
+        // 1,000- and 3,000-layer runs.
+        if memory_report_enabled() {
+            println!("memory-owners {}", self.memory_owners().to_json());
+        }
         if let Some(host) = self.host() {
             host.audio_stop();
             if has_project {
@@ -2188,6 +2319,46 @@ struct FrameFacts {
     orphans: Vec<OrphanRow>,
     layer_states: Vec<(bool, bool)>,
     layer_flags: Vec<(bool, bool)>,
+}
+
+/// Writes value strings only for the timeline rows the current layout draws.
+///
+/// [`crate::timeline_model::TimelineRows::write_values`] formats every row of
+/// the document, but a 3,000-layer list only shows the ~30 rows that intersect
+/// the visible tracks. The layout already carries exactly those indices, so
+/// this keeps the per-frame formatting work proportional to the visible rows
+/// while writing into the same index positions the panel reads. Rows outside
+/// the window are never read, so the pixels are identical.
+fn write_visible_timeline_values(
+    timeline: &crate::timeline_model::TimelineRows,
+    visible: &[crate::timeline_model::RowRect],
+    document: &motioner_core::Document,
+    frame: Frame,
+    out: &mut Vec<String>,
+) {
+    use crate::timeline_model::{write_content_text, write_value_text, RowKind};
+    let Some(last) = visible.iter().map(|row| row.row).max() else {
+        return;
+    };
+    if out.len() <= last {
+        out.resize_with(last + 1, String::new);
+    }
+    for row_rect in visible {
+        let Some(row) = timeline.rows().get(row_rect.row) else {
+            continue;
+        };
+        let text = &mut out[row_rect.row];
+        text.clear();
+        match row.kind {
+            RowKind::Layer { .. } => {}
+            RowKind::Transform { property, axis, .. } => {
+                write_value_text(text, document, row.node, property, axis, frame);
+            }
+            RowKind::Content { field, .. } => {
+                write_content_text(text, document, row.node, field, frame);
+            }
+        }
+    }
 }
 
 /// Modifier state for this frame.
@@ -2337,5 +2508,36 @@ mod tests {
             playback_period(FrameRate::new(1, 4000).unwrap()),
             FRAME_BUDGET
         );
+    }
+
+    #[test]
+    fn the_memory_owners_line_lists_every_owner() {
+        let report = super::MemoryOwners {
+            document_nodes: 3000,
+            document_bytes_estimate: 600_000,
+            plan_items: 3000,
+            plan_bytes_estimate: 1_000_000,
+            panel_batches: 40,
+            panel_bytes_estimate: 20_000,
+            video_cache_bytes: 0,
+            image_cpu_bytes: 0,
+            persistent_ui: false,
+            persistent_ui_frames: 0,
+        };
+        let json = report.to_json();
+        for key in [
+            "document_nodes",
+            "document_bytes_estimate",
+            "plan_items",
+            "plan_bytes_estimate",
+            "panel_batches",
+            "panel_bytes_estimate",
+            "video_cache_bytes",
+            "image_cpu_bytes",
+        ] {
+            assert!(json.contains(key), "{key} missing");
+        }
+        assert!(json.contains("\"persistent_ui\":false"));
+        assert!(json.starts_with('{') && json.ends_with('}'));
     }
 }

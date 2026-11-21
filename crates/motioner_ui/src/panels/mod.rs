@@ -19,9 +19,10 @@ pub mod top_bar;
 
 use motioner_core::{Document, FrameRate};
 
-use crate::inspect::{Editing, FieldTarget, Layout as InspectLayout, Model as InspectModel};
+use crate::inspect::{Editing, FieldTarget, Item, Layout as InspectLayout, Model as InspectModel};
 use crate::layout::{Hit, Layout, Rect};
 use crate::outline::OutlineRow;
+use crate::paint::{HoverKey, PanelKind};
 use crate::session::DiagnosticInfo;
 use crate::widgets::Interaction;
 
@@ -215,5 +216,154 @@ impl View<'_> {
     #[must_use]
     pub fn has_error(&self) -> bool {
         !self.diagnostics.is_empty()
+    }
+
+    /// The stable hover code of the pointer when it belongs to `kind`.
+    ///
+    /// Panels hash this into their revision; a hit another panel paints leaves
+    /// it at `0`, so a pointer move over a layer row does not invalidate the
+    /// timeline, the inspector or the top bar.
+    #[must_use]
+    pub fn hover_code(&self, kind: PanelKind) -> u64 {
+        crate::paint::hover_code(self.hover, kind)
+    }
+
+    /// The hover state to pass to [`crate::paint::Painter::panel_hover`].
+    ///
+    /// `rect` is the hovered widget when the hit is not a cached row; rows
+    /// report their own damage from the painter's row cache.
+    #[must_use]
+    pub fn hover_key(&self, kind: PanelKind) -> HoverKey {
+        let code = self.hover_code(kind);
+        if code == 0 {
+            return HoverKey::none();
+        }
+        HoverKey::new(code, self.hover_rect())
+    }
+
+    /// The rectangle of the hovered widget, for a hover-only repaint.
+    fn hover_rect(&self) -> Option<Rect> {
+        let hit = self.hover?;
+        Some(match hit {
+            Hit::LayerRow(index)
+            | Hit::LayerEye(index)
+            | Hit::LayerLock(index)
+            | Hit::LayerSolo(index)
+            | Hit::LayerShy(index) => self
+                .layout
+                .layer_row(self.layer_position(index), self.layer_scroll),
+            Hit::OrphanRow(index) | Hit::OrphanDelete(index) | Hit::OrphanRebind(index) => self
+                .layout
+                .orphan_row(index, self.layer_rows.len(), self.layer_scroll),
+            Hit::LeftTab(tab) => self.layout.left_tab(tab),
+            Hit::AssetRow(index) => self
+                .layout
+                .asset_row(self.asset_position(index), self.layer_scroll),
+            Hit::AssetCell(index) => self
+                .layout
+                .asset_cell(self.asset_position(index), self.layer_scroll),
+            Hit::AssetAdd => self.layout.asset_toolbar().0,
+            Hit::AssetView(view) => {
+                let (_, list, grid, _) = self.layout.asset_toolbar();
+                if view == crate::assets::AssetView::List {
+                    list
+                } else {
+                    grid
+                }
+            }
+            Hit::AssetRemoveUnused => self.layout.asset_toolbar().3,
+            Hit::Transport(button) => self
+                .layout
+                .transport
+                .iter()
+                .find(|(candidate, _)| *candidate == button)
+                .map_or(self.layout.timeline.header, |(_, rect)| *rect),
+            Hit::TimelineRow(index)
+            | Hit::TimelineStopwatch(index)
+            | Hit::TimelinePrevKey(index)
+            | Hit::TimelineKeyToggle(index)
+            | Hit::TimelineNextKey(index)
+            | Hit::TimelineField(index)
+            | Hit::TimelineDiamond { row: index, .. }
+            | Hit::LayerChevron(index) => self.timeline_row_rect(index),
+            Hit::InspectField { item, .. }
+            | Hit::InspectStopwatch(item)
+            | Hit::InspectDiamond(item)
+            | Hit::InspectSegment { item, .. } => self.inspector_item_rect(item),
+            Hit::InspectCopy => self
+                .inspector_layout
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Header { copy, .. } => Some(*copy),
+                    _ => None,
+                })
+                .unwrap_or(self.layout.inspector.header),
+            Hit::Toggle(_) => self.layout.safe_area_toggle,
+            Hit::SnapToggle => self.layout.snap_toggle,
+            Hit::ZoomPill => self.layout.zoom_pill,
+            Hit::FileMenu => self.layout.file_button,
+            Hit::ViewMenu => self.layout.view_button,
+            Hit::RecoverRestore => self.layout.recovery_restore,
+            Hit::RecoverDismiss => self.layout.recovery_dismiss,
+            Hit::Gizmo(handle) => self.gizmo_handle_rect(handle),
+            _ => return None,
+        })
+    }
+
+    /// A small box around one selection handle.
+    fn gizmo_handle_rect(&self, handle: crate::gizmo::Handle) -> Rect {
+        use crate::gizmo::Handle;
+        let Some(bounds) = self.selection_bounds else {
+            return self.layout.canvas;
+        };
+        let side = self.layout.metrics.px(9.0);
+        let x = match handle {
+            Handle::TopLeft | Handle::BottomLeft => bounds.x,
+            Handle::TopRight | Handle::BottomRight => bounds.right(),
+            _ => bounds.center_x(),
+        };
+        let y = match handle {
+            Handle::TopLeft | Handle::TopRight => bounds.y,
+            Handle::BottomLeft | Handle::BottomRight => bounds.bottom(),
+            Handle::Rotate => bounds.y - self.layout.metrics.px(22.0),
+            Handle::Move => bounds.center_y(),
+        };
+        Rect::new(x - side * 0.5, y - side * 0.5, side, side)
+    }
+
+    /// The position of an outline row in the filtered layer list.
+    fn layer_position(&self, index: usize) -> usize {
+        self.layer_rows
+            .iter()
+            .position(|candidate| *candidate == index)
+            .unwrap_or(index)
+    }
+
+    /// The position of an asset entry in the filtered list or grid.
+    fn asset_position(&self, index: usize) -> usize {
+        let count = self.assets.visible_count(self.filter);
+        (0..count)
+            .find(|position| self.assets.list_index(*position, self.filter) == Some(index))
+            .unwrap_or(index)
+    }
+
+    /// The laid-out rectangle of timeline row `index`.
+    fn timeline_row_rect(&self, index: usize) -> Rect {
+        self.timeline_layout
+            .rows
+            .iter()
+            .find(|row| row.row == index)
+            .map_or(self.layout.timeline.tracks, |row| row.rect)
+    }
+
+    /// The laid-out rectangle of inspector item `index`.
+    fn inspector_item_rect(&self, index: usize) -> Rect {
+        match self.inspector_layout.items.get(index) {
+            Some(
+                Item::Header { rect, .. } | Item::Section { rect, .. } | Item::Row { rect, .. },
+            ) => *rect,
+            None => self.layout.inspector.body,
+        }
     }
 }

@@ -91,7 +91,6 @@ fn revision(v: &View<'_>) -> u64 {
     let mut rev = PanelRevision::new()
         .u64(v.selected.map_or(u64::MAX, |index| index as u64))
         .f32(v.inspector_scroll)
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
         .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
         .bool(v.copied)
         .bool(v.inspector_field_error.is_some())
@@ -148,7 +147,7 @@ fn revision(v: &View<'_>) -> u64 {
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) -> f32 {
     let key = p.panel_key(PanelKind::Inspector, revision(v), v.layout.inspector.rect);
     let mut content_h = 0.0;
-    p.panel(key, |p| {
+    p.panel_hover(key, v.hover_key(PanelKind::Inspector), |p| {
         content_h = draw_body(p, v);
     });
     content_h

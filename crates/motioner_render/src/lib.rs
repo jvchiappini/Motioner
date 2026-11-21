@@ -66,6 +66,39 @@ pub const DEFAULT_TEXTURE_BUDGET: u64 = 512 * 1024 * 1024;
 /// textures exist, dropping the least recently used resident copies first.
 pub const DEFAULT_IMAGE_CPU_BUDGET: u64 = 256 * 1024 * 1024;
 
+/// Damage fraction below which a persistent offscreen UI target is expected
+/// to win over a full redraw (prompt 18 P6 measured ~0.71).
+///
+/// The engine owns the final decision (`AppConfig::persistent_ui` and its
+/// break-even option); this constant is the shared default both the engine
+/// wiring and the tests use until the engine exposes a measured value.
+pub const PERSISTENT_UI_BREAK_EVEN: f32 = 0.71;
+
+/// Whether the user opted into the persistent offscreen UI present path.
+///
+/// Off by default. `MOTIONER_PERSISTENT_UI=1` (set by `motioner preview
+/// --persistent-ui`) turns it on; the orchestrator measures scrub CPU with
+/// and without it and records the decision before any default changes.
+#[must_use]
+pub fn persistent_ui_opt_in() -> bool {
+    std::env::var("MOTIONER_PERSISTENT_UI").is_ok_and(|value| value == "1")
+}
+
+/// Whether this frame's damage is small enough to use the persistent path.
+///
+/// `damage_fraction` is the fraction of the window the chrome repainted
+/// (`0.0..=1.0`); a non-finite value or a non-finite/non-positive break-even
+/// always selects the full redraw, so a broken measurement can never turn the
+/// optimisation on by accident. The comparison is strict: damage *below* the
+/// break-even wins.
+#[must_use]
+pub fn persistent_ui_within_break_even(damage_fraction: f32, break_even: f32) -> bool {
+    if !damage_fraction.is_finite() || !break_even.is_finite() || break_even <= 0.0 {
+        return false;
+    }
+    damage_fraction.clamp(0.0, 1.0) < break_even.clamp(0.0, 1.0)
+}
+
 /// How large the GPU copies of decoded images may be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProxyTarget {
@@ -1606,6 +1639,16 @@ impl LivePainter {
         &self.fonts
     }
 
+    /// Decoded image pixels this painter still keeps on the CPU.
+    ///
+    /// The interactive preview releases pixels once their texture exists, so
+    /// this is the memory-attribution figure for the image owner; it never
+    /// includes GPU texture bytes.
+    #[must_use]
+    pub fn image_cpu_bytes(&self) -> u64 {
+        self.images.total_bytes()
+    }
+
     /// Replaces the face set faces are resolved from (a newly opened document).
     ///
     /// Already registered atlases stay: the next paint registers whatever the
@@ -2063,6 +2106,33 @@ fn register_face(
 mod tests {
     use super::*;
     use motioner_core::ImageKey;
+
+    #[test]
+    fn persistent_ui_selects_only_damage_below_the_break_even() {
+        assert!(persistent_ui_within_break_even(
+            0.0,
+            PERSISTENT_UI_BREAK_EVEN
+        ));
+        assert!(persistent_ui_within_break_even(
+            0.398,
+            PERSISTENT_UI_BREAK_EVEN
+        ));
+        assert!(!persistent_ui_within_break_even(
+            PERSISTENT_UI_BREAK_EVEN,
+            PERSISTENT_UI_BREAK_EVEN
+        ));
+        assert!(!persistent_ui_within_break_even(
+            0.9,
+            PERSISTENT_UI_BREAK_EVEN
+        ));
+        // A broken measurement can never turn the optimisation on.
+        assert!(!persistent_ui_within_break_even(
+            f32::NAN,
+            PERSISTENT_UI_BREAK_EVEN
+        ));
+        assert!(!persistent_ui_within_break_even(0.1, 0.0));
+        assert!(!persistent_ui_within_break_even(0.1, f32::INFINITY));
+    }
 
     fn image(marker: u8, pixels: u32) -> ImageData {
         ImageData {

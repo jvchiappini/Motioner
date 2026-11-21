@@ -16,28 +16,21 @@ use crate::timeline_model::{RowKind, TimelineRow};
 use crate::widgets::{self, ButtonKind, KeyMark};
 
 /// Everything the timeline reads, except the theme and DPI (in the key).
+///
+/// The transport frame and the strings that change with it are deliberately
+/// absent: they live in [`PanelKind::TimelineLive`]. A scrub therefore hits
+/// this panel and replays its rows instead of rebuilding the whole timeline.
 #[allow(clippy::too_many_lines)] // one input per line: the whole key in one place
 fn revision(v: &View<'_>) -> u64 {
     let mut rev = PanelRevision::new()
         .bool(v.document.is_some())
-        .i64(v.frame)
         .i64(v.duration)
         .u64(u64::from(v.rate.numerator()))
         .u64(u64::from(v.rate.denominator()))
         .bool(v.playing)
         .bool(v.looping)
         .u64(v.selected.map_or(u64::MAX, |index| index as u64))
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
         .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
-        .bool(v.retime_delta.is_some())
-        .u64(v.retime_delta.map_or(0, |delta| delta as u64))
-        .str(&v.chrome.timecode)
-        .str(&v.chrome.counter)
-        .str(&v.chrome.info)
-        .str(&v.chrome.selected)
-        .str(&v.chrome.head)
-        .str(&v.chrome.end_label)
-        .f32(v.chrome.end_x)
         .usize(v.selected_keys.len())
         .usize(v.timeline_layout.rows.len())
         .f32(v.timeline_layout.height)
@@ -47,9 +40,6 @@ fn revision(v: &View<'_>) -> u64 {
         .rect(v.layout.timeline.tracks)
         .rect(v.layout.timeline.ruler)
         .rect(v.layout.timeline.scrub);
-    for (x, label) in &v.chrome.ruler {
-        rev = rev.f32(*x).str(label);
-    }
     rev = rev.u64(selected_keys_revision(v));
     if let Some(graph) = v.graph {
         rev = rev
@@ -92,7 +82,7 @@ fn revision(v: &View<'_>) -> u64 {
         let Some(row) = v.timeline.rows().get(row_rect.row) else {
             continue;
         };
-        rev = row_revision(rev, v, row, row_rect.row);
+        rev = row_revision(rev, v, row, row_rect.row, false);
         if let Some(value) = v.timeline_values.get(row_rect.row) {
             rev = rev.str(value);
         }
@@ -102,11 +92,16 @@ fn revision(v: &View<'_>) -> u64 {
 }
 
 /// Visibility of one timeline row, without its rectangle (in the key).
+///
+/// `with_hover` is off for the enclosing panel: its key must not change when
+/// the pointer moves between rows, or a hover would miss the whole timeline.
+/// The row key itself always includes the pointer state.
 fn row_revision(
     mut rev: PanelRevision,
     v: &View<'_>,
     row: &TimelineRow,
     row_index: usize,
+    with_hover: bool,
 ) -> PanelRevision {
     let outline = row.kind.outline();
     let (visible, locked) = v
@@ -129,9 +124,13 @@ fn row_revision(
         .hashable(&row.keys)
         .hashable(&row.eases)
         .bool(v.selected == Some(outline))
-        .bool(v.expanded.contains(&outline))
-        .u64(row_hit_code(v.hover, row_index))
-        .u64(row_hit_code(v.pressed, row_index))
+        .bool(v.expanded.contains(&outline));
+    if with_hover {
+        rev = rev
+            .u64(row_hit_code(v.hover, row_index))
+            .u64(row_hit_code(v.pressed, row_index));
+    }
+    rev = rev
         .i64(v.duration)
         .u64(u64::from(v.rate.numerator()))
         .u64(u64::from(v.rate.denominator()))
@@ -172,7 +171,7 @@ fn row_key(
     row: &TimelineRow,
     assets: u64,
 ) -> PanelKey {
-    let mut rev = row_revision(PanelRevision::new(), v, row, row_rect.row)
+    let mut rev = row_revision(PanelRevision::new(), v, row, row_rect.row, true)
         .usize(row_rect.row)
         .rect(row_rect.rect)
         .rect(row_rect.name)
@@ -408,7 +407,113 @@ impl ChromeText {
 /// Draws the timeline.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let key = p.panel_key(PanelKind::Timeline, revision(v), v.layout.timeline.rect);
-    p.panel(key, |p| draw_body(p, v));
+    p.panel_hover(key, v.hover_key(PanelKind::Timeline), |p| draw_body(p, v));
+    draw_live(p, v);
+}
+
+/// The header readouts, ruler labels and playhead: the parts that follow the
+/// transport frame.
+///
+/// Each range is its own small cache entry so a scrub rebuilds a thin playhead
+/// line and a few labels while the main timeline (its rows included) hits.
+fn draw_live(p: &mut Painter<'_>, v: &View<'_>) {
+    let tl = v.layout.timeline;
+    // The live keys change on every scrub frame, so their rectangles are kept
+    // tight: a stale entry damages its own key rect, never the whole timeline.
+    let live_band = p.m.px(28.0);
+    let header_rect = Rect::new(
+        tl.header.x,
+        (tl.header.center_y() - live_band * 0.5).round(),
+        tl.header.w,
+        live_band,
+    );
+    let header_key = p.panel_key(
+        PanelKind::TimelineLive,
+        header_live_revision(v),
+        header_rect,
+    );
+    p.panel(header_key, |p| header_live(p, v));
+    if v.document.is_none() {
+        return;
+    }
+    let duration = v.duration.max(1);
+    let x = frame_to_x(
+        v.frame,
+        duration,
+        f64::from(tl.scrub.x),
+        f64::from(tl.scrub.w),
+    )
+    .round() as f32;
+    let line = p.m.hairline().max(p.m.px(1.5).floor()).max(1.0);
+    let playhead_rect = Rect::new(
+        (x - line).floor(),
+        tl.ruler.y,
+        (line * 2.0).max(2.0),
+        tl.ruler.h + tl.tracks.h,
+    );
+    let playhead_key = p.panel_key(PanelKind::TimelineLive, playhead_revision(v), playhead_rect);
+    p.panel(playhead_key, |p| playhead_line(p, v));
+    let ruler_key = p.panel_key(PanelKind::TimelineLive, ruler_live_revision(v), tl.ruler);
+    p.panel(ruler_key, |p| ruler_live(p, v));
+    if v.retime_delta.is_some() {
+        let pill_rect = Rect::new(
+            tl.ruler.x,
+            tl.ruler.y - p.m.px(24.0),
+            tl.ruler.w,
+            tl.ruler.h + p.m.px(24.0),
+        );
+        let pill_key = p.panel_key(PanelKind::TimelineLive, retime_revision(v), pill_rect);
+        p.panel(pill_key, |p| retime_pill(p, v));
+    }
+}
+
+/// The frame-dependent header strings.
+fn header_live_revision(v: &View<'_>) -> u64 {
+    PanelRevision::new()
+        .bool(v.document.is_some())
+        .str(&v.chrome.timecode)
+        .str(&v.chrome.counter)
+        .str(&v.chrome.info)
+        .str(&v.chrome.selected)
+        .finish()
+}
+
+/// The ruler labels and the playhead tab, which the head can hide.
+fn ruler_live_revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .bool(v.document.is_some())
+        .i64(v.frame)
+        .i64(v.duration)
+        .str(&v.chrome.head)
+        .str(&v.chrome.end_label)
+        .f32(v.chrome.end_x)
+        .rect(v.layout.timeline.ruler);
+    for (x, label) in &v.chrome.ruler {
+        rev = rev.f32(*x).str(label);
+    }
+    rev.finish()
+}
+
+/// The playhead line, which spans the ruler and the tracks.
+fn playhead_revision(v: &View<'_>) -> u64 {
+    PanelRevision::new()
+        .bool(v.document.is_some())
+        .i64(v.frame)
+        .i64(v.duration)
+        .rect(v.layout.timeline.scrub)
+        .finish()
+}
+
+/// The retime delta pill above the playhead.
+fn retime_revision(v: &View<'_>) -> u64 {
+    PanelRevision::new()
+        .bool(v.document.is_some())
+        .i64(v.frame)
+        .i64(v.duration)
+        .bool(v.retime_delta.is_some())
+        .u64(v.retime_delta.map_or(0, |delta| delta as u64))
+        .str(&v.chrome.head)
+        .finish()
 }
 
 fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
@@ -424,12 +529,12 @@ fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
     } else {
         rows(p, v);
     }
-    if v.document.is_some() {
-        playhead(p, v);
-    }
-    retime_pill(p, v);
 }
 
+/// The transport strip: its separator and the buttons.
+///
+/// The timecode and counter are painted by [`header_live`], so a scrub does not
+/// rebuild the transport.
 fn header(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let tl = v.layout.timeline;
@@ -441,6 +546,31 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
         t.hairline,
     );
 
+    for (button, rect) in v.layout.transport {
+        let (icon, kind) = match button {
+            TransportButton::ToStart => (Icon::ToStart, ButtonKind::Ghost),
+            TransportButton::StepBack => (Icon::StepBack, ButtonKind::Ghost),
+            TransportButton::PlayPause => (
+                if v.playing { Icon::Pause } else { Icon::Play },
+                ButtonKind::Primary,
+            ),
+            TransportButton::StepForward => (Icon::StepForward, ButtonKind::Ghost),
+            TransportButton::ToEnd => (Icon::ToEnd, ButtonKind::Ghost),
+            TransportButton::Loop => (Icon::Loop, ButtonKind::Ghost),
+        };
+        let mut state = v.interaction(Hit::Transport(button));
+        state.active = button == TransportButton::Loop && v.looping;
+        state.disabled = v.document.is_none();
+        widgets::icon_button(p, rect, icon, kind, state);
+    }
+}
+
+/// The frame-dependent header readouts: timecode, counter, selected-key count
+/// and duration.
+fn header_live(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let tl = v.layout.timeline;
+    let header = tl.header;
     let pad = p.m.px(size::PAD);
     let loaded = v.document.is_some();
     let tc_style = p
@@ -467,24 +597,6 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
         header.h,
     );
     p.text_in(counter, counter_rect, Align::Left, &counter_style);
-
-    for (button, rect) in v.layout.transport {
-        let (icon, kind) = match button {
-            TransportButton::ToStart => (Icon::ToStart, ButtonKind::Ghost),
-            TransportButton::StepBack => (Icon::StepBack, ButtonKind::Ghost),
-            TransportButton::PlayPause => (
-                if v.playing { Icon::Pause } else { Icon::Play },
-                ButtonKind::Primary,
-            ),
-            TransportButton::StepForward => (Icon::StepForward, ButtonKind::Ghost),
-            TransportButton::ToEnd => (Icon::ToEnd, ButtonKind::Ghost),
-            TransportButton::Loop => (Icon::Loop, ButtonKind::Ghost),
-        };
-        let mut state = v.interaction(Hit::Transport(button));
-        state.active = button == TransportButton::Loop && v.looping;
-        state.disabled = v.document.is_none();
-        widgets::icon_button(p, rect, icon, kind, state);
-    }
 
     // Selected keys: count and the U-filter hint, right of the transport.
     if !v.chrome.selected.is_empty() {
@@ -516,6 +628,10 @@ fn header(p: &mut Painter<'_>, v: &View<'_>) {
     }
 }
 
+/// The ruler background, the corner caption and the tick marks.
+///
+/// Labels, the composition-end label and the playhead tab follow the transport
+/// frame; [`ruler_live`] paints them.
 fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let tl = v.layout.timeline;
@@ -546,9 +662,7 @@ fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
         f64::from(scrub.w),
         MIN_TICK_SPACING_PX * f64::from(p.m.scale),
     );
-    let head = v.document.is_some().then(|| head_rect(p, v));
     p.push_clip(tl.ruler);
-    let label_style = p.style(type_scale::CAPTION, t.text_muted);
     let major_h = p.m.px(8.0);
     let minor_h = p.m.px(4.0);
     let bottom = tl.ruler.bottom() - p.m.hairline();
@@ -564,6 +678,25 @@ fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
         }
         frame += minor_step;
     }
+    // The composition end is explicit: its tick sits at the right edge, where
+    // the last frame maps to. Its label is frame-adjacent (the head can cover
+    // it) and lives in [`ruler_live`].
+    let end = v.chrome.end_x;
+    p.vline(end, bottom - major_h, bottom, t.text_disabled);
+    p.pop_clip();
+}
+
+/// The ruler labels, the composition-end label and the playhead tab.
+fn ruler_live(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let tl = v.layout.timeline;
+    if v.document.is_none() {
+        return;
+    }
+    let head = head_rect(p, v);
+    let major_h = p.m.px(8.0);
+    p.push_clip(tl.ruler);
+    let label_style = p.style(type_scale::CAPTION, t.text_muted);
     // Labels are centred on their tick so the mark and the number agree; the
     // strings and x positions are prepared once per frame.
     for (x, label) in &v.chrome.ruler {
@@ -574,21 +707,23 @@ fn ruler(p: &mut Painter<'_>, v: &View<'_>) {
             w + 1.0,
             tl.ruler.h - major_h,
         );
-        if head.is_some_and(|h| h.overlaps(rect)) {
+        if head.overlaps(rect) {
             continue;
         }
         p.text_in(label, rect, Align::Center, &label_style);
     }
-    // The composition end is explicit: its tick and label sit at the right
-    // edge, where the last frame maps to.
     let end = v.chrome.end_x;
-    p.vline(end, bottom - major_h, bottom, t.text_disabled);
     let end_label = v.chrome.end_label.as_str();
     let w = p.measure(end_label, &label_style);
     let rect = Rect::new(end - w, tl.ruler.y, w + 1.0, tl.ruler.h - major_h);
-    if !head.is_some_and(|h| h.overlaps(rect)) {
+    if !head.overlaps(rect) {
         p.text_in(end_label, rect, Align::Right, &label_style);
     }
+    // The tab is drawn last so it covers any label the head sits on, matching
+    // the old single-panel order.
+    let style = p.style(type_scale::CAPTION, t.text).medium();
+    p.fill_rounded(head, t.accent, p.m.px(size::RADIUS_SM));
+    p.text_in(&v.chrome.head, head, Align::Center, &style);
     p.pop_clip();
 }
 
@@ -1390,7 +1525,11 @@ fn draw_easing(
     }
 }
 
-fn playhead(p: &mut Painter<'_>, v: &View<'_>) {
+/// The playhead line across the ruler and the tracks.
+///
+/// The head tab is painted by [`ruler_live`] (above the ruler clip) so it can
+/// cover the labels the head sits on.
+fn playhead_line(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let tl = v.layout.timeline;
     let duration = v.duration.max(1);
@@ -1403,11 +1542,6 @@ fn playhead(p: &mut Painter<'_>, v: &View<'_>) {
         Rect::new(x - (w * 0.5).floor(), tl.ruler.y, w, area.h),
         t.accent,
     );
-
-    let head = head_rect(p, v);
-    let style = p.style(type_scale::CAPTION, t.text).medium();
-    p.fill_rounded(head, t.accent, p.m.px(size::RADIUS_SM));
-    p.text_in(&v.chrome.head, head, Align::Center, &style);
     p.pop_clip();
 }
 

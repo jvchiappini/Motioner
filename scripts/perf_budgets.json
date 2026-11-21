@@ -1,0 +1,539 @@
+{
+  "noise_margin": 0.15,
+  "notes": [
+    "export_120 is excluded: its throughput is noisy without a much wider margin; measure it separately.",
+    "Budgets use the three-run median and a 15 % margin; the recorded min/max span can be wider on noisy metrics (collection, damage, hover CPU).",
+    "allocations_per_frame is omitted when the run has no motioner-bench (alloc-stats) binary."
+  ],
+  "scenarios": {
+    "start_idle": {
+      "cpu_percent": {
+        "max": 2.679
+      },
+      "idle_cpu_percent": {
+        "max": 1.0
+      },
+      "tail_cpu_percent": {
+        "max": 1.0
+      },
+      "collection_ms": {
+        "max": 0.02
+      },
+      "frame_ms_p99": {
+        "max": 5.806
+      },
+      "damage_fraction": {
+        "max": 0.02
+      },
+      "input_to_present_p50": {
+        "max": 0.02
+      },
+      "input_to_present_p99": {
+        "max": 0.02
+      },
+      "private_mb": {
+        "max": 359.72
+      },
+      "vram_mb": {
+        "max": 8.74
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 2.3
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 2.3
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 3.45
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 4.6
+      },
+      "gpu_frame.ui_segments": {
+        "max": 1.15
+      }
+    },
+    "editor_idle": {
+      "cpu_percent": {
+        "max": 2.012
+      },
+      "idle_cpu_percent": {
+        "max": 1.0
+      },
+      "tail_cpu_percent": {
+        "max": 1.0
+      },
+      "collection_ms": {
+        "max": 0.02
+      },
+      "frame_ms_p99": {
+        "max": 39.55
+      },
+      "damage_fraction": {
+        "max": 1.0
+      },
+      "input_to_present_p50": {
+        "max": 0.02
+      },
+      "input_to_present_p99": {
+        "max": 0.02
+      },
+      "private_mb": {
+        "max": 389.39
+      },
+      "vram_mb": {
+        "max": 22.195
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 27.6
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 21.85
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 24.15
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 24.15
+      },
+      "gpu_frame.ui_segments": {
+        "max": 16.1
+      }
+    },
+    "editor_hover": {
+      "cpu_percent": {
+        "max": 6.813
+      },
+      "tail_cpu_percent": {
+        "max": 4.174
+      },
+      "collection_ms": {
+        "max": 0.168
+      },
+      "frame_ms_p99": {
+        "max": 1.864
+      },
+      "damage_fraction": {
+        "max": 0.038
+      },
+      "input_to_present_p50": {
+        "max": 1.183
+      },
+      "input_to_present_p99": {
+        "max": 1.899
+      },
+      "private_mb": {
+        "max": 404.8
+      },
+      "vram_mb": {
+        "max": 24.38
+      },
+      "fps": {
+        "min": 20.205
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 32.2
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 24.15
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 27.6
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 26.45
+      },
+      "gpu_frame.ui_segments": {
+        "max": 18.4
+      }
+    },
+    "editor_hover_static": {
+      "cpu_percent": {
+        "max": 8.577
+      },
+      "tail_cpu_percent": {
+        "max": 1.0
+      },
+      "collection_ms": {
+        "max": 0.141
+      },
+      "frame_ms_p99": {
+        "max": 113.389
+      },
+      "damage_fraction": {
+        "max": 0.083
+      },
+      "input_to_present_p50": {
+        "max": 1.142
+      },
+      "input_to_present_p99": {
+        "max": 44.597
+      },
+      "private_mb": {
+        "max": 404.57
+      },
+      "vram_mb": {
+        "max": 24.38
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 32.2
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 24.15
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 27.6
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 26.45
+      },
+      "gpu_frame.ui_segments": {
+        "max": 18.4
+      }
+    },
+    "timeline_scrub": {
+      "cpu_percent": {
+        "max": 7.998
+      },
+      "tail_cpu_percent": {
+        "max": 3.685
+      },
+      "collection_ms": {
+        "max": 1.995
+      },
+      "frame_ms_p99": {
+        "max": 34.986
+      },
+      "damage_fraction": {
+        "max": 0.116
+      },
+      "input_to_present_p50": {
+        "max": 3.096
+      },
+      "input_to_present_p99": {
+        "max": 4.85
+      },
+      "private_mb": {
+        "max": 465.75
+      },
+      "vram_mb": {
+        "max": 27.945
+      },
+      "fps": {
+        "min": 7.931
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 32.2
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 24.15
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 27.6
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 26.45
+      },
+      "gpu_frame.ui_segments": {
+        "max": 18.4
+      }
+    },
+    "playback_1080p": {
+      "cpu_percent": {
+        "max": 20.969
+      },
+      "collection_ms": {
+        "max": 0.538
+      },
+      "frame_ms_p99": {
+        "max": 3.552
+      },
+      "damage_fraction": {
+        "max": 0.098
+      },
+      "input_to_present_p50": {
+        "max": 46.389
+      },
+      "input_to_present_p99": {
+        "max": 46.389
+      },
+      "private_mb": {
+        "max": 471.385
+      },
+      "vram_mb": {
+        "max": 24.955
+      },
+      "fps": {
+        "min": 46.268
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 32.2
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 24.15
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 27.6
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 26.45
+      },
+      "gpu_frame.ui_segments": {
+        "max": 18.4
+      }
+    },
+    "playback_4k30": {
+      "cpu_percent": {
+        "max": 13.757
+      },
+      "collection_ms": {
+        "max": 0.531
+      },
+      "frame_ms_p99": {
+        "max": 6.933
+      },
+      "damage_fraction": {
+        "max": 0.098
+      },
+      "input_to_present_p50": {
+        "max": 10.421
+      },
+      "input_to_present_p99": {
+        "max": 10.421
+      },
+      "private_mb": {
+        "max": 467.245
+      },
+      "vram_mb": {
+        "max": 15.87
+      },
+      "fps": {
+        "min": 23.6
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 29.9
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 23.0
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 25.3
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 25.3
+      },
+      "gpu_frame.ui_segments": {
+        "max": 18.4
+      }
+    },
+    "heavy_ui": {
+      "cpu_percent": {
+        "max": 63.143
+      },
+      "collection_ms": {
+        "max": 4.876
+      },
+      "frame_ms_p99": {
+        "max": 11.231
+      },
+      "damage_fraction": {
+        "max": 0.038
+      },
+      "input_to_present_p50": {
+        "max": 8.494
+      },
+      "input_to_present_p99": {
+        "max": 8.494
+      },
+      "private_mb": {
+        "max": 468.28
+      },
+      "vram_mb": {
+        "max": 25.3
+      },
+      "fps": {
+        "min": 43.219
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 26.45
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 20.7
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 23.0
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 23.0
+      },
+      "gpu_frame.ui_segments": {
+        "max": 16.1
+      }
+    },
+    "heavy_ui_list": {
+      "cpu_percent": {
+        "max": 10.621
+      },
+      "collection_ms": {
+        "max": 0.177
+      },
+      "frame_ms_p99": {
+        "max": 1.686
+      },
+      "damage_fraction": {
+        "max": 0.163
+      },
+      "input_to_present_p50": {
+        "max": 10.865
+      },
+      "input_to_present_p99": {
+        "max": 19.881
+      },
+      "private_mb": {
+        "max": 382.95
+      },
+      "vram_mb": {
+        "max": 8.74
+      },
+      "fps": {
+        "min": 50.243
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 25.3
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 19.55
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 20.7
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 21.85
+      },
+      "gpu_frame.ui_segments": {
+        "max": 16.1
+      }
+    },
+    "heavy_ui_list_1000": {
+      "cpu_percent": {
+        "max": 9.673
+      },
+      "collection_ms": {
+        "max": 0.129
+      },
+      "frame_ms_p99": {
+        "max": 1.584
+      },
+      "damage_fraction": {
+        "max": 0.163
+      },
+      "input_to_present_p50": {
+        "max": 10.863
+      },
+      "input_to_present_p99": {
+        "max": 19.762
+      },
+      "private_mb": {
+        "max": 369.38
+      },
+      "vram_mb": {
+        "max": 8.74
+      },
+      "fps": {
+        "min": 50.106
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 25.3
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 19.55
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 20.7
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 21.85
+      },
+      "gpu_frame.ui_segments": {
+        "max": 16.1
+      }
+    },
+    "heavy_composition": {
+      "cpu_percent": {
+        "max": 12.788
+      },
+      "collection_ms": {
+        "max": 0.118
+      },
+      "frame_ms_p99": {
+        "max": 1.111
+      },
+      "damage_fraction": {
+        "max": 0.038
+      },
+      "input_to_present_p50": {
+        "max": 0.891
+      },
+      "input_to_present_p99": {
+        "max": 0.891
+      },
+      "private_mb": {
+        "max": 441.255
+      },
+      "vram_mb": {
+        "max": 58.42
+      },
+      "fps": {
+        "min": 47.175
+      },
+      "dropped_frames": {
+        "max": 0
+      },
+      "gpu_frame.draw_calls": {
+        "max": 32.2
+      },
+      "gpu_frame.pipeline_binds": {
+        "max": 26.45
+      },
+      "gpu_frame.bind_group_binds": {
+        "max": 28.75
+      },
+      "gpu_frame.buffer_binds": {
+        "max": 28.75
+      },
+      "gpu_frame.ui_segments": {
+        "max": 16.1
+      }
+    }
+  }
+}

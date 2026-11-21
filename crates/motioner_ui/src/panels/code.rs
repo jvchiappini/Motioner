@@ -4,7 +4,7 @@
 //! The model (lines and highlight ranges) lives in [`crate::CodePanel`]; this
 //! module only paints it.
 
-use crate::layout::{Hit, Rect};
+use crate::layout::Rect;
 use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
@@ -17,8 +17,6 @@ const LINE: f32 = 17.0;
 fn revision(v: &View<'_>) -> u64 {
     let mut rev = PanelRevision::new()
         .str(v.file_name)
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
-        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
         .usize(v.code_panel.lines.len());
     rev = match v.code_panel.highlight {
         Some((first, last)) => rev.bool(true).usize(first).usize(last),

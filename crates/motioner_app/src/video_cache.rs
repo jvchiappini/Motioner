@@ -6,6 +6,13 @@
 //! the playhead into the bounded LRU; a paused request decodes one full
 //! resolution frame. Every decoded frame is bounded by a byte budget and an
 //! LRU order, so scrubbing cannot grow memory without limit.
+//!
+//! [`decode`] also keeps the decode-ahead counters ([`VideoCache::snapshot`])
+//! that the P7 harness prints as `video-cache {json}`: requests answered from
+//! the cache, requests that waited for the worker, and the resulting hit rate.
+//! The worker's internal frame reads are not requests, so scrubbing and 4K30
+//! playback (which uses the same [`PROXY_WIDTH`] proxy as 1080p60) report the
+//! rate the UI actually saw.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -55,9 +62,63 @@ struct CacheInner {
     info: HashMap<String, VideoInfo>,
     pending: HashSet<FrameKey>,
     bytes: usize,
+    /// [`decode`] calls since the process started.
+    requests: u64,
+    /// Calls answered immediately with [`FrameLookup::Ready`].
+    hits: u64,
+    /// Calls that returned [`FrameLookup::Pending`] or
+    /// [`FrameLookup::Unavailable`] (including a queued decode).
+    misses: u64,
+}
+
+/// A point-in-time readout of the preview decode-ahead cache.
+///
+/// `hit_rate` is `hits / requests` (`0.0` before the first request). Only
+/// calls to [`decode`] are counted; frames the worker decodes internally are
+/// not requests and therefore never change the rate.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct VideoCacheSnapshot {
+    /// [`decode`] calls.
+    pub requests: u64,
+    /// Calls answered from the cache with a resident frame.
+    pub hits: u64,
+    /// Calls that had to wait for the worker or failed.
+    pub misses: u64,
+    /// `hits / requests`, in `0.0..=1.0`.
+    pub hit_rate: f64,
+    /// Resident decoded bytes.
+    pub bytes: usize,
+}
+
+impl VideoCacheSnapshot {
+    /// One-line JSON, as printed by the application under tracing.
+    #[must_use]
+    pub fn to_json(self) -> String {
+        format!(
+            "{{\"requests\":{},\"hits\":{},\"misses\":{},\"hit_rate\":{:.6},\"bytes\":{}}}",
+            self.requests, self.hits, self.misses, self.hit_rate, self.bytes
+        )
+    }
 }
 
 impl CacheInner {
+    /// The current counters plus the resident byte total.
+    fn snapshot(&self) -> VideoCacheSnapshot {
+        #[allow(clippy::cast_precision_loss)] // display-only ratio
+        let hit_rate = if self.requests == 0 {
+            0.0
+        } else {
+            self.hits as f64 / self.requests as f64
+        };
+        VideoCacheSnapshot {
+            requests: self.requests,
+            hits: self.hits,
+            misses: self.misses,
+            hit_rate,
+            bytes: self.bytes,
+        }
+    }
+
     fn get(&mut self, key: &FrameKey) -> Option<&CachedFrame> {
         if !self.frames.contains_key(key) {
             return None;
@@ -158,6 +219,15 @@ impl VideoCache {
     #[must_use]
     pub fn bytes(&self) -> usize {
         lock(&self.inner).bytes
+    }
+
+    /// The decode-ahead hit-rate counters and resident bytes.
+    ///
+    /// The worker's own frame decodes do not touch these counters, so the
+    /// rate measures what the UI asked for and got immediately.
+    #[must_use]
+    pub fn snapshot(&self) -> VideoCacheSnapshot {
+        lock(&self.inner).snapshot()
     }
 }
 
@@ -291,6 +361,13 @@ pub fn proxy_done_path(project: &Project, hash: &str) -> PathBuf {
 /// `preview` means "playing": the frame comes from the proxy (or the original
 /// downscaled to the proxy size) and the worker decodes a lookahead batch.
 /// Paused requests decode the original at full resolution.
+///
+/// The preview path is resolution-independent: a 3840x2160 source (4K30) is
+/// decoded at [`PROXY_WIDTH`] wide, exactly like a 1080p60 one, because both
+/// the proxy file and the direct `ffmpeg` stream use [`proxy_dimensions`]. A
+/// 1920x1080 window therefore plays a 4K composition with proxy-sized frames
+/// and never keeps a full-resolution frame in the cache; only `still`/`render`
+/// (which never set `preview`) decode at the source size.
 pub fn decode(
     project: &Project,
     entry: &VideoEntry,
@@ -303,17 +380,21 @@ pub fn decode(
     let key = (entry.hash.clone(), source_frame, preview);
     {
         let mut inner = lock(&cache.inner);
+        inner.requests = inner.requests.saturating_add(1);
         if let Some(frame) = inner.get(&key) {
-            return FrameLookup::Ready(DecodedImage {
+            let decoded = DecodedImage {
                 asset: ImageAsset {
                     key: frame.key,
                     width: frame.width,
                     height: frame.height,
                 },
                 rgba8: frame.rgba8.clone(),
-            });
+            };
+            inner.hits = inner.hits.saturating_add(1);
+            return FrameLookup::Ready(decoded);
         }
         if inner.pending.contains(&key) {
+            inner.misses = inner.misses.saturating_add(1);
             return FrameLookup::Pending;
         }
     }
@@ -322,6 +403,8 @@ pub fn decode(
         info
     } else {
         let Ok(info) = probe_video(&entry.path, &FfmpegLocation::FromEnvOrPath) else {
+            let mut inner = lock(&cache.inner);
+            inner.misses = inner.misses.saturating_add(1);
             return FrameLookup::Unavailable;
         };
         lock(&cache.inner)
@@ -337,6 +420,8 @@ pub fn decode(
         (info.width, info.height)
     };
     let Some(key_bytes) = motioner_io::image_key_from_hex(&entry.hash) else {
+        let mut inner = lock(&cache.inner);
+        inner.misses = inner.misses.saturating_add(1);
         return FrameLookup::Unavailable;
     };
     let count = if preview {
@@ -361,27 +446,37 @@ pub fn decode(
     };
     let mut inner = lock(&cache.inner);
     if let Some(frame) = inner.get(&key) {
-        return FrameLookup::Ready(DecodedImage {
+        let decoded = DecodedImage {
             asset: ImageAsset {
                 key: frame.key,
                 width: frame.width,
                 height: frame.height,
             },
             rgba8: frame.rgba8.clone(),
-        });
+        };
+        inner.hits = inner.hits.saturating_add(1);
+        return FrameLookup::Ready(decoded);
     }
     if inner.pending.contains(&key) {
+        inner.misses = inner.misses.saturating_add(1);
         return FrameLookup::Pending;
     }
     for frame in source_frame..source_frame.saturating_add(count) {
         inner.pending.insert((entry.hash.clone(), frame, preview));
     }
+    inner.misses = inner.misses.saturating_add(1);
     drop(inner);
     let _ = cache.jobs.send(job);
     FrameLookup::Pending
 }
 
 /// The proxy frame size for a source, preserving the aspect ratio.
+///
+/// The long edge is capped at [`PROXY_WIDTH`], so a 3840x2160 (4K30) source
+/// becomes 640x360 and a 1920x1080 one also becomes 640x360. Smaller sources
+/// keep their own width. This is the only size the preview ever asks
+/// `ffmpeg` for, so a 4K composition at `--window-size 1920x1080` needs no
+/// full-resolution decode.
 fn proxy_dimensions(info: &VideoInfo) -> (u32, u32) {
     let ratio = f64::from(info.height) / f64::from(info.width.max(1));
     let width = info.width.min(PROXY_WIDTH);
@@ -508,5 +603,56 @@ mod tests {
         if let Ok(project) = project {
             assert!(proxy_path(&project, "abc").ends_with("abc.proxy.mp4"));
         }
+    }
+
+    #[test]
+    fn the_snapshot_reports_hits_over_requests_and_bytes() {
+        let mut cache = CacheInner::default();
+        assert!(
+            cache.snapshot().hit_rate.abs() < f64::EPSILON,
+            "no requests, no rate"
+        );
+        cache.requests = 4;
+        cache.hits = 3;
+        cache.misses = 1;
+        cache.bytes = 100;
+        let snapshot = cache.snapshot();
+        assert_eq!(snapshot.requests, 4);
+        assert_eq!(snapshot.hits, 3);
+        assert_eq!(snapshot.misses, 1);
+        assert!((snapshot.hit_rate - 0.75).abs() < f64::EPSILON);
+        assert_eq!(snapshot.bytes, 100);
+        assert_eq!(
+            snapshot.to_json(),
+            "{\"requests\":4,\"hits\":3,\"misses\":1,\"hit_rate\":0.750000,\"bytes\":100}"
+        );
+    }
+
+    #[test]
+    fn a_4k_source_decodes_at_the_proxy_width_in_preview() {
+        let four_k = VideoInfo {
+            width: 3840,
+            height: 2160,
+            fps_numerator: 30,
+            fps_denominator: 1,
+            duration: 1.0,
+        };
+        assert_eq!(proxy_dimensions(&four_k), (PROXY_WIDTH, 360));
+        let full_hd = VideoInfo {
+            width: 1920,
+            height: 1080,
+            fps_numerator: 60,
+            fps_denominator: 1,
+            duration: 1.0,
+        };
+        assert_eq!(proxy_dimensions(&full_hd), (PROXY_WIDTH, 360));
+        let small = VideoInfo {
+            width: 320,
+            height: 180,
+            fps_numerator: 30,
+            fps_denominator: 1,
+            duration: 1.0,
+        };
+        assert_eq!(proxy_dimensions(&small), (320, 180), "never upscales");
     }
 }

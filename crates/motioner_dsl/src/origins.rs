@@ -21,7 +21,7 @@
 //! Recording is deterministic (the interpreter has no clock or randomness)
 //! and never changes the document.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use motioner_core::{Frame, NodeId};
@@ -267,6 +267,15 @@ pub struct NodeOrigin {
     pub bindings: Vec<BindingOrigin>,
 }
 
+/// The most recent entry index for one node property, split by write kind.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PropertyIndex {
+    /// Latest `Set` entry, if any.
+    set: Option<usize>,
+    /// Latest `Key` entry per frame.
+    keys: HashMap<Frame, usize>,
+}
+
 /// Every value origin of one run.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ValueOrigins {
@@ -274,6 +283,14 @@ pub struct ValueOrigins {
     nodes: Vec<NodeOrigin>,
     names: Vec<String>,
     name_ids: HashMap<String, NameId>,
+    /// Entry index by node, so a lookup does not scan the entry list.
+    entries_by_node: HashMap<NodeId, Vec<usize>>,
+    /// Latest entry per node property and kind.
+    properties: HashMap<NodeId, HashMap<String, PropertyIndex>>,
+    /// How many entries share each expression span start.
+    span_counts: HashMap<usize, usize>,
+    /// Creation-origin index by node.
+    node_index: HashMap<NodeId, usize>,
 }
 
 impl ValueOrigins {
@@ -298,7 +315,9 @@ impl ValueOrigins {
     /// The creation origin of `node`, if it was recorded.
     #[must_use]
     pub fn node_origin(&self, node: NodeId) -> Option<&NodeOrigin> {
-        self.nodes.iter().find(|origin| origin.node == node)
+        self.node_index
+            .get(&node)
+            .and_then(|index| self.nodes.get(*index))
     }
 
     /// The name an interned id refers to.
@@ -331,25 +350,48 @@ impl ValueOrigins {
     /// write still wins for [`Self::set_origin`] and [`Self::key_origin`],
     /// which search from the end.
     pub fn record(&mut self, origin: ValueOrigin) {
+        let index = self.entries.len();
+        let node = origin.node;
+        let span_start = origin.span.start;
+        let kind = origin.kind;
+        let property = origin.property.clone();
         self.entries.push(origin);
+        *self.span_counts.entry(span_start).or_insert(0) += 1;
+        self.entries_by_node.entry(node).or_default().push(index);
+        let slot = self
+            .properties
+            .entry(node)
+            .or_default()
+            .entry(property)
+            .or_default();
+        match kind {
+            OriginKind::Set => slot.set = Some(index),
+            OriginKind::Key(frame) => {
+                slot.keys.insert(frame, index);
+            }
+        }
     }
 
     /// Records the creation of `origin`.
     pub(crate) fn record_node(&mut self, origin: NodeOrigin) {
+        let index = self.nodes.len();
+        self.node_index.insert(origin.node, index);
         self.nodes.push(origin);
     }
 
     /// Binds `node` to the variable named in `binding`.
     pub(crate) fn attach_binding(&mut self, node: NodeId, binding: BindingOrigin) {
-        if let Some(origin) = self.nodes.iter_mut().find(|origin| origin.node == node) {
-            let duplicate = origin.bindings.iter().any(|existing| {
-                existing.statement.start == binding.statement.start
-                    && existing.name == binding.name
-                    && existing.block.span.start == binding.block.span.start
-            });
-            if !duplicate {
-                origin.bindings.push(binding);
-            }
+        let Some(index) = self.node_index.get(&node).copied() else {
+            return;
+        };
+        let origin = &mut self.nodes[index];
+        let duplicate = origin.bindings.iter().any(|existing| {
+            existing.statement.start == binding.statement.start
+                && existing.name == binding.name
+                && existing.block.span.start == binding.block.span.start
+        });
+        if !duplicate {
+            origin.bindings.push(binding);
         }
     }
 
@@ -359,18 +401,19 @@ impl ValueOrigins {
     /// that produced a node; a node can be returned by several call sites.
     pub(crate) fn mark_returned(&mut self, returned: &[(NodeId, Span)]) {
         for (node, call_site) in returned {
-            for origin in self.nodes.iter_mut().filter(|origin| origin.node == *node) {
+            if let Some(index) = self.node_index.get(node).copied() {
+                let origin = &mut self.nodes[index];
                 for call in &mut Arc::make_mut(&mut origin.site).calls {
                     if call.call_site.start == call_site.start {
                         call.returns_node = true;
                     }
                 }
             }
-            for origin in self
-                .entries
-                .iter_mut()
-                .filter(|origin| origin.node == *node)
-            {
+            let Some(indices) = self.entries_by_node.get(node) else {
+                continue;
+            };
+            for index in indices {
+                let origin = &mut self.entries[*index];
                 for call in &mut Arc::make_mut(&mut origin.site).calls {
                     if call.call_site.start == call_site.start {
                         call.returns_node = true;
@@ -386,15 +429,11 @@ impl ValueOrigins {
     /// `body` is the user's statements: origins only ever point at them, and
     /// scanning the library too would make every run pay for it.
     pub(crate) fn finalize(&mut self, body: &[crate::ast::Stmt]) {
-        let mut assigned_later: HashMap<usize, Vec<String>> = HashMap::new();
-        collect_assigned_later(body, &mut assigned_later);
+        let mut reassigned: HashSet<usize> = HashSet::new();
+        collect_assigned_later(body, &mut reassigned);
         for origin in &mut self.nodes {
             for binding in &mut origin.bindings {
-                let binding_name = &self.names[binding.name.index()];
-                if assigned_later
-                    .get(&binding.statement.start)
-                    .is_some_and(|names| names.iter().any(|name| name == binding_name))
-                {
+                if reassigned.contains(&binding.statement.start) {
                     binding.reassigned_later = true;
                 }
             }
@@ -405,26 +444,24 @@ impl ValueOrigins {
     /// run. `1` means the literal is private to its node.
     #[must_use]
     pub fn count(&self, origin: &ValueOrigin) -> usize {
-        self.entries
-            .iter()
-            .filter(|entry| entry.span.start == origin.span.start)
-            .count()
+        self.span_counts
+            .get(&origin.span.start)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The static origin of `node`'s `property`, if recorded.
     #[must_use]
     pub fn set_origin(&self, node: NodeId, property: &str) -> Option<&ValueOrigin> {
-        self.entries.iter().rev().find(|entry| {
-            entry.node == node && entry.property == property && entry.kind == OriginKind::Set
-        })
+        let slot = self.properties.get(&node)?.get(property)?;
+        self.entries.get(slot.set?)
     }
 
     /// The key origin of `node`'s `property` at `frame`, if recorded.
     #[must_use]
     pub fn key_origin(&self, node: NodeId, property: &str, frame: Frame) -> Option<&ValueOrigin> {
-        self.entries.iter().rev().find(|entry| {
-            entry.node == node && entry.property == property && entry.kind == OriginKind::Key(frame)
-        })
+        let slot = self.properties.get(&node)?.get(property)?;
+        self.entries.get(*slot.keys.get(&frame)?)
     }
 
     /// Whether every origin with this span start is private to one node.
@@ -434,37 +471,39 @@ impl ValueOrigins {
     }
 }
 
-/// Collects, for every statement, the names assigned in later statements of
-/// the same block.
-fn collect_assigned_later(body: &[Stmt], assigned_later: &mut HashMap<usize, Vec<String>>) {
-    for (index, statement) in body.iter().enumerate() {
-        let mut names: Vec<String> = Vec::new();
-        for later in &body[index + 1..] {
-            if let StmtKind::Assign {
-                target: Target::Name(name),
-                ..
-            } = &later.kind
-            {
-                if !names.iter().any(|existing| existing == &**name) {
-                    names.push(name.to_string());
-                }
+/// Marks the statements whose assigned name is assigned again later in the
+/// same block.
+///
+/// One reverse pass per block: a name seen later is already in `assigned`, so
+/// every earlier assignment to it is a reassignment. Nested blocks are walked
+/// separately, exactly as before, so a name reused in another block does not
+/// leak across.
+fn collect_assigned_later(body: &[Stmt], reassigned: &mut HashSet<usize>) {
+    let mut assigned: HashSet<&str> = HashSet::new();
+    for statement in body.iter().rev() {
+        if let StmtKind::Assign {
+            target: Target::Name(name),
+            ..
+        } = &statement.kind
+        {
+            if !assigned.insert(&**name) {
+                reassigned.insert(statement.span.start);
             }
         }
-        if !names.is_empty() {
-            assigned_later.insert(statement.span.start, names);
-        }
+    }
+    for statement in body {
         match &statement.kind {
             StmtKind::If {
                 branches,
                 otherwise,
             } => {
                 for (_, body) in branches {
-                    collect_assigned_later(body, assigned_later);
+                    collect_assigned_later(body, reassigned);
                 }
-                collect_assigned_later(otherwise, assigned_later);
+                collect_assigned_later(otherwise, reassigned);
             }
-            StmtKind::For { body, .. } => collect_assigned_later(body, assigned_later),
-            StmtKind::Def(function) => collect_assigned_later(&function.body, assigned_later),
+            StmtKind::For { body, .. } => collect_assigned_later(body, reassigned),
+            StmtKind::Def(function) => collect_assigned_later(&function.body, reassigned),
             _ => {}
         }
     }

@@ -264,6 +264,28 @@ impl Host {
     }
 }
 
+impl Drop for Host {
+    fn drop(&mut self) {
+        // The window prints the per-owner memory report from `PreviewApp`;
+        // the video decode-ahead counters live here, so this is the last
+        // point that sees them before the process exits. The line is only
+        // written under tracing, like `frame-trace` and `memory-owners`.
+        if tracing_enabled() {
+            println!("video-cache {}", self.video_cache.snapshot().to_json());
+        }
+    }
+}
+
+/// Whether the process was started with tracing enabled.
+///
+/// `FERROUS_TRACE_FRAMES` is what `scripts/perf_bench.py` sets for every
+/// scenario; `MOTIONER_MEMORY_REPORT` is the explicit `--memory-report`
+/// escape hatch.
+fn tracing_enabled() -> bool {
+    std::env::var("FERROUS_TRACE_FRAMES").is_ok_and(|value| value == "1")
+        || std::env::var("MOTIONER_MEMORY_REPORT").is_ok_and(|value| value == "1")
+}
+
 impl ProjectHost for Host {
     fn recents(&self) -> Vec<StartEntry> {
         self.recent_entries()

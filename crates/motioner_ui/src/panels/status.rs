@@ -19,7 +19,6 @@ fn revision(v: &View<'_>) -> u64 {
         .u64(v.stats.dropped)
         .u64(v.stats.allocations)
         .f32(v.stats.blur_ms)
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
         .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
         .usize(v.diagnostics.len())
         .usize(v.warnings.len())
@@ -47,7 +46,7 @@ fn revision(v: &View<'_>) -> u64 {
 /// Draws the status bar.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let key = p.panel_key(PanelKind::Status, revision(v), v.layout.status_bar);
-    p.panel(key, |p| draw_body(p, v));
+    p.panel_hover(key, v.hover_key(PanelKind::Status), |p| draw_body(p, v));
 }
 
 #[allow(clippy::too_many_lines)] // one immediate-mode strip

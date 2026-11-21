@@ -3,7 +3,7 @@
 //! The model (rows and command text) lives in
 //! [`crate::overrides_panel`](crate::OverrideRow); this module paints it.
 
-use crate::layout::{Hit, Rect};
+use crate::layout::Rect;
 use crate::paint::{Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
@@ -33,10 +33,7 @@ pub fn draw_chip(p: &mut Painter<'_>, v: &View<'_>) {
 
 /// Hash of the pending-overrides rows.
 fn rows_revision(mut rev: PanelRevision, v: &View<'_>) -> PanelRevision {
-    rev = rev
-        .usize(v.override_rows.len())
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
-        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code));
+    rev = rev.usize(v.override_rows.len());
     for row in v.override_rows {
         rev = rev.str(&row.command);
         match &row.reason {

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Measure Motioner release scenarios (prompt 18 P6).
+"""Measure Motioner release scenarios (prompt 18 P7).
 
-Runs the eleven baseline scenarios, samples the process with ``psutil`` and
+Runs the twelve baseline scenarios, samples the process with ``psutil`` and
 parses the engine's ``frame-trace``/``memory-report`` JSON lines.  For every
 scenario it reports CPU % of one core, frames drawn, GPU ms per pass, the
 per-stage medians, allocations per frame (with a bench build), working set,
-private bytes, VRAM and threads.
+private bytes, VRAM, threads, the decode-ahead hit rate and the memory-owner
+bytes when the binary prints them.
 
 Requirements: ``pip install psutil`` (the only non-stdlib dependency) and a
 release build:
@@ -19,6 +20,10 @@ Usage:
     python scripts/perf_bench.py --binary target/release/motioner.exe
     python scripts/perf_bench.py --alloc-binary target/release/motioner-bench.exe
     python scripts/perf_bench.py --check scripts/perf_budgets.json
+    python scripts/perf_bench.py --write-budgets scripts/perf_budgets.json
+    # Re-derive budgets from a recorded result without running the app:
+    python scripts/perf_bench.py --from-json out/reports/phase18/p7-after.json \
+        --write-budgets scripts/perf_budgets.json --margin 0.15
 
 The scenarios:
 
@@ -28,14 +33,17 @@ The scenarios:
 4. editor hover inside one static panel area;
 5. timeline scrubbing through the control endpoint;
 6. 1080p playback of the demo for 10 s;
-7. heavy UI (a generated 3000-row text composition);
-8. heavy UI layers list: a generated 3000-layer ``.motioner`` project whose
+7. 4K30 playback: a generated 3840x2160 ``.motioner`` project with a video,
+   previewed at ``--window-size 1920x1080`` so the preview proxy is used
+   (dropped frames and the decode-ahead hit rate are recorded);
+8. heavy UI (a generated 3000-row text composition);
+9. heavy UI layers list: a generated 3000-layer ``.motioner`` project whose
    layers panel is scrolled at a steady rate for 30 s (target collection
    <= 2 ms; flat 1k vs 3k);
-9. heavy UI layers list, 1000 layers: the same project at a tenth of the row
-   count, to check that collection stays flat;
-10. heavy composition (``examples/showcase_pro.motion``);
-11. export of 120 frames.
+10. heavy UI layers list, 1000 layers: the same project at a tenth of the row
+    count, to check that collection stays flat;
+11. heavy composition (``examples/showcase_pro.motion``);
+12. export of 120 frames.
 
 All scenarios run in release.  ``--warmup`` runs (default 1) are discarded.
 The frame trace is enabled with ``FERROUS_TRACE_FRAMES=1``; the engine prints
@@ -80,8 +88,61 @@ the harness posts ``WM_MOUSEWHEEL`` messages over the layers panel every
 ~16 ms (gated on ``--allow-pointer``, like the hover scenarios).  The run is
 steady, one wheel event per tick, not a burst.
 
-``--check`` compares the aggregate against a budget JSON.  A baseline output
-is never overwritten implicitly: an existing ``--json-out`` needs ``--force``.
+P7 trace lines: when the binary prints ``memory-owners {json}`` (document,
+plan, panel and video bytes) and ``video-cache {json}`` (``requests``,
+``hits``, ``misses``, ``hit_rate``, ``bytes``) the harness parses them into
+``memory_owners`` / ``decode_ahead`` plus flat scalar fields for aggregation
+and ranges (``memory_owners_document_bytes``, ``decode_ahead_hit_rate``, ...).
+An older binary that does not print them yields ``not reported`` and does not
+fail the run.
+
+``--check BUDGETS`` enforces a budget JSON.  The schema is deliberately small:
+
+    {
+      "noise_margin": 0.15,
+      "scenarios": {
+        "editor_hover": {
+          "cpu_percent": {"max": 10.675},
+          "fps": {"min": 31.495},
+          "damage_fraction": {"max": 1.0},
+          "gpu_frame.draw_calls": {"max": 64.4}
+        }
+      }
+    }
+
+Every metric may carry ``max``, ``min`` or both.  Metric names may use dotted
+paths into nested result objects (``gpu_frame.draw_calls``,
+``stages_ms.render-command collection``).  A metric entry may instead carry a
+recorded ``baseline`` plus an optional ``noise_margin`` (fraction) and
+``direction`` (``"max"`` by default, ``"min"`` for throughput); the limit is
+then derived as ``baseline * (1 +/- margin)`` with an optional ``floor``.  The
+top-level ``noise_margin`` is the fallback for those entries.  A missing
+scenario or metric, a value above ``max`` or below ``min`` all fail the check;
+the failure list is printed and the process returns 1.
+
+``--write-budgets PATH`` derives that file from the measured (or
+``--from-json`` recorded) results.  ``--margin`` defaults to 0.15, the P0
+spread ceiling.  Near-zero metrics get an absolute floor instead of a useless
+percentage: collection, frame-time p99, input-to-present and damage use at
+least 0.02 (a damage fraction is clamped to 1.0), idle/tail CPU uses 1 % of a
+core (the NVIDIA driver wakes 0.1-0.85 % on the reference machine),
+``private_mb`` at least 1.0 and ``vram_mb`` at least 0.1.  Throughput
+(``fps``) becomes a ``min`` at ``value * (1 - margin)``; ``dropped_frames`` is
+pinned at ``max: 0``.  The noisy ``export_120`` scenario is skipped with a
+note rather than a loose budget.  ``--from-json`` reads a recorded result
+payload and never runs the app, so budgets can be regenerated after a
+measurement without a rebuild.
+
+Bench baselines: the divan numbers recorded in P0 live in
+``scripts/bench_baselines.json`` (ui_layout 8192 5.451 ms, gui_batch 16k
+~165 us, text layout 4.599 us, MSDF ASCII 3.295 ms / 213 allocs / 1.80 MB,
+tessellation 0 allocs, pure2d heavy 2048 328 us / 87 allocs, SVG upload
+2.023 us / 6 allocs).  They are a recorded reference, not an automatic gate;
+re-run ``cargo bench -p ferrous_renderer --bench subsystems`` and compare in
+``scripts/README-perf.md``.
+
+A baseline output is never overwritten implicitly: an existing ``--json-out``
+needs ``--force``.
 
 CPU that remains after the teardown exclusion is not Motioner waking up.  A
 per-thread start-address attribution of the residual ticks maps them to the
@@ -446,6 +507,79 @@ def heavy_ui_list_fixture(count: int) -> Path:
     return root
 
 
+def playback_4k_fixture() -> Path:
+    """Generate a 3840x2160 30 fps project for the 4K playback scenario.
+
+    Reuses the demo's generated test video (and its ready proxy when present)
+    so the run exercises the preview proxy and decode-ahead path; if the demo
+    asset is missing it falls back to shapes so the scenario still runs.  The
+    preview window is 1920x1080, so the 4K composition is drawn through the
+    proxy; the video frames themselves come from the 640 px preview proxy.
+    """
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    root = FIXTURES / "playback_4k30.motioner"
+    compositions = root / "compositions"
+    assets = root / "assets"
+    cache = root / "cache"
+    for directory in (compositions, assets, cache):
+        directory.mkdir(parents=True, exist_ok=True)
+    main = compositions / "main.motion"
+    if main.is_file():
+        return root
+    demo = ROOT / "examples" / "demo.motioner"
+    clip = next(iter(sorted((demo / "assets").glob("*.mp4"))), None)
+    registry = ""
+    intro: list[str] = []
+    if clip is not None:
+        shutil.copyfile(clip, assets / clip.name)
+        digest = clip.stem
+        registry = (
+            f'asset(key="clip", hash="{digest}", original="clip.mp4", '
+            'kind="video", imported="2026-11-21T00:00:00Z")\n'
+        )
+        proxy = demo / "cache" / f"{digest}.proxy.mp4"
+        done = demo / "cache" / f"{digest}.proxy.done"
+        if proxy.is_file():
+            shutil.copyfile(proxy, cache / proxy.name)
+            if done.is_file():
+                shutil.copyfile(done, cache / done.name)
+        intro = [
+            'clip = video("clip.mp4", in_point=0, out_point=6, width=3840, '
+            'height=2160, fit="cover", gain=1)',
+            'clip.id("clip")',
+            'clip.pos = (1920, 1080)',
+        ]
+    else:
+        intro = [
+            'backdrop = rect(3840, 2160, fill="#101830")',
+            'backdrop.id("backdrop")',
+            'backdrop.pos = (1920, 1080)',
+        ]
+    lines = [
+        '# generated by scripts/perf_bench.py (prompt 18 P7)',
+        'comp(name="Playback 4K30", width=3840, height=2160, fps=30, '
+        'duration=10, background="#07070C")',
+        *intro,
+        'bar = rect(1840, 10, radius=5, fill="#5B8CFF")',
+        'bar.id("bar")',
+        'bar.pos = (1920, 980)',
+        'title = text("4K30", font="Inter", weight=700, size=280, '
+        'color="#F4F7FF", align="center", tracking=0.06)',
+        'title.id("title")',
+        'title.pos = (1920, 1080)',
+        'title.key("scale", 0, 1.0)',
+        'title.key("scale", 10, 1.08)',
+    ]
+    project = (
+        'project(version=1, name="Playback 4K30", width=3840, height=2160, '
+        'fps=30, duration=300, background="#07070C", main="main")\n'
+        f'{registry}composition(slug="main", title="Main")\n'
+    )
+    (root / "project.motion").write_text(project, encoding="utf-8", newline="\n")
+    main.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return root
+
+
 # ── scenario definitions ───────────────────────────────────────────────────
 
 
@@ -453,6 +587,7 @@ def scenario_specs() -> dict[str, dict]:
     heavy = heavy_ui_fixture()
     heavy_list = heavy_ui_list_fixture(3000)
     heavy_list_1000 = heavy_ui_list_fixture(1000)
+    playback_4k = playback_4k_fixture()
     tmp = Path(tempfile.gettempdir()) / "motioner-p0"
     tmp.mkdir(parents=True, exist_ok=True)
     return {
@@ -544,6 +679,23 @@ def scenario_specs() -> dict[str, dict]:
             "expected_frames": 600,
             "timeout": 45,
         },
+        "playback_4k30": {
+            "description": (
+                "4K30 playback: generated 3840x2160 project with a video, "
+                "previewed at 1920x1080 through the proxy for 10 s"
+            ),
+            "args": lambda _p: [
+                "preview",
+                str(playback_4k),
+                "--exit-after-frames",
+                "300",
+                "--window-size",
+                "1920x1080",
+            ],
+            "expected_frames": 300,
+            "timeout": 60,
+            "4k": True,
+        },
         "heavy_ui": {
             "description": "heavy UI: 3000-row text composition",
             "args": lambda _p: [
@@ -633,9 +785,18 @@ def scenario_specs() -> dict[str, dict]:
 # ── process measurement ────────────────────────────────────────────────────
 
 
-def parse_json_lines(output: str) -> tuple[dict | None, dict | None]:
+def parse_json_lines(
+    output: str,
+) -> tuple[dict | None, dict | None, dict | None, dict | None]:
+    """Parse the engine's summary lines from captured stdout.
+
+    Returns ``(frame_trace, memory_report, memory_owners, video_cache)``.  The
+    last two are ``None`` on a binary that does not print the P7 lines yet.
+    """
     frame = None
     memory = None
+    memory_owners = None
+    video_cache = None
     for line in output.splitlines():
         line = line.strip()
         if line.startswith("frame-trace "):
@@ -648,7 +809,27 @@ def parse_json_lines(output: str) -> tuple[dict | None, dict | None]:
                 memory = json.loads(line[len("memory-report ") :])
             except json.JSONDecodeError:
                 pass
-    return frame, memory
+        elif line.startswith("memory-owners "):
+            try:
+                memory_owners = json.loads(line[len("memory-owners ") :])
+            except json.JSONDecodeError:
+                pass
+        elif line.startswith("memory_owners "):
+            try:
+                memory_owners = json.loads(line[len("memory_owners ") :])
+            except json.JSONDecodeError:
+                pass
+        elif line.startswith("video-cache "):
+            try:
+                video_cache = json.loads(line[len("video-cache ") :])
+            except json.JSONDecodeError:
+                pass
+        elif line.startswith("video_cache "):
+            try:
+                video_cache = json.loads(line[len("video_cache ") :])
+            except json.JSONDecodeError:
+                pass
+    return frame, memory, memory_owners, video_cache
 
 
 def median_stage(stages: dict, name: str) -> float | None:
@@ -718,6 +899,88 @@ def trace_damage(frame: dict) -> tuple[float | None, float | None, float | None]
         trace_stat(entry, "p90", "p90_fraction"),
         trace_stat(entry, "p99", "p99_fraction"),
     )
+
+
+def trace_memory_owners(
+    entry: object,
+) -> tuple[dict | None, dict[str, float | None]]:
+    """Parse ``memory-owners`` (document/plan/panel/video bytes)."""
+    keys = (
+        "memory_owners_document_bytes",
+        "memory_owners_plan_bytes",
+        "memory_owners_panel_bytes",
+        "memory_owners_video_bytes",
+        "memory_owners_total_bytes",
+    )
+    if not isinstance(entry, dict):
+        return None, {key: None for key in keys}
+    owners = entry.get("owners")
+    scope = owners if isinstance(owners, dict) else entry
+
+    def owner_bytes(name: str) -> float | None:
+        return trace_stat(scope, name, f"{name}_bytes", f"{name}_owner_bytes")
+
+    document = owner_bytes("document")
+    plan = owner_bytes("plan")
+    panel = owner_bytes("panel")
+    video = owner_bytes("video")
+    total = trace_stat(entry, "total", "total_bytes")
+    if total is None:
+        total = trace_stat(scope, "total", "total_bytes")
+    if total is None:
+        present = [value for value in (document, plan, panel, video) if value is not None]
+        total = sum(present) if present else None
+    return entry, {
+        "memory_owners_document_bytes": document,
+        "memory_owners_plan_bytes": plan,
+        "memory_owners_panel_bytes": panel,
+        "memory_owners_video_bytes": video,
+        "memory_owners_total_bytes": total,
+    }
+
+
+def trace_decode_ahead(
+    entry: object,
+) -> tuple[dict | None, dict[str, float | int | None]]:
+    """Parse ``video-cache`` into a normalized dict and flat scalars."""
+    keys = (
+        "decode_ahead_requests",
+        "decode_ahead_hits",
+        "decode_ahead_misses",
+        "decode_ahead_hit_rate",
+        "decode_ahead_bytes",
+    )
+    if not isinstance(entry, dict):
+        return None, {key: None for key in keys}
+    stats = entry.get("stats")
+    scope = stats if isinstance(stats, dict) else entry
+    requests = trace_stat(scope, "requests", "request_count", "requested")
+    hits = trace_stat(scope, "hits", "hit_count")
+    misses = trace_stat(scope, "misses", "miss_count")
+    hit_rate = trace_stat(scope, "hit_rate", "rate")
+    if hit_rate is None and requests and hits is not None:
+        hit_rate = hits / requests
+    cache_bytes = trace_stat(scope, "bytes", "resident_bytes", "cache_bytes")
+
+    def as_int(value: float | None) -> int | None:
+        return None if value is None else int(round(value))
+
+    parsed = {
+        "requests": as_int(requests),
+        "hits": as_int(hits),
+        "misses": as_int(misses),
+        "hit_rate": _round_or_none(hit_rate),
+        "bytes": as_int(cache_bytes),
+    }
+    if all(value is None for value in parsed.values()):
+        return None, {key: None for key in keys}
+    return parsed, {
+        "decode_ahead_requests": parsed["requests"],
+        "decode_ahead_hits": parsed["hits"],
+        "decode_ahead_misses": parsed["misses"],
+        "decode_ahead_hit_rate": parsed["hit_rate"],
+        "decode_ahead_bytes": parsed["bytes"],
+    }
 
 
 def run_once(
@@ -890,7 +1153,9 @@ def run_once(
         if tail_span > 0.0:
             tail_cpu_s = max(0.0, measured_cpu - tail_cpu)
             tail_cpu_percent = tail_cpu_s / tail_span * 100.0
-    frame, memory = parse_json_lines("".join(output_lines))
+    frame, memory, memory_owners_line, video_cache_line = parse_json_lines(
+        "".join(output_lines)
+    )
     frames = 0
     presented = 0
     gpu_submits = 0
@@ -910,6 +1175,8 @@ def run_once(
     damage_fraction_p90 = None
     damage_fraction_p99 = None
     present_mode = None
+    memory_owners, memory_owner_scalars = trace_memory_owners(memory_owners_line)
+    decode_ahead, decode_ahead_scalars = trace_decode_ahead(video_cache_line)
     if frame is not None:
         frames = int(frame.get("frames", 0))
         presented = int(frame.get("presented", 0))
@@ -1019,6 +1286,10 @@ def run_once(
         "damage_fraction_p90": _round_or_none(damage_fraction_p90),
         "damage_fraction_p99": _round_or_none(damage_fraction_p99),
         "present_mode": present_mode,
+        "decode_ahead": decode_ahead,
+        **decode_ahead_scalars,
+        "memory_owners": memory_owners,
+        **memory_owner_scalars,
         "vram_mb": None,
         "gpu_bytes": None,
         "cpu_bytes": None,
@@ -1073,6 +1344,16 @@ RANGE_METRICS = (
     "input_to_present_p90",
     "input_to_present_p99",
     "input_to_present_samples",
+    "decode_ahead_requests",
+    "decode_ahead_hits",
+    "decode_ahead_misses",
+    "decode_ahead_hit_rate",
+    "decode_ahead_bytes",
+    "memory_owners_document_bytes",
+    "memory_owners_plan_bytes",
+    "memory_owners_panel_bytes",
+    "memory_owners_video_bytes",
+    "memory_owners_total_bytes",
     "wall_s",
     "frames",
     "presented",
@@ -1113,6 +1394,19 @@ def aggregate(runs: list[dict]) -> dict:
         input_to_present = None
     elif input_to_present["samples"] is not None:
         input_to_present["samples"] = int(input_to_present["samples"])
+    decode_ahead = {
+        "requests": med("decode_ahead_requests"),
+        "hits": med("decode_ahead_hits"),
+        "misses": med("decode_ahead_misses"),
+        "hit_rate": med("decode_ahead_hit_rate"),
+        "bytes": med("decode_ahead_bytes"),
+    }
+    if all(value is None for value in decode_ahead.values()):
+        decode_ahead = None
+    else:
+        for key in ("requests", "hits", "misses", "bytes"):
+            if decode_ahead[key] is not None:
+                decode_ahead[key] = int(decode_ahead[key])
     return {
         "runs": len(runs),
         "cpu_percent": med("cpu_percent"),
@@ -1151,6 +1445,18 @@ def aggregate(runs: list[dict]) -> dict:
         "damage_fraction": med("damage_fraction"),
         "damage_fraction_p90": med("damage_fraction_p90"),
         "damage_fraction_p99": med("damage_fraction_p99"),
+        "decode_ahead": decode_ahead,
+        "decode_ahead_requests": med("decode_ahead_requests"),
+        "decode_ahead_hits": med("decode_ahead_hits"),
+        "decode_ahead_misses": med("decode_ahead_misses"),
+        "decode_ahead_hit_rate": med("decode_ahead_hit_rate"),
+        "decode_ahead_bytes": med("decode_ahead_bytes"),
+        "memory_owners": runs[-1].get("memory_owners"),
+        "memory_owners_document_bytes": med("memory_owners_document_bytes"),
+        "memory_owners_plan_bytes": med("memory_owners_plan_bytes"),
+        "memory_owners_panel_bytes": med("memory_owners_panel_bytes"),
+        "memory_owners_video_bytes": med("memory_owners_video_bytes"),
+        "memory_owners_total_bytes": med("memory_owners_total_bytes"),
         "present_mode": runs[-1].get("present_mode"),
         "ranges": {
             key: value
@@ -1298,6 +1604,50 @@ def print_result(name: str, description: str, result: dict) -> None:
         )
     else:
         print("  damaged fraction: not reported")
+    decode_ahead = result.get("decode_ahead")
+    memory_owners = result.get("memory_owners")
+    if decode_ahead and any(value is not None for value in decode_ahead.values()):
+        rate = fraction_percent(decode_ahead.get("hit_rate"))
+        rate_text = "n/a" if rate is None else f"{rate:.1f}%"
+        cache_bytes = decode_ahead.get("bytes")
+        cache_mb = (
+            "n/a"
+            if cache_bytes is None
+            else f"{float(cache_bytes) / (1024 * 1024):.1f} MB"
+        )
+        decode_text = (
+            f"decode-ahead hit rate {rate_text} "
+            f"(requests {decode_ahead.get('requests')}, "
+            f"hits {decode_ahead.get('hits')}, "
+            f"misses {decode_ahead.get('misses')}, cache {cache_mb})"
+        )
+    else:
+        decode_text = "decode-ahead: not reported"
+
+    def owner_mb(name: str) -> str:
+        value = result.get(f"memory_owners_{name}_bytes")
+        if value is None and isinstance(memory_owners, dict):
+            key = {
+                "document": "document_bytes_estimate",
+                "plan": "plan_bytes_estimate",
+                "panel": "panel_bytes_estimate",
+                "video": "video_cache_bytes",
+            }.get(name)
+            if key is not None:
+                value = memory_owners.get(key)
+        if value is None:
+            return "n/a"
+        return f"{float(value) / (1024 * 1024):.1f} MB"
+
+    if isinstance(memory_owners, dict):
+        owners_text = (
+            "memory owners: "
+            f"document {owner_mb('document')}  plan {owner_mb('plan')}  "
+            f"panel {owner_mb('panel')}  video {owner_mb('video')}"
+        )
+    else:
+        owners_text = "memory owners: not reported"
+    print(f"  {decode_text}  |  {owners_text}")
     if result["gpu_passes_ms"]:
         passes = ", ".join(f"{key} {value:.3f} ms" for key, value in result["gpu_passes_ms"].items())
         print(f"  GPU passes: {passes}")
@@ -1316,27 +1666,201 @@ def print_result(name: str, description: str, result: dict) -> None:
         print(f"  export {result['export_fps']} frames/s")
 
 
+MISSING = object()
+
+
+def resolve_metric(result: dict, metric: str):
+    """Read a metric, following dotted paths into nested result objects."""
+    value: object = result
+    for part in metric.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return MISSING
+        value = value[part]
+    return value
+
+
+def _entry_limit(
+    entry: dict, name: str, baseline: float | None, margin: float
+) -> float | None:
+    """Return an explicit ``max``/``min`` or derive it from a baseline."""
+    if name in entry:
+        return float(entry[name])
+    if baseline is None:
+        return None
+    direction = entry.get("direction", "max")
+    if direction != name:
+        return None
+    floor = float(entry.get("floor", 0.0))
+    if direction == "min":
+        return max(floor, baseline * (1.0 - margin))
+    return max(floor, baseline * (1.0 + margin))
+
+
 def check_budgets(results: dict[str, dict], budgets: dict) -> list[str]:
+    """Return every budget violation; an empty list means the check passed."""
+    global_margin = float(budgets.get("noise_margin", 0.0))
     failures: list[str] = []
     for scenario, metrics in budgets.get("scenarios", {}).items():
         if scenario not in results:
             failures.append(f"{scenario}: no measurement")
             continue
         measured = results[scenario]
-        for metric, limits in metrics.items():
-            value = measured.get(metric)
-            if value is None:
+        if not isinstance(metrics, dict):
+            failures.append(f"{scenario}: budget is not an object")
+            continue
+        for metric, entry in metrics.items():
+            if not isinstance(entry, dict):
+                failures.append(f"{scenario}.{metric}: budget entry is not an object")
+                continue
+            value = resolve_metric(measured, metric)
+            if value is MISSING or value is None:
                 failures.append(f"{scenario}.{metric}: not measured")
                 continue
-            if "max" in limits and value > limits["max"]:
-                failures.append(
-                    f"{scenario}.{metric}: {value} > max {limits['max']}"
+            if not isinstance(value, (int, float)):
+                failures.append(f"{scenario}.{metric}: not numeric ({value!r})")
+                continue
+            baseline = entry.get("baseline")
+            baseline_value = float(baseline) if baseline is not None else None
+            margin = float(entry.get("noise_margin", global_margin))
+            max_value = _entry_limit(entry, "max", baseline_value, margin)
+            min_value = _entry_limit(entry, "min", baseline_value, margin)
+            if max_value is not None and value > max_value:
+                suffix = (
+                    f" (baseline {baseline_value} + margin {margin})"
+                    if baseline_value is not None
+                    else ""
                 )
-            if "min" in limits and value < limits["min"]:
                 failures.append(
-                    f"{scenario}.{metric}: {value} < min {limits['min']}"
+                    f"{scenario}.{metric}: {value} > max {round(max_value, 3)}{suffix}"
+                )
+            if min_value is not None and value < min_value:
+                suffix = (
+                    f" (baseline {baseline_value} + margin {margin})"
+                    if baseline_value is not None
+                    else ""
+                )
+                failures.append(
+                    f"{scenario}.{metric}: {value} < min {round(min_value, 3)}{suffix}"
                 )
     return failures
+
+
+# Metrics written by --write-budgets: ``max`` with an absolute floor so that
+# a near-zero median (idle collection, 0 damage, 0 input latency) does not
+# turn into a meaningless 0 * 1.15 budget.
+MAX_FLOOR_METRICS = {
+    "cpu_percent": 0.02,
+    # Idle/tail CPU is near zero and the NVIDIA driver wakes 0.1-0.85 % of a
+    # core on the reference machine; a 0.02 % floor would flake on the
+    # baseline, so the absolute floor is 1 % of a core.
+    "idle_cpu_percent": 1.0,
+    "tail_cpu_percent": 1.0,
+    "collection_ms": 0.02,
+    "frame_ms_p99": 0.02,
+    "damage_fraction": 0.02,
+    "input_to_present_p50": 0.02,
+    "input_to_present_p99": 0.02,
+}
+MAX_MB_METRICS = {
+    "private_mb": 1.0,
+    "vram_mb": 0.1,
+}
+GPU_FRAME_METRICS = (
+    "gpu_frame.draw_calls",
+    "gpu_frame.pipeline_binds",
+    "gpu_frame.bind_group_binds",
+    "gpu_frame.buffer_binds",
+    "gpu_frame.ui_segments",
+)
+
+
+def derive_budgets(results: dict[str, dict], margin: float) -> dict:
+    """Build a budget payload from measured medians, with noise margins."""
+    notes: list[str] = [
+        (
+            "export_120 is excluded: its throughput is noisy without a much "
+            "wider margin; measure it separately."
+        ),
+        (
+            "Budgets use the three-run median and a 15 % margin; the recorded "
+            "min/max span can be wider on noisy metrics (collection, damage, "
+            "hover CPU)."
+        ),
+    ]
+    scenarios: dict[str, dict] = {}
+    for name, measured in results.items():
+        if name == "export_120":
+            continue
+        if measured.get("timed_out"):
+            notes.append(f"{name}: excluded because the run timed out.")
+            continue
+        limits: dict[str, dict[str, float]] = {}
+        for metric, floor in MAX_FLOOR_METRICS.items():
+            value = measured.get(metric)
+            if not isinstance(value, (int, float)):
+                continue
+            bound = max(floor, float(value) * (1.0 + margin))
+            if metric == "damage_fraction":
+                bound = min(1.0, bound)
+            limits[metric] = {"max": round(bound, 3)}
+        for metric, floor in MAX_MB_METRICS.items():
+            value = measured.get(metric)
+            if not isinstance(value, (int, float)):
+                continue
+            limits[metric] = {
+                "max": round(max(floor, float(value) * (1.0 + margin)), 3)
+            }
+        fps = measured.get("fps")
+        if isinstance(fps, (int, float)) and float(fps) >= 1.0:
+            limits["fps"] = {"min": round(float(fps) * (1.0 - margin), 3)}
+        dropped = measured.get("dropped_frames")
+        if isinstance(dropped, (int, float)):
+            limits["dropped_frames"] = {"max": 0}
+        allocations = measured.get("allocations_per_frame")
+        if isinstance(allocations, (int, float)):
+            limits["allocations_per_frame"] = {
+                "max": round(float(allocations) * (1.0 + margin), 3)
+            }
+        gpu_frame = measured.get("gpu_frame")
+        if isinstance(gpu_frame, dict):
+            for dotted in GPU_FRAME_METRICS:
+                leaf = dotted.split(".", 1)[1]
+                value = gpu_frame.get(leaf)
+                if isinstance(value, (int, float)):
+                    limits[dotted] = {
+                        "max": round(float(value) * (1.0 + margin), 3)
+                    }
+        if limits:
+            scenarios[name] = limits
+        else:
+            notes.append(f"{name}: no scalar guard metrics were measured.")
+    if not any(
+        "allocations_per_frame" in metrics for metrics in scenarios.values()
+    ):
+        notes.append(
+            "allocations_per_frame is omitted when the run has no "
+            "motioner-bench (alloc-stats) binary."
+        )
+    if "playback_4k30" not in scenarios:
+        notes.append(
+            "playback_4k30 is absent from this result; regenerate from "
+            "p7-after.json to add its budget."
+        )
+    return {
+        "noise_margin": margin,
+        "notes": notes,
+        "scenarios": scenarios,
+    }
+
+
+def write_budgets_file(path: Path, results: dict[str, dict], margin: float) -> None:
+    """Derive, write and print a budget file."""
+    budgets = derive_budgets(results, margin)
+    text = json.dumps(budgets, indent=2) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    print(f"\nwrote budgets {path}")
+    print(text)
 
 
 def main(argv: list[str]) -> int:
@@ -1356,6 +1880,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--scenario", action="append", default=[], help="only these scenarios")
     parser.add_argument(
+        "--from-json",
+        type=Path,
+        default=None,
+        help=(
+            "read a recorded result payload instead of running the app; "
+            "--json-out/--force are ignored in this mode"
+        ),
+    )
+    parser.add_argument(
         "--json-out",
         type=Path,
         default=None,
@@ -1367,6 +1900,18 @@ def main(argv: list[str]) -> int:
         help="overwrite an existing output file (a baseline is never overwritten implicitly)",
     )
     parser.add_argument("--check", type=Path, default=None, help="budget JSON to enforce")
+    parser.add_argument(
+        "--write-budgets",
+        type=Path,
+        default=None,
+        help="derive a budget JSON from the measured (or --from-json) results",
+    )
+    parser.add_argument(
+        "--margin",
+        type=float,
+        default=0.15,
+        help="noise margin used by --write-budgets (default: 0.15)",
+    )
     parser.add_argument("--alloc-frames", type=int, default=120)
     parser.add_argument(
         "--allow-pointer",
@@ -1380,76 +1925,93 @@ def main(argv: list[str]) -> int:
     enable_dpi_awareness()
     if args.runs < 1:
         raise SystemExit("--runs must be at least 1")
-    if not args.binary.is_file():
-        raise SystemExit(f"{args.binary} does not exist; build the release binary first")
-    WORK.mkdir(parents=True, exist_ok=True)
-    json_out = args.json_out or (
-        WORK / f"perf-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    )
-    if json_out.exists() and not args.force:
-        raise SystemExit(
-            f"{json_out} already exists; pass --force to overwrite it "
-            "(baselines are never overwritten implicitly)"
+    if args.margin < 0.0:
+        raise SystemExit("--margin must not be negative")
+
+    if args.from_json is not None:
+        source = args.from_json
+        if not source.is_file():
+            raise SystemExit(f"{source} does not exist")
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        results = payload.get("scenarios", {})
+        if not isinstance(results, dict) or not results:
+            raise SystemExit(f"{source} has no scenarios")
+        for name, result in results.items():
+            print_result(name, f"recorded in {source.name}", result)
+    else:
+        if not args.binary.is_file():
+            raise SystemExit(f"{args.binary} does not exist; build the release binary first")
+        WORK.mkdir(parents=True, exist_ok=True)
+        json_out = args.json_out or (
+            WORK / f"perf-{time.strftime('%Y%m%d-%H%M%S')}.json"
         )
-    specs = scenario_specs()
-    names = args.scenario or list(specs)
-    for name in names:
-        if name not in specs:
-            raise SystemExit(f"unknown scenario {name!r}")
-
-    results: dict[str, dict] = {}
-    for name in names:
-        spec = specs[name]
-        if (
-            spec.get("hover") or spec.get("hover_static") or spec.get("wheel")
-        ) and not args.allow_pointer:
-            print(
-                f"\n{name}: skipped "
-                "(needs --allow-pointer: it moves the real mouse and wheel)"
+        if json_out.exists() and not args.force:
+            raise SystemExit(
+                f"{json_out} already exists; pass --force to overwrite it "
+                "(baselines are never overwritten implicitly)"
             )
-            continue
-        endpoint = Path(tempfile.gettempdir()) / f"motioner-p0-{name}.ctl"
-        if endpoint.exists():
-            endpoint.unlink()
-        for _ in range(args.warmup):
-            run_once(args.binary, name, spec, endpoint, spec["timeout"], allow_pointer=args.allow_pointer)
-        runs = [
-            run_once(args.binary, name, spec, endpoint, spec["timeout"], allow_pointer=args.allow_pointer)
-            for _ in range(args.runs)
-        ]
-        result = aggregate(runs)
-        if args.alloc_binary is not None and not spec.get("export"):
-            alloc_args = spec["args"](endpoint)
-            if "--exit-after-frames" in alloc_args:
-                index = alloc_args.index("--exit-after-frames") + 1
-                alloc_args[index] = str(args.alloc_frames)
-            alloc_spec = dict(spec)
-            alloc_spec["args"] = lambda _p, a=alloc_args: a
-            alloc_spec["expected_frames"] = args.alloc_frames
-            alloc = run_once(
-                args.alloc_binary,
-                name,
-                alloc_spec,
-                endpoint,
-                spec["timeout"],
-                allow_pointer=False,
-            )
-            result["allocations_per_frame"] = alloc.get("allocations_per_frame")
-            result["allocated_bytes_per_frame"] = alloc.get("allocated_bytes_per_frame")
-        results[name] = result
-        print_result(name, spec["description"], result)
+        specs = scenario_specs()
+        names = args.scenario or list(specs)
+        for name in names:
+            if name not in specs:
+                raise SystemExit(f"unknown scenario {name!r}")
 
-    payload = {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "binary": str(args.binary),
-        "alloc_binary": str(args.alloc_binary) if args.alloc_binary else None,
-        "runs": args.runs,
-        "warmup": args.warmup,
-        "scenarios": results,
-    }
-    json_out.parent.mkdir(parents=True, exist_ok=True)
-    json_out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"\nwrote {json_out}")
+        results = {}
+        for name in names:
+            spec = specs[name]
+            if (
+                spec.get("hover") or spec.get("hover_static") or spec.get("wheel")
+            ) and not args.allow_pointer:
+                print(
+                    f"\n{name}: skipped "
+                    "(needs --allow-pointer: it moves the real mouse and wheel)"
+                )
+                continue
+            endpoint = Path(tempfile.gettempdir()) / f"motioner-p0-{name}.ctl"
+            if endpoint.exists():
+                endpoint.unlink()
+            for _ in range(args.warmup):
+                run_once(args.binary, name, spec, endpoint, spec["timeout"], allow_pointer=args.allow_pointer)
+            runs = [
+                run_once(args.binary, name, spec, endpoint, spec["timeout"], allow_pointer=args.allow_pointer)
+                for _ in range(args.runs)
+            ]
+            result = aggregate(runs)
+            if args.alloc_binary is not None and not spec.get("export"):
+                alloc_args = spec["args"](endpoint)
+                if "--exit-after-frames" in alloc_args:
+                    index = alloc_args.index("--exit-after-frames") + 1
+                    alloc_args[index] = str(args.alloc_frames)
+                alloc_spec = dict(spec)
+                alloc_spec["args"] = lambda _p, a=alloc_args: a
+                alloc_spec["expected_frames"] = args.alloc_frames
+                alloc = run_once(
+                    args.alloc_binary,
+                    name,
+                    alloc_spec,
+                    endpoint,
+                    spec["timeout"],
+                    allow_pointer=False,
+                )
+                result["allocations_per_frame"] = alloc.get("allocations_per_frame")
+                result["allocated_bytes_per_frame"] = alloc.get("allocated_bytes_per_frame")
+            results[name] = result
+            print_result(name, spec["description"], result)
+
+        payload = {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "binary": str(args.binary),
+            "alloc_binary": str(args.alloc_binary) if args.alloc_binary else None,
+            "runs": args.runs,
+            "warmup": args.warmup,
+            "scenarios": results,
+        }
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
+        print(f"\nwrote {json_out}")
+
     if args.check is not None:
         budgets = json.loads(args.check.read_text(encoding="utf-8"))
         failures = check_budgets(results, budgets)
@@ -1459,6 +2021,8 @@ def main(argv: list[str]) -> int:
                 print(f"  - {failure}")
             return 1
         print("\ncheck: ok")
+    if args.write_budgets is not None:
+        write_budgets_file(args.write_budgets, results, args.margin)
     return 0
 
 

@@ -83,7 +83,8 @@ Usage:
   motioner preview <project|file.motion> [--frame N] [--paused] [--exit-after-frames N]
                    [--exit-after-seconds F] [--window-size WxH] [--ui-scale F]
                    [--select ROW] [--screenshot <file.png>] [--control]
-                   [--control-file FILE] [--continuous]
+                   [--control-file FILE] [--continuous] [--memory-report]
+                   [--persistent-ui]
   motioner --help
 
 A project is a `<name>.motioner/` folder (D-0045); every command also accepts
@@ -101,7 +102,10 @@ the heavy benchmark,
 `--ui-scale` overrides the chrome scale (to check other DPI settings),
 `--select` selects an outline row at startup and `--screenshot` writes the
 window to a PNG after `--exit-after-frames` frames (1 by default) and closes
-it.
+it. `--memory-report` prints one `memory-owners {json}` line when the window
+closes (the same line is printed whenever `FERROUS_TRACE_FRAMES=1`).
+`--persistent-ui` opts into the engine's offscreen partial-present path; it is
+off by default and is measured before any default changes.
 
 `new` creates the folder, manifest, a default composition and `editor.motion`.
 `migrate` copies a loose program and the assets it references into a project.
@@ -302,6 +306,10 @@ struct PreviewArgs {
     assets: bool,
     /// Draw continuously (benchmarks and demos) instead of on demand.
     continuous: bool,
+    /// Print `memory-owners {json}` at exit (prompt 18 P7).
+    memory_report: bool,
+    /// Opt into the engine's persistent offscreen UI present path.
+    persistent_ui: bool,
 }
 
 /// Why the run stopped and with which exit code.
@@ -1122,6 +1130,8 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
     let mut control = None;
     let mut assets = false;
     let mut continuous = false;
+    let mut memory_report = false;
+    let mut persistent_ui = false;
     let mut hidden = false;
     let mut index = 0;
     while index < args.len() {
@@ -1174,6 +1184,14 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
                 continuous = true;
                 index += 1;
             }
+            "--memory-report" => {
+                memory_report = true;
+                index += 1;
+            }
+            "--persistent-ui" => {
+                persistent_ui = true;
+                index += 1;
+            }
             "--hidden" => {
                 hidden = true;
                 index += 1;
@@ -1210,6 +1228,8 @@ fn parse_preview(args: &[OsString]) -> Result<Command> {
         control,
         assets,
         continuous,
+        memory_report,
+        persistent_ui,
         hidden_window: hidden,
     }))
 }
@@ -1369,6 +1389,15 @@ fn run_desktop(args: &DesktopArgs) -> std::result::Result<(), Failure> {
 
 /// Opens the live preview window.
 fn run_preview(args: &PreviewArgs) -> std::result::Result<(), Failure> {
+    // The window reads both switches from the environment: its option struct
+    // lives in `motioner_ui::window`, outside this lane, so the CLI sets the
+    // documented variables before the app is built.
+    if args.memory_report {
+        std::env::set_var("MOTIONER_MEMORY_REPORT", "1");
+    }
+    if args.persistent_ui {
+        std::env::set_var("MOTIONER_PERSISTENT_UI", "1");
+    }
     let target = {
         let _span = motioner_ui::startup::span("motioner: resolve input");
         resolve_input(&args.input)?
@@ -2216,6 +2245,34 @@ mod tests {
                 control: Some(PathBuf::from("ctl.txt")),
                 assets: false,
                 continuous: false,
+                memory_report: false,
+                persistent_ui: false,
+                hidden_window: false,
+            })
+        );
+        assert_eq!(
+            parse(&args(&[
+                "preview",
+                "in.motion",
+                "--memory-report",
+                "--persistent-ui"
+            ]))
+            .unwrap(),
+            Command::Preview(PreviewArgs {
+                input: PathBuf::from("in.motion"),
+                frame: None,
+                paused: false,
+                exit_after_frames: None,
+                exit_after_seconds: None,
+                window_size: None,
+                ui_scale_milli: None,
+                select: None,
+                screenshot: None,
+                control: None,
+                assets: false,
+                continuous: false,
+                memory_report: true,
+                persistent_ui: true,
                 hidden_window: false,
             })
         );
@@ -2238,6 +2295,8 @@ mod tests {
                 control: None,
                 assets: false,
                 continuous: false,
+                memory_report: false,
+                persistent_ui: false,
                 hidden_window: false,
             })
         );

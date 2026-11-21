@@ -12,7 +12,7 @@ use crate::widgets::{self, ButtonKind};
 /// Draws the top bar.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let key = p.panel_key(PanelKind::TopBar, revision(v), v.layout.top_bar);
-    p.panel(key, |p| draw_body(p, v));
+    p.panel_hover(key, v.hover_key(PanelKind::TopBar), |p| draw_body(p, v));
 }
 
 /// Everything the top bar reads, except the theme and DPI (in the key).
@@ -30,7 +30,6 @@ fn revision(v: &View<'_>) -> u64 {
         .f32(v.reload_pulse)
         .f64(v.zoom)
         .bool(v.comp_rect.is_some())
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
         .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
         .usize(v.override_rows.len())
         .bool(v.overrides_open)

@@ -53,7 +53,6 @@ fn revision(v: &View<'_>) -> u64 {
         .u64(v.assets.selected.map_or(u64::MAX, |index| index as u64))
         .str(v.filter)
         .f32(v.layer_scroll)
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
         .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
         .usize(v.assets.entries.len())
         .usize(v.assets.entries.as_ptr() as usize);
@@ -83,7 +82,7 @@ fn revision(v: &View<'_>) -> u64 {
 /// Draws the assets panel.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let key = p.panel_key(PanelKind::Assets, revision(v), v.layout.layers.rect);
-    p.panel(key, |p| draw_body(p, v));
+    p.panel_hover(key, v.hover_key(PanelKind::Assets), |p| draw_body(p, v));
 }
 
 fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {

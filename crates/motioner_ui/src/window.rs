@@ -259,6 +259,10 @@ fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(
         .with_font_cache(font_cache_config())
         // Prompt 17 S3: keep the compiled pipelines between runs (Vulkan).
         .with_pipeline_cache(ferrous_engine::PipelineCacheConfig::for_app("Motioner"))
+        // Prompt 18 P7: opt-in offscreen present path. It is off unless
+        // `MOTIONER_PERSISTENT_UI=1` (measured against a full redraw first).
+        .with_persistent_ui(motioner_render::persistent_ui_opt_in())
+        .with_persistent_ui_break_even(motioner_render::PERSISTENT_UI_BREAK_EVEN)
         .run();
     // S3b no longer stores a launch snapshot; a build that used one may have
     // left its cache behind (best effort, once per run).

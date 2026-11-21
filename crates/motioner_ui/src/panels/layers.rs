@@ -13,7 +13,7 @@ use crate::theme::{over, size, type_scale};
 /// Draws the layers panel.
 pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
     let key = p.panel_key(PanelKind::Layers, revision(v), v.layout.layers.rect);
-    p.panel(key, |p| draw_body(p, v));
+    p.panel_hover(key, v.hover_key(PanelKind::Layers), |p| draw_body(p, v));
 }
 
 /// Everything the layers panel reads, except the theme and DPI (in the key).
@@ -29,7 +29,6 @@ fn revision(v: &View<'_>) -> u64 {
         .bool(v.add_menu_open)
         .f32(v.layer_scroll)
         .u64(v.selected.map_or(u64::MAX, |index| index as u64))
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
         .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
         .usize(v.layer_rows.len())
         .usize(v.orphans.len())
@@ -65,7 +64,6 @@ fn revision(v: &View<'_>) -> u64 {
                 .bool(row.has_children)
                 .bool(row.has_next_sibling)
                 .bool(v.selected == Some(index))
-                .bool(row_hovered(v, index))
                 .bool(v.expanded.contains(&index))
                 .bool(visible)
                 .bool(locked)

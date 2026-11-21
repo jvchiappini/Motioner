@@ -13,7 +13,7 @@ use motioner_render::linear_rgba;
 
 use crate::icons::{self, Icon};
 use crate::layout::{Hit, Rect};
-use crate::paint::{Painter, PanelKind, PanelRevision};
+use crate::paint::{HoverKey, Painter, PanelKind, PanelRevision};
 use crate::panels::View;
 use crate::text::Align;
 use crate::theme::{size, type_scale, Theme};
@@ -94,72 +94,153 @@ fn push_rect(
     renderer.draw_2d_shape(shape);
 }
 
-/// Everything the canvas overlays read, except the theme and DPI (in the key).
-///
-/// `time` only animates the loading dots, so it is hashed only while the
-/// loading card is the one on screen.
-fn revision(v: &View<'_>, time: f32) -> u64 {
+/// The frame border, safe areas and the empty-composition card.
+fn static_revision(v: &View<'_>) -> u64 {
     let mut rev = PanelRevision::new()
         .bool(v.comp_rect.is_some())
         .bool(v.safe_area)
         .bool(v.document.is_some())
         .bool(v.document.is_some_and(motioner_core::Document::is_empty))
-        .bool(v.has_error())
-        .f64(v.zoom)
-        .u64(v.hover.map_or(u64::MAX, Hit::stable_code))
-        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
-        .usize(v.guides.len())
-        .usize(v.diagnostics.len())
         .str(v.file_name);
     if let Some(comp) = v.comp_rect {
         rev = rev.rect(comp);
     }
-    rev = match v.hover_bounds {
-        Some(bounds) => rev.bool(true).rect(bounds),
-        None => rev.bool(false),
-    };
-    rev = match v.selection_bounds {
-        Some(bounds) => rev.bool(true).rect(bounds),
-        None => rev.bool(false),
-    };
+    rev.finish()
+}
+
+/// The selection frame, its handles and the size pill.
+fn selection_revision(v: &View<'_>, bounds: Rect) -> u64 {
+    let mut rev = PanelRevision::new().rect(bounds);
     rev = match v.selection_size {
         Some((width, height)) => rev.bool(true).f64(width).f64(height),
         None => rev.bool(false),
     };
+    rev.finish()
+}
+
+/// The snapping guides and the box-selection marquee.
+fn guides_revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .bool(v.comp_rect.is_some())
+        .f64(v.zoom)
+        .usize(v.guides.len());
+    if let Some(comp) = v.comp_rect {
+        rev = rev.rect(comp);
+    }
+    for guide in v.guides {
+        rev = rev.bool(guide.vertical).f64(guide.at);
+    }
     rev = match v.marquee {
         Some(rect) => rev.bool(true).rect(rect),
         None => rev.bool(false),
     };
-    for guide in v.guides {
-        rev = rev.bool(guide.vertical).f64(guide.at);
-    }
+    rev.finish()
+}
+
+/// The load-error banner or card.
+fn cards_revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .bool(v.document.is_some())
+        .bool(v.has_error())
+        .str(v.file_name)
+        .usize(v.diagnostics.len());
     if let Some(diagnostic) = v.diagnostics.first() {
         rev = rev
             .str(&diagnostic.message)
             .u64(u64::from(diagnostic.line))
             .u64(u64::from(diagnostic.column));
     }
-    if v.document.is_none() && !v.has_error() {
-        rev = rev.f32(time);
-    }
     rev.finish()
 }
 
-/// Draws the overlays above the composition, clipped to the canvas.
-pub fn draw_overlays(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
-    let key = p.panel_key(
-        PanelKind::CanvasOverlays,
-        revision(v, time),
-        v.layout.canvas,
-    );
-    p.panel(key, |p| draw_overlays_body(p, v, time));
+/// The animated loading dots.
+fn loading_revision(v: &View<'_>, time: f32) -> u64 {
+    PanelRevision::new()
+        .bool(v.document.is_none())
+        .bool(v.has_error())
+        .f32(time)
+        .finish()
 }
 
-fn draw_overlays_body(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
+/// Draws the overlays above the composition, clipped to the canvas.
+///
+/// Each overlay is its own cache entry so a hover only repaints the hovered
+/// node's outline and a selection change never damages the whole canvas frame.
+pub fn draw_overlays(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
+    let canvas = v.layout.canvas;
+    let key = p.panel_key(PanelKind::CanvasOverlays, static_revision(v), canvas);
+    p.panel(key, |p| draw_static(p, v));
+
+    // One stable slot: the node the pointer is over changes its hover code and
+    // rect, so the outline damages the old and new bounds instead of a key
+    // change leaving a stale whole-canvas entry behind.
+    let hover_revision = PanelRevision::new().u64(0x6361_6e76_6173).finish();
+    let hover_key = p.panel_key(PanelKind::CanvasOverlays, hover_revision, canvas);
+    let hover = match v.hover_bounds {
+        Some(bounds) => HoverKey::new(
+            PanelRevision::new()
+                .rect(bounds)
+                .bool(v.selection_bounds == Some(bounds))
+                .finish(),
+            Some(bounds),
+        ),
+        None => HoverKey::none(),
+    };
+    p.panel_hover(hover_key, hover, |p| {
+        if let Some(bounds) = v.hover_bounds {
+            if v.selection_bounds != Some(bounds) {
+                draw_hover(p, v, bounds);
+            }
+        }
+    });
+    if let Some(bounds) = v.selection_bounds {
+        let margin = p.m.px(40.0);
+        let key_rect = Rect::new(
+            bounds.x,
+            bounds.y - margin,
+            bounds.w,
+            bounds.h + margin * 2.0,
+        );
+        let key = p.panel_key(
+            PanelKind::CanvasOverlays,
+            selection_revision(v, bounds),
+            key_rect,
+        );
+        p.panel_hover(key, v.hover_key(PanelKind::CanvasOverlays), |p| {
+            draw_selection(p, v, bounds);
+        });
+    }
+    if !v.guides.is_empty() || v.marquee.is_some() {
+        let key_rect = v.marquee.unwrap_or(canvas);
+        let key = p.panel_key(PanelKind::CanvasOverlays, guides_revision(v), key_rect);
+        p.panel(key, |p| draw_guides(p, v));
+    }
+    if v.has_error() {
+        let key = p.panel_key(PanelKind::CanvasOverlays, cards_revision(v), canvas);
+        p.panel(key, |p| draw_cards(p, v));
+    }
+    if v.document.is_none() && !v.has_error() {
+        let width = p.m.px(240.0);
+        let height = p.m.px(64.0);
+        let key_rect = Rect::new(
+            (canvas.center_x() - width * 0.5).round(),
+            (canvas.center_y() - height * 0.5).round(),
+            width,
+            height,
+        );
+        let key = p.panel_key(
+            PanelKind::CanvasOverlays,
+            loading_revision(v, time),
+            key_rect,
+        );
+        p.panel(key, |p| draw_loading(p, v, time));
+    }
+}
+
+fn draw_static(p: &mut Painter<'_>, v: &View<'_>) {
     let t = *p.theme;
     let canvas = v.layout.canvas;
     p.push_clip(canvas);
-
     if let Some(comp) = v.comp_rect {
         let h = p.m.hairline();
         p.stroke_rounded(
@@ -175,23 +256,44 @@ fn draw_overlays_body(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
             empty_card(p, comp, v.file_name);
         }
     }
-    if let Some(bounds) = v.hover_bounds {
-        if v.selection_bounds != Some(bounds) {
-            p.stroke_rounded(bounds, t.hover_outline, 0.0, p.m.hairline());
-        }
-    }
-    if let Some(bounds) = v.selection_bounds {
-        selection(p, v, bounds);
-    }
+    p.pop_clip();
+}
+
+fn draw_hover(p: &mut Painter<'_>, v: &View<'_>, bounds: Rect) {
+    let t = *p.theme;
+    p.push_clip(v.layout.canvas);
+    p.stroke_rounded(bounds, t.hover_outline, 0.0, p.m.hairline());
+    p.pop_clip();
+}
+
+fn draw_selection(p: &mut Painter<'_>, v: &View<'_>, bounds: Rect) {
+    p.push_clip(v.layout.canvas);
+    selection(p, v, bounds);
+    p.pop_clip();
+}
+
+fn draw_guides(p: &mut Painter<'_>, v: &View<'_>) {
+    p.push_clip(v.layout.canvas);
     guides(p, v);
     marquee(p, v);
+    p.pop_clip();
+}
 
+fn draw_cards(p: &mut Painter<'_>, v: &View<'_>) {
+    let canvas = v.layout.canvas;
+    p.push_clip(canvas);
     match (v.document.is_some(), v.has_error()) {
         (true, true) => error_banner(p, canvas, v),
         (false, true) => error_card(p, canvas, v),
-        (false, false) => loading(p, canvas, time),
-        (true, false) => {}
+        _ => {}
     }
+    p.pop_clip();
+}
+
+fn draw_loading(p: &mut Painter<'_>, v: &View<'_>, time: f32) {
+    let canvas = v.layout.canvas;
+    p.push_clip(canvas);
+    loading(p, canvas, time);
     p.pop_clip();
 }
 

@@ -285,6 +285,29 @@ impl RenderPlan {
         Self::default()
     }
 
+    /// Approximate bytes allocated by the plan arenas.
+    ///
+    /// Sums the capacity of every vector, so it measures the buffers the
+    /// evaluator keeps between frames (the plan is reused, not reallocated).
+    /// It is an estimate: it does not include allocator slack or the heap the
+    /// item payloads may own.
+    #[must_use]
+    pub fn arena_bytes(&self) -> u64 {
+        let bytes = self.items.capacity() * std::mem::size_of::<RenderItem>()
+            + self.layers.capacity() * std::mem::size_of::<PlanLayer>()
+            + self.paths.capacity() * std::mem::size_of::<ResolvedPath>()
+            + self.meshes.capacity() * std::mem::size_of::<motioner_core::MeshSample>()
+            + self.gradients.capacity() * std::mem::size_of::<ResolvedGradient>()
+            + self.text_animations.capacity() * std::mem::size_of::<Vec<TextAnimator>>()
+            + self
+                .text_animations
+                .iter()
+                .map(|list| list.capacity() * std::mem::size_of::<TextAnimator>())
+                .sum::<usize>()
+            + self.effect_layer_items.capacity() * std::mem::size_of::<bool>();
+        u64::try_from(bytes).unwrap_or(u64::MAX)
+    }
+
     /// Canvas width in pixels.
     #[must_use]
     pub fn width(&self) -> u32 {

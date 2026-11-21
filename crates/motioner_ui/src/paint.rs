@@ -22,7 +22,7 @@ use ferrous_gui::{
     GuiBatch, GuiQuad, Rect as ClipRect, BORDER_BIT, GRADIENT_BIT, GRADIENT_V_BIT, SHADOW_BIT,
 };
 
-use crate::layout::Rect;
+use crate::layout::{Hit, Rect};
 use crate::text::{self, Align, TextStyle};
 use crate::theme::{Metrics, Theme};
 
@@ -66,6 +66,35 @@ impl FrameDamage {
     }
 }
 
+/// The hover state a panel painted with, kept beside its cached batch.
+///
+/// A panel whose key does not contain hover is still repainted when the pointer
+/// moves inside it. `code` only changes when the hit belongs to that panel, so
+/// a hover over a layer row never touches the top bar, the inspector or the
+/// timeline, and `rect` is the widget the pointer is on, so the repaint can
+/// damage that widget instead of the whole panel.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HoverKey {
+    /// Stable hit code, or `0` when the pointer is not on this panel.
+    pub code: u64,
+    /// The hovered widget, when the hit is not a cached row.
+    pub rect: Option<Rect>,
+}
+
+impl HoverKey {
+    /// No hover target.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// A hover target with its stable code and, when known, its rectangle.
+    #[must_use]
+    pub fn new(code: u64, rect: Option<Rect>) -> Self {
+        Self { code, rect }
+    }
+}
+
 /// The subsystem a [`PanelKey`] belongs to.
 ///
 /// Every top-level panel has its own kind. Per-row caches use
@@ -84,6 +113,11 @@ pub enum PanelKind {
     Inspector,
     /// Timeline.
     Timeline,
+    /// The timeline's per-frame readouts, ruler labels and playhead.
+    ///
+    /// Keyed on the transport frame, so a scrub rebuilds only this small range
+    /// while the main [`PanelKind::Timeline`] panel keeps hitting.
+    TimelineLive,
     /// Status bar.
     Status,
     /// File menu dropdown.
@@ -160,6 +194,61 @@ impl PanelKey {
             f32::from_bits(self.rect[2]),
             f32::from_bits(self.rect[3]),
         )
+    }
+}
+
+/// The stable hover code of `hit` when it belongs to `kind`, else `0`.
+///
+/// Panels hash this into their revision so a pointer move only invalidates the
+/// panel it is actually over. A hit that this panel does not paint differently
+/// (a splitter, an empty body, a hit whose panel is not the requested one)
+/// returns `0`, so the panel keeps hitting.
+#[must_use]
+pub fn hover_code(hit: Option<Hit>, kind: PanelKind) -> u64 {
+    match hit {
+        Some(hit) if hover_belongs(hit, kind) => hit.stable_code(),
+        _ => 0,
+    }
+}
+
+/// Whether `kind` paints a different state while `hit` is under the pointer.
+fn hover_belongs(hit: Hit, kind: PanelKind) -> bool {
+    match hit {
+        Hit::Toggle(_) | Hit::SnapToggle | Hit::ZoomPill | Hit::FileMenu | Hit::ViewMenu => {
+            kind == PanelKind::TopBar
+        }
+        Hit::LayerRow(_)
+        | Hit::LayerEye(_)
+        | Hit::LayerLock(_)
+        | Hit::LayerSolo(_)
+        | Hit::LayerShy(_)
+        | Hit::OrphanRow(_)
+        | Hit::OrphanDelete(_)
+        | Hit::OrphanRebind(_) => kind == PanelKind::Layers,
+        Hit::LeftTab(_) => matches!(kind, PanelKind::Layers | PanelKind::Assets),
+        Hit::Transport(_)
+        | Hit::LayerChevron(_)
+        | Hit::TimelineRow(_)
+        | Hit::TimelineStopwatch(_)
+        | Hit::TimelinePrevKey(_)
+        | Hit::TimelineKeyToggle(_)
+        | Hit::TimelineNextKey(_)
+        | Hit::TimelineField(_)
+        | Hit::TimelineDiamond { .. } => kind == PanelKind::Timeline,
+        Hit::InspectField { .. }
+        | Hit::InspectStopwatch(_)
+        | Hit::InspectDiamond(_)
+        | Hit::InspectSegment { .. }
+        | Hit::InspectCopy => kind == PanelKind::Inspector,
+        Hit::Gizmo(crate::gizmo::Handle::Move) => false,
+        Hit::Gizmo(_) => kind == PanelKind::CanvasOverlays,
+        Hit::AssetRow(_)
+        | Hit::AssetCell(_)
+        | Hit::AssetAdd
+        | Hit::AssetView(_)
+        | Hit::AssetRemoveUnused => kind == PanelKind::Assets,
+        Hit::RecoverRestore | Hit::RecoverDismiss => kind == PanelKind::Status,
+        _ => false,
     }
 }
 
@@ -265,6 +354,8 @@ struct SlotKey {
 struct CachedPanel {
     batch: GuiBatch,
     last_seen: u64,
+    /// The hover state this batch was painted with.
+    hover: HoverKey,
 }
 
 /// One retained row batch.
@@ -306,6 +397,41 @@ impl PanelCache {
             damage: FrameDamage::new(),
             force_full: false,
         }
+    }
+
+    /// Approximate bytes retained by the cached panel and row batches.
+    ///
+    /// Counts the capacity of every `GuiBatch` vector plus the map entries, so
+    /// the memory report can attribute the chrome cache. It is an estimate of
+    /// the retained buffers, not of the hash-map allocator slack.
+    #[must_use]
+    pub fn byte_size(&self) -> usize {
+        let panels = self
+            .panels
+            .values()
+            .map(|entry| entry.batch.byte_size())
+            .sum::<usize>();
+        let rows = self
+            .groups
+            .values()
+            .flat_map(|group| group.rows.values())
+            .map(|entry| entry.batch.byte_size())
+            .sum::<usize>();
+        panels
+            + rows
+            + self.panels.capacity() * std::mem::size_of::<CachedPanel>()
+            + self.groups.capacity() * std::mem::size_of::<RowGroup>()
+    }
+
+    /// Number of retained panel and row batches.
+    #[must_use]
+    pub fn batch_count(&self) -> usize {
+        self.panels.len()
+            + self
+                .groups
+                .values()
+                .map(|group| group.rows.len())
+                .sum::<usize>()
     }
 
     /// Starts a frame.
@@ -370,13 +496,15 @@ impl Default for PanelCache {
 /// One frame's drawing context for the chrome.
 pub struct Painter<'a> {
     batch: &'a mut GuiBatch,
-    font: &'a Font,
+    font: Option<&'a Font>,
     /// Colours.
     pub theme: &'a Theme,
     /// DPI metrics.
     pub m: Metrics,
     cache: Option<&'a mut PanelCache>,
     rows: Option<&'a mut HashMap<SlotKey, CachedRow>>,
+    /// Rects of the rows that had to be rebuilt under the current panel.
+    row_damage: Option<&'a mut Vec<Rect>>,
     row_frame: u64,
     theme_hash: u64,
     font_hash: u64,
@@ -390,11 +518,12 @@ impl<'a> Painter<'a> {
     pub fn new(batch: &'a mut GuiBatch, font: &'a Font, theme: &'a Theme, m: Metrics) -> Self {
         Self {
             batch,
-            font,
+            font: Some(font),
             theme,
             m,
             cache: None,
             rows: None,
+            row_damage: None,
             row_frame: 0,
             theme_hash: theme_identity(theme),
             font_hash: font_identity(font),
@@ -412,14 +541,41 @@ impl<'a> Painter<'a> {
     ) -> Self {
         Self {
             batch,
-            font,
+            font: Some(font),
             theme,
             m,
             cache: Some(cache),
             rows: None,
+            row_damage: None,
             row_frame: 0,
             theme_hash: theme_identity(theme),
             font_hash: font_identity(font),
+        }
+    }
+
+    /// A painter with no font, for cache tests that only draw quads.
+    ///
+    /// Text calls become no-ops and `measure` returns `0.0`; the panel and row
+    /// caches behave exactly as they do with a real atlas.
+    #[cfg(test)]
+    #[must_use]
+    fn for_test(
+        batch: &'a mut GuiBatch,
+        theme: &'a Theme,
+        m: Metrics,
+        cache: &'a mut PanelCache,
+    ) -> Self {
+        Self {
+            batch,
+            font: None,
+            theme,
+            m,
+            cache: Some(cache),
+            rows: None,
+            row_damage: None,
+            row_frame: 0,
+            theme_hash: theme_identity(theme),
+            font_hash: 0,
         }
     }
 
@@ -432,6 +588,35 @@ impl<'a> Painter<'a> {
     /// plus the entering scissor.
     #[allow(clippy::needless_pass_by_value)] // the key is small, `Copy` and the public contract
     pub fn panel(&mut self, key: PanelKey, paint: impl FnOnce(&mut Painter<'_>)) {
+        self.panel_impl(key, HoverKey::none(), paint);
+    }
+
+    /// Like [`Self::panel`], but tracks the panel's own hover state.
+    ///
+    /// The panel key should not contain hover: put the stable code of the hit
+    /// in `hover.code` instead. When only that code changed, the panel is
+    /// repainted but only the hovered widgets (and the rows that rebuilt inside
+    /// it) are damaged, never the whole panel. A panel that hashes every hover
+    /// into its key would miss wholesale on every pointer move.
+    #[allow(clippy::needless_pass_by_value)] // the key is small, `Copy` and the public contract
+    pub fn panel_hover(
+        &mut self,
+        key: PanelKey,
+        hover: HoverKey,
+        paint: impl FnOnce(&mut Painter<'_>),
+    ) {
+        self.panel_impl(key, hover, paint);
+    }
+
+    #[allow(clippy::too_many_lines)] // one cache decision, one paint path
+    #[allow(clippy::needless_pass_by_value)] // the key and hover are small `Copy` values
+    fn panel_impl(&mut self, key: PanelKey, hover: HoverKey, paint: impl FnOnce(&mut Painter<'_>)) {
+        #[derive(Clone, Copy)]
+        enum Repair {
+            Hit,
+            Hover(HoverKey),
+            Miss,
+        }
         if self.cache.is_none() {
             paint(self);
             return;
@@ -450,27 +635,34 @@ impl<'a> Painter<'a> {
         let font_hash = self.font_hash;
         let clip = clip_identity(self.batch);
         let slot = SlotKey { key, clip };
-        if let Some(cache) = self.cache.as_deref_mut() {
-            if let Some(entry) = cache.panels.get_mut(&slot) {
-                let frame = cache.frame;
-                entry.last_seen = frame;
-                if let Some(group) = cache.groups.get_mut(&key.kind) {
-                    group.last_seen = frame;
-                }
-                let replay = &entry.batch;
-                self.batch.extend_from(replay);
-                return;
+        let (repair, frame) = {
+            let cache = self.cache.as_deref().expect("cache checked above");
+            let repair = match cache.panels.get(&slot) {
+                Some(entry) if entry.hover.code == hover.code => Repair::Hit,
+                Some(entry) => Repair::Hover(entry.hover),
+                None => Repair::Miss,
+            };
+            (repair, cache.frame)
+        };
+        if let Repair::Hit = repair {
+            let cache = self.cache.as_deref_mut().expect("cache checked above");
+            let entry = cache.panels.get_mut(&slot).expect("repair is hit");
+            entry.last_seen = frame;
+            if let Some(group) = cache.groups.get_mut(&key.kind) {
+                group.last_seen = frame;
             }
+            let replay = &entry.batch;
+            self.batch.extend_from(replay);
+            return;
         }
         let Some(cache) = self.cache.as_deref_mut() else {
             return;
         };
-        let frame = cache.frame;
         let mut group = cache.groups.remove(&key.kind).unwrap_or_default();
         group.last_seen = frame;
         let entering = self.batch.current_scissor;
         // Reuse the slot's previous batch as the paint scratch: its buffers are
-        // already allocated at the old size, so a miss allocates nothing when
+        // already allocated at the old size, so a repaint allocates nothing when
         // the panel's primitive count is stable.
         let mut fresh = cache
             .panels
@@ -481,6 +673,7 @@ impl<'a> Painter<'a> {
         if let Some(clip) = entering {
             fresh.scissor_stack.push(clip);
         }
+        let mut row_damage: Vec<Rect> = Vec::new();
         {
             let mut child = Painter {
                 batch: &mut fresh,
@@ -489,6 +682,7 @@ impl<'a> Painter<'a> {
                 m,
                 cache: None,
                 rows: Some(&mut group.rows),
+                row_damage: Some(&mut row_damage),
                 row_frame: frame,
                 theme_hash,
                 font_hash,
@@ -497,13 +691,27 @@ impl<'a> Painter<'a> {
         }
         let balanced = fresh.current_scissor == entering
             && fresh.scissor_stack.len() == usize::from(entering.is_some());
-        let damage = fresh.damage_union.map_or_else(
-            || key.rect(),
-            |rect| Rect::new(rect.x, rect.y, rect.width, rect.height),
-        );
         group.rows.retain(|_, row| row.last_seen == frame);
         cache.groups.insert(key.kind, group);
-        cache.damage.rects.push(damage);
+        match repair {
+            Repair::Miss => {
+                let damage = fresh.damage_union.map_or_else(
+                    || key.rect(),
+                    |rect| Rect::new(rect.x, rect.y, rect.width, rect.height),
+                );
+                cache.damage.rects.push(damage);
+            }
+            Repair::Hover(previous) => {
+                if let Some(rect) = previous.rect {
+                    cache.damage.rects.push(rect);
+                }
+                if let Some(rect) = hover.rect {
+                    cache.damage.rects.push(rect);
+                }
+                cache.damage.rects.extend(row_damage);
+            }
+            Repair::Hit => unreachable!("hit returned above"),
+        }
         if !balanced {
             cache.damage.full = true;
             fresh.current_scissor = entering;
@@ -518,6 +726,7 @@ impl<'a> Painter<'a> {
             CachedPanel {
                 batch: fresh,
                 last_seen: frame,
+                hover,
             },
         );
         let stored = &cache.panels[&slot].batch;
@@ -575,6 +784,7 @@ impl<'a> Painter<'a> {
                 m,
                 cache: None,
                 rows: None,
+                row_damage: None,
                 row_frame: 0,
                 theme_hash,
                 font_hash,
@@ -583,6 +793,13 @@ impl<'a> Painter<'a> {
         }
         let balanced = fresh.current_scissor == entering
             && fresh.scissor_stack.len() == usize::from(entering.is_some());
+        let damage = fresh.damage_union.map_or_else(
+            || key.rect(),
+            |rect| Rect::new(rect.x, rect.y, rect.width, rect.height),
+        );
+        if let Some(sink) = self.row_damage.as_deref_mut() {
+            sink.push(damage);
+        }
         if balanced {
             fresh.damage_union = None;
             rows.insert(
@@ -870,13 +1087,16 @@ impl<'a> Painter<'a> {
 
     /// Draws text vertically centred in `rect`, ellipsized to fit.
     pub fn text_in(&mut self, text: &str, rect: Rect, align: Align, style: &TextStyle) {
-        text::draw_in(self.batch, self.font, text, rect, align, style);
+        if let Some(font) = self.font {
+            text::draw_in(self.batch, font, text, rect, align, style);
+        }
     }
 
     /// Width of `text` in physical pixels.
     #[must_use]
     pub fn measure(&self, text: &str, style: &TextStyle) -> f32 {
-        text::advance(self.font, text, style)
+        self.font
+            .map_or(0.0, |font| text::advance(font, text, style))
     }
 
     /// A text style at a logical size in a colour.
@@ -1054,7 +1274,8 @@ fn span_at(points: &[(f32, f32)], y: f32) -> Option<(f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        span_at, CachedPanel, FrameDamage, PanelCache, PanelKey, PanelKind, PanelRevision, SlotKey,
+        span_at, CachedPanel, FrameDamage, HoverKey, Painter, PanelCache, PanelKey, PanelKind,
+        PanelRevision, SlotKey,
     };
     use crate::layout::Rect;
     use crate::theme::{Metrics, Theme};
@@ -1106,6 +1327,7 @@ mod tests {
             CachedPanel {
                 batch: GuiBatch::new(),
                 last_seen: cache.frame,
+                hover: HoverKey::none(),
             },
         );
         assert!(!cache.snapshot().full);
@@ -1219,5 +1441,125 @@ mod tests {
         assert!(lo.abs() < 1e-4 && (hi - 10.0).abs() < 1e-4);
         let (lo, hi) = span_at(&diamond, 1.0).unwrap();
         assert!((lo - 4.0).abs() < 1e-4 && (hi - 6.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_hover_only_row_change_damages_only_the_row() {
+        let theme = Theme::dark();
+        let metrics = Metrics::new(1.0);
+        let mut cache = PanelCache::new();
+        let panel = Rect::new(0.0, 0.0, 200.0, 200.0);
+        let row = Rect::new(10.0, 10.0, 180.0, 20.0);
+        cache.begin_frame();
+        {
+            let mut batch = GuiBatch::new();
+            let mut p = Painter::for_test(&mut batch, &theme, metrics, &mut cache);
+            let key = p.panel_key(PanelKind::Layers, 7, panel);
+            p.panel_hover(key, HoverKey::none(), |p| {
+                p.fill(panel, [0.1, 0.1, 0.1, 1.0]);
+                let row_key = p.panel_key(PanelKind::Row, 100, row);
+                p.row(row_key, |p| p.fill(row, [0.2, 0.2, 0.2, 1.0]));
+            });
+        }
+        cache.begin_frame();
+        let damage = {
+            let mut batch = GuiBatch::new();
+            let mut p = Painter::for_test(&mut batch, &theme, metrics, &mut cache);
+            let key = p.panel_key(PanelKind::Layers, 7, panel);
+            p.panel_hover(key, HoverKey::new(42, Some(row)), |p| {
+                p.fill(panel, [0.1, 0.1, 0.1, 1.0]);
+                // The row key changes because the pointer entered the row.
+                let row_key = p.panel_key(PanelKind::Row, 101, row);
+                p.row(row_key, |p| p.fill(row, [0.3, 0.2, 0.2, 1.0]));
+            });
+            p.damage()
+        };
+        assert!(!damage.full, "a hover must never report a full window");
+        assert!(
+            !damage.rects.contains(&panel),
+            "the panel background did not change: {:?}",
+            damage.rects
+        );
+        assert!(!damage.rects.is_empty(), "the hovered row is damaged");
+        for rect in &damage.rects {
+            assert!(
+                rect.x >= row.x - 0.01
+                    && rect.y >= row.y - 0.01
+                    && rect.right() <= row.right() + 0.01
+                    && rect.bottom() <= row.bottom() + 0.01,
+                "a hover-only repaint may damage only the row, got {rect:?} for row {row:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scrubbing_live_panel_misses_while_the_main_timeline_hits() {
+        let theme = Theme::dark();
+        let metrics = Metrics::new(1.0);
+        let mut cache = PanelCache::new();
+        let main = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let live = Rect::new(500.0, 0.0, 100.0, 20.0);
+        cache.begin_frame();
+        {
+            let mut batch = GuiBatch::new();
+            let mut p = Painter::for_test(&mut batch, &theme, metrics, &mut cache);
+            let main_key = p.panel_key(PanelKind::Timeline, 1, main);
+            p.panel(main_key, |p| p.fill(main, [0.1, 0.1, 0.1, 1.0]));
+            let live_key = p.panel_key(PanelKind::TimelineLive, 1, live);
+            p.panel(live_key, |p| p.fill(live, [0.2, 0.1, 0.1, 1.0]));
+        }
+        cache.begin_frame();
+        let damage = {
+            let mut batch = GuiBatch::new();
+            let mut p = Painter::for_test(&mut batch, &theme, metrics, &mut cache);
+            // Same revision: the main timeline hits and replays its rows.
+            let main_key = p.panel_key(PanelKind::Timeline, 1, main);
+            p.panel(main_key, |p| p.fill(main, [0.1, 0.1, 0.1, 1.0]));
+            // A transport frame change only rebuilds the live range.
+            let live_key = p.panel_key(PanelKind::TimelineLive, 2, live);
+            p.panel(live_key, |p| p.fill(live, [0.2, 0.1, 0.1, 1.0]));
+            p.damage()
+        };
+        assert!(!damage.full);
+        assert!(
+            !damage.rects.iter().any(|rect| rect.overlaps(main)),
+            "the main timeline hit and must not be damaged: {:?}",
+            damage.rects
+        );
+        assert!(
+            damage.rects.iter().all(|rect| rect.overlaps(live)),
+            "only the live range is damaged: {:?}",
+            damage.rects
+        );
+        assert!(!damage.rects.is_empty(), "the live range changed");
+    }
+
+    #[test]
+    fn a_static_sub_panel_hit_damages_nothing() {
+        let theme = Theme::dark();
+        let metrics = Metrics::new(1.0);
+        let mut cache = PanelCache::new();
+        let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
+        cache.begin_frame();
+        {
+            let mut batch = GuiBatch::new();
+            let mut p = Painter::for_test(&mut batch, &theme, metrics, &mut cache);
+            let key = p.panel_key(PanelKind::Status, 1, rect);
+            p.panel(key, |p| p.fill(rect, [0.1, 0.1, 0.1, 1.0]));
+        }
+        cache.begin_frame();
+        let damage = {
+            let mut batch = GuiBatch::new();
+            let mut p = Painter::for_test(&mut batch, &theme, metrics, &mut cache);
+            let key = p.panel_key(PanelKind::Status, 1, rect);
+            p.panel(key, |p| p.fill(rect, [0.1, 0.1, 0.1, 1.0]));
+            p.damage()
+        };
+        assert!(!damage.full);
+        assert!(
+            damage.rects.is_empty(),
+            "an unchanged panel replays without damage: {:?}",
+            damage.rects
+        );
     }
 }

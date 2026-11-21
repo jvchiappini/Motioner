@@ -798,7 +798,7 @@ impl PreviewSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use motioner_core::{OverrideAction, OverrideEntry, OverrideValue};
+    use motioner_core::{OverrideAction, OverrideEntry, OverrideSet, OverrideValue};
 
     const HELLO: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -995,6 +995,102 @@ mod tests {
         assert!(!session.edit_program("comp(name=\"Broken\"\n", Instant::now()));
         assert_eq!(session.source(), added, "a failure keeps the last program");
         assert_eq!(session.generation(), generation);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn every_successful_mutation_bumps_the_generation_exactly_once() {
+        let path = temp_path("generation");
+        write(&path, HELLO);
+        let mut session = PreviewSession::new(&path);
+
+        session.reload().unwrap();
+        assert_eq!(session.generation(), 1);
+
+        let before = session.generation();
+        session.reload().unwrap();
+        assert_eq!(session.generation(), before + 1, "reload");
+
+        let title = session.document().unwrap().roots()[0];
+        let identity = session
+            .document()
+            .unwrap()
+            .node(title)
+            .unwrap()
+            .identity()
+            .as_str()
+            .to_owned();
+        let mut set = session.overrides().clone();
+        set.insert(OverrideEntry::new(
+            identity,
+            "rotation",
+            OverrideAction::Set(OverrideValue::Number(30.0)),
+        ));
+        let now = Instant::now();
+
+        let before = session.generation();
+        assert!(session.edit_overrides(&set, now), "edit_overrides");
+        assert_eq!(session.generation(), before + 1, "edit_overrides");
+
+        // Persistence-only paths never touch the document generation.
+        let before = session.generation();
+        assert!(session.flush_overrides(now + WRITE_DEBOUNCE));
+        assert_eq!(session.generation(), before, "flush_overrides");
+        assert!(session.write_overrides_now().is_ok());
+        assert_eq!(session.generation(), before, "write_overrides_now");
+        assert!(session.force_write().is_ok());
+        assert_eq!(session.generation(), before, "force_write");
+        assert!(session.write_program_now().is_ok());
+        assert_eq!(session.generation(), before, "write_program_now");
+        assert!(!session.flush_program(now + WRITE_DEBOUNCE));
+        assert_eq!(session.generation(), before, "flush_program");
+        let _ = session.poll_changes(now + WRITE_DEBOUNCE * 4);
+        assert_eq!(session.generation(), before, "poll_changes");
+        session.request_reload();
+        assert_eq!(session.generation(), before, "request_reload");
+
+        // Evaluating a different frame reuses the document.
+        let before = session.generation();
+        session.evaluate(10).unwrap();
+        session.evaluate(11).unwrap();
+        assert_eq!(session.generation(), before, "evaluate");
+
+        let source = session.source().to_owned();
+        let added = format!("{source}\n# generation: edit\n");
+        let before = session.generation();
+        assert!(session.edit_program(&added, now), "edit_program");
+        assert_eq!(session.generation(), before + 1, "edit_program");
+
+        let before = session.generation();
+        assert!(!session.edit_program("comp(name=\"Broken\"\n", now));
+        assert_eq!(session.generation(), before, "failed edit_program");
+
+        let set = session.overrides().clone();
+        let source = session.source().to_owned();
+        let applied = format!("{source}\n# generation: apply\n");
+        let before = session.generation();
+        assert!(session.apply_program(&applied, &set, now), "apply_program");
+        assert_eq!(session.generation(), before + 1, "apply_program");
+
+        let before = session.generation();
+        assert!(
+            !session.apply_program("comp(name=\"Broken\"\n", &set, now),
+            "a broken program must fail"
+        );
+        assert_eq!(session.generation(), before, "failed apply_program");
+
+        let source = session.source().to_owned();
+        let installed = format!("{source}\n# generation: install\n");
+        let compiled = session
+            .compile_source(&installed, None)
+            .expect("the install candidate compiles");
+        let before = session.generation();
+        assert!(
+            session.install_compiled(&installed, &OverrideSet::new(), compiled),
+            "install_compiled"
+        );
+        assert_eq!(session.generation(), before + 1, "install_compiled");
+
         cleanup(&path);
     }
 }
