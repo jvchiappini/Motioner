@@ -2,13 +2,14 @@
 
 You are the orchestrator of a long, multi-phase job in the Motioner
 repository at `C:\Users\jvchi\CARPETAS\Motioner` and the FerrousEngine dev
-clone at `C:\Users\jvchi\CARPETAS\FerrousEngine`, using the GUIMaker
-library at `C:\Users\jvchi\CARPETAS\GUIMaker`. Run this prompt **after
-prompt 18 P7 is merged into `main` and after prompt 15 (GUIMaker) is
-finished**. The panels are UI, so they are built on GUIMaker. Work on the
-branches the reviewer names in the start message (default:
-`feat/debug-tooling` off `main` in all repositories). Change GUIMaker only
-to add the inspection hooks the tools need, as generic library features.
+clone at `C:\Users\jvchi\CARPETAS\FerrousEngine`. That workspace includes
+the GUIMaker crates (`crates/guimaker*`). Run this prompt **after prompt 18
+P7 is merged into `main` and after prompt 15 (GUIMaker) is finished**. The
+panels are UI, so they are built on GUIMaker. Work on the branches the
+reviewer names in the start message (default: `feat/debug-tooling` off
+`main` in both repositories). Change the GUIMaker crates only to add the
+inspection hooks the tools need, as generic library features. The
+dependency direction holds: no engine crate depends on a GUIMaker crate.
 Task: `T-DEBUG-0001`. Create it with `pctl` in P0.
 
 ## Goal

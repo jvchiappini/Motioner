@@ -1,27 +1,41 @@
 # opencode prompt 15 — GUIMaker: a UI library that is beautiful by default and easier than HTML + CSS
 
-You are the orchestrator of a very long, multi-phase job in three folders:
+You are the orchestrator of a very long, multi-phase job in two
+repositories:
 
-- **GUIMaker** at `C:\Users\jvchi\CARPETAS\GUIMaker` (remote
-  `github.com/jvchiappini/GUIMaker`). Today it is a small designer binary
-  (`src/main.rs`, `src/panels`, `src/scene.rs`) that does not even build: it
-  depends on `../crates/ferrous_app`, which no longer exists. This prompt turns
-  the repository into **the UI library of the FerrousEngine ecosystem**, which
-  is what D-0004 always meant by "GUIMaker".
-- **FerrousEngine dev clone** at `C:\Users\jvchi\CARPETAS\FerrousEngine`: only
-  for render primitives the library needs and the engine lacks. **Engine
-  features must be generic** (no GUIMaker or Motioner names), with rustdoc,
-  crate docs in `crates/<crate>/docs` + `mkdocs.yml` nav, tests and ideally an
-  example. The reviewer pushes and bumps pins.
-- **Motioner** at `C:\Users\jvchi\CARPETAS\Motioner` (branch
-  `feat/m1-foundations`): only in the last phases, to rebuild the start screen
-  and the dialogs from prompt 11 on the new library. Run those phases **after**
-  `opencode-prompt-11-projects-assets-media.md` is committed.
+- **FerrousEngine dev clone** at `C:\Users\jvchi\CARPETAS\FerrousEngine`.
+  **GUIMaker lives here**, as a group of crates in the engine workspace
+  (`crates/guimaker*`). It becomes **the UI library of the FerrousEngine
+  ecosystem**, which is what D-0004 always meant by "GUIMaker".
+  - The old separate repository (`github.com/jvchiappini/GUIMaker`, last
+    commit `9dcbc28`, 2026-03-11, a small designer binary that no longer
+    builds) is retired, and its local folder was deleted on 2026-11-21. To
+    read the old designer for Phase 0 and Phase 11, clone it read-only into
+    `%TEMP%\guimaker-old` and delete it after.
+  - Engine render primitives that the library needs and the engine lacks
+    are added to the engine crates as **generic** features (no GUIMaker or
+    Motioner names in them), with rustdoc, crate docs in
+    `crates/<crate>/docs` plus the `mkdocs.yml` nav, tests and ideally an
+    example. The reviewer pushes and bumps pins.
+- **Motioner** at `C:\Users\jvchi\CARPETAS\Motioner` (branch named by the
+  reviewer): only in Phase 10, for the plumbing. The frontend itself is a
+  separate Claude session (see Phase 10).
+
+**Dependency direction inside the engine workspace.**
+- The GUIMaker crates may depend on the engine crates: the GPU-free ones
+  from the core, and the drawing ones only from `guimaker_ferrous`.
+- No engine crate may depend on a GUIMaker crate.
+- Add this rule to the engine's boundary check, so the gate fails when it
+  breaks.
+- A project that uses Ferrous without GUIMaker compiles none of it.
 
 ### Status and refresh (reviewer, 2026-11-21) — read this first
 
-This prompt has **not been run**. The GUIMaker repository is still at
-`9dcbc28` (2026-03-11) and still depends on `../crates/ferrous_app`.
+This prompt has **not been run**. The old GUIMaker repository stopped at
+`9dcbc28` (2026-03-11) and is retired. **Repository decision
+(2026-11-21):** GUIMaker is built inside the FerrousEngine workspace, so
+there is one repository, one `target` dir and one gate for the engine and
+its UI library.
 Prompts 16, 17 and 18 ran in the meantime, and the rest of this prompt must
 be read with these changes in mind:
 
@@ -225,18 +239,25 @@ and sends "continue with Phase N".
 
 ## 0. Ground rules (every phase, every subagent)
 
-- Work only inside the three folders above. Never edit
+- Work only inside the two repositories above. Never edit
   `Motioner\engine\ferrous`. Do not commit, stage, stash, reset, checkout,
   rebase or push in any repository. The reviewer commits.
 - `CARGO_INCREMENTAL=0`, `-j 2` (8 GB RAM). Never run two cargo builds at the
   same time. Stop if free space on C: drops below 5 GB (you may clean caches
   outside the repositories).
-- GUIMaker and Motioner: `cargo fmt`, clippy pedantic `-D warnings`, every
-  `#[allow]` has a reason, `cargo machete`. FerrousEngine: `rustfmt --edition
-  2021 --config skip_children=true` only on files you edit; keep CRLF files'
-  endings (`git ls-files --eol`); run the engine tests of crates you touch.
+- **The GUIMaker crates** (new, so held to the strictest bar):
+  - `cargo fmt -p guimaker -p guimaker_ferrous …` with `--check`;
+  - `cargo clippy -p guimaker* --all-targets -- -W clippy::pedantic -D
+    warnings`, and every `#[allow]` has a reason;
+  - their tests;
+  - `cargo machete`;
+  - the dependency-direction check.
+- **Motioner:** its usual gate.
+- **The other engine crates:** `rustfmt --edition 2021 --config
+  skip_children=true` only on files you edit, keep CRLF files' endings
+  (`git ls-files --eol`), and run the tests of the crates you touch.
 - **Decisions.** GUIMaker gets its own decision log:
-  `GUIMaker/docs/decisions/G-NNNN.md` (context, decision, consequences,
+  `FerrousEngine/crates/guimaker/docs/decisions/G-NNNN.md` (context, decision, consequences,
   alternatives rejected), same tone as Motioner's ADRs. Motioner decisions go
   through `pctl decision-new`. Every new dependency needs a decision first
   (what, why writing it is worse, licence, size, transitive deps). Expected:
@@ -283,23 +304,28 @@ documented fallback and continue).
    `widgets.rs`, `layout.rs`; D-0004, D-0018, D-0020, D-0021;
    engine `ferrous_ui_core` (`primitives.rs`, `theme.rs`, `style_builder.rs`,
    `ui_tree.rs`, `widgets/`), `ferrous_layout`, `ferrous_ui_render`
-   (`gui_batch.rs`, the WGSL it feeds), `ferrous_font`; GUIMaker `src/` and
-   `docs/`. List what each one does well (Motioner's tokens, WCAG tests, text
+   (`gui_batch.rs`, the WGSL it feeds), `ferrous_font`; the old GUIMaker `src/` and
+   `docs/` from the read-only clone. List what each one does well (Motioner's tokens, WCAG tests, text
    baseline/kerning/ellipsis, vector icons are good seeds) and what blocks good
    design.
 2. Take screenshots of today's Motioner start screen and New project dialog
    (`scripts/ui_shot.ps1 -Out out/ui/p15-00-before-*.png`). They are the
    "before" of the final report.
 3. Write **G-0001 "GUIMaker library architecture"** deciding:
-   - **Repository layout**: a Cargo workspace in GUIMaker:
-     `crates/guimaker` (core free of engine drawing crates, may use the GPU-free ones: view tree, style, theme, layout,
-     input routing, state, display list, lint, inspect),
-     `crates/guimaker_ferrous` (thin adapter: draw commands → engine API,
-     input events in, text metrics from `ferrous_font`; no drawing logic of
-     its own — if the adapter needs more than a mapping, the capability
-     belongs in the engine), `apps/gallery` (storybook), and `apps/designer` (the old
-     designer, revived in Phase 11). The old `src/` moves or is deleted; no
-     dead code stays.
+   - **Crate layout** inside the FerrousEngine workspace:
+     - `crates/guimaker`: the core. It has no engine drawing crates; the
+       GPU-free ones are allowed. It holds the view tree, style, theme,
+       layout, input routing and controllers, state, display list, lint
+       and inspect.
+     - `crates/guimaker_ferrous`: a thin adapter. Draw commands go to the
+       engine API, input events come in, and text metrics come from
+       `ferrous_font`. It has no drawing logic of its own: if the adapter
+       needs more than a mapping, the capability belongs in the engine.
+     - `crates/guimaker_gallery`: the storybook binary.
+     - `crates/guimaker_designer`: the old designer, revived in Phase 11.
+
+     Docs go in `crates/guimaker/docs` with their own section in the
+     engine's `mkdocs.yml`. No dead code from the old repository is copied.
    - **Programming model.** Recommended, justify or replace: a declarative
      tree rebuilt every frame from the app's state (cheap, no stale widgets,
      ideal for a model to write), laid out, then input is routed through
@@ -317,10 +343,10 @@ documented fallback and continue).
      (`Ui<Msg>` → `Vec<Msg>`), Elm style, so apps keep their own command
      layer (Motioner's `StartAction` / `Command` map 1:1). No `Rc<RefCell>`,
      no callbacks that capture app state.
-   - **Engine dependency** so that Motioner builds with **one** copy of the
-     engine: e.g. GUIMaker depends on the engine by git URL + rev, and
-     Motioner `[patch]`es that URL to its `engine/ferrous` submodule paths.
-     Verify the mechanism with a throwaway check before deciding.
+   - **Engine dependency:** GUIMaker uses workspace path dependencies.
+     Motioner gets GUIMaker through its existing `engine/ferrous`
+     submodule, so it builds one engine copy by construction, with no
+     `[patch]` and no second submodule.
    - **Relation to the engine's `ferrous_ui_core`**: GUIMaker does not wrap
      its `Widget` trait. Decide which engine parts it reuses (taffy version,
      `GuiBatch`, fonts, SVG icons) and record which engine UI pieces become
@@ -743,7 +769,7 @@ Every gallery story and recipe must lint clean across the sweep.
   with form, settings window (sidebar nav + forms), file browser grid,
   empty-state first run, editor app shell (toolbar, sidebar, inspector,
   status bar), command palette, toasts after an action.
-- **Docs** (`GUIMaker/docs/`, English, mkdocs-ready): getting started (a
+- **Docs** (`crates/guimaker/docs/` in the engine, English, in the mkdocs nav): getting started (a
   window with a button in under 30 lines), concepts (tree per frame, keys,
   messages, tokens), every component, theming, the backend contract,
   screenshots and lint, and **`design-guide.md` written for models**: "before
@@ -777,8 +803,8 @@ Every gallery story and recipe must lint clean across the sweep.
    where supported. Documented in an engine "UI performance" page.
 4. **Comparison**: build the same start screen in **egui** and **Slint**
    (and, if feasible in time, a WebView2/HTML page as the Electron-class
-   reference) as standalone bench apps in `GUIMaker/bench/` (excluded from
-   the workspace; their dependencies never reach the library; a decision
+   reference) as standalone bench apps in `bench/guimaker_compare/` of the
+   engine repo (excluded from the workspace; their dependencies never reach the library; a decision
    records that). Measure for each: idle CPU/GPU, CPU and GPU per frame while
    hovering and typing, RSS, GPU memory, startup to first frame, release
    binary size. Report a table. Where GUIMaker is not the lightest, profile
@@ -801,9 +827,9 @@ the frontend session possible, with no duplicated code left:
 1. **Motioner ADR** (`pctl decision-new`), **"Editor chrome on
    GUIMaker"**:
    - it amends D-0004, D-0018, D-0020 and D-0021;
-   - how Motioner depends on GUIMaker, following the repository decision
-     the reviewer gives in the start message;
-   - one engine copy is built;
+   - Motioner depends on `guimaker` and `guimaker_ferrous` by path into
+     `engine/ferrous/crates/`, like the other engine crates, so one engine
+     copy is built;
    - `scripts/check_boundaries.py` allows `guimaker*` only in
      `motioner_ui`.
 2. **Theme.** Motioner's theme becomes a GUIMaker `Theme` built from the
@@ -831,7 +857,9 @@ the frontend session possible, with no duplicated code left:
 
 ## Phase 11 — Dogfood: the GUIMaker designer, and the backlog
 
-- Revive `apps/designer` on the library, as the best stress test:
+- Revive the designer as `crates/guimaker_designer` on the library, as the
+  best stress test. Read the old one in the read-only clone for ideas, but
+  write it fresh:
   - a canvas with the app shell recipe;
   - a component palette;
   - an inspector built from forms;
@@ -841,7 +869,8 @@ the frontend session possible, with no duplicated code left:
 
   Keep the scope to what the library proves, and put the rest in the
   roadmap.
-- Backlog (GUIMaker `docs/roadmap.md`, and Motioner tasks through
+- Backlog (`crates/guimaker/docs/roadmap.md` in the engine, and Motioner
+  tasks through
   `pctl task-new`):
   - the Motioner frontend (the Claude session, from
     `docs/frontend-handoff.md`);
@@ -852,7 +881,7 @@ the frontend session possible, with no duplicated code left:
 
 ## Phase 12 — Report
 
-`pctl session-log` in Motioner and a session note in GUIMaker. Final report
+`pctl session-log` in Motioner and a session note in `crates/guimaker/docs`. Final report
 **in Spanish**: what changed per phase; before/after screenshots of the start
 screen; the HTML + CSS comparison numbers; the resource table against the
 budget and against egui/Slint/WebView2, and Motioner's idle and startup
