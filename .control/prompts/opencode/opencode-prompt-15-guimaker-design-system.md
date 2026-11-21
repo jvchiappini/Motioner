@@ -18,6 +18,64 @@ You are the orchestrator of a very long, multi-phase job in three folders:
   and the dialogs from prompt 11 on the new library. Run those phases **after**
   `opencode-prompt-11-projects-assets-media.md` is committed.
 
+### Status and refresh (reviewer, 2026-11-21) — read this first
+
+This prompt has **not been run**. The GUIMaker repository is still at
+`9dcbc28` (2026-03-11) and still depends on `../crates/ferrous_app`.
+Prompts 16, 17 and 18 ran in the meantime, and the rest of this prompt must
+be read with these changes in mind:
+
+- **Order.** Run this prompt after prompt 18 P7 is merged into `main`, and
+  **before** prompt 19 (debug tools) and prompt 14 (agent panel). Prompt 19's
+  devtools panels and the future Unreal-style editor are UI. Per the
+  ownership split below they are built on GUIMaker, so GUIMaker must exist
+  first. Prompt 11 is committed, so Phase 10 is no longer blocked.
+- **Already done elsewhere: reuse it, do not redo it.**
+  - **Phase 0B (startup freeze):** prompt 17 fixed the "Not responding"
+    startup, and the first composed frame lands at about 0.5 s. Phase 0B
+    shrinks to a re-check with the prompt 17 startup trace.
+  - **Render flags, redraw scheduler and damage:** prompt 18 P1 and P5 did
+    them (on-demand redraw, `redraw_at`, damage rects, `PersistentUiTarget`).
+    GUIMaker emits damage through those APIs.
+  - **Spatial index and incremental layout:** prompt 18 P4 put
+    `spatial_index.rs`, incremental layout and retained batch ranges in
+    `ferrous_ui_core`.
+    - Decide in Phase 0 whether this code moves to a GPU-free engine crate
+      that GUIMaker depends on (the split table says the spatial index is
+      the engine's, in a GPU-free crate), or whether GUIMaker replaces it.
+      There must be one implementation, not two.
+    - `UiSystem` versus Motioner's retained ranges (D-0063) is the same
+      question: the outcome is that Motioner's panels move onto GUIMaker.
+  - **Zero allocations per frame, byte budgets and the perf harness:**
+    prompt 18 (D-0063). The resource budgets below are measured with
+    `scripts/perf_bench.py` and the `alloc-stats` feature, not with a new
+    harness.
+- **Not done anywhere yet:**
+  - gesture recognition in `ferrous_events`, which today is a single
+    `lib.rs`;
+  - canvas and scene picking in the engine (Phase 4B);
+  - the whole library (tokens, view tree, components, text editing, lint);
+  - the Motioner migration.
+- **Stale numbers.**
+  - `start.rs` is now 973 lines with 28 `Rect::new` calls.
+  - The idle and memory figures must be re-measured against the prompt 18
+    `p7-after.json`, not the older numbers in this file.
+- **Execution.**
+  - Use the prompt 18 execution model: lanes with disjoint files,
+    edit-only subagents, one gate in a clean worktree by the main agent,
+    and three-run medians.
+  - Use the disk floor: check C: before every build and stop below 12 GB.
+  - GUIMaker is its own lane in every phase.
+- **Debug hooks.** Every GUIMaker view must be inspectable by the prompt 19
+  widget reflector and frame debugger:
+  - stable node ids and paths;
+  - layout rects and resolved tokens;
+  - the cache state and repaint reason;
+  - the draw commands it produced, with attribution.
+
+  Design those data sources in Phase 2 so that prompt 19 only adds the
+  panels.
+
 ### Visual contract
 
 `.control/design/ui-target-v1.md` is the visual target for this prompt: tokens

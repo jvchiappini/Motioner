@@ -2,12 +2,14 @@
 
 You are the orchestrator of a long, multi-phase job in the Motioner
 repository at `C:\Users\jvchi\CARPETAS\Motioner` and the FerrousEngine dev
-clone at `C:\Users\jvchi\CARPETAS\FerrousEngine`. Run this prompt **after
-prompt 18 P7 is reviewed and merged into `main`** in both repositories. Work
-on the branches the reviewer names in the start message (default:
-`feat/debug-tooling` off `main` in both repositories). Do not touch
-`C:\Users\jvchi\CARPETAS\GUIMaker`. Task: `T-DEBUG-0001`. Create it with
-`pctl` in P0.
+clone at `C:\Users\jvchi\CARPETAS\FerrousEngine`, using the GUIMaker
+library at `C:\Users\jvchi\CARPETAS\GUIMaker`. Run this prompt **after
+prompt 18 P7 is merged into `main` and after prompt 15 (GUIMaker) is
+finished**. The panels are UI, so they are built on GUIMaker. Work on the
+branches the reviewer names in the start message (default:
+`feat/debug-tooling` off `main` in all repositories). Change GUIMaker only
+to add the inspection hooks the tools need, as generic library features.
+Task: `T-DEBUG-0001`. Create it with `pctl` in P0.
 
 ## Goal
 
@@ -61,8 +63,21 @@ Debug-specific rules:
 2. **Panels for the future editor.** The tools live in a new engine crate,
    `ferrous_devtools`. Each tool is a panel type with three parts: a data
    source, a view, and the actions it exposes.
-   - Panels only draw through the engine UI (Ferrous draws everything; no
-     second toolkit).
+   - Panels are GUIMaker views. GUIMaker lays them out and routes their
+     input, and Ferrous draws everything. There is no second toolkit.
+   - The widget reflector reads the inspection data GUIMaker exposes (node
+     ids, rects, resolved tokens, cache state, repaint reasons).
+   - **Split by dependency direction** (GUIMaker depends on the engine,
+     never the reverse):
+     - the engine crate `ferrous_devtools` holds the data sources, with no
+       UI: the capture recorder and replay, the registry live values, the
+       profiler data and the resource and cache inventories;
+     - the panels and the host live in a GUIMaker crate,
+       `guimaker_devtools`, built on that data;
+     - an engine-only app gets the tools by adding `guimaker_devtools`.
+
+     Wherever this prompt says "the `ferrous_devtools` crate" for panels,
+     host or hotkeys, read `guimaker_devtools`.
    - A **host** places them. P0 builds the overlay host (dockable inside the
      app window), and the future editor (`ferrous_editor`) is a second
      host.
