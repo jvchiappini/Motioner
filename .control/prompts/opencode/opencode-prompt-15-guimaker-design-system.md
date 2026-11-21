@@ -965,3 +965,45 @@ Phase 2 itself must also cover:
 - the prompt 19 debug hooks designed as data: stable ids and paths, rects,
   resolved tokens, cache state, the repaint reason, and draw commands with
   their attribution.
+
+## Review findings after Phase 2 (reviewer, 2026-11-21)
+
+Accepted. The engine is pushed as `c866f7c` (GUIMaker) and `59e1c3f` (the
+controller move). Motioner pins `59e1c3f`.
+
+The reviewer re-ran these, all green:
+- the strict GUIMaker gate;
+- the literal guard and the boundary check;
+- `cargo check --workspace --all-targets` on the engine (the phase only
+  checked the crates it touched);
+- the tests of the touched crates;
+- both wasm32 checks;
+- the full Motioner gate in a clean worktree against the pushed pin.
+
+Measured:
+- layout on the start screen: 0.164 ms, against the 0.3 ms threshold;
+- 0 allocations in steady state;
+- GUIMaker layout at 8,192 nodes: 3.885 ms, against 6.328 ms for the
+  engine's full pass;
+- the spatial index query: 37.0 → 33.3 ns.
+
+Phase 3 starts with these:
+
+1. **Idle cost after the engine lost its layout early-out.**
+   `ferrous_layout` now runs a full pass. Prove that no engine app runs it
+   while nothing changes:
+   - run `scripts/perf_bench.py --check` against `perf_budgets.json` for
+     the idle start screen, the idle editor, hover and heavy UI;
+   - add an engine test proving a clean `UiTree` frame skips layout;
+   - if anything regressed, restore a single paint-or-layout dirty check in
+     the engine. That check is part of drawing, not a controller.
+2. **The linear hit test in `ferrous_events` is temporary.** Phase 4 must
+   remove it: routing goes through GUIMaker, or, for the legacy `UiTree`
+   path that stays until it is deprecated, a bounded walk with a measured
+   cost in the report. Do not let it become the permanent state.
+3. **`docs/frontend-handoff.md`.** The reviewer fixed its last paragraph:
+   Phase 10 never changes the start screen geometry, and the Claude
+   frontend session does that. Keep it that way in later edits.
+4. **Motioner fmt.** In Motioner, run `cargo fmt -- --check`, never
+   `--all`, and do not use a per-package list either. That is the gate
+   command, and it does not reach `engine/ferrous`.
