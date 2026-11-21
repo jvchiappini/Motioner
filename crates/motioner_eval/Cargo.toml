@@ -7,5 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+motioner_core.workspace = true
+
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The zero-allocation playback test uses the counting allocator.
+ferrous_core = { workspace = true, features = ["alloc-stats"] }

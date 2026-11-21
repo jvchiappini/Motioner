@@ -1,0 +1,12 @@
+RetargetTransition {
+    rig: "mascot",
+    from: Some(
+        "calm",
+    ),
+    to: "sad",
+    input: "mood",
+    new_from: Some(
+        "calm",
+    ),
+    new_to: "happy",
+}

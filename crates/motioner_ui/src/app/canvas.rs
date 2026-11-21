@@ -1,0 +1,441 @@
+//! Painting the composition and the selection overlays, and resolving canvas
+//! picks.
+//!
+//! Picking a layer needs text measurement, which needs the renderer, so a
+//! press stores a point in `pending_pick` and the next paint resolves it into
+//! a `select` or `deselect` command. Gizmo hit testing uses the selection
+//! bounds of the previous frame (one frame of latency, invisible in use).
+
+use std::time::Instant;
+
+use ferrous_renderer::Renderer;
+use motioner_core::{NodeId, OverrideAction, Vec2};
+use motioner_render::{ImageData, ImageSet, ProxyTarget, TextExtent, ViewFit};
+
+use super::PreviewApp;
+use crate::bounds::{self, Bounds};
+use crate::command::Command;
+use crate::editor::ViewState;
+use crate::layout::{Hit, Layout, Rect};
+use crate::panels;
+use crate::theme::size;
+use crate::viewport::Viewport;
+use crate::PreviewSession;
+
+/// Converts the session's decoded images into renderer upload records.
+fn image_set(images: Vec<motioner_core::DecodedImage>) -> ImageSet {
+    let mut set = ImageSet::new();
+    for image in images {
+        set.insert(ImageData {
+            key: image.asset.key,
+            width: image.asset.width,
+            height: image.asset.height,
+            rgba8: image.rgba8,
+            revision: 0,
+        });
+    }
+    set
+}
+
+/// What a canvas click landed on.
+pub(super) enum Pick {
+    /// An unlocked layer.
+    Node(NodeId),
+    /// Empty canvas (the selection is cleared).
+    Nothing,
+}
+
+/// On-screen bounds produced while painting the canvas.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct CanvasBounds {
+    pub(super) selection: Option<Rect>,
+    pub(super) size: Option<(f64, f64)>,
+    pub(super) hover: Option<Rect>,
+    bounds: Option<Bounds>,
+}
+
+impl PreviewApp {
+    pub(super) fn paint_canvas(
+        &mut self,
+        renderer: &mut Renderer,
+        layout: &Layout,
+        frame: i64,
+    ) -> CanvasBounds {
+        let viewport = viewport(self.editor.session(), self.editor.view(), layout);
+        let comp_rect = viewport.map(|view| view.rect);
+        let background = self
+            .editor
+            .session()
+            .composition()
+            .map(motioner_core::Composition::background);
+        panels::canvas::paint_backdrop(
+            renderer,
+            &self.theme,
+            (layout.window.w, layout.window.h),
+            layout.canvas,
+            comp_rect.zip(background),
+            layout.metrics.px(24.0),
+        );
+        let pick = self.pending_pick.take();
+        let (out, picked) = self.canvas_overlays(renderer, layout, frame, viewport, pick);
+        if let Some(picked) = picked {
+            let command = match picked {
+                Pick::Node(node) => Command::Select(self.editor.node_identity(node)),
+                Pick::Nothing => Command::Deselect,
+            };
+            self.run(&command);
+        }
+        self.last_bounds = out.bounds;
+        out
+    }
+
+    /// Paints the composition, computes the selection and hover bounds, and
+    /// resolves a pending pick ([`Pick`]).
+    #[allow(clippy::too_many_lines)] // evaluate, paint, bounds and pick in one pass
+    fn canvas_overlays(
+        &mut self,
+        renderer: &mut Renderer,
+        layout: &Layout,
+        frame: i64,
+        viewport: Option<Viewport>,
+        pick: Option<Vec2>,
+    ) -> (CanvasBounds, Option<Pick>) {
+        let mut out = CanvasBounds::default();
+        let hovered = self.hovered_node();
+        let selected = self.editor.selected();
+        let Some(view) = viewport else {
+            return (out, None);
+        };
+        let rect = view.rect;
+        // Prompt 18 P4: size each image texture from the item that draws it
+        // (crop, node scale, view zoom and DPI), so a zoom-in re-uploads a
+        // sharper texture instead of magnifying the fit-sized one.  Pixels
+        // that were released after the first upload are re-fetched through
+        // `LivePainter::missing_image_pixels` (see the app worker wiring).
+        //
+        // Prompt 18 P5: also tell the painter which slice of the composition
+        // the canvas actually shows, so an item entirely off-screen is skipped
+        // before it is laid out or drawn. The rectangle is conservative (a
+        // window-pixel of margin on every side) and clipped to the
+        // composition: an item that can touch the visible area is kept.
+        let visible = visible_composition_rect(&view, layout.canvas);
+        if let Some(painter) = self.painter.as_mut() {
+            painter.set_proxy_target(ProxyTarget::PerImage);
+            painter.set_visible_composition_rect(visible);
+        }
+        let stale = self.editor.session().plan_frame() != Some(frame);
+        let started = Instant::now();
+        // Only a click needs the lock states; do not copy the set every frame.
+        let overrides = pick.map(|_| self.editor.session().overrides().clone());
+        let generation = self.editor.session().generation();
+        if self.painter_generation != Some(generation) {
+            // Keys belong to the old image set; their failures and in-flight
+            // requests must not leak into the new one.
+            self.reset_image_reloads();
+            // Prompt 17 S2: decoding the composition's images is first-frame
+            // work; it is measured here until S5 moves it off the path.
+            let _span = ferrous_engine::startup::span("motioner: decode images");
+            let images = self.editor.session().decoded_images();
+            let set = image_set(images);
+            if let Some(painter) = self.painter.as_mut() {
+                painter.set_images(set.clone());
+            }
+            self.blur.set_images(set);
+            self.painter_generation = Some(generation);
+            self.blur_generation = Some(generation);
+        }
+        let playing = self.editor.transport().is_playing();
+        {
+            let _span = ferrous_engine::startup::span("motioner: video frame");
+            self.update_video_images(frame, playing);
+        }
+        let blur_on = self.editor.motion_blur_preview()
+            && self
+                .editor
+                .session()
+                .composition()
+                .is_some_and(motioner_core::Composition::motion_blur);
+        let hidden = self
+            .editor
+            .has_preview_filter()
+            .then(|| self.editor.preview_hidden());
+        let Some((document, plan)) = ({
+            let _span = ferrous_engine::startup::span("motioner: evaluate");
+            self.editor.session_mut().evaluate(frame)
+        }) else {
+            return (out, None);
+        };
+        if stale {
+            self.eval_ms = started.elapsed().as_secs_f32() * 1000.0;
+        }
+        let comp = document.composition();
+        let mut paint_error = None;
+        {
+            let _span = ferrous_engine::startup::span("motioner: paint composition");
+            if blur_on
+                && hidden.is_none()
+                && self.blur.paint(
+                    renderer,
+                    document,
+                    frame,
+                    rect,
+                    (layout.window.w, layout.window.h),
+                    playing,
+                    generation,
+                )
+            {
+                // The accumulated frame is on screen; the selection overlays below
+                // still run against the same document and plan.
+            } else if let Some(painter) = self.painter.as_mut() {
+                let fit = ViewFit::contain(
+                    f64::from(comp.width()),
+                    f64::from(comp.height()),
+                    rect.to_f64(),
+                    f64::from(layout.window.w),
+                    f64::from(layout.window.h),
+                );
+                let painted = if let Some(hidden) = &hidden {
+                    painter.paint_visible(renderer, document, plan, fit, hidden)
+                } else {
+                    painter.paint(renderer, document, plan, fit)
+                };
+                if let Err(error) = painted {
+                    // A face the font set has but the engine could not
+                    // register: report it instead of drawing a substitute.
+                    paint_error = Some(error.to_string());
+                }
+            }
+        }
+        // The textures now hold every drawn image. The interactive preview
+        // does not need the decoded CPU copies again (export reads its own
+        // renderer), so release them; a new image or revision installs fresh
+        // bytes before the next upload.
+        if let Some(painter) = self.painter.as_mut() {
+            painter.release_image_cpu_pixels();
+        }
+        let _bounds_span = ferrous_engine::startup::span("motioner: selection bounds");
+        let painter = self.painter.as_ref();
+        let renderer_ref = &*renderer;
+        let measure = |text: &str, size: f64| -> Option<TextExtent> {
+            painter?.text_extent(renderer_ref, text, size)
+        };
+        let to_screen = |b: Bounds| {
+            view.box_to_screen(Vec2::new(b.min_x, b.min_y), Vec2::new(b.max_x, b.max_y))
+        };
+        if let Some(b) =
+            selected.and_then(|node| bounds::node_bounds(document, plan, node, &measure))
+        {
+            out.selection = Some(to_screen(b));
+            out.size = Some((b.max_x - b.min_x, b.max_y - b.min_y));
+            out.bounds = Some(b);
+        }
+        out.hover = hovered
+            .and_then(|node| bounds::node_bounds(document, plan, node, &measure))
+            .map(to_screen);
+        let picked = pick.map(|point| {
+            let locked = |node: NodeId| {
+                document.node(node).is_some_and(|n| {
+                    overrides.as_ref().is_some_and(|set| {
+                        set.get(n.identity().as_str(), motioner_core::LOCKED, None)
+                            .is_some_and(|entry| entry.action == OverrideAction::Locked(true))
+                    })
+                })
+            };
+            bounds::hit_node_where(document, plan, point, &measure, |node| !locked(node))
+                .map_or(Pick::Nothing, Pick::Node)
+        });
+        if let Some(message) = paint_error {
+            self.report(&message);
+        }
+        (out, picked)
+    }
+
+    /// Uploads the current source frame of every video layer, reusing one
+    /// texture per layer. Called only when the frame or preview mode changes;
+    /// a frame that is still decoding is retried on the next UI frame.
+    fn update_video_images(&mut self, frame: i64, playing: bool) {
+        if self.options.hidden_window {
+            // A hidden idle benchmark must not start decoders/proxies.
+            return;
+        }
+        if self.video_last == Some((frame, playing)) && !self.video_waiting {
+            return;
+        }
+        self.video_last = Some((frame, playing));
+        let Some(host) = self.host.clone() else {
+            return;
+        };
+        let path = self.editor.session().path().to_path_buf();
+        let requests = self.video_requests(frame);
+        let revision = u64::try_from(frame).unwrap_or(0) * 2 + u64::from(playing);
+        let mut waiting = false;
+        for (source, source_frame, key) in requests {
+            match host.video_frame(&path, &source, source_frame, playing) {
+                crate::VideoFrameState::Ready(decoded) => {
+                    let image = ImageData {
+                        key,
+                        width: decoded.asset.width,
+                        height: decoded.asset.height,
+                        rgba8: decoded.rgba8,
+                        revision,
+                    };
+                    if let Some(painter) = self.painter.as_mut() {
+                        painter.set_image(image.clone());
+                    }
+                    self.blur.set_image(image);
+                }
+                crate::VideoFrameState::Pending => waiting = true,
+                crate::VideoFrameState::Unavailable => {}
+            }
+        }
+        self.video_waiting = waiting;
+    }
+
+    /// The video layers visible at `frame`, with their exact source frame.
+    fn video_requests(&self, frame: i64) -> Vec<(String, i64, motioner_core::ImageKey)> {
+        let Some(document) = self.editor.session().document() else {
+            return Vec::new();
+        };
+        let rate = document.composition().frame_rate();
+        document
+            .nodes()
+            .filter_map(|node| {
+                let motioner_core::NodeContent::Video(video) = node.content() else {
+                    return None;
+                };
+                let source_frame = video.source_frame(frame, rate)?;
+                Some((
+                    video.source.clone(),
+                    source_frame,
+                    video.texture_key(node.id())?,
+                ))
+            })
+            .collect()
+    }
+
+    fn hovered_node(&self) -> Option<NodeId> {
+        let outline = match self.pointer.hover? {
+            Hit::LayerRow(row) | Hit::LayerEye(row) | Hit::LayerLock(row) | Hit::Track(row) => row,
+            Hit::TimelineRow(row) | Hit::TimelineDiamond { row, .. } => {
+                self.editor.timeline().rows().get(row)?.kind.outline()
+            }
+            _ => return None,
+        };
+        self.editor.outline().get(outline).map(|row| row.node)
+    }
+
+    pub(super) fn zoom(&self, layout: &Layout) -> f64 {
+        viewport(self.editor.session(), self.editor.view(), layout).map_or(1.0, |view| view.scale)
+    }
+
+    pub(super) fn composition_size(&self) -> (f64, f64) {
+        self.editor
+            .session()
+            .composition()
+            .map_or((1920.0, 1080.0), |c| {
+                (f64::from(c.width()), f64::from(c.height()))
+            })
+    }
+
+    /// Bounds of the other layers, for snapping (shape bounds only; text
+    /// layers need the renderer and are skipped).
+    pub(super) fn other_bounds(&self, selected: NodeId) -> Vec<Bounds> {
+        let Some(document) = self.editor.session().document() else {
+            return Vec::new();
+        };
+        let plan = self.editor.session().plan();
+        self.editor
+            .outline()
+            .iter()
+            .filter(|row| row.node != selected)
+            .filter_map(|row| {
+                bounds::node_bounds(
+                    document,
+                    plan,
+                    row.node,
+                    &|_: &str, _: f64| -> Option<TextExtent> { None },
+                )
+            })
+            .collect()
+    }
+}
+
+/// The composition-space region the canvas area shows, clipped to the
+/// composition.
+///
+/// This is the cull rectangle the painter uses. It is deliberately
+/// conservative: the visible area is padded by at least one window pixel
+/// (converted to composition pixels) plus one composition pixel, so rounding
+/// at the viewport edges can never cull a sliver that is still on screen.
+/// `None` means the visible area does not overlap the composition (nothing to
+/// draw) or the viewport is degenerate; the painter then keeps its previous
+/// behaviour of drawing everything, which is always correct.
+fn visible_composition_rect(view: &Viewport, area: Rect) -> Option<[f64; 4]> {
+    if !(view.scale.is_finite() && view.scale > 0.0) {
+        return None;
+    }
+    let min = view.to_composition(area.x, area.y);
+    let max = view.to_composition(area.x + area.w, area.y + area.h);
+    if !(min.x.is_finite()
+        && min.y.is_finite()
+        && max.x.is_finite()
+        && max.y.is_finite()
+        && view.width.is_finite()
+        && view.height.is_finite()
+        && view.width > 0.0
+        && view.height > 0.0)
+    {
+        return None;
+    }
+    // One window pixel (rounding) plus one composition pixel (anti-aliasing
+    // and stroke ink that the item bounds may not model exactly) of margin.
+    let margin = 1.0 / view.scale + 1.0;
+    let x0 = (min.x.min(max.x) - margin).max(0.0);
+    let y0 = (min.y.min(max.y) - margin).max(0.0);
+    let x1 = (min.x.max(max.x) + margin).min(view.width);
+    let y1 = (min.y.max(max.y) + margin).min(view.height);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some([x0, y0, x1 - x0, y1 - y0])
+}
+
+/// The canvas area the composition is fitted into: the canvas inset by a
+/// margin that shrinks on very small canvases.
+pub(super) fn canvas_area(layout: &Layout) -> Rect {
+    let short_side = layout.canvas.w.min(layout.canvas.h);
+    let margin = layout
+        .metrics
+        .px(size::GRID * 8.0)
+        .min((short_side * 0.06).round());
+    layout.canvas.inset(margin)
+}
+
+/// The canvas viewport from the view state: fit, zoom and pan (D-0026).
+pub(super) fn viewport(
+    session: &PreviewSession,
+    view: &ViewState,
+    layout: &Layout,
+) -> Option<Viewport> {
+    let comp = session.composition()?;
+    Viewport::new(
+        f64::from(comp.width()),
+        f64::from(comp.height()),
+        canvas_area(layout),
+        view.zoom,
+        view.pan,
+    )
+}
+
+/// The fit scale of the composition in the current canvas.
+pub(super) fn fit_zoom(session: &PreviewSession, layout: &Layout) -> f64 {
+    let Some(comp) = session.composition() else {
+        return 1.0;
+    };
+    Viewport::fit_scale(
+        f64::from(comp.width()),
+        f64::from(comp.height()),
+        canvas_area(layout),
+    )
+    .unwrap_or(1.0)
+}

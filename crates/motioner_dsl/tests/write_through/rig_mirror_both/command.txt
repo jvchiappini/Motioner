@@ -1,0 +1,8 @@
+Set {
+    rig: "mascot",
+    property: "lid",
+    side: Both,
+    value: Number(
+        0.5,
+    ),
+}

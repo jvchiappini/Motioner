@@ -1,0 +1,7 @@
+ApplyPose {
+    rig: "mascot",
+    pose: "Neutral",
+    at: 2.0,
+    duration: 0.2,
+    ease: Linear,
+}

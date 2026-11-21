@@ -1,0 +1,6 @@
+comp(name="P", width=1000, height=600, duration=4.0, theme="dark")
+use_theme(theme("dark"))
+g = lower_third("Ana Silva", "Design lead")
+g.id("third")
+g.pos = (500, 420)
+g.rotation = 5

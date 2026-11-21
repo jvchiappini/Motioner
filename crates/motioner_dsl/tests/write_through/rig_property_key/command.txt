@@ -1,0 +1,10 @@
+Key {
+    rig: "mascot",
+    property: "glow",
+    side: Both,
+    time: 2.0,
+    value: Number(
+        0.7,
+    ),
+    ease: CubicOut,
+}

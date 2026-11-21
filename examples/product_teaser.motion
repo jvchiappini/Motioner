@@ -1,0 +1,58 @@
+# mdf: 0.1
+#
+# PRODUCT TEASER — a 6 s std example (prompt 13 phase 11).
+#
+# Prompt (see product_teaser.prompt.md):
+#   "A 6 s teaser for a noise-cancelling headphone called Aurora. Neon,
+#    premium, one product shot placeholder, a badge and a pre-order button."
+#
+# Plan (D-0040 section 2), one scene block per beat:
+#   0.0-3.4 s  scene "hero"  badge -> title card
+#   3.4-6.0 s  scene "cta"   logo lockup -> pre-order button
+#   Tempo 120, the neon theme's type scale and motion tokens.
+#
+# Render:
+#   motioner render examples/product_teaser.motion --out out/product_teaser.mp4
+
+comp(name="Product Teaser", width=1920, height=1080, fps=60, duration=6.0, theme="neon")
+use_theme(theme("neon"))
+
+backdrop = background("glow_orbs")
+backdrop.id("backdrop")
+backdrop.pos = (960, 540)
+
+# ---- scene 1: hero ---------------------------------------------------------
+s1 = scene("hero", 0.0, 3.4)
+
+# A dark scrim keeps the muted subtitle readable over the glow orbs.
+scrim = rect(1000, 330, 24, fill=token("bg"))
+scrim.id("scrim")
+scrim.pos = (960, 500)
+scrim.opacity = 0.72
+
+flag = badge("NEW")
+flag.id("badge")
+flag.pos = (960, 330)
+flag.enter("drop", at=0.2, duration=1.0)
+
+hero = title_card("AURORA", "Noise-cancelling, reimagined")
+hero.id("hero")
+hero.pos = (960, 520)
+hero.enter("pop", at=0.5, duration=1.2)
+
+s1.add([scrim, flag, hero])
+
+# ---- scene 2: call to action ----------------------------------------------
+s2 = scene("cta", 3.4, 2.6)
+
+mark = logo_lockup("AURORA", 56)
+mark.id("lockup")
+mark.pos = (960, 430)
+mark.enter("rise", at=s2.t(0.1), duration=1.0)
+
+cta = button("Pre-order")
+cta.id("cta")
+cta.pos = (960, 570)
+cta.enter("rise", at=s2.t(0.35), duration=1.0)
+
+s2.add([mark, cta])

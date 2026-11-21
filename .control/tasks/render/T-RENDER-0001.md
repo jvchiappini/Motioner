@@ -1,18 +1,17 @@
 ---
 id: T-RENDER-0001
 titulo: Spike offscreen deterministic still frame
-estado: backlog
+estado: done
 prioridad: alta
 tipo: investigacion
 creado_por: agente
 asignado_a: agente
 creado: 2026-10-31
-actualizado: 2026-10-31
+actualizado: 2026-11-11
 depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 Prove the determinism contract end to end with a throwaway spike: load a

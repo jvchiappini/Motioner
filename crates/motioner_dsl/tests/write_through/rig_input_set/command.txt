@@ -1,0 +1,7 @@
+SetInput {
+    rig: "mascot",
+    property: "mood",
+    value: Text(
+        "sad",
+    ),
+}

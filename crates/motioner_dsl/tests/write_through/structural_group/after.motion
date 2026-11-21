@@ -1,0 +1,6 @@
+comp(name="P", duration=1.0)
+a = circle(10)
+b = circle(20)
+pair = group()
+pair.add(a)
+pair.add(b)

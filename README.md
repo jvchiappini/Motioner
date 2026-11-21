@@ -8,11 +8,47 @@ pipeline shared by preview and export.
 
 ## Status
 
-**Foundation phase.** The architecture gate is closed and the Cargo
-workspace is scaffolded with six core crates. There are no editor
-features yet. Next up: the MDF format specification and the first
-deterministic frame spike. FerrousEngine and GUIMaker are not vendored
-into this repository yet.
+**Milestone 1: an editor.** The MDF program compiles and renders to MP4 or
+PNG, and motioner preview opens an editor window that edits the composition
+through **overrides** stored in <name>.overrides.motion (D-0022): inspector
+fields, canvas gizmos with zoom and pan, timeline keys, visibility/lock,
+undo/redo. Projects are `<name>.motioner/` folders with a start screen,
+autosave, backups, an assets panel and OS file drops. Audio layers are mixed
+to a deterministic 48 kHz stereo track and muxed as AAC; video layers decode
+frame-exactly, use generated preview proxies and carry their audio through
+the same mixer. The program itself changes only through motioner bake, which
+edits private literals in place and falls back to a generated block for the
+rest (D-0027). FerrousEngine is vendored as a pinned submodule; GUIMaker is
+not.
+
+## Standard library
+
+Programs can start from design tokens instead of coordinates: `theme("dark")`
+and `use_theme`, relative `place`/`row`/`grid` layout, `beat`/`bar` timing,
+`scene` storyboard blocks, motion presets (`enter`, `exit`, `emphasis`,
+`reveal`) and reviewed components (`card`, `lower_third`, `button`,
+`bar_chart`, `background`). The library is an implicit prelude written in MDF,
+compiles to ordinary nodes and keys, and is read-only for write-through.
+Theme boards and preset GIFs are in `docs/std/` and `out/std/`; the guide is
+[docs/std.md](docs/std.md) and the language reference is
+[spec/mdf-v0.md](spec/mdf-v0.md).
+
+## Showcase
+
+`examples/showcase_pro.motion` is the 24 s, 1920x1080, 60 fps demo reel:
+animated colour stops, self-drawing line art, a shifting gradient background,
+glass cards with shadows, a masked headline, per-character kinetic type in
+Inter, a cover-fit image, soft screen light leaks, `bezier(...)` timing,
+`stagger`/`wiggle` and 8-sample motion blur. `examples/showcase.motion` stays
+as the v0 baseline. Both go through the same deterministic evaluator,
+`render` and `still`.
+
+Release build on the reference machine (Ryzen 5 8645HS, RTX 4050 Laptop):
+`showcase.motion` renders at **7.8 ms/frame** (render+readback) and
+`showcase_pro.motion` at **16.5 ms/frame** with motion blur on; the editor
+preview at 1600x900 plays the Pro reel at **59 fps** (evaluation 0.03 ms,
+**0 allocations/frame** of chrome). The numbers and the method are in
+`out/reports/` and `.control/CONTEXT.md`.
 
 ## What it will do
 
@@ -60,7 +96,7 @@ crates/
   motioner_io/        MDF project format, assets, ffmpeg export
   motioner_app/       application binary and wiring
   motioner_testkit/   fixtures, golden frames, benchmarks
-  motioner_ui/        editor shell and panels on GUIMaker (Phase 3)
+  motioner_ui/        editor window: layers, canvas, inspector, timeline, hot reload
   motioner_dsl/       grammar, parser, printer, sandbox (Phase 5)
   motioner_ai/        providers, tools, context builder (Phase 5)
 .control/             project control system (source of truth for state)
@@ -69,6 +105,133 @@ engine/               FerrousEngine and GUIMaker, pinned later
 scripts/              repository checks
 spec/                 language and format specifications
 ```
+
+## Open the app
+
+Run `motioner` with no arguments (or double-click `motioner.exe`) to open the
+start screen: **New project**, **Open project**, recent projects and the
+examples. A project is a `<name>.motioner/` folder that holds the manifest,
+the compositions and the content-addressed assets; the editor autosaves into
+it and keeps rolling backups. The File menu has New, Open, Save, Save a copy,
+Import asset, Reveal in Explorer and Close project. Opening a loose
+`.motion` file still works in single-file mode.
+
+```
+motioner                         # start screen
+motioner examples/demo.motioner  # the generated demo project
+```
+
+The full folder contract, what is safe to delete and the recovery flow are in
+[`docs/projects.md`](docs/projects.md). The demo project
+(`examples/demo.motioner/`) uses only ffmpeg `lavfi` test sources for its
+image, video and music, and renders to `out/demo.mp4`.
+
+## Usage
+
+```
+motioner render  examples/demo.motioner --out out/demo.mp4
+motioner render  examples/hello.motion --out out/hello.mp4
+motioner render  examples/showcase_pro.motion --out out/showcase_pro.mp4
+motioner still   examples/hello.motion --frame 120 --out out/hello.png
+motioner still   examples/animatable.motion --frame 45 --out out/animatable.png
+motioner info    examples/hello.motion [--json]
+motioner bake    examples/hello.motion
+motioner preview examples/hello.motion [--control]
+motioner query   examples/hello.motion --frame 48
+motioner edit    examples/hello.motion 'seek(120)' 'edit("@288", "pos.y", 520)'
+motioner fmt     examples/hello.motion [--check]
+motioner lint    examples/hello.motion
+motioner tools   --schema
+motioner corpus  check out/generated
+motioner trace   export examples/demo.motioner --out out/corpus.jsonl
+motioner ctl     'select("@288")' 'screenshot("out/shot.png")'
+```
+
+`preview` opens the editor window: layers on the left, the composition
+letterboxed on a canvas with selection gizmos, an editable properties inspector
+on the right, and a timeline with transport, ruler, visibility strips and
+expandable rows with one lane per parameter (Position X/Y, Scale X/Y, Anchor
+X/Y, Rotation, Opacity, plus every content field). X and Y keyframes are
+independent and are stored as `pos.x`/`pos.y` overrides. Content fields
+(`fill`, `stroke`, `stroke_width`, `width`, `height`, `radius`, `size`,
+`color`) are animatable channels too: they have stopwatches, diamonds and eased
+lines like transform rows, and their colours interpolate in linear-light sRGB
+(D-0028; see `examples/animatable.motion`). Vector paths (`path`, `polygon`,
+`star`, `arc`) are filled and stroked with anti-aliased tessellation and have
+animatable `trim_start`/`trim_end`/`trim_offset`/`dash`/`dash_offset`, so a
+line draws itself and a dash pattern marches (D-0029; see
+`examples/paths.motion`). Paint gradients (`linear_gradient`,
+`radial_gradient`) use animatable stop offsets and colours, show one row per
+stop in the timeline and inspector, and render through the Pure2D gradient
+pass (D-0030; see `examples/gradients.motion`). The radial geometry transforms
+the centre and the local +x edge separately before measuring the world radius,
+so an off-centre glow reaches zero alpha exactly at its silhouette in every
+blend mode.
+Nodes blend with `normal`, `add`, `multiply`, `screen`, `overlay`, `darken` and
+`lighten`, chosen from a segmented grid at the top of the inspector and
+overridable with `set(id, "blend", "multiply")` (D-0031; see
+`examples/blend.motion`). All seven modes render through the engine layer
+composite.
+Nodes also carry ordered effects: `node.effect("drop_shadow", color, offset,
+blur, opacity)`, `node.effect("blur", radius)` and `node.effect("glow", color,
+radius, intensity)`. Every parameter is an animatable channel
+(`drop_shadow.blur`, `glow.radius`, `drop_shadow.offset.x`), the effects apply
+to the node and its subtree as one offscreen layer, and the inspector has an
+Effects section with add/reorder/remove tiles (D-0032; see
+`examples/effects.motion`). The pinned engine carries the effect, mask and
+blend passes, so `still`, `render` and `preview` all composite them.
+The canvas zooms around the
+pointer with Ctrl+wheel, pans with a middle drag or Space+drag, and fits with
+`F` or a click on the zoom pill; zoom and pan are view state and never change
+a rendered frame (D-0026). Selection is shared by the canvas, the lists and
+the inspector; saving the `.motion` or the overrides file reloads it, and MDF
+errors appear as a banner, a red file dot and a status-bar diagnostic.
+
+Layers carry display names (`node.name`, `rename`), a filter box, collapse and
+preview-only solo/shy; a numeric timeline row opens the value graph editor with
+draggable bezier handles. The status bar shows evaluation time, UI fps,
+dropped frames and, when built with `--features alloc-count`, the chrome's
+per-frame allocations (0 in the steady state).
+
+**The editor writes code.** Every gesture is planned into an exact MDF code
+edit (a private literal, a loop guard, a call-site parameter, a local
+assignment or a structural statement), written atomically, verified by
+re-running the program and recorded as one undo step (D-0036). The overrides
+file is only the fallback: when no exact code edit exists the change stays
+there with a reason, and the overrides list offers to convert it. The old
+`motioner bake` still folds legacy overrides in; orphans are listed with
+ranked re-binding suggestions (D-0025). The strategy ladder, with before/after
+examples and the remaining fallbacks, is in
+[`docs/write-through.md`](docs/write-through.md).
+
+`editor.motion` stores the project's edit mode (`code` by default), the local
+trace switch and editor-only state. `MOTIONER_TRACES=1` records every commit
+as a JSONL trace under `<project>/traces/`; `motioner trace export` turns them
+into a clean, replayable corpus ([`docs/traces.md`](docs/traces.md)).
+`motioner corpus check` filters generated programs and writes a manifest
+([`docs/corpus.md`](docs/corpus.md)).
+
+Shortcuts: Space play/pause (release, when it did not drag), Left/Right step
+(Shift: 10), Up/Down select layer, Home/End, L loop, G safe areas, R reload, K
+add keys, Delete delete keys, U show only animated properties, F fit the
+canvas, 1 go to 100 %, Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo, Esc quit.
+Options: `--frame N`, `--paused`, `--exit-after-frames N` (smoke tests and CI),
+`--window-size WxH`, `--ui-scale F`, `--select ROW` and `--screenshot
+<file.png>` (in-app capture, see `crates/motioner_ui/README.md`).
+
+### Agents
+
+Motioner is AI-first: everything a person can do in the editor is a typed
+command, and the window turns its clicks and shortcuts into the same
+commands (D-0024). `motioner query` prints the scene at a frame as JSON,
+`motioner edit` runs commands such as `key("@288", "opacity", 1.5, 0.5,
+ease="quad_out")` and writes them into the program as MDF (all or nothing;
+`--overrides` keeps D-0022 and `--code` forces code), `motioner tools --schema`
+prints the tool list generated from the same command table, and `motioner
+preview --control` + `motioner ctl` drive a running editor, including
+`state()`, `query()`, `screenshot(path)` and the code diff of each edit. The
+full command list, the JSON formats and an end-to-end example are in
+[`docs/agents.md`](docs/agents.md).
 
 ## Project control
 
@@ -98,10 +261,45 @@ cargo test --workspace
 cargo build --workspace
 cargo machete
 python scripts/check_boundaries.py
+python scripts/check_encoding.py
 ```
+
+Files are UTF-8 without a BOM and use LF line endings; the encoding check
+reads the Git index and the working tree of changed files, and fails on a BOM
+or CR outside `engine/`.
 
 The toolchain is pinned in `rust-toolchain.toml` (1.96.0). The same
 checks run in `.github/workflows/ci.yml` on Windows and Linux.
+
+Startup is measured separately from the gate, with the engine's startup
+trace (`FERROUS_TRACE_STARTUP=1`; see
+`engine/ferrous/crates/ferrous_engine/docs/startup.md`):
+
+```
+cargo build --release -p motioner_app
+python scripts/startup_bench.py --runs 20
+```
+
+`scripts/startup_bench.py` runs `--start --exit-after-frames 1` and
+`preview examples/demo.motioner --exit-after-frames 1`, parses the JSON
+trace and prints median/p90 per mark, per span and for the closing path.
+
+The reviewer runs the regression guard with
+
+```
+python scripts/startup_bench.py --check
+```
+
+It fails if the window becomes visible before its first frame (outside the
+safety-timeout path) or if one of our own critical-path metrics exceeds the
+budgets in `scripts/startup_budgets.json` (2x the S6 measurements, driver
+floor excluded). See [docs/startup.md](docs/startup.md) and D-0062.
+
+The release build produces two binaries: `motioner.exe` (GUI, no console on
+double-click) and `motioner-cli.exe` (console, so `cmd`/PowerShell wait for it,
+`>` redirection works and `%ERRORLEVEL%`/`$LASTEXITCODE` are set). Copying
+`motioner-cli.exe` to `motioner.com` next to `motioner.exe` keeps the short
+`motioner` name for terminals (Windows resolves `.com` before `.exe`).
 
 ## Conventions
 
@@ -114,3 +312,5 @@ carry rustdoc, and performance changes are measured. See
 
 Motioner is free and open source under the
 [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
+
+Rigs, SVG symbols and state machines are documented in [docs/rigs.md](docs/rigs.md); imports in [docs/imports.md](docs/imports.md).

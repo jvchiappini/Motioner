@@ -1,0 +1,6 @@
+comp(name="P", duration=1.0)
+
+# a commented loop
+for i in range(2):
+    c = circle(10)
+    c.pos = (100 + i * 20, 200)  # a dot

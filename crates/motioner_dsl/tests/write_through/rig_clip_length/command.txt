@@ -1,0 +1,5 @@
+ClipLength {
+    rig: "mascot",
+    clip: "jump",
+    length: 2.0,
+}

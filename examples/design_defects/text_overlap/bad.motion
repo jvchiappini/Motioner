@@ -1,0 +1,5 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+a = text("Overlapping text", "Inter", 56, "#FFFFFF", "center")
+a.pos = (500, 300)
+b = text("second line", "Inter", 56, "#FFFFFF", "center")
+b.pos = (500, 310)

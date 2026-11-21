@@ -1,0 +1,320 @@
+//! Entry point of the preview window: options, errors and `run_preview`.
+//!
+//! The composition is drawn in the engine's `Pure2D` pass through
+//! [`motioner_render::LivePainter`]; the chrome is drawn in the engine's UI
+//! pass, which the renderer composites on top. That ordering is why items can
+//! overflow the composition over the pasteboard and still stay below the
+//! panels. Engine 2D views are not used: they clip shapes but not text, and
+//! the pinned engine's multi-view path clips hard edges at the wrong place
+//! for views away from the origin (fixed upstream in the engine clone).
+
+use std::cell::RefCell;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use ferrous_engine::{App, AppMode, Color};
+use motioner_core::FrameRate;
+use motioner_render::RenderError;
+
+use crate::app::PreviewApp;
+use crate::capture::PngWriter;
+use crate::control::ControlServer;
+use crate::{Editor, PreviewSession, SessionError, Transport};
+
+/// Embedded UI font (also used by the engine's immediate text pass).
+const UI_FONT: &[u8] = include_bytes!("../../../engine/ferrous/assets/fonts/Roboto-Regular.ttf");
+
+/// Default window size in physical pixels.
+pub const DEFAULT_WINDOW_SIZE: (u32, u32) = (1600, 900);
+
+/// Options accepted by [`run_preview`].
+#[derive(Clone, Default)]
+pub struct PreviewOptions {
+    /// Initial frame (clamped into the composition).
+    pub frame: Option<i64>,
+    /// Start paused instead of playing immediately.
+    pub paused: bool,
+    /// Close the window after this many presented frames (smoke tests/CI).
+    pub exit_after_frames: Option<u64>,
+    /// Close the window after this many seconds of wall time (idle
+    /// measurements: an on-demand window presents no frames, so a frame
+    /// limit would never be reached).
+    pub exit_after_seconds: Option<f64>,
+    /// Initial window size in physical pixels; [`DEFAULT_WINDOW_SIZE`] when
+    /// `None`.
+    pub window_size: Option<(u32, u32)>,
+    /// Chrome scale override (for example `1.25`); the monitor's scale
+    /// factor when `None`. Used to check layouts at other DPI settings.
+    pub ui_scale: Option<f32>,
+    /// Outline row selected at startup (screenshots and demos).
+    pub select: Option<usize>,
+    /// Capture the window to this PNG once `exit_after_frames` frames were
+    /// presented (one by default), then close it.
+    pub screenshot: Option<PathBuf>,
+    /// Writes screenshots; supplied by the application so this crate does
+    /// not depend on the export crate.
+    pub png_writer: Option<PngWriter>,
+    /// Open the live control endpoint and write its endpoint file here
+    /// (`preview --control`).
+    pub control: Option<PathBuf>,
+    /// CPU text measurer for `text_width`/`text_bounds` (D-0034).
+    pub text_metrics: Option<std::sync::Arc<dyn motioner_core::TextMetrics>>,
+    /// Faces the preview may use (project plus bundled). The default renders
+    /// with the bundled set only.
+    pub fonts: Option<motioner_render::FontSet>,
+    /// Resolves image nodes (D-0035). The application supplies the
+    /// project-rooted loader; without one every image stays unresolved and
+    /// draws a placeholder.
+    pub image_resolver: Option<std::rc::Rc<dyn motioner_core::ImageResolver>>,
+    /// Resolver for `video()` metadata.
+    pub video_resolver: Option<std::rc::Rc<dyn motioner_core::VideoResolver>>,
+    /// Resolver for `use()` of SVG symbols and `.motion` modules (D-0051).
+    /// The application supplies the project-rooted one.
+    pub asset_resolver: Option<std::rc::Rc<dyn motioner_dsl::AssetResolver>>,
+    /// Project services (D-0045); without one the start screen is read-only.
+    pub host: Option<std::rc::Rc<dyn crate::ProjectHost>>,
+    /// Open the window on the start screen with this state.
+    pub start: Option<crate::StartScreen>,
+    /// Left panel tab shown at startup (screenshots and demos).
+    pub panel_tab: Option<crate::LeftTab>,
+    /// Draw continuously instead of on demand. Benchmark and demo switch;
+    /// the normal editor never sets it.
+    pub continuous: bool,
+    /// Never map the OS window: frames present to a hidden surface and no
+    /// input can reach the app. Used by the idle benchmarks.
+    pub hidden_window: bool,
+}
+
+/// Errors that prevent the preview window from running.
+#[derive(Debug)]
+pub enum UiError {
+    /// The file could not be read at startup.
+    Load(SessionError),
+    /// The embedded font could not be registered with the renderer.
+    Painter(RenderError),
+    /// A requested screenshot could not be taken or written.
+    Screenshot(String),
+    /// The control endpoint could not be opened.
+    Control(String),
+    /// An internal invariant failed without a better typed error.
+    Internal(String),
+}
+
+impl fmt::Display for UiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load(error) => write!(f, "{error}"),
+            Self::Painter(error) => write!(f, "{error}"),
+            Self::Screenshot(message) => write!(f, "screenshot failed: {message}"),
+            Self::Control(message) => write!(f, "cannot open the control endpoint: {message}"),
+            Self::Internal(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for UiError {}
+
+/// Opens the preview window for `path` and blocks until it closes.
+///
+/// A missing or unreadable file is a startup error. An MDF diagnostic opens
+/// the window with no composition and shows the diagnostic, so the user can
+/// fix the file and let hot reload pick it up.
+///
+/// # Errors
+///
+/// Returns [`UiError::Load`] for an unreadable file, [`UiError::Painter`]
+/// when the embedded font cannot be registered and [`UiError::Screenshot`]
+/// when a requested screenshot cannot be taken or written.
+pub fn run_preview(path: &Path, options: PreviewOptions) -> Result<(), UiError> {
+    let mut session = PreviewSession::new(path);
+    if let Some(metrics) = options.text_metrics.clone() {
+        session.set_text_metrics(metrics);
+    }
+    if let Some(resolver) = options.image_resolver.clone() {
+        session.set_image_resolver(resolver);
+    }
+    if let Some(resolver) = options.video_resolver.clone() {
+        session.set_video_resolver(resolver);
+    }
+    if let Some(resolver) = options.asset_resolver.clone() {
+        session.set_asset_resolver(resolver);
+    }
+    {
+        // Prompt 17 S0: the build+bake of the opened document, measured from
+        // the session reload through the first document the window can draw.
+        let _span = ferrous_engine::startup::span("motioner: document load");
+        match session.reload() {
+            Ok(()) | Err(SessionError::Diagnostic(_)) => {}
+            Err(error @ SessionError::Io { .. }) => return Err(UiError::Load(error)),
+        }
+    }
+    // Prompt 17 S5: warm the audio device while the window and the GPU start;
+    // the first play then starts immediately instead of paying the cpal open
+    // on a frame.
+    if !options.hidden_window {
+        if let (Some(host), Some(document)) = (options.host.as_ref(), session.document()) {
+            host.audio_prewarm(path, document);
+        }
+    }
+
+    let (rate, duration) = session
+        .composition()
+        .map_or((default_rate()?, 1), |composition| {
+            (composition.frame_rate(), composition.duration())
+        });
+    let mut transport = Transport::new(rate, duration);
+    if let Some(frame) = options.frame {
+        transport.set_frame(frame);
+    }
+
+    let title = format!(
+        "Motioner — {}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("untitled")
+    );
+    let mut editor = Editor::new(session, transport, options.select);
+    if let Some(fonts) = &options.fonts {
+        let mut families: Vec<String> =
+            fonts.faces().map(|(family, _)| family.to_owned()).collect();
+        families.sort();
+        families.dedup();
+        editor.set_font_families(families);
+    }
+    run_inner(editor, options, title)
+}
+
+/// The on-disk font atlas cache Motioner uses (prompt 17 S1/S2).
+///
+/// It lives in the per-OS local cache directory, never inside a project: it
+/// holds only MSDF atlases of the bundled and project faces, no user content.
+pub(crate) fn font_cache_config() -> ferrous_font::FontCacheConfig {
+    ferrous_font::FontCacheConfig::for_app("Motioner")
+}
+
+/// Runs the window for an already loaded editor.
+#[allow(clippy::needless_pass_by_value)] // cloned into the app and borrowed by the builder
+fn run_inner(editor: Editor, options: PreviewOptions, title: String) -> Result<(), UiError> {
+    let (width, height) = options.window_size.unwrap_or(DEFAULT_WINDOW_SIZE);
+    let control = match &options.control {
+        Some(file) => {
+            let server =
+                ControlServer::start(file).map_err(|error| UiError::Control(error.to_string()))?;
+            println!(
+                "Control endpoint: 127.0.0.1:{} (token in {})",
+                server.endpoint().port,
+                file.display()
+            );
+            Some(server)
+        }
+        None => None,
+    };
+    // `App::run` consumes the app and returns `()`, so a fatal error raised
+    // inside the event loop is handed back through this shared slot.
+    let fatal = Rc::new(RefCell::new(None));
+    // Whether this window opens the start screen (its pasteboard is the
+    // background used if the first frame is late).
+    let start_screen = options.start.is_some();
+    let continuous = options.continuous;
+    let hidden_window = options.hidden_window;
+    let app = {
+        // Prompt 17 S2: work the window does before the first frame.
+        let _span = ferrous_engine::startup::span("motioner: app new");
+        PreviewApp::new(editor, options, control, Rc::clone(&fatal), title.clone())
+    };
+    // Prompt 17 S3b: the start screen paints the theme pasteboard; the window
+    // background (used if the first frame is late) is that colour, so the
+    // timeout path never switches colours. The editor keeps black.
+    let background = if start_screen {
+        let [r, g, b, a] = crate::theme::Theme::dark().pasteboard;
+        Color::rgba(r, g, b, a)
+    } else {
+        Color::rgb(0.0, 0.0, 0.0)
+    };
+    App::new(app)
+        .with_title(&title)
+        .with_size(width.max(320), height.max(240))
+        .with_mode(AppMode::Flat2D)
+        .with_background_color(background)
+        // Prompt 18 P1: an editor is event-driven. Playback, scrubbing and
+        // drags ask for frames; an idle window presents none and submits no
+        // GPU work. `--continuous` keeps the historical loop for the heavy
+        // benchmark and for demos.
+        .with_redraw_policy(if continuous {
+            ferrous_engine::RedrawPolicy::Continuous
+        } else {
+            ferrous_engine::RedrawPolicy::OnDemand
+        })
+        // Hover draws only when a pointer move changes the target or another
+        // visible state; `PreviewApp::on_window_event` makes that decision.
+        .with_redraw_on_pointer_move(false)
+        .with_visible(!hidden_window)
+        .with_target_fps(Some(60))
+        .with_vsync(true)
+        .with_font_bytes(UI_FONT)
+        // Prompt 17 S1: the MSDF bake is the largest cost the window pays
+        // before its first frame; cache it per face so only the first launch
+        // of a build pays it.
+        .with_font_cache(font_cache_config())
+        // Prompt 17 S3: keep the compiled pipelines between runs (Vulkan).
+        .with_pipeline_cache(ferrous_engine::PipelineCacheConfig::for_app("Motioner"))
+        // Prompt 18 P7: opt-in offscreen present path. It is off unless
+        // `MOTIONER_PERSISTENT_UI=1` (measured against a full redraw first).
+        .with_persistent_ui(motioner_render::persistent_ui_opt_in())
+        .with_persistent_ui_break_even(motioner_render::PERSISTENT_UI_BREAK_EVEN)
+        .run();
+    // S3b no longer stores a launch snapshot; a build that used one may have
+    // left its cache behind (best effort, once per run).
+    let _ = std::fs::remove_dir_all(legacy_launch_cache());
+    let error = fatal.borrow_mut().take();
+    error.map_or(Ok(()), Err)
+}
+
+/// Opens the window on the start screen (no argument on the command line).
+///
+/// # Errors
+///
+/// [`UiError::Painter`] when the embedded font cannot be registered, and
+/// [`UiError::Screenshot`] when a requested screenshot cannot be written.
+pub fn run_app(options: PreviewOptions) -> Result<(), UiError> {
+    let metrics = options
+        .text_metrics
+        .clone()
+        .unwrap_or_else(|| std::sync::Arc::new(motioner_core::NoTextMetrics));
+    let editor = Editor::blank(metrics);
+    let mut options = options;
+    if options.start.is_none() {
+        let (recents, examples) = options.host.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |host| {
+                // Prompt 17 S0: the start screen is the pre-window work that
+                // must stay under 10 ms, so each list gets its own span.
+                let recents = {
+                    let _span = ferrous_engine::startup::span("motioner: recents");
+                    host.recents()
+                };
+                let examples = {
+                    let _span = ferrous_engine::startup::span("motioner: examples");
+                    host.examples()
+                };
+                (recents, examples)
+            },
+        );
+        options.start = Some(crate::StartScreen::new(recents, examples));
+    }
+    run_inner(editor, options, "Motioner".to_owned())
+}
+
+/// Where the removed S3b launch snapshot used to live.
+fn legacy_launch_cache() -> PathBuf {
+    let mut path = PathBuf::new();
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        path.push(base);
+    }
+    path.join("Motioner").join("cache").join("launch")
+}
+
+fn default_rate() -> Result<FrameRate, UiError> {
+    FrameRate::new(60, 1).map_err(|error| UiError::Internal(error.to_string()))
+}

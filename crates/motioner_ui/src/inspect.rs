@@ -1,0 +1,2290 @@
+//! Editable inspector model and layout.
+//!
+//! [`inspect_node`] samples the selected node's transform and content at the
+//! current frame and turns them into [`Row`]s: one row per property, with the
+//! fields the user can edit, the stopwatch state of animatable channels and
+//! the keyframes of the channel at the playhead.
+//!
+//! [`layout`] turns a model into rectangles for drawing **and** hit testing, so
+//! what is drawn is exactly what is clickable. Everything here is pure: no
+//! input, no window, no GPU.
+
+use motioner_core::{
+    Color, Composition, ContentField, ContentValue, Document, EffectChannel, EffectKind,
+    EffectParam, Frame, NodeContent, NodeId, OverrideSet, Property, TextAlign, Transform,
+};
+use motioner_eval::sample;
+
+use crate::layout::Rect;
+use crate::text_edit::TextEdit;
+use crate::theme::{size, Metrics};
+
+/// Which axis of a vector property a field edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    /// The only component (rotation, opacity).
+    Single,
+    /// X of a pair.
+    X,
+    /// Y of a pair.
+    Y,
+}
+
+impl Axis {
+    /// The core axis of a component, for calls that take one.
+    #[must_use]
+    pub const fn core(self) -> motioner_core::Axis {
+        match self {
+            Self::X | Self::Single => motioner_core::Axis::X,
+            Self::Y => motioner_core::Axis::Y,
+        }
+    }
+}
+
+/// What a field writes when it is edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldTarget {
+    /// A transform property (with its axis for pairs).
+    Transform(Property, Axis),
+    /// A content field.
+    Content(ContentField),
+    /// An effect parameter (D-0028 section 3).
+    Effect(EffectChannel),
+    /// The text of a text layer.
+    Text,
+    /// The horizontal alignment of a text layer.
+    Align,
+    /// The font family of a text layer.
+    Font,
+    /// The font weight of a text layer.
+    Weight,
+    /// The display name of the layer.
+    Name,
+    /// One control value of the selected keys' cubic-bezier ease.
+    Bezier(BezierPart),
+    /// The layers-panel search filter.
+    Filter,
+    /// Audio layer mute (the layer visibility switch).
+    AudioMute,
+    /// Audio layer preview solo.
+    AudioSolo,
+    /// Not editable (composition summary rows).
+    None,
+}
+
+/// One of the four cubic-bezier control values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BezierPart {
+    /// First control point, x (time).
+    X1,
+    /// First control point, y (value).
+    Y1,
+    /// Second control point, x (time).
+    X2,
+    /// Second control point, y (value).
+    Y2,
+}
+
+impl BezierPart {
+    /// Every part, in display order.
+    pub const ALL: [Self; 4] = [Self::X1, Self::Y1, Self::X2, Self::Y2];
+
+    /// The short name shown in the inspector.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::X1 => "x1",
+            Self::Y1 => "y1",
+            Self::X2 => "x2",
+            Self::Y2 => "y2",
+        }
+    }
+
+    /// Whether this part is constrained to `[0, 1]`.
+    #[must_use]
+    pub const fn is_x(self) -> bool {
+        matches!(self, Self::X1 | Self::X2)
+    }
+}
+
+/// One numeric field of a row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    /// What an edit writes.
+    pub target: FieldTarget,
+    /// Short label inside the field ("X", "W", "").
+    pub label: String,
+    /// The property value (scale 1.0, opacity 0.0..=1.0).
+    pub value: f64,
+    /// The text shown and edited (percent for scale and opacity).
+    pub text: String,
+    /// Multiplier from value to display number (100 for percentages).
+    pub factor: f64,
+    /// Unit suffix shown in the field ("%", "°").
+    pub suffix: &'static str,
+}
+
+impl Field {
+    /// The value a parsed display number means.
+    #[must_use]
+    pub fn value_of(&self, shown: f64) -> f64 {
+        shown / self.factor
+    }
+}
+
+/// What an animatable channel drives: a transform property or a content
+/// field (D-0028).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelTarget {
+    /// A transform property, with its axis for vector properties.
+    Transform(Property, Option<motioner_core::Axis>),
+    /// A content field.
+    Content(ContentField),
+    /// An effect parameter.
+    Effect(EffectChannel),
+}
+
+impl ChannelTarget {
+    /// The override name of the channel (`pos.x`, `fill`, `blur.radius`).
+    #[must_use]
+    pub fn name(self) -> String {
+        match self {
+            Self::Transform(property, axis) => crate::editor::channel_name(property, axis),
+            Self::Content(field) => field.name().clone(),
+            Self::Effect(channel) => channel.name(),
+        }
+    }
+}
+
+/// The state of one animatable channel.
+///
+/// A vector property has one channel per axis: X and Y are keyed, sampled and
+/// shown independently, like After Effects' "separate dimensions".
+#[derive(Debug, Clone, PartialEq)]
+pub struct Channel {
+    /// What the channel drives.
+    pub target: ChannelTarget,
+    /// Whether the channel has keyframes.
+    pub keyed: bool,
+    /// Whether the playhead sits exactly on a key.
+    pub on_key: bool,
+    /// Frames of the channel's keys, sorted.
+    pub frames: Vec<Frame>,
+}
+
+/// What one row shows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowValue {
+    /// Two numeric fields side by side.
+    Pair {
+        /// Left field.
+        left: Field,
+        /// Right field.
+        right: Field,
+    },
+    /// One numeric field.
+    Single(Field),
+    /// A colour swatch and its hex code.
+    Color {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The colour.
+        color: Color,
+        /// `#RRGGBB[AA]`.
+        text: String,
+    },
+    /// A free text field.
+    Text {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The text.
+        text: String,
+    },
+    /// The node's blend mode as a seven-tile segmented grid.
+    Blend {
+        /// What an edit writes (`blend`).
+        target: FieldTarget,
+        /// The current mode.
+        mode: motioner_core::BlendMode,
+    },
+    /// The up/down/remove tiles of one effect row.
+    EffectOps {
+        /// The effect the row belongs to.
+        kind: EffectKind,
+    },
+    /// The three add-effect tiles (shadow, blur, glow).
+    EffectAdd,
+    /// Remove the per-character animator at `index`.
+    TextAnimRemove {
+        /// Zero-based position in the animator list.
+        index: usize,
+    },
+    /// The three add-animator tiles (fade, rise, colour).
+    TextAnimAdd,
+    /// The mask source picker: clicking the tile cycles the candidates.
+    MaskSource {
+        /// Current source identity, `None` when the node is not masked.
+        current: Option<String>,
+        /// Node identities a `mask_set` accepts, in outline order.
+        candidates: Vec<String>,
+        /// Mode kept by the cycle.
+        mode: motioner_core::MaskMode,
+        /// Invert kept by the cycle.
+        invert: bool,
+    },
+    /// Alpha or luma coverage: one tile per mode.
+    MaskMode {
+        /// The masked node's source identity.
+        source: String,
+        /// The current mode.
+        mode: motioner_core::MaskMode,
+        /// Invert kept by the change.
+        invert: bool,
+    },
+    /// Whether the coverage is inverted: Off / On / Clear.
+    MaskInvert {
+        /// The masked node's source identity.
+        source: String,
+        /// The current mode (kept by the toggle).
+        mode: motioner_core::MaskMode,
+        /// Whether the coverage is inverted.
+        invert: bool,
+    },
+    /// A two-state switch.
+    Toggle {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// Whether the switch is on.
+        on: bool,
+    },
+    /// A three-state segmented control.
+    Align {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The current alignment.
+        align: TextAlign,
+    },
+    /// A one-tile picker that cycles through `options` on click.
+    Cycle {
+        /// What an edit writes.
+        target: FieldTarget,
+        /// The current option.
+        current: String,
+        /// Every option, in display order.
+        options: Vec<String>,
+    },
+    /// The ease of the selected keys: one tile per ease with a curve preview.
+    Ease {
+        /// The ease shared by every selected key, `None` when they differ.
+        current: Option<motioner_core::Ease>,
+    },
+    /// Read-only text.
+    ReadOnly(String),
+}
+
+/// One inspector row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    /// Section this row belongs to; the panel draws a header when it changes.
+    pub section: &'static str,
+    /// Row label.
+    pub label: String,
+    /// The value(s).
+    pub value: RowValue,
+    /// Animatable channel, when the row has a stopwatch and diamonds.
+    pub channel: Option<Channel>,
+}
+
+/// Editor-only media state the inspector cannot read from the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MediaState {
+    /// Whether the layer is muted (its visibility switch is off).
+    pub muted: bool,
+    /// Whether the layer is soloed in the preview.
+    pub solo: bool,
+}
+
+/// Everything the inspector shows for a selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Model {
+    /// Header data (a selected layer) or `None` for the composition.
+    pub header: Option<Header>,
+    /// Rows in display order.
+    pub rows: Vec<Row>,
+}
+
+/// The selected layer's header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Header {
+    /// Display name (the `name` override when present).
+    pub name: String,
+    /// "Text layer", "Group layer", ...
+    pub kind: &'static str,
+    /// Stable identity key.
+    pub identity: String,
+    /// Whether the identity is explicit (`.id()`) or a provenance key.
+    pub explicit: bool,
+}
+
+/// Formats a colour as `#RRGGBB`, plus alpha when not opaque.
+#[must_use]
+pub fn hex(color: Color) -> String {
+    color.to_hex()
+}
+
+fn display(value: f64, factor: f64) -> String {
+    let shown = (value * factor * 10.0).round() / 10.0;
+    let shown = if shown == 0.0 { 0.0 } else { shown };
+    if shown.fract().abs() < 1e-9 {
+        format!("{shown:.0}")
+    } else {
+        format!("{shown:.1}")
+    }
+}
+
+fn field(
+    target: FieldTarget,
+    label: &'static str,
+    value: f64,
+    factor: f64,
+    suffix: &'static str,
+) -> Field {
+    Field {
+        target,
+        label: label.to_owned(),
+        value,
+        text: display(value, factor),
+        factor,
+        suffix,
+    }
+}
+
+fn channel(
+    t: &Transform,
+    property: Property,
+    axis: Option<motioner_core::Axis>,
+    frame: Frame,
+) -> Channel {
+    let frames = crate::editor::channels::transform_keys(t, property, axis);
+    Channel {
+        target: ChannelTarget::Transform(property, axis),
+        keyed: !frames.is_empty(),
+        on_key: frames.contains(&frame),
+        frames,
+    }
+}
+
+/// The inspector channel of a content field.
+fn content_channel(
+    document: &Document,
+    node: NodeId,
+    field: ContentField,
+    frame: Frame,
+) -> Channel {
+    let frames =
+        crate::editor::channels::keys(document, node, crate::editor::Channel::Content(field));
+    Channel {
+        target: ChannelTarget::Content(field),
+        keyed: !frames.is_empty(),
+        on_key: frames.contains(&frame),
+        frames,
+    }
+}
+fn row(
+    section: &'static str,
+    label: impl Into<String>,
+    value: RowValue,
+    channel: Option<Channel>,
+) -> Row {
+    Row {
+        section,
+        label: label.into(),
+        value,
+        channel,
+    }
+}
+
+fn transform_rows(t: &Transform, frame: Frame) -> Vec<Row> {
+    let mut rows = position_scale_rows(t, frame);
+    let anchor = motioner_eval::sample_vec2(&t.anchor, frame);
+    let rotation = sample(&t.rotation, frame);
+    let opacity = sample(&t.opacity, frame).clamp(0.0, 1.0);
+    rows.push(row(
+        "Transform",
+        crate::labels::transform_label(Property::Rotation, None),
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Rotation, Axis::Single),
+            "",
+            rotation,
+            1.0,
+            "\u{00b0}",
+        )),
+        Some(channel(t, Property::Rotation, None, frame)),
+    ));
+    rows.push(row(
+        "Transform",
+        crate::labels::transform_label(Property::Anchor, Some(Axis::X.core())),
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Anchor, Axis::X),
+            "X",
+            anchor.x,
+            1.0,
+            "",
+        )),
+        Some(channel(t, Property::Anchor, Some(Axis::X.core()), frame)),
+    ));
+    rows.push(row(
+        "Transform",
+        crate::labels::transform_label(Property::Anchor, Some(Axis::Y.core())),
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Anchor, Axis::Y),
+            "Y",
+            anchor.y,
+            1.0,
+            "",
+        )),
+        Some(channel(t, Property::Anchor, Some(Axis::Y.core()), frame)),
+    ));
+    rows.push(row(
+        "Transform",
+        crate::labels::transform_label(Property::Opacity, None),
+        RowValue::Single(field(
+            FieldTarget::Transform(Property::Opacity, Axis::Single),
+            "",
+            opacity,
+            100.0,
+            "%",
+        )),
+        Some(channel(t, Property::Opacity, None, frame)),
+    ));
+    rows
+}
+
+/// Position and scale, one row per axis.
+fn position_scale_rows(t: &Transform, frame: Frame) -> Vec<Row> {
+    let position = motioner_eval::sample_vec2(&t.position, frame);
+    let scale = motioner_eval::sample_vec2(&t.scale, frame);
+    vec![
+        row(
+            "Transform",
+            crate::labels::transform_label(Property::Position, Some(Axis::X.core())),
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Position, Axis::X),
+                "X",
+                position.x,
+                1.0,
+                "",
+            )),
+            Some(channel(t, Property::Position, Some(Axis::X.core()), frame)),
+        ),
+        row(
+            "Transform",
+            crate::labels::transform_label(Property::Position, Some(Axis::Y.core())),
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Position, Axis::Y),
+                "Y",
+                position.y,
+                1.0,
+                "",
+            )),
+            Some(channel(t, Property::Position, Some(Axis::Y.core()), frame)),
+        ),
+        row(
+            "Transform",
+            crate::labels::transform_label(Property::Scale, Some(Axis::X.core())),
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Scale, Axis::X),
+                "W",
+                scale.x,
+                100.0,
+                "%",
+            )),
+            Some(channel(t, Property::Scale, Some(Axis::X.core()), frame)),
+        ),
+        row(
+            "Transform",
+            crate::labels::transform_label(Property::Scale, Some(Axis::Y.core())),
+            RowValue::Single(field(
+                FieldTarget::Transform(Property::Scale, Axis::Y),
+                "H",
+                scale.y,
+                100.0,
+                "%",
+            )),
+            Some(channel(t, Property::Scale, Some(Axis::Y.core()), frame)),
+        ),
+    ]
+}
+fn content_rows(
+    document: &Document,
+    node: NodeId,
+    content: &NodeContent,
+    frame: Frame,
+    font_families: &[String],
+    media: MediaState,
+) -> Vec<Row> {
+    match content {
+        NodeContent::Group => Vec::new(),
+        NodeContent::Rect { .. } => rect_rows(document, node, frame),
+        NodeContent::Circle { .. } => circle_rows(document, node, frame),
+        NodeContent::Path { geometry, .. } => path_rows(document, node, geometry, frame),
+        NodeContent::Text(text) => text_rows(document, node, text, frame, font_families),
+        NodeContent::Image(image) => image_rows(document, node, image, frame),
+        NodeContent::Audio(audio) => audio_rows(document, node, audio, frame, media),
+        NodeContent::Video(video) => video_rows(document, node, video, frame, media),
+    }
+}
+
+/// The Video section: image geometry plus the clip's audio controls.
+#[allow(clippy::too_many_lines)] // one row per video field, in inspector order
+fn video_rows(
+    document: &Document,
+    node: NodeId,
+    video: &motioner_core::VideoContent,
+    frame: Frame,
+    media: MediaState,
+) -> Vec<Row> {
+    let natural = video.asset.map_or_else(
+        || "unresolved".to_owned(),
+        |asset| format!("{} x {}", asset.width, asset.height),
+    );
+    let mut rows = vec![
+        row(
+            "Video",
+            "Source",
+            RowValue::Text {
+                target: FieldTarget::Content(ContentField::Source),
+                text: video.source.clone(),
+            },
+            None,
+        ),
+        row("Video", "Natural size", RowValue::ReadOnly(natural), None),
+        row(
+            "Video",
+            "Width",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Width),
+                "",
+                number_or_zero(document, node, ContentField::Width, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Width, frame)),
+        ),
+        row(
+            "Video",
+            "Height",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Height),
+                "",
+                number_or_zero(document, node, ContentField::Height, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Height, frame)),
+        ),
+        row(
+            "Video",
+            "Fit",
+            RowValue::Cycle {
+                target: FieldTarget::Content(ContentField::Fit),
+                current: video.fit.name().to_owned(),
+                options: vec!["contain".to_owned(), "cover".to_owned(), "fill".to_owned()],
+            },
+            None,
+        ),
+        row(
+            "Video",
+            "Speed",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Speed),
+                "",
+                video.speed,
+                1.0,
+                "x",
+            )),
+            None,
+        ),
+        row(
+            "Video",
+            "Start",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Start),
+                "",
+                number_or_zero(document, node, ContentField::Start, frame),
+                1.0,
+                " fr",
+            )),
+            None,
+        ),
+        row(
+            "Video",
+            "In point",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::InPoint),
+                "",
+                number_or_zero(document, node, ContentField::InPoint, frame),
+                1.0,
+                " s",
+            )),
+            None,
+        ),
+        row(
+            "Video",
+            "Out point",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::OutPoint),
+                "",
+                number_or_zero(document, node, ContentField::OutPoint, frame),
+                1.0,
+                " s",
+            )),
+            None,
+        ),
+    ];
+    rows.push(row(
+        "Audio",
+        "Gain",
+        RowValue::Single(field(
+            FieldTarget::Content(ContentField::Gain),
+            "",
+            number_or_zero(document, node, ContentField::Gain, frame),
+            1.0,
+            "",
+        )),
+        Some(content_channel(document, node, ContentField::Gain, frame)),
+    ));
+    rows.push(row(
+        "Audio",
+        "Mute",
+        RowValue::Toggle {
+            target: FieldTarget::AudioMute,
+            on: media.muted,
+        },
+        None,
+    ));
+    rows.push(row(
+        "Audio",
+        "Solo",
+        RowValue::Toggle {
+            target: FieldTarget::AudioSolo,
+            on: media.solo,
+        },
+        None,
+    ));
+    rows
+}
+
+fn audio_rows(
+    document: &Document,
+    node: NodeId,
+    audio: &motioner_core::AudioContent,
+    frame: Frame,
+    media: MediaState,
+) -> Vec<Row> {
+    let mut rows = vec![
+        row(
+            "Audio",
+            "Source",
+            RowValue::Text {
+                target: FieldTarget::Content(ContentField::Source),
+                text: audio.source.clone(),
+            },
+            None,
+        ),
+        row(
+            "Audio",
+            crate::labels::content_label(ContentField::Start),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Start),
+                "",
+                number_or_zero(document, node, ContentField::Start, frame),
+                1.0,
+                " fr",
+            )),
+            None,
+        ),
+        row(
+            "Audio",
+            crate::labels::content_label(ContentField::InPoint),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::InPoint),
+                "",
+                number_or_zero(document, node, ContentField::InPoint, frame),
+                1.0,
+                " s",
+            )),
+            None,
+        ),
+        row(
+            "Audio",
+            crate::labels::content_label(ContentField::OutPoint),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::OutPoint),
+                "",
+                number_or_zero(document, node, ContentField::OutPoint, frame),
+                1.0,
+                " s",
+            )),
+            None,
+        ),
+    ];
+    for content_field in [
+        ContentField::Gain,
+        ContentField::Pan,
+        ContentField::FadeIn,
+        ContentField::FadeOut,
+    ] {
+        rows.push(row(
+            "Audio",
+            crate::labels::content_label(content_field),
+            RowValue::Single(field(
+                FieldTarget::Content(content_field),
+                "",
+                number_or_zero(document, node, content_field, frame),
+                1.0,
+                "",
+            )),
+            (content_field == ContentField::Gain || content_field == ContentField::Pan)
+                .then(|| content_channel(document, node, content_field, frame)),
+        ));
+    }
+    rows.push(row(
+        "Audio",
+        "Mute",
+        RowValue::Toggle {
+            target: FieldTarget::AudioMute,
+            on: media.muted,
+        },
+        None,
+    ));
+    rows.push(row(
+        "Audio",
+        "Solo",
+        RowValue::Toggle {
+            target: FieldTarget::AudioSolo,
+            on: media.solo,
+        },
+        None,
+    ));
+    rows
+}
+
+fn path_rows(
+    document: &Document,
+    node: NodeId,
+    geometry: &motioner_core::PathGeometry,
+    frame: Frame,
+) -> Vec<Row> {
+    let mut rows = vec![row(
+        "Path",
+        "Points",
+        RowValue::ReadOnly(format!(
+            "{} pts{}",
+            geometry.points().len(),
+            if geometry.closed() { ", closed" } else { "" }
+        )),
+        None,
+    )];
+    for content_field in [
+        ContentField::TrimStart,
+        ContentField::TrimEnd,
+        ContentField::TrimOffset,
+        ContentField::Dash,
+        ContentField::DashOffset,
+    ] {
+        rows.push(row(
+            "Path",
+            crate::labels::content_label(content_field),
+            RowValue::Single(field(
+                FieldTarget::Content(content_field),
+                "",
+                number_or_zero(document, node, content_field, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, content_field, frame)),
+        ));
+    }
+    rows.push(row(
+        "Path",
+        "Cap",
+        RowValue::Text {
+            target: FieldTarget::Content(ContentField::Cap),
+            text: geometry.cap().name().to_owned(),
+        },
+        None,
+    ));
+    rows.push(row(
+        "Path",
+        "Join",
+        RowValue::Text {
+            target: FieldTarget::Content(ContentField::Join),
+            text: geometry.join().name().to_owned(),
+        },
+        None,
+    ));
+    rows.extend(paint_rows(document, node, frame, true));
+    rows
+}
+
+fn number_or_zero(document: &Document, node: NodeId, field: ContentField, frame: Frame) -> f64 {
+    if field.is_animatable() {
+        if let Some(value) = crate::editor::channels::sampled_number(document, node, field, frame) {
+            return value;
+        }
+    }
+    match document
+        .node(node)
+        .and_then(|node| node.content().static_value(field))
+    {
+        Some(ContentValue::Number(value)) => value,
+        _ => 0.0,
+    }
+}
+
+fn colour_of(
+    document: &Document,
+    node: NodeId,
+    field: ContentField,
+    frame: Frame,
+) -> Option<Color> {
+    match crate::editor::channels::sampled_colour(document, node, field, frame) {
+        crate::editor::channels::SampledColour::Colour(color) => Some(color),
+        _ => None,
+    }
+}
+
+fn rect_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
+    let width = number_or_zero(document, node, ContentField::Width, frame);
+    let height = number_or_zero(document, node, ContentField::Height, frame);
+    let radius = number_or_zero(document, node, ContentField::Radius, frame);
+    let mut rows = vec![
+        row(
+            "Shape",
+            "Size",
+            RowValue::Pair {
+                left: field(
+                    FieldTarget::Content(ContentField::Width),
+                    "W",
+                    width,
+                    1.0,
+                    "",
+                ),
+                right: field(
+                    FieldTarget::Content(ContentField::Height),
+                    "H",
+                    height,
+                    1.0,
+                    "",
+                ),
+            },
+            None,
+        ),
+        row(
+            "Shape",
+            "Radius",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Radius),
+                "",
+                radius,
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Radius, frame)),
+        ),
+    ];
+    rows.extend(paint_rows(document, node, frame, true));
+    rows
+}
+
+fn circle_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
+    let radius = number_or_zero(document, node, ContentField::Radius, frame);
+    let mut rows = vec![row(
+        "Shape",
+        "Radius",
+        RowValue::Single(field(
+            FieldTarget::Content(ContentField::Radius),
+            "",
+            radius,
+            1.0,
+            "",
+        )),
+        Some(content_channel(document, node, ContentField::Radius, frame)),
+    )];
+    rows.extend(paint_rows(document, node, frame, false));
+    rows
+}
+
+#[allow(clippy::too_many_lines)] // one row per text field, in inspector order
+fn text_rows(
+    document: &Document,
+    node: NodeId,
+    text: &motioner_core::TextContent,
+    frame: Frame,
+    font_families: &[String],
+) -> Vec<Row> {
+    let mut rows = vec![
+        row(
+            "Text",
+            "Text",
+            RowValue::Text {
+                target: FieldTarget::Text,
+                // Newlines are shown as `\n`, the spelling `bake` writes.
+                text: text.text.replace('\n', "\\n"),
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Family",
+            RowValue::Cycle {
+                target: FieldTarget::Font,
+                current: text.font.clone(),
+                options: font_families.to_vec(),
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Weight",
+            RowValue::Cycle {
+                target: FieldTarget::Weight,
+                current: text.weight.to_string(),
+                options: vec!["400".to_owned(), "600".to_owned(), "700".to_owned()],
+            },
+            None,
+        ),
+        row(
+            "Text",
+            "Size",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Size),
+                "",
+                number_or_zero(document, node, ContentField::Size, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Size, frame)),
+        ),
+        row(
+            "Text",
+            "Tracking",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Tracking),
+                "",
+                number_or_zero(document, node, ContentField::Tracking, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(
+                document,
+                node,
+                ContentField::Tracking,
+                frame,
+            )),
+        ),
+        row(
+            "Text",
+            "Line height",
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::LineHeight),
+                "",
+                number_or_zero(document, node, ContentField::LineHeight, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(
+                document,
+                node,
+                ContentField::LineHeight,
+                frame,
+            )),
+        ),
+        row(
+            "Text",
+            "Colour",
+            RowValue::Color {
+                target: FieldTarget::Content(ContentField::Color),
+                color: colour_of(document, node, ContentField::Color, frame)
+                    .unwrap_or(Color::WHITE),
+                text: colour_of(document, node, ContentField::Color, frame)
+                    .map_or_else(String::new, hex),
+            },
+            Some(content_channel(document, node, ContentField::Color, frame)),
+        ),
+        row(
+            "Text",
+            "Align",
+            RowValue::Align {
+                target: FieldTarget::Align,
+                align: text.align,
+            },
+            None,
+        ),
+    ];
+    if let Some(gradient) = &text.gradient {
+        rows.extend(gradient_rows(
+            document,
+            node,
+            frame,
+            "Text",
+            motioner_core::PaintSlot::Fill,
+            gradient.len(),
+        ));
+    }
+    for (index, animator) in text.animators.iter().enumerate() {
+        rows.push(row(
+            "Animators",
+            format!("{} #{}", animator.property.name(), index),
+            RowValue::TextAnimRemove { index },
+            None,
+        ));
+    }
+    rows.push(row(
+        "Animators",
+        "Add animator",
+        RowValue::TextAnimAdd,
+        None,
+    ));
+    rows
+}
+
+fn paint_rows(document: &Document, node: NodeId, frame: Frame, fill: bool) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let content = document.node(node).map(motioner_core::Node::content);
+    if fill {
+        let stops = content.map_or(0, |content| {
+            content.gradient_stop_count(motioner_core::PaintSlot::Fill)
+        });
+        if stops > 0 {
+            rows.extend(gradient_rows(
+                document,
+                node,
+                frame,
+                "Fill",
+                motioner_core::PaintSlot::Fill,
+                stops,
+            ));
+        } else {
+            rows.push(match colour_of(document, node, ContentField::Fill, frame) {
+                Some(color) => row(
+                    "Fill",
+                    "Fill",
+                    RowValue::Color {
+                        target: FieldTarget::Content(ContentField::Fill),
+                        color,
+                        text: hex(color),
+                    },
+                    Some(content_channel(document, node, ContentField::Fill, frame)),
+                ),
+                None => row(
+                    "Fill",
+                    "Fill",
+                    RowValue::ReadOnly("None".to_owned()),
+                    Some(content_channel(document, node, ContentField::Fill, frame)),
+                ),
+            });
+        }
+    }
+    let stroke_stops = content.map_or(0, |content| {
+        content.gradient_stop_count(motioner_core::PaintSlot::Stroke)
+    });
+    if stroke_stops > 0 {
+        rows.extend(gradient_rows(
+            document,
+            node,
+            frame,
+            "Stroke",
+            motioner_core::PaintSlot::Stroke,
+            stroke_stops,
+        ));
+    } else {
+        rows.push(
+            match colour_of(document, node, ContentField::Stroke, frame) {
+                Some(color) => row(
+                    "Fill",
+                    "Stroke",
+                    RowValue::Color {
+                        target: FieldTarget::Content(ContentField::Stroke),
+                        color,
+                        text: hex(color),
+                    },
+                    Some(content_channel(document, node, ContentField::Stroke, frame)),
+                ),
+                None => row(
+                    "Fill",
+                    "Stroke",
+                    RowValue::ReadOnly("None".to_owned()),
+                    Some(content_channel(document, node, ContentField::Stroke, frame)),
+                ),
+            },
+        );
+    }
+    rows.push(row(
+        "Fill",
+        crate::labels::content_label(ContentField::StrokeWidth),
+        RowValue::Single(field(
+            FieldTarget::Content(ContentField::StrokeWidth),
+            "",
+            number_or_zero(document, node, ContentField::StrokeWidth, frame),
+            1.0,
+            "",
+        )),
+        Some(content_channel(
+            document,
+            node,
+            ContentField::StrokeWidth,
+            frame,
+        )),
+    ));
+    rows
+}
+
+/// Rows for one gradient: a summary line and an offset/colour pair per stop
+/// (D-0030). Every stop part is an ordinary content channel, so its row has
+/// the same stopwatch and diamonds as `fill`.
+fn gradient_rows(
+    document: &Document,
+    node: NodeId,
+    frame: Frame,
+    section: &'static str,
+    slot: motioner_core::PaintSlot,
+    stops: usize,
+) -> Vec<Row> {
+    let kind = document
+        .node(node)
+        .and_then(|node| {
+            node.content().static_value(match slot {
+                motioner_core::PaintSlot::Fill => ContentField::Fill,
+                motioner_core::PaintSlot::Stroke => ContentField::Stroke,
+            })
+        })
+        .and_then(|value| match value {
+            ContentValue::Gradient(Some(gradient)) => Some(gradient.kind().name()),
+            _ => None,
+        })
+        .unwrap_or("linear");
+    let mut rows = vec![row(
+        section,
+        "Gradient",
+        RowValue::ReadOnly(format!("{kind}, {stops} stops")),
+        None,
+    )];
+    for index in 0..stops {
+        let Ok(index) = u8::try_from(index) else {
+            break;
+        };
+        let offset = ContentField::stop_field(slot, motioner_core::StopPart::Offset, index);
+        let color = ContentField::stop_field(slot, motioner_core::StopPart::Color, index);
+        rows.push(row(
+            section,
+            crate::labels::content_label(offset),
+            RowValue::Single(field(
+                FieldTarget::Content(offset),
+                "",
+                number_or_zero(document, node, offset, frame),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, offset, frame)),
+        ));
+        let sampled = colour_of(document, node, color, frame);
+        rows.push(row(
+            section,
+            crate::labels::content_label(color),
+            RowValue::Color {
+                target: FieldTarget::Content(color),
+                color: sampled.unwrap_or(Color::WHITE),
+                text: sampled.map_or_else(String::new, hex),
+            },
+            Some(content_channel(document, node, color, frame)),
+        ));
+    }
+    rows
+}
+
+/// The Image section: source, natural size, destination box and fit (D-0035).
+fn image_rows(
+    document: &Document,
+    node: NodeId,
+    image: &motioner_core::ImageContent,
+    frame: Frame,
+) -> Vec<Row> {
+    let natural = image.asset.map_or_else(
+        || "unresolved".to_owned(),
+        |asset| format!("{} x {}", asset.width, asset.height),
+    );
+    vec![
+        row(
+            "Image",
+            "Source",
+            RowValue::Text {
+                target: FieldTarget::Content(ContentField::Source),
+                text: image.source.clone(),
+            },
+            None,
+        ),
+        row("Image", "Natural size", RowValue::ReadOnly(natural), None),
+        row(
+            "Image",
+            crate::labels::content_label(ContentField::Width),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Width),
+                "",
+                image.width.value(),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Width, frame)),
+        ),
+        row(
+            "Image",
+            crate::labels::content_label(ContentField::Height),
+            RowValue::Single(field(
+                FieldTarget::Content(ContentField::Height),
+                "",
+                image.height.value(),
+                1.0,
+                "",
+            )),
+            Some(content_channel(document, node, ContentField::Height, frame)),
+        ),
+        row(
+            "Image",
+            "Fit",
+            RowValue::Cycle {
+                target: FieldTarget::Content(ContentField::Fit),
+                current: image.fit.name().to_owned(),
+                options: vec!["contain".to_owned(), "cover".to_owned(), "fill".to_owned()],
+            },
+            None,
+        ),
+    ]
+}
+
+/// A one-line kind label for the header.
+#[must_use]
+pub const fn kind_label(content: &NodeContent) -> &'static str {
+    match content {
+        NodeContent::Group => "Group layer",
+        NodeContent::Rect { .. } => "Rectangle layer",
+        NodeContent::Circle { .. } => "Circle layer",
+        NodeContent::Path { .. } => "Path layer",
+        NodeContent::Text(_) => "Text layer",
+        NodeContent::Image(_) => "Image layer",
+        NodeContent::Audio(_) => "Audio layer",
+        NodeContent::Video(_) => "Video layer",
+    }
+}
+
+/// The display name of a node: its `name` override when present, otherwise a
+/// kind label with a running ordinal computed by `fallback`.
+fn display_name(
+    document: &Document,
+    node: NodeId,
+    overrides: Option<&OverrideSet>,
+) -> Option<String> {
+    let n = document.node(node)?;
+    if let Some(set) = overrides {
+        if let Some(entry) = set.get(n.identity().as_str(), motioner_core::NAME, None) {
+            if let motioner_core::OverrideAction::Set(motioner_core::OverrideValue::Text(text)) =
+                &entry.action
+            {
+                return Some(text.clone());
+            }
+        }
+    }
+    Some(String::new())
+}
+
+/// One effect-parameter inspector channel.
+fn effect_channel(
+    document: &Document,
+    node: NodeId,
+    channel: EffectChannel,
+    frame: Frame,
+) -> Channel {
+    let frames =
+        crate::editor::channels::keys(document, node, crate::editor::Channel::Effect(channel));
+    Channel {
+        target: ChannelTarget::Effect(channel),
+        keyed: !frames.is_empty(),
+        on_key: frames.contains(&frame),
+        frames,
+    }
+}
+
+/// The sampled number of an effect parameter.
+fn effect_number(document: &Document, node: NodeId, channel: EffectChannel, frame: Frame) -> f64 {
+    match crate::editor::channels::sampled(
+        document,
+        node,
+        crate::editor::Channel::Effect(channel),
+        frame,
+    ) {
+        Some(motioner_core::OverrideValue::Number(number)) => number,
+        _ => 0.0,
+    }
+}
+
+/// The sampled colour of an effect parameter.
+fn effect_colour(document: &Document, node: NodeId, channel: EffectChannel, frame: Frame) -> Color {
+    match crate::editor::channels::sampled(
+        document,
+        node,
+        crate::editor::Channel::Effect(channel),
+        frame,
+    ) {
+        Some(motioner_core::OverrideValue::Text(text)) => {
+            Color::parse_hex(&text).unwrap_or(Color::BLACK)
+        }
+        _ => Color::BLACK,
+    }
+}
+
+/// The Effects section: one operation row per effect, its parameter rows and
+/// the add-effect tiles.
+fn effect_rows(document: &Document, node: NodeId, frame: Frame) -> Vec<Row> {
+    let Some(n) = document.node(node) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for effect in n.effects() {
+        let kind = effect.kind();
+        rows.push(row(
+            "Effects",
+            kind.label(),
+            RowValue::EffectOps { kind },
+            None,
+        ));
+        for &param in kind.params() {
+            match param {
+                EffectParam::Color => {
+                    let channel = EffectChannel {
+                        kind,
+                        param,
+                        axis: None,
+                    };
+                    let color = effect_colour(document, node, channel, frame);
+                    rows.push(row(
+                        "Effects",
+                        "Colour",
+                        RowValue::Color {
+                            target: FieldTarget::Effect(channel),
+                            color,
+                            text: hex(color),
+                        },
+                        Some(effect_channel(document, node, channel, frame)),
+                    ));
+                }
+                EffectParam::Offset => {
+                    for (label, axis) in [
+                        ("Offset X", motioner_core::Axis::X),
+                        ("Offset Y", motioner_core::Axis::Y),
+                    ] {
+                        let channel = EffectChannel {
+                            kind,
+                            param,
+                            axis: Some(axis),
+                        };
+                        rows.push(row(
+                            "Effects",
+                            label,
+                            RowValue::Single(field(
+                                FieldTarget::Effect(channel),
+                                axis_label(axis),
+                                effect_number(document, node, channel, frame),
+                                1.0,
+                                "",
+                            )),
+                            Some(effect_channel(document, node, channel, frame)),
+                        ));
+                    }
+                }
+                _ => {
+                    let channel = EffectChannel {
+                        kind,
+                        param,
+                        axis: None,
+                    };
+                    let label = match param {
+                        EffectParam::Blur => "Blur",
+                        EffectParam::Opacity => "Opacity",
+                        EffectParam::Radius => "Radius",
+                        EffectParam::Intensity => "Intensity",
+                        _ => "Value",
+                    };
+                    rows.push(row(
+                        "Effects",
+                        label,
+                        RowValue::Single(field(
+                            FieldTarget::Effect(channel),
+                            "",
+                            effect_number(document, node, channel, frame),
+                            1.0,
+                            "",
+                        )),
+                        Some(effect_channel(document, node, channel, frame)),
+                    ));
+                }
+            }
+        }
+    }
+    rows.push(row("Effects", "Add effect", RowValue::EffectAdd, None));
+    rows
+}
+
+/// The Mask section: source picker, mode, invert and the clear tile (D-0033).
+///
+/// A node without a mask still gets the Source row so the section shows how to
+/// add one; clicking it masks with the first candidate.
+fn mask_rows(document: &Document, node: NodeId) -> Vec<Row> {
+    let candidates: Vec<String> = document
+        .nodes()
+        .filter(|candidate| candidate.id() != node && document.can_mask(node, candidate.id()))
+        .map(|candidate| candidate.identity().as_str().to_owned())
+        .collect();
+    let mask = document.node(node).and_then(motioner_core::Node::mask);
+    let Some(mask) = mask else {
+        return vec![row(
+            "Mask",
+            "Source",
+            RowValue::MaskSource {
+                current: None,
+                candidates,
+                mode: motioner_core::MaskMode::Alpha,
+                invert: false,
+            },
+            None,
+        )];
+    };
+    let source = document
+        .node(mask.source)
+        .map_or_else(String::new, |node| node.identity().as_str().to_owned());
+    vec![
+        row(
+            "Mask",
+            "Source",
+            RowValue::MaskSource {
+                current: Some(source.clone()),
+                candidates,
+                mode: mask.mode,
+                invert: mask.invert,
+            },
+            None,
+        ),
+        row(
+            "Mask",
+            "Mode",
+            RowValue::MaskMode {
+                source: source.clone(),
+                mode: mask.mode,
+                invert: mask.invert,
+            },
+            None,
+        ),
+        row(
+            "Mask",
+            "Invert",
+            RowValue::MaskInvert {
+                source,
+                mode: mask.mode,
+                invert: mask.invert,
+            },
+            None,
+        ),
+    ]
+}
+
+/// "X" or "Y" for an effect offset field.
+fn axis_label(axis: motioner_core::Axis) -> &'static str {
+    match axis {
+        motioner_core::Axis::X => "X",
+        motioner_core::Axis::Y => "Y",
+    }
+}
+
+/// The rows shown for `node` at `frame`, or `None` if the node is gone.
+///
+/// `fallback_name` is the outline's generated name ("Circle 3"); a `name`
+/// override replaces it.
+#[must_use]
+pub fn inspect_node(
+    document: &Document,
+    node: NodeId,
+    frame: Frame,
+    overrides: Option<&OverrideSet>,
+    fallback_name: &str,
+    font_families: &[String],
+    media: MediaState,
+) -> Option<Model> {
+    let n = document.node(node)?;
+    let properties = crate::properties::PropertySet::of(n.content());
+    let mut rows = Vec::new();
+    if properties.has_visual() {
+        // Blend sits at the top: it is a whole-node property, and the
+        // segmented grid needs the first screenful.
+        rows.push(row(
+            "Composite",
+            "Blend",
+            RowValue::Blend {
+                target: FieldTarget::None,
+                mode: n.blend(),
+            },
+            None,
+        ));
+        // Effects sit next to Blend: both are whole-node properties.
+        rows.extend(effect_rows(document, node, frame));
+        rows.extend(mask_rows(document, node));
+        rows.extend(transform_rows(n.transform(), frame));
+    }
+    rows.extend(content_rows(
+        document,
+        node,
+        n.content(),
+        frame,
+        font_families,
+        media,
+    ));
+    let name = display_name(document, node, overrides)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| fallback_name.to_owned());
+    let header = Header {
+        name: name.clone(),
+        kind: kind_label(n.content()),
+        identity: n.identity().as_str().to_owned(),
+        explicit: n.identity().is_explicit(),
+    };
+    rows.push(row(
+        "Layer",
+        "Name",
+        RowValue::Text {
+            target: FieldTarget::Name,
+            text: name,
+        },
+        None,
+    ));
+    Some(Model {
+        header: Some(header),
+        rows,
+    })
+}
+
+/// The rows shown for the composition when nothing is selected.
+#[must_use]
+pub fn inspect_comp(composition: &Composition, layers: usize) -> Model {
+    let rate = composition.frame_rate();
+    let frames = composition.duration();
+    let fps = if rate.denominator() == 1 {
+        rate.numerator().to_string()
+    } else {
+        format!("{:.3}", rate.as_f64())
+    };
+    let seconds = frames as f64 * f64::from(rate.denominator()) / f64::from(rate.numerator());
+    let rows = vec![
+        row(
+            "Composition",
+            "Name",
+            RowValue::ReadOnly(composition.name().to_owned()),
+            None,
+        ),
+        row(
+            "Composition",
+            "Size",
+            RowValue::ReadOnly(format!(
+                "{} × {}",
+                composition.width(),
+                composition.height()
+            )),
+            None,
+        ),
+        row(
+            "Composition",
+            "Timing",
+            RowValue::ReadOnly(format!("{fps} fps · {seconds:.2} s")),
+            None,
+        ),
+        row(
+            "Composition",
+            "Frames",
+            RowValue::ReadOnly(frames.to_string()),
+            None,
+        ),
+        row(
+            "Composition",
+            "Background",
+            RowValue::Color {
+                target: FieldTarget::None,
+                color: composition.background(),
+                text: hex(composition.background()),
+            },
+            None,
+        ),
+        row(
+            "Scene",
+            "Layers",
+            RowValue::ReadOnly(layers.to_string()),
+            None,
+        ),
+    ];
+    Model { header: None, rows }
+}
+
+/// The field currently being typed into.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Editing {
+    /// Field being edited.
+    pub target: FieldTarget,
+    /// The editor model.
+    pub editor: TextEdit,
+    /// Whether the current text does not parse.
+    pub invalid: bool,
+}
+
+/// One drawable/hit-testable item of the inspector body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    /// A section title.
+    Section {
+        /// Title.
+        title: &'static str,
+        /// Its rectangle.
+        rect: Rect,
+    },
+    /// One property row.
+    Row {
+        /// Index into [`Model::rows`].
+        index: usize,
+        /// The whole row.
+        rect: Rect,
+        /// The label (also the numeric scrub handle).
+        label: Rect,
+        /// Stopwatch button, when the row has a channel.
+        stopwatch: Option<Rect>,
+        /// Filled/outline key diamond, when the row has a channel.
+        diamond: Option<Rect>,
+        /// Editable fields with their targets.
+        fields: Vec<(Rect, FieldTarget)>,
+        /// Segments of a segmented control: left, centre, right for Align,
+        /// one tile per [`motioner_core::Ease::ALL`] entry for Ease; empty
+        /// for other rows.
+        segments: Vec<Rect>,
+    },
+    /// The selected layer's header (name, kind, identity, copy button).
+    Header {
+        /// The whole header block.
+        rect: Rect,
+        /// The "Copy" button next to the identity.
+        copy: Rect,
+    },
+}
+
+/// Rows and headers laid out for drawing and hit testing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+    /// Items top to bottom.
+    pub items: Vec<Item>,
+    /// Total content height, for scroll limits.
+    pub height: f32,
+}
+
+/// Lays the selected layer's header out and returns the next `y`.
+fn layout_header(
+    model: &Model,
+    left: f32,
+    right: f32,
+    y: f32,
+    m: Metrics,
+    items: &mut Vec<Item>,
+) -> f32 {
+    if model.header.is_none() {
+        return y;
+    }
+    let h = m.px(56.0);
+    let rect = Rect::new(left, y, (right - left).max(0.0), h);
+    let copy = Rect::new(right - m.px(44.0), y + m.px(36.0), m.px(44.0), m.px(16.0));
+    items.push(Item::Header { rect, copy });
+    y + h + m.px(size::GRID * 3.0)
+}
+
+/// Lays `model` out inside `body`, scrolled by `scroll`.
+#[must_use]
+#[allow(clippy::too_many_lines)] // one branch per row value kind
+pub fn layout(model: &Model, body: Rect, scroll: f32, m: Metrics) -> Layout {
+    let pad = m.px(size::PAD);
+    let row_h = m.px(28.0);
+    let field_h = m.px(24.0);
+    // Channel rows start with a fixed key column (stopwatch, then the key
+    // diamond) so the diamond never touches the label; the label column
+    // after it is wide enough for "Anchor X".
+    let key_column = m.px(36.0);
+    let label_column = m.px(104.0);
+    let gap = m.px(size::GRID * 2.0);
+    let left = body.x + pad;
+    let right = body.right() - pad;
+    let value_x = left + label_column;
+    let value_w = (right - value_x).max(0.0);
+    let mut y = body.y - scroll + m.px(size::GRID * 3.0);
+    let top = y;
+    let mut items = Vec::new();
+
+    y = layout_header(model, left, right, y, m, &mut items);
+
+    let mut section = "";
+    for (index, row) in model.rows.iter().enumerate() {
+        if row.section != section {
+            section = row.section;
+            let rect = Rect::new(left, y, (right - left).max(0.0), m.px(24.0));
+            items.push(Item::Section {
+                title: section,
+                rect,
+            });
+            y += m.px(24.0);
+        }
+        let height = match row.value {
+            RowValue::Ease { .. } => ease_grid_height(m) + row_h,
+            RowValue::Blend { .. } => blend_grid_height(m) + row_h,
+            _ => row_h,
+        };
+        let rect = Rect::new(left, y, (right - left).max(0.0), height);
+        let line = Rect::new(left, y, rect.w, row_h);
+        let stopwatch = row.channel.as_ref().map(|_| {
+            Rect::new(
+                left,
+                (line.center_y() - m.px(8.0)).round(),
+                m.px(16.0),
+                m.px(16.0),
+            )
+        });
+        let diamond = row.channel.as_ref().map(|_| {
+            let side = m.px(10.0);
+            Rect::new(
+                left + m.px(21.0),
+                (line.center_y() - side * 0.5).round(),
+                side,
+                side,
+            )
+        });
+        let label_x = left
+            + if row.channel.is_some() {
+                key_column
+            } else {
+                0.0
+            };
+        let label = Rect::new(label_x, y, (value_x - gap - label_x).max(0.0), row_h);
+        let field_y = (line.center_y() - field_h * 0.5).round();
+        let mut fields = Vec::new();
+        let mut segments = Vec::new();
+        match &row.value {
+            RowValue::Pair { left: a, right: b } => {
+                let half = ((value_w - gap) * 0.5).floor();
+                fields.push((Rect::new(value_x, field_y, half, field_h), a.target));
+                fields.push((
+                    Rect::new(value_x + half + gap, field_y, half, field_h),
+                    b.target,
+                ));
+            }
+            RowValue::Single(f) => {
+                fields.push((Rect::new(value_x, field_y, value_w, field_h), f.target));
+            }
+            RowValue::Color { target, .. } | RowValue::Text { target, .. } => {
+                fields.push((Rect::new(value_x, field_y, value_w, field_h), *target));
+            }
+            RowValue::Align { target, .. } => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+                fields.push((Rect::new(value_x, field_y, seg_w * 3.0, field_h), *target));
+            }
+            RowValue::Ease { .. } => {
+                segments = ease_tiles(Rect::new(left, y + row_h, rect.w, ease_grid_height(m)), m);
+            }
+            RowValue::Blend { .. } => {
+                segments = blend_tiles(Rect::new(left, y + row_h, rect.w, blend_grid_height(m)), m);
+            }
+            RowValue::EffectOps { .. } | RowValue::EffectAdd => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::TextAnimAdd => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::TextAnimRemove { .. }
+            | RowValue::MaskSource { .. }
+            | RowValue::Cycle { .. }
+            | RowValue::Toggle { .. } => {
+                segments = vec![Rect::new(value_x, field_y, value_w, field_h)];
+            }
+            RowValue::MaskMode { .. } => {
+                let seg_w = (value_w / 2.0).floor();
+                segments = (0..2)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::MaskInvert { .. } => {
+                let seg_w = (value_w / 3.0).floor();
+                segments = (0..3)
+                    .map(|i| Rect::new(value_x + seg_w * i as f32, field_y, seg_w, field_h))
+                    .collect();
+            }
+            RowValue::ReadOnly(_) => {
+                fields.push((
+                    Rect::new(value_x, field_y, value_w, field_h),
+                    FieldTarget::None,
+                ));
+            }
+        }
+        items.push(Item::Row {
+            index,
+            rect,
+            label,
+            stopwatch,
+            diamond,
+            fields,
+            segments,
+        });
+        y += height;
+    }
+    let height = (y - top).max(0.0) + pad;
+    Layout { items, height }
+}
+
+/// Columns of the ease grid.
+const EASE_COLUMNS: usize = 3;
+/// Height of one ease tile (curve preview over its name).
+const EASE_TILE: f32 = 52.0;
+
+/// Height of the ease grid below the "Ease" label.
+fn ease_grid_height(m: Metrics) -> f32 {
+    let rows = motioner_core::Ease::ALL.len().div_ceil(EASE_COLUMNS);
+    let gap = m.px(size::GRID);
+    m.px(EASE_TILE) * rows as f32 + gap * (rows as f32 - 1.0) + m.px(size::GRID)
+}
+
+/// Short labels for the blend tiles, in [`motioner_core::BlendMode::ALL`] order.
+pub const BLEND_LABELS: [&str; 7] = [
+    "Normal", "Add", "Mult", "Screen", "Overlay", "Darken", "Lighten",
+];
+
+/// Height of the blend grid below the "Blend" label.
+fn blend_grid_height(m: Metrics) -> f32 {
+    let rows = motioner_core::BlendMode::ALL.len().div_ceil(4);
+    let gap = m.px(size::GRID);
+    m.px(24.0) * rows as f32 + gap * (rows as f32 - 1.0) + m.px(size::GRID)
+}
+
+/// One tile per blend mode, four per row.
+fn blend_tiles(area: Rect, m: Metrics) -> Vec<Rect> {
+    const COLUMNS: usize = 4;
+    let gap = m.px(size::GRID);
+    let w = ((area.w - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).floor();
+    let h = m.px(24.0);
+    (0..motioner_core::BlendMode::ALL.len())
+        .map(|index| {
+            let column = (index % COLUMNS) as f32;
+            let row = (index / COLUMNS) as f32;
+            Rect::new(area.x + (w + gap) * column, area.y + (h + gap) * row, w, h)
+        })
+        .collect()
+}
+
+/// One tile per ease, in [`motioner_core::Ease::ALL`] order.
+fn ease_tiles(area: Rect, m: Metrics) -> Vec<Rect> {
+    let gap = m.px(size::GRID);
+    let w = ((area.w - gap * (EASE_COLUMNS as f32 - 1.0)) / EASE_COLUMNS as f32).floor();
+    let h = m.px(EASE_TILE);
+    (0..motioner_core::Ease::ALL.len())
+        .map(|index| {
+            let column = (index % EASE_COLUMNS) as f32;
+            let row = (index / EASE_COLUMNS) as f32;
+            Rect::new(area.x + (w + gap) * column, area.y + (h + gap) * row, w, h)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Metrics;
+    use motioner_core::{OverrideAction, OverrideEntry, OverrideValue};
+
+    const HELLO: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hello.motion"
+    ));
+
+    fn hello() -> Document {
+        motioner_dsl::run(HELLO, &motioner_dsl::Limits::default()).unwrap()
+    }
+
+    fn body() -> Rect {
+        Rect::new(0.0, 0.0, 320.0, 2000.0)
+    }
+
+    fn field_of<'a>(model: &'a Model, label: &str) -> &'a Row {
+        model.rows.iter().find(|r| r.label == label).unwrap()
+    }
+
+    #[test]
+    fn transform_values_follow_the_frame() {
+        let document = hello();
+        let title = document.roots()[0];
+        let start = inspect_node(
+            &document,
+            title,
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        let settled = inspect_node(
+            &document,
+            title,
+            120,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        let position_x = field_of(&start, "Pos X");
+        match &position_x.value {
+            RowValue::Single(field) => {
+                assert_eq!(field.text, "960");
+                assert_eq!(
+                    field.target,
+                    FieldTarget::Transform(Property::Position, Axis::X)
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match &field_of(&start, "Pos Y").value {
+            RowValue::Single(field) => assert_eq!(field.text, "520"),
+            other => panic!("{other:?}"),
+        }
+        // X and Y have their own channels and keys.
+        assert!(position_x.channel.as_ref().unwrap().keyed);
+        match &field_of(&settled, "Pos Y").value {
+            RowValue::Single(field) => assert_eq!(field.text, "480"),
+            other => panic!("{other:?}"),
+        }
+        let opacity = field_of(&settled, "Opacity");
+        assert!(opacity.channel.as_ref().unwrap().keyed);
+        match &opacity.value {
+            RowValue::Single(f) => assert_eq!(f.text, "100"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn stopwatch_state_reports_keys_and_the_playhead() {
+        let document = hello();
+        let title = document.roots()[0];
+        let model = inspect_node(
+            &document,
+            title,
+            48,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        let opacity = field_of(&model, "Opacity").channel.clone().unwrap();
+        assert!(opacity.keyed);
+        assert!(opacity.on_key, "frame 48 is a key (0.8 s at 60 fps)");
+        assert_eq!(opacity.frames, vec![0, 48]);
+        let between = inspect_node(
+            &document,
+            title,
+            20,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        assert!(
+            !field_of(&between, "Opacity")
+                .channel
+                .as_ref()
+                .unwrap()
+                .on_key
+        );
+        let rotation = field_of(&between, "Rotation").channel.clone().unwrap();
+        assert!(!rotation.keyed);
+    }
+
+    #[test]
+    fn the_name_override_replaces_the_display_name() {
+        let document = hello();
+        let title = document.roots()[0];
+        let key = document.node(title).unwrap().identity().as_str().to_owned();
+        let mut set = OverrideSet::new();
+        set.insert(OverrideEntry::new(
+            key,
+            motioner_core::NAME,
+            OverrideAction::Set(OverrideValue::Text("Headline".to_owned())),
+        ));
+        let model = inspect_node(
+            &document,
+            title,
+            0,
+            Some(&set),
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        match &field_of(&model, "Name").value {
+            RowValue::Text { text, .. } => assert_eq!(text, "Headline"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn layout_matches_the_model_and_has_no_overlaps() {
+        let document = hello();
+        let title = document.roots()[0];
+        let model = inspect_node(
+            &document,
+            title,
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        let m = Metrics::new(1.0);
+        let out = layout(&model, body(), 0.0, m);
+        let rows: Vec<&Item> = out
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Row { .. }))
+            .collect();
+        assert_eq!(rows.len(), model.rows.len());
+        for pair in out.items.windows(2) {
+            let a = item_rect(&pair[0]);
+            let b = item_rect(&pair[1]);
+            assert!(
+                a.bottom() <= b.y + 1e-3 || b.bottom() <= a.y + 1e-3,
+                "items overlap: {a:?} {b:?}"
+            );
+        }
+        for item in &out.items {
+            if let Item::Row {
+                fields, diamond, ..
+            } = item
+            {
+                for (rect, _) in fields {
+                    assert!(rect.w > 0.0 && rect.h > 0.0);
+                }
+                if let Some(diamond) = diamond {
+                    assert!(diamond.right() <= fields.first().map_or(f32::INFINITY, |(r, _)| r.x));
+                }
+            }
+        }
+        // Scrolling moves everything up by the same amount.
+        let scrolled = layout(&model, body(), 40.0, m);
+        if let (Some(Item::Row { rect: a, .. }), Some(Item::Row { rect: b, .. })) =
+            (out.items.get(1), scrolled.items.get(1))
+        {
+            assert!((a.y - b.y - 40.0).abs() < 1e-3);
+        }
+    }
+
+    fn item_rect(item: &Item) -> Rect {
+        match item {
+            Item::Section { rect, .. } | Item::Header { rect, .. } | Item::Row { rect, .. } => {
+                *rect
+            }
+        }
+    }
+
+    #[test]
+    fn content_rows_match_the_node_kind() {
+        let document = hello();
+        let rows = crate::outline_rows(&document);
+        let rect = rows
+            .iter()
+            .find(|r| r.kind == crate::NodeKind::Rect)
+            .unwrap();
+        let model = inspect_node(
+            &document,
+            rect.node,
+            0,
+            None,
+            "Rect 1",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        let labels: Vec<&str> = model.rows.iter().map(|r| r.label.as_str()).collect();
+        assert!(labels.contains(&"Size"));
+        assert!(labels.contains(&"Radius"));
+        assert!(labels.contains(&"Fill"));
+        assert!(labels.contains(&"Stroke width"));
+        let text = inspect_node(
+            &document,
+            document.roots()[0],
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        assert!(text.rows.iter().any(|r| r.label == "Text"));
+        assert!(text.rows.iter().any(|r| r.label == "Align"));
+    }
+
+    #[test]
+    fn effect_rows_show_operations_and_parameters() {
+        let mut document = hello();
+        let node = document.roots()[0];
+        document
+            .add_effect(node, motioner_core::EffectKind::Blur)
+            .unwrap();
+        let channel = EffectChannel {
+            kind: motioner_core::EffectKind::Blur,
+            param: EffectParam::Radius,
+            axis: None,
+        };
+        document
+            .set_effect(node, channel, motioner_core::EffectValueInput::Number(12.0))
+            .unwrap();
+        let model = inspect_node(
+            &document,
+            node,
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default(),
+        )
+        .unwrap();
+        assert!(model.rows.iter().any(|row| row.label == "Blur"));
+        assert!(model.rows.iter().any(|row| row.label == "Radius"));
+        assert!(model
+            .rows
+            .iter()
+            .any(|row| matches!(row.value, RowValue::EffectAdd)));
+        let radius = field_of(&model, "Radius");
+        assert!(matches!(radius.value, RowValue::Single(_)));
+        assert!(radius
+            .channel
+            .as_ref()
+            .is_some_and(|channel| !channel.keyed));
+    }
+
+    #[test]
+    fn composition_rows_are_read_only() {
+        let document = hello();
+        let model = inspect_comp(document.composition(), 10);
+        assert!(model.header.is_none());
+        let m = Metrics::new(1.0);
+        let out = layout(&model, body(), 0.0, m);
+        // Only the background swatch is clickable, and it writes nothing.
+        assert!(out.items.iter().all(|item| match item {
+            Item::Row {
+                fields, segments, ..
+            } => {
+                segments.is_empty()
+                    && fields
+                        .iter()
+                        .all(|(_, target)| *target == FieldTarget::None)
+            }
+            _ => true,
+        }));
+    }
+
+    #[test]
+    fn a_missing_node_inspects_to_none() {
+        let other = motioner_dsl::run(
+            "comp(name=\"A\", duration=1.0)\n",
+            &motioner_dsl::Limits::default(),
+        )
+        .unwrap();
+        let document = hello();
+        assert!(inspect_node(
+            &other,
+            document.roots()[0],
+            0,
+            None,
+            "Title",
+            &[],
+            MediaState::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn an_audio_layer_shows_only_audio_rows() {
+        let document = motioner_dsl::run(
+            r#"
+comp("A", 640, 360, 60, 1.0)
+music = audio("tone.wav", in_point=0.5, out_point=1.5, gain=0.5, start=12,
+              pan=-0.5, fade_in=0.2, fade_out=0.3)
+music.id("music")
+"#,
+            &motioner_dsl::Limits::default(),
+        )
+        .unwrap();
+        let node = document.find("music").unwrap();
+        let model = inspect_node(
+            &document,
+            node,
+            0,
+            None,
+            "Music",
+            &[],
+            MediaState::default(),
+        )
+        .expect("audio model");
+        let sections: Vec<&str> = model.rows.iter().map(|row| row.section).collect();
+        for forbidden in ["Composite", "Effects", "Mask", "Transform"] {
+            assert!(
+                !sections.contains(&forbidden),
+                "audio must not show {forbidden}: {sections:?}"
+            );
+        }
+        let labels: Vec<&str> = model.rows.iter().map(|row| row.label.as_str()).collect();
+        for required in [
+            "Source",
+            "Start",
+            "In point",
+            "Out point",
+            "Gain",
+            "Pan",
+            "Fade in",
+            "Fade out",
+            "Mute",
+            "Solo",
+        ] {
+            assert!(labels.contains(&required), "missing {required}: {labels:?}");
+        }
+        let shown = |label: &str| {
+            let row = model.rows.iter().find(|row| row.label == label).unwrap();
+            match &row.value {
+                RowValue::Single(field) => field.text.clone(),
+                other => panic!("{label} is not a single field: {other:?}"),
+            }
+        };
+        assert_eq!(shown("Start"), "12");
+        assert_eq!(shown("In point"), "0.5");
+        assert_eq!(shown("Out point"), "1.5");
+        assert_eq!(shown("Gain"), "0.5");
+        assert_eq!(shown("Pan"), "-0.5");
+        assert_eq!(shown("Fade in"), "0.2");
+    }
+}

@@ -1,0 +1,160 @@
+# Motioner standard library — components (D-0039 section 6).
+#
+# Every component returns a group with named parts, takes theme tokens and
+# never hard-codes a palette. Components are ordinary nodes: query, overrides,
+# bake and write-through work unchanged.
+
+def _named(node, name):
+    node.name = name
+    return node
+
+
+def _text_center(content, size, color, weight=400):
+    node = text(content, token("font:body"), size, color, "center", weight)
+    return node
+
+
+def card(title, body, width=560.0, height=300.0):
+    g = group()
+    g.name = "card"
+    bg = _named(rect(width, height, token("radius_m"), fill=token("surface")), "card.background")
+    heading = _named(_text_center(title, token("h2"), token("text"), 600), "card.title")
+    heading.pos = (0.0, -48.0)
+    copy = _named(_text_center(body, token("body"), token("muted")), "card.body")
+    copy.pos = (0.0, 36.0)
+    g.add([bg, heading, copy])
+    return g
+
+
+def title_card(title, subtitle, accent_text=None):
+    g = group()
+    g.name = "title_card"
+    heading = _named(_text_center(title, token("h1"), token("text"), 700), "title")
+    heading.pos = (0.0, -40.0)
+    sub = _named(_text_center(subtitle, token("body"), token("muted")), "subtitle")
+    sub.pos = (0.0, 44.0)
+    parts = [heading, sub]
+    if accent_text != None:
+        label = _named(_text_center(accent_text, token("label"), token("accent"), 600), "label")
+        label.pos = (0.0, 118.0)
+        parts = [heading, sub, label]
+    g.add(parts)
+    return g
+
+
+def lower_third(name, role, width=760.0):
+    g = group()
+    g.name = "lower_third"
+    bar = _named(rect(10.0, 132.0, 3.0, fill=token("accent")), "lower_third.bar")
+    bar.pos = (-width * 0.5, 0.0)
+    heading = _named(text(name, token("font:body"), token("h3"), token("text"), "left", 600), "lower_third.name")
+    heading.pos = (-width * 0.5 + 36.0, -8.0)
+    sub = _named(text(role, token("font:body"), token("label"), token("muted"), "left", 500), "lower_third.role")
+    sub.pos = (-width * 0.5 + 36.0, 40.0)
+    g.add([bar, heading, sub])
+    return g
+
+
+def logo_lockup(word, mark_size=72.0):
+    g = group()
+    g.name = "logo_lockup"
+    mark = _named(circle(mark_size * 0.5, fill=token("accent")), "logo.mark")
+    mark.pos = (-mark_size * 0.9, 0.0)
+    label = _named(text(word, token("font:body"), token("h3"), token("text"), "left", 700), "logo.word")
+    label.pos = (0.0, 0.0)
+    g.add([mark, label])
+    return g
+
+
+def badge(label, fill=None):
+    g = group()
+    g.name = "badge"
+    color = fill or token("accent")
+    pill = _named(rect(220.0, 56.0, 28.0, fill=color), "badge.pill")
+    copy = _named(_text_center(label, token("label"), token("bg"), 700), "badge.label")
+    copy.pos = (0.0, 7.0)
+    g.add([pill, copy])
+    return g
+
+
+def button(label, width=320.0, height=76.0):
+    g = group()
+    g.name = "button"
+    plate = _named(rect(width, height, height * 0.5, fill=token("accent")), "button.plate")
+    copy = _named(_text_center(label, token("body"), token("bg"), 600), "button.label")
+    copy.pos = (0.0, 10.0)
+    g.add([plate, copy])
+    return g
+
+
+def bar_chart(values, labels=None, width=720.0, height=360.0, gap=18.0):
+    g = group()
+    g.name = "bar_chart"
+    count = len(values)
+    tallest = max(values)
+    if tallest <= 0.0:
+        tallest = 1.0
+    slot = (width - gap * (count - 1)) / count
+    index = 0
+    for value in values:
+        bar_height = height * value / tallest
+        bar = rect(slot, bar_height, token("radius_s"), fill=token("accent"))
+        bar.name = "bar"
+        bar.pos = (-width * 0.5 + slot * 0.5 + (slot + gap) * index, -bar_height * 0.5)
+        g.add([bar])
+        if labels != None:
+            label = text(labels[index], token("font:body"), token("caption"), token("muted"), "center", 500)
+            label.name = "bar.label"
+            label.pos = (bar.pos[0], 32.0)
+            g.add([label])
+        index = index + 1
+    return g
+
+
+def progress(value, label=None, width=640.0):
+    g = group()
+    g.name = "progress"
+    track = _named(rect(width, 18.0, 9.0, fill=token("surface")), "progress.track")
+    fill_width = width * clamp01(value)
+    fill_rect = _named(rect(fill_width, 18.0, 9.0, fill=token("accent")), "progress.fill")
+    fill_rect.pos = (-width * 0.5 + fill_width * 0.5, 0.0)
+    track.pos = (0.0, 0.0)
+    g.add([track, fill_rect])
+    if label != None:
+        copy = _named(text(label, token("font:body"), token("label"), token("muted"), "left", 500), "progress.label")
+        copy.pos = (-width * 0.5, -28.0)
+        g.add([copy])
+    return g
+
+
+def background(kind="gradient_drift"):
+    g = group()
+    g.name = "background"
+    size = comp_size()
+    if kind == "grain":
+        base = _named(rect(size[0], size[1], 0.0, fill=token("bg")), "background.base")
+        g.add([base])
+        for index in range(36):
+            x = -size[0] * 0.5 + size[0] * ((index * 37) % 36) / 36.0
+            y = -size[1] * 0.5 + size[1] * ((index * 53) % 29) / 29.0
+            dot = circle(2.0 + (index % 3), fill=token("muted"))
+            dot.name = "grain"
+            dot.pos = (x, y)
+            g.add([dot])
+    elif kind == "glow_orbs":
+        base = _named(rect(size[0], size[1], 0.0, fill=token("bg")), "background.base")
+        g.add([base])
+        orb_a = circle(size[1] * 0.42, fill=token("accent"))
+        orb_a.name = "orb.accent"
+        orb_a.pos = (-size[0] * 0.22, -size[1] * 0.18)
+        orb_a.opacity = 0.35
+        orb_b = circle(size[1] * 0.36, fill=token("accent_2"))
+        orb_b.name = "orb.accent_2"
+        orb_b.pos = (size[0] * 0.26, size[1] * 0.2)
+        orb_b.opacity = 0.3
+        g.add([orb_a, orb_b])
+    else:
+        gradient = linear_gradient((0.0, -size[1] * 0.5), (0.0, size[1] * 0.5), [(0.0, token("bg")), (1.0, token("surface"))])
+        panel = _named(rect(size[0], size[1], 0.0, fill=gradient), "background.gradient")
+        g.add([panel])
+    return g

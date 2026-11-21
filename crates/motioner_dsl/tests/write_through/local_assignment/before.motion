@@ -1,0 +1,3 @@
+comp(name="P", duration=1.0)
+c = circle(10)
+c.pos = (100, 200)

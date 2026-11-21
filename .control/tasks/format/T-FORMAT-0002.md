@@ -1,18 +1,17 @@
 ---
 id: T-FORMAT-0002
 titulo: Implement project load and save round-trip
-estado: backlog
+estado: done
 prioridad: alta
 tipo: feature
 creado_por: agente
 asignado_a: agente
 creado: 2026-10-31
-actualizado: 2026-10-31
+actualizado: 2026-11-11
 depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 Implement the loader and saver for project format v0 against the spec

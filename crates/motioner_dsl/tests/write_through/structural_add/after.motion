@@ -1,0 +1,4 @@
+comp(name="P", duration=1.0)
+a = circle(10)
+card = rect(100, 50)
+b = circle(20)

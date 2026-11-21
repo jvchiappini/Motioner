@@ -1,7 +1,11 @@
-//! Motioner application entry point.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+//! GUI-subsystem entry point (the desktop app and editor).
 //!
-//! Wires the document, evaluator, renderer and project I/O into the
-//! desktop application. The editor shell and the engine host are added
-//! in later phases.
+//! Built as a Windows GUI executable so double-clicking `motioner.exe` never
+//! opens a console window next to the editor. The CLI logic lives in the
+//! library ([`motioner_app::run_cli`]); `motioner-cli.exe` is the
+//! console-subsystem companion for terminals (prompt 17 S6).
 
-fn main() {}
+fn main() -> std::process::ExitCode {
+    motioner_app::run_cli()
+}

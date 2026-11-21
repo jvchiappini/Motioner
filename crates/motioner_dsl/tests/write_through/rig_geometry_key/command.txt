@@ -1,0 +1,78 @@
+GeometryKey {
+    rig: "mascot",
+    part: "lid-top-left",
+    time: 1.0,
+    points: [
+        PathPoint {
+            position: Vec2 {
+                x: 61.0,
+                y: 90.0,
+            },
+            handle_in: Vec2 {
+                x: 0.0,
+                y: 0.0,
+            },
+            handle_out: Vec2 {
+                x: 0.0,
+                y: -8.284271247461902,
+            },
+        },
+        PathPoint {
+            position: Vec2 {
+                x: 76.0,
+                y: 73.0,
+            },
+            handle_in: Vec2 {
+                x: -8.284271247461902,
+                y: 0.0,
+            },
+            handle_out: Vec2 {
+                x: 8.284271247461902,
+                y: 0.0,
+            },
+        },
+        PathPoint {
+            position: Vec2 {
+                x: 91.0,
+                y: 88.0,
+            },
+            handle_in: Vec2 {
+                x: 0.0,
+                y: -8.284271247461902,
+            },
+            handle_out: Vec2 {
+                x: 0.0,
+                y: 0.0,
+            },
+        },
+        PathPoint {
+            position: Vec2 {
+                x: 91.0,
+                y: 70.0,
+            },
+            handle_in: Vec2 {
+                x: 0.0,
+                y: 0.0,
+            },
+            handle_out: Vec2 {
+                x: 0.0,
+                y: 0.0,
+            },
+        },
+        PathPoint {
+            position: Vec2 {
+                x: 61.0,
+                y: 70.0,
+            },
+            handle_in: Vec2 {
+                x: 0.0,
+                y: 0.0,
+            },
+            handle_out: Vec2 {
+                x: 0.0,
+                y: 0.0,
+            },
+        },
+    ],
+    ease: Linear,
+}

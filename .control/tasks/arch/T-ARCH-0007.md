@@ -34,3 +34,9 @@ record which widgets belong upstream in GUIMaker and which stay in
 
 ## Notas del agente
 
+2026-10-31 (S-2026-10-31-009): GUIMaker inspected via GitHub API (head
+9dcbc28). It is a designer binary with code generation, not a library;
+it imports the removed `ferrous_app` crate, so it does not build against
+engine 02e6d48. First upstream fix: port it to the current engine API.
+D-0004 and REF-0001 section 3 must be corrected (motioner_ui depends on
+the engine UI crates, GUIMaker generates code for them). See CONTEXT.

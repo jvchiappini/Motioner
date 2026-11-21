@@ -2,4 +2,4 @@
 
 (generado por `pctl reindex` — no editar a mano)
 
-- **T-ARCH-0005** (bloqueada) — Pin FerrousEngine and document the update flow `[alta]` (actualizado 2026-10-31)
+- **T-PERF-0005** — FerrousEngine to the byte: measured, zero-waste, idle-free engine (prompt 18) `[alta]` (actualizado 2026-11-17)

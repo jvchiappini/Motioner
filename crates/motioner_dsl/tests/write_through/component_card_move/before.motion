@@ -1,0 +1,5 @@
+comp(name="P", width=1000, height=600, duration=4.0, theme="dark")
+use_theme(theme("dark"))
+g = card("Quarterly", "Revenue grew 24 percent")
+g.id("card")
+g.pos = (500, 300)

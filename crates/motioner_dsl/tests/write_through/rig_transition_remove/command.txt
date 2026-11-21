@@ -1,0 +1,8 @@
+RemoveTransition {
+    rig: "mascot",
+    from: Some(
+        "calm",
+    ),
+    to: "sad",
+    input: "mood",
+}

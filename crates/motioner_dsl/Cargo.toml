@@ -1,0 +1,18 @@
+[package]
+name = "motioner_dsl"
+description = "MDF language: lexer, parser, AST and sandboxed interpreter for Motioner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_rig.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+motioner_eval.workspace = true

@@ -1,0 +1,712 @@
+//! Native deformers: lattice, skinning and blend shapes (D-0059).
+//!
+//! Deformers run after drivers and before constraints. They only touch a
+//! part's path points; transforms stay with the driver/constraint stages.
+//! Every operation is pure and allocation-bounded, so bake and a future
+//! runtime share the same code.
+
+use std::collections::BTreeMap;
+
+use motioner_core::{PathGeometry, PathPoint, Vec2};
+
+use crate::eval::RigError;
+use crate::{PartBase, PartOutput, PropValue};
+
+/// Maximum bones in one skin.
+pub const MAX_BONES: usize = 64;
+/// Maximum blend shapes on one part.
+pub const MAX_BLEND_SHAPES: usize = 32;
+/// Maximum point count a skin or blend shape may touch.
+pub const MAX_DEFORM_POINTS: usize = 16_384;
+
+/// A 2x2 free-form lattice with quadratic edge bends.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lattice {
+    /// Part index.
+    pub part: usize,
+    /// Vec2 properties for the top-left, top-right, bottom-right and
+    /// bottom-left corners, as offsets from the part's local bounds.
+    pub corners: [usize; 4],
+    /// Optional Vec2 midpoint offsets for the top, right, bottom and left
+    /// edges.
+    pub edges: [Option<usize>; 4],
+}
+
+/// One bone in a skin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bone {
+    /// Stable name used by weights and the DSL.
+    pub name: String,
+    /// Parent bone index.
+    pub parent: Option<usize>,
+    /// Bind position in the parent's space.
+    pub bind_position: Vec2,
+    /// Bind rotation in degrees, relative to the parent.
+    pub bind_rotation: f64,
+    /// Length along the bone's local +x axis, for auto weights.
+    pub length: f64,
+    /// Property that adds to the bone's rotation.
+    pub rotation_property: Option<usize>,
+    /// Vec2 property that adds to the bone's position.
+    pub position_property: Option<usize>,
+}
+
+/// A skin: bones plus optional per-point weights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Skin {
+    /// Part index.
+    pub part: usize,
+    /// Indices into [`Rig::bones`](crate::Rig::bones). Bind pose and hierarchy
+    /// always come from the rig, never from a copy.
+    pub bones: Vec<usize>,
+    /// Per-point `(bone, weight)` pairs. `None` uses distance weights.
+    pub weights: Option<Vec<Vec<(usize, f64)>>>,
+}
+
+/// One blend shape (morph target).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlendShape {
+    /// Stable name.
+    pub name: String,
+    /// Target points, already compatible with the part topology.
+    pub points: Vec<PathPoint>,
+    /// Number property holding the blend weight in `0..=1`.
+    pub weight: usize,
+}
+
+/// A set of blend shapes on one part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlendShapes {
+    /// Part index.
+    pub part: usize,
+    /// Shapes in application order.
+    pub shapes: Vec<BlendShape>,
+}
+
+/// A deformer in the part pipeline.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Deformer {
+    /// 2x2 free-form lattice with edge bends.
+    Lattice(Lattice),
+    /// Hierarchical bone skinning.
+    Skin(Skin),
+    /// Blend shapes.
+    BlendShapes(BlendShapes),
+}
+
+impl Deformer {
+    /// The part this deformer writes.
+    #[must_use]
+    pub fn part(&self) -> usize {
+        match self {
+            Self::Lattice(lattice) => lattice.part,
+            Self::Skin(skin) => skin.part,
+            Self::BlendShapes(shapes) => shapes.part,
+        }
+    }
+
+    /// Applies the deformer to one part.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] for a missing path part, an out-of-range bone,
+    /// invalid weights, a topology mismatch or a non-finite result.
+    pub fn apply(
+        &self,
+        part: &mut PartOutput,
+        base: &PartBase,
+        values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
+        bones: Option<&[BonePose]>,
+    ) -> Result<(), RigError> {
+        if let Some(media) = &base.media {
+            let source = part.mesh.as_ref().unwrap_or(&media.mesh);
+            let points: Vec<PathPoint> = source
+                .points
+                .iter()
+                .map(|point| PathPoint::corner(*point))
+                .collect();
+            let points = self.apply_points(&points, values, rig_bones, bones)?;
+            part.mesh = Some(motioner_core::MeshSample {
+                columns: source.columns,
+                rows: source.rows,
+                uvs: source.uvs.clone(),
+                points: points.into_iter().map(|point| point.position).collect(),
+            });
+            part.touched = true;
+            return Ok(());
+        }
+        let source = part
+            .geometry
+            .as_ref()
+            .or(base.geometry.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                RigError::message(format!("part '{}' has no path to deform", base.name))
+            })?;
+        let deformed = match self {
+            Self::Lattice(lattice) => lattice.apply(&source, values)?,
+            Self::Skin(skin) => skin.apply(&source, values, rig_bones, bones)?,
+            Self::BlendShapes(shapes) => shapes.apply(&source, values)?,
+        };
+        part.geometry = Some(deformed);
+        part.touched = true;
+        Ok(())
+    }
+
+    /// Applies one deformer to an arbitrary point set. Paths and image/video
+    /// mesh vertices share this entry point (D-0061).
+    ///
+    /// # Errors
+    ///
+    /// The same errors as the concrete deformer.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
+        bones: Option<&[BonePose]>,
+    ) -> Result<Vec<PathPoint>, RigError> {
+        match self {
+            Self::Lattice(lattice) => lattice.apply_points(points, values),
+            Self::Skin(skin) => skin.apply_points(points, values, rig_bones, bones),
+            Self::BlendShapes(shapes) => shapes.apply_points(points, values),
+        }
+    }
+}
+
+impl Lattice {
+    fn apply(
+        &self,
+        geometry: &PathGeometry,
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Result<PathGeometry, RigError> {
+        let bounds = geometry
+            .local_bounds()
+            .ok_or_else(|| RigError::message("lattice source has no finite bounds"))?;
+        let points = self.apply_points_with_bounds(geometry.points(), bounds, values);
+        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
+            .map_err(|error| RigError::message(error.to_string()))
+    }
+
+    /// Applies the Coons patch to any point set. Image/video meshes and vector
+    /// paths share this implementation; only the bounds source differs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] when the points have no finite bounds.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Result<Vec<PathPoint>, RigError> {
+        let bounds = point_bounds(points)
+            .ok_or_else(|| RigError::message("lattice source has no finite bounds"))?;
+        Ok(self.apply_points_with_bounds(points, bounds, values))
+    }
+
+    fn apply_points_with_bounds(
+        &self,
+        points: &[PathPoint],
+        bounds: [f64; 4],
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Vec<PathPoint> {
+        let [left, top, right, bottom] = bounds;
+        let width = right - left;
+        let height = bottom - top;
+        if width.abs() < 1e-9 || height.abs() < 1e-9 {
+            return points.to_vec();
+        }
+        let source = [
+            Vec2::new(left, top),
+            Vec2::new(right, top),
+            Vec2::new(right, bottom),
+            Vec2::new(left, bottom),
+        ];
+        let mut corners = source;
+        for (index, corner) in corners.iter_mut().enumerate() {
+            *corner = source[index] + vector(values, self.corners[index]).unwrap_or(Vec2::ZERO);
+        }
+        let mut midpoints = [
+            (corners[0] + corners[1]) * 0.5,
+            (corners[1] + corners[2]) * 0.5,
+            (corners[2] + corners[3]) * 0.5,
+            (corners[3] + corners[0]) * 0.5,
+        ];
+        for (index, edge) in self.edges.iter().enumerate() {
+            if let Some(property) = edge {
+                midpoints[index] =
+                    midpoints[index] + vector(values, *property).unwrap_or(Vec2::ZERO);
+            }
+        }
+        let mut deformed = Vec::with_capacity(points.len());
+        for point in points {
+            let u = ((point.position.x - left) / width).clamp(0.0, 1.0);
+            let v = ((point.position.y - top) / height).clamp(0.0, 1.0);
+            let position = map_lattice(corners, midpoints, u, v);
+            let end = map_lattice(
+                corners,
+                midpoints,
+                ((point.position.x + point.handle_out.x - left) / width).clamp(0.0, 1.0),
+                ((point.position.y + point.handle_out.y - top) / height).clamp(0.0, 1.0),
+            );
+            let incoming = map_lattice(
+                corners,
+                midpoints,
+                ((point.position.x + point.handle_in.x - left) / width).clamp(0.0, 1.0),
+                ((point.position.y + point.handle_in.y - top) / height).clamp(0.0, 1.0),
+            );
+            deformed.push(PathPoint::curved(
+                position,
+                incoming - position,
+                end - position,
+            ));
+        }
+        deformed
+    }
+}
+
+fn point_bounds(points: &[PathPoint]) -> Option<[f64; 4]> {
+    let first = points.first()?;
+    let mut bounds = [
+        first.position.x,
+        first.position.y,
+        first.position.x,
+        first.position.y,
+    ];
+    for point in points {
+        for value in [
+            point.position,
+            point.position + point.handle_in,
+            point.position + point.handle_out,
+        ] {
+            if !value.is_finite() {
+                return None;
+            }
+            bounds[0] = bounds[0].min(value.x);
+            bounds[1] = bounds[1].min(value.y);
+            bounds[2] = bounds[2].max(value.x);
+            bounds[3] = bounds[3].max(value.y);
+        }
+    }
+    Some(bounds)
+}
+
+fn map_lattice(corners: [Vec2; 4], midpoints: [Vec2; 4], u: f64, v: f64) -> Vec2 {
+    let top = quadratic(corners[0], midpoints[0], corners[1], u);
+    let bottom = quadratic(corners[3], midpoints[2], corners[2], u);
+    let left = quadratic(corners[0], midpoints[3], corners[3], v);
+    let right = quadratic(corners[1], midpoints[1], corners[2], v);
+    let bilinear = (corners[0] * (1.0 - u) + corners[1] * u) * (1.0 - v)
+        + (corners[3] * (1.0 - u) + corners[2] * u) * v;
+    top * (1.0 - v) + bottom * v + left * (1.0 - u) + right * u - bilinear
+}
+
+fn quadratic(a: Vec2, mid: Vec2, b: Vec2, t: f64) -> Vec2 {
+    let one = 1.0 - t;
+    a * (one * one) + mid * (2.0 * one * t) + b * (t * t)
+}
+
+impl Skin {
+    fn apply(
+        &self,
+        geometry: &PathGeometry,
+        values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
+        bones: Option<&[BonePose]>,
+    ) -> Result<PathGeometry, RigError> {
+        let points = self.apply_points(geometry.points(), values, rig_bones, bones)?;
+        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
+            .map_err(|error| RigError::message(error.to_string()))
+    }
+
+    /// Skins any point set, with or without handles. This is the shared path
+    /// for vector outlines and image/video mesh vertices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] for a missing/duplicate bone, a bad pose count or
+    /// invalid weights.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+        rig_bones: &[Bone],
+        bones: Option<&[BonePose]>,
+    ) -> Result<Vec<PathPoint>, RigError> {
+        if self.bones.is_empty() {
+            return Err(RigError::message("skin has no bones"));
+        }
+        if self.bones.len() > MAX_BONES {
+            return Err(RigError::message(format!(
+                "skin has more than {MAX_BONES} bones"
+            )));
+        }
+        if points.len() > MAX_DEFORM_POINTS {
+            return Err(RigError::message(format!(
+                "skin touches more than {MAX_DEFORM_POINTS} points"
+            )));
+        }
+        for (position, &bone) in self.bones.iter().enumerate() {
+            if bone >= rig_bones.len() {
+                return Err(RigError::message(format!(
+                    "skin bone index {bone} does not exist in the rig"
+                )));
+            }
+            if self.bones[..position].contains(&bone) {
+                return Err(RigError::message(format!("skin repeats bone index {bone}")));
+            }
+        }
+        let owned;
+        let bone_poses_ref = if let Some(poses) = bones {
+            poses
+        } else {
+            owned = bone_poses(rig_bones, values);
+            &owned
+        };
+        if bone_poses_ref.len() != rig_bones.len() {
+            return Err(RigError::message("bone pose count does not match the rig"));
+        }
+        let mut bind = Vec::with_capacity(rig_bones.len());
+        let mut posed = Vec::with_capacity(rig_bones.len());
+        for index in 0..rig_bones.len() {
+            bind.push(bone_world(rig_bones, index, None, true)?);
+            posed.push(posed_world(rig_bones, bone_poses_ref, index)?);
+        }
+        let weights = self
+            .weights
+            .clone()
+            .unwrap_or_else(|| auto_weights(self, rig_bones, &bind, points));
+        if weights.len() != points.len() {
+            return Err(RigError::message(format!(
+                "skin weights cover {} points but the set has {}",
+                weights.len(),
+                points.len()
+            )));
+        }
+        let mut deformed = Vec::with_capacity(points.len());
+        for (point, weights) in points.iter().zip(&weights) {
+            let mut position = Vec2::ZERO;
+            let mut incoming = Vec2::ZERO;
+            let mut outgoing = Vec2::ZERO;
+            let mut total = 0.0;
+            for &(bone, weight) in weights {
+                if bone >= rig_bones.len() || !weight.is_finite() || weight < 0.0 {
+                    return Err(RigError::message("skin has an invalid weight"));
+                }
+                if weight == 0.0 {
+                    continue;
+                }
+                let local = inverse(bind[bone], point.position);
+                let mapped = forward(posed[bone], local);
+                let delta = posed[bone].rotation - bind[bone].rotation;
+                position = position + mapped * weight;
+                incoming = incoming + rotate(point.handle_in, delta) * weight;
+                outgoing = outgoing + rotate(point.handle_out, delta) * weight;
+                total += weight;
+            }
+            if total > 1e-9 {
+                position = position * (1.0 / total);
+                incoming = incoming * (1.0 / total);
+                outgoing = outgoing * (1.0 / total);
+            } else {
+                position = point.position;
+                incoming = point.handle_in;
+                outgoing = point.handle_out;
+            }
+            deformed.push(PathPoint::curved(position, incoming, outgoing));
+        }
+        Ok(deformed)
+    }
+}
+
+/// A bone's local transform after properties and bone constraints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BonePose {
+    /// Local position.
+    pub position: Vec2,
+    /// Local rotation in degrees.
+    pub rotation: f64,
+}
+
+/// Builds the default local bone poses from bind values and properties.
+#[must_use]
+pub fn bone_poses(bones: &[Bone], values: &BTreeMap<usize, PropValue>) -> Vec<BonePose> {
+    bones
+        .iter()
+        .map(|bone| BonePose {
+            position: bone.bind_position
+                + bone
+                    .position_property
+                    .and_then(|property| values.get(&property))
+                    .and_then(PropValue::vector)
+                    .unwrap_or(Vec2::ZERO),
+            rotation: bone.bind_rotation
+                + bone
+                    .rotation_property
+                    .and_then(|property| values.get(&property))
+                    .and_then(PropValue::number)
+                    .unwrap_or(0.0),
+        })
+        .collect()
+}
+
+fn posed_world(bones: &[Bone], poses: &[BonePose], index: usize) -> Result<BoneWorld, RigError> {
+    let Some(pose) = poses.get(index) else {
+        return Err(RigError::message(format!("bone {index} has no pose")));
+    };
+    if let Some(parent) = bones[index].parent {
+        let parent = posed_world(bones, poses, parent)?;
+        Ok(BoneWorld {
+            position: parent.position + rotate(pose.position, parent.rotation),
+            rotation: parent.rotation + pose.rotation,
+        })
+    } else {
+        Ok(BoneWorld {
+            position: pose.position,
+            rotation: pose.rotation,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BoneWorld {
+    position: Vec2,
+    rotation: f64,
+}
+
+fn bone_world(
+    bones: &[Bone],
+    index: usize,
+    values: Option<&BTreeMap<usize, PropValue>>,
+    bind: bool,
+) -> Result<BoneWorld, RigError> {
+    let bone = &bones[index];
+    let (position, rotation) = if bind {
+        (bone.bind_position, bone.bind_rotation)
+    } else {
+        let position = bone.bind_position
+            + bone
+                .position_property
+                .and_then(|property| values.and_then(|values| values.get(&property)))
+                .and_then(PropValue::vector)
+                .unwrap_or(Vec2::ZERO);
+        let rotation = bone.bind_rotation
+            + bone
+                .rotation_property
+                .and_then(|property| values.and_then(|values| values.get(&property)))
+                .and_then(PropValue::number)
+                .unwrap_or(0.0);
+        (position, rotation)
+    };
+    if let Some(parent) = bone.parent {
+        let parent = bone_world(bones, parent, values, bind)?;
+        Ok(BoneWorld {
+            position: parent.position + rotate(position, parent.rotation),
+            rotation: parent.rotation + rotation,
+        })
+    } else {
+        Ok(BoneWorld { position, rotation })
+    }
+}
+
+fn inverse(world: BoneWorld, point: Vec2) -> Vec2 {
+    rotate(point - world.position, -world.rotation)
+}
+
+fn forward(world: BoneWorld, point: Vec2) -> Vec2 {
+    rotate(point, world.rotation) + world.position
+}
+
+fn rotate(value: Vec2, degrees: f64) -> Vec2 {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    Vec2::new(value.x * cos - value.y * sin, value.x * sin + value.y * cos)
+}
+
+fn auto_weights(
+    skin: &Skin,
+    rig_bones: &[Bone],
+    bind: &[BoneWorld],
+    points: &[PathPoint],
+) -> Vec<Vec<(usize, f64)>> {
+    points
+        .iter()
+        .map(|point| {
+            let mut weights: Vec<(usize, f64)> = skin
+                .bones
+                .iter()
+                .map(|&index| {
+                    let bone = &bind[index];
+                    let start = bone.position;
+                    let end =
+                        start + rotate(Vec2::new(rig_bones[index].length, 0.0), bone.rotation);
+                    let distance = distance_to_segment(point.position, start, end);
+                    (index, 1.0 / (distance + 1.0).powi(2))
+                })
+                .collect();
+            weights.sort_by(|a, b| b.1.total_cmp(&a.1));
+            weights.truncate(2);
+            let total: f64 = weights.iter().map(|(_, weight)| weight).sum();
+            if total > 0.0 {
+                for (_, weight) in &mut weights {
+                    *weight /= total;
+                }
+            }
+            weights
+        })
+        .collect()
+}
+
+fn distance_to_segment(point: Vec2, start: Vec2, end: Vec2) -> f64 {
+    let line = end - start;
+    let length = line.length_squared();
+    if length <= 1e-12 {
+        return (point - start).length();
+    }
+    let t = ((point - start).x * line.x + (point - start).y * line.y) / length;
+    let t = t.clamp(0.0, 1.0);
+    (point - (start + line * t)).length()
+}
+
+impl BlendShapes {
+    fn apply(
+        &self,
+        geometry: &PathGeometry,
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Result<PathGeometry, RigError> {
+        let points = self.apply_points(geometry.points(), values)?;
+        PathGeometry::new(points, geometry.closed(), geometry.cap(), geometry.join())
+            .map_err(|error| RigError::message(error.to_string()))
+    }
+
+    /// Blends any point set. Handles blend as offsets, so mesh vertices with
+    /// no handles and curved paths use the same implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RigError`] for too many shapes or a shape whose point count
+    /// does not match the input.
+    pub fn apply_points(
+        &self,
+        points: &[PathPoint],
+        values: &BTreeMap<usize, PropValue>,
+    ) -> Result<Vec<PathPoint>, RigError> {
+        if self.shapes.len() > MAX_BLEND_SHAPES {
+            return Err(RigError::message(format!(
+                "part has more than {MAX_BLEND_SHAPES} blend shapes"
+            )));
+        }
+        let mut deformed = points.to_vec();
+        for shape in &self.shapes {
+            if shape.points.len() != deformed.len() {
+                return Err(RigError::message(format!(
+                    "blend shape '{}' has {} points, expected {}",
+                    shape.name,
+                    shape.points.len(),
+                    deformed.len()
+                )));
+            }
+            let weight = values
+                .get(&shape.weight)
+                .and_then(PropValue::number)
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            if weight == 0.0 {
+                continue;
+            }
+            for (point, target) in deformed.iter_mut().zip(&shape.points) {
+                *point = PathPoint::curved(
+                    point.position.lerp(target.position, weight),
+                    point.handle_in.lerp(target.handle_in, weight),
+                    point.handle_out.lerp(target.handle_out, weight),
+                );
+            }
+        }
+        Ok(deformed)
+    }
+}
+
+/// Resamples `target` to `count` points along its polyline so a blend shape
+/// can use any authored topology.
+#[must_use]
+pub fn compatible_points(target: &PathGeometry, count: usize, closed: bool) -> Vec<PathPoint> {
+    let source = target.flatten();
+    if source.len() < 2 || count < 2 {
+        return target.points().to_vec();
+    }
+    let mut points = source.clone();
+    if closed {
+        points.push(source[0]);
+    }
+    let mut lengths = Vec::with_capacity(points.len());
+    let mut total = 0.0;
+    lengths.push(0.0);
+    for pair in points.windows(2) {
+        total += (pair[1] - pair[0]).length();
+        lengths.push(total);
+    }
+    if total <= 1e-12 {
+        return target.points().to_vec();
+    }
+    (0..count)
+        .map(|index| {
+            #[allow(clippy::cast_precision_loss)]
+            let distance = total * index as f64 / (count - 1) as f64;
+            let segment = lengths
+                .partition_point(|length| *length <= distance)
+                .saturating_sub(1)
+                .min(points.len() - 2);
+            let span = lengths[segment + 1] - lengths[segment];
+            let t = if span <= 1e-12 {
+                0.0
+            } else {
+                (distance - lengths[segment]) / span
+            };
+            PathPoint::corner(points[segment].lerp(points[segment + 1], t))
+        })
+        .collect()
+}
+
+fn vector(values: &BTreeMap<usize, PropValue>, property: usize) -> Option<Vec2> {
+    values.get(&property).and_then(PropValue::vector)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square() -> PathGeometry {
+        PathGeometry::new(
+            vec![
+                PathPoint::corner(Vec2::new(0.0, 0.0)),
+                PathPoint::corner(Vec2::new(10.0, 0.0)),
+                PathPoint::corner(Vec2::new(10.0, 10.0)),
+                PathPoint::corner(Vec2::new(0.0, 10.0)),
+            ],
+            true,
+            motioner_core::LineCap::Round,
+            motioner_core::LineJoin::Round,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lattice_moves_a_corner_and_keeps_topology() {
+        let mut values = BTreeMap::new();
+        values.insert(0, PropValue::Vector(Vec2::new(2.0, 0.0)));
+        let lattice = Lattice {
+            part: 0,
+            corners: [0, 1, 2, 3],
+            edges: [None; 4],
+        };
+        let deformed = lattice.apply(&square(), &values).unwrap();
+        assert_eq!(deformed.points().len(), 4);
+        assert!((deformed.points()[0].position.x - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compatible_points_matches_the_requested_count() {
+        let points = compatible_points(&square(), 8, true);
+        assert_eq!(points.len(), 8);
+    }
+}

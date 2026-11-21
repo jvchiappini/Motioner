@@ -1,0 +1,70 @@
+{
+  "source": ".control/CONTEXT.md, prompt 18 P0 baseline row",
+  "recorded_at": "2026-11-17",
+  "machine": "Windows, release mode, RTX 4050, divan",
+  "commands": {
+    "subsystems": "cargo bench -p ferrous_renderer --bench subsystems",
+    "engine": "No separate engine bench target exists; ferrous_renderer's subsystems bench is the only [[bench]] target."
+  },
+  "baselines": [
+    {
+      "bench": "ui_layout_large_tree",
+      "case": "8192",
+      "ms": 5.451,
+      "alloc_mb": 14.18,
+      "note": "one-shot tree construction plus layout"
+    },
+    {
+      "bench": "gui_batch_quads",
+      "case": "16384",
+      "us_approx": 165,
+      "allocs": 0
+    },
+    {
+      "bench": "gui_batch_glyphs",
+      "case": "16384",
+      "us_approx": 165,
+      "allocs": 0
+    },
+    {
+      "bench": "text_layout_line",
+      "case": "The quick brown fox jumps over the lazy dog AV 1234567890",
+      "us": 4.599,
+      "allocs": 0
+    },
+    {
+      "bench": "msdf_glyph_rasterisation",
+      "case": "ASCII",
+      "ms": 3.295,
+      "allocs": 213,
+      "alloc_mb": 1.8
+    },
+    {
+      "bench": "tessellation_simple_fill",
+      "case": "default",
+      "allocs": 0
+    },
+    {
+      "bench": "tessellation_complex_fill",
+      "case": "default",
+      "allocs": 0
+    },
+    {
+      "bench": "tessellation_complex_stroke",
+      "case": "default",
+      "allocs": 0
+    },
+    {
+      "bench": "pure2d_heavy_mixed",
+      "case": "2048",
+      "us": 328,
+      "allocs": 87
+    },
+    {
+      "bench": "svg_mesh_upload",
+      "case": "default",
+      "us": 2.023,
+      "allocs": 6
+    }
+  ]
+}

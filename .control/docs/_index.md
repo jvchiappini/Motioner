@@ -30,7 +30,7 @@ Each category groups related documentation files.
 | Doc | Status | Last updated | File |
 |---|---|---|---|
 | **REF-0001** — Motioner system blueprint | draft | 2026-10-31 | reference/REF-0001.md |
-| **REF-0002** — Engineering conventions | draft | 2026-10-31 | reference/REF-0002.md |
+| **REF-0002** — Engineering conventions | draft | 2026-11-16 | reference/REF-0002.md |
 | **REF-0003** — Product requirements and scope | draft | 2026-10-31 | reference/REF-0003.md |
 | **REF-0004** — MDF v0 language specification | draft | 2026-10-31 | reference/REF-0004.md |
 

@@ -1,0 +1,7 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#101418")
+a = text("Headline", "Inter", 72, "#FFFFFF", "center")
+a.pos = (500, 240)
+b = text("Body copy", "Inter", 40, "#D0D6E2", "center")
+b.pos = (500, 340)
+c = text("caption", "Inter", 26, "#A9B8D0", "center")
+c.pos = (500, 410)

@@ -1,0 +1,5 @@
+project(version=1, name="Demo", width=1280, height=720, fps=60, duration=360, background="#000000", main="main")
+asset(key="bg", hash="259cb6e79b25528e6e833db77760c3f7be85d69203852d9dd846d21b62c6d65b", original="bg.png", kind="image", imported="2026-11-04T17:19:25Z")
+asset(key="clip", hash="d605a10b13e8b436de2e42e10d41d8cdebb6ca1e4b86b8d38a784105b6cb6321", original="clip.mp4", kind="video", imported="2026-11-04T17:19:25Z")
+asset(key="music", hash="8d5525836ddaa8c2a80ce07cd95fd65b79a3e414e4e3cd685f4de36c96d17122", original="music.wav", kind="audio", imported="2026-11-04T17:19:26Z")
+composition(slug="main", title="Main")

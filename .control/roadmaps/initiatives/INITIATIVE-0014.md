@@ -30,7 +30,9 @@ AI action is undoable, reviewable and attributable.
 - Change review: diff, accept/reject, undo grouping.
 - Safety: no shell, no arbitrary file access, confirmation for
   destructive or expensive actions.
-- Deterministic mock provider for tests.
+- Real providers only (D-0041 amendment): offline tests for request
+  building, stream parsing of captured payloads and tool execution; E2E
+  tests against the real API when a key is present.
 
 ### Non-goals
 - Model training or fine-tuning.
@@ -72,9 +74,15 @@ No tasks yet. Create them when this initiative starts.
 - [ ] A prompt creates a multi-layer animated composition.
 - [ ] Every AI edit is undoable and reviewable as a diff.
 - [ ] The agent cannot perform I/O or run shell commands.
-- [ ] Mocked tests cover the main tool flows deterministically.
+- [ ] Offline tests cover tool flows; E2E sessions run against the real API.
 
 ## Notes
 
 The AI is a client of the same command surface as the UI. If it needs a
 private backdoor to be useful, the command model is wrong.
+
+D-0036 (2026-11-03): the agent panel is a harness (conversation, provider
+abstraction, tool calls) whose tools come from `motioner tools --schema`
+(prompt 12). Its edits go through write-through, so they are MDF code and
+are recorded as traces. Model training stays out of the app, but it is a
+product goal: a small model distilled from a Fable 5 corpus plus traces.

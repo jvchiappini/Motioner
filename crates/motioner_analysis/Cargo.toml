@@ -1,0 +1,23 @@
+[package]
+name = "motioner_analysis"
+description = "Engine-free design and media analysis for Motioner (D-0049)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_eval.workspace = true
+# Value origins only: the DSL is engine-free and file-system-free too, and the
+# frame → code mapping is an analysis result (D-0049 addendum).
+motioner_dsl.workspace = true
+
+[dev-dependencies]
+motioner_core.workspace = true
+motioner_eval.workspace = true
+motioner_dsl.workspace = true
+
+[lints]
+workspace = true

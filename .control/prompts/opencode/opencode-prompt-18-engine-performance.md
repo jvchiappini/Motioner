@@ -1,0 +1,749 @@
+# opencode prompt 18 — FerrousEngine to the byte: measured, zero-waste, idle-free (instrumentation, idle = zero, zero allocations per frame, byte-level data, own algorithms, GPU efficiency, guards)
+
+You are the orchestrator of a long, multi-phase job in the Motioner
+repository at `C:\Users\jvchi\CARPETAS\Motioner` (branch
+`feat/m1-foundations`) and the FerrousEngine dev clone at
+`C:\Users\jvchi\CARPETAS\FerrousEngine` (branch
+`feat/pure2d-text-and-readback`). Run this prompt **after prompt 17 S6 is
+finished and committed**. Do not touch `C:\Users\jvchi\CARPETAS\GUIMaker`.
+Task: `T-PERF-0005` (absorbs `T-PERF-0001`, budgets and benchmark plan).
+
+## Goal
+
+The user's standing rule: FerrousEngine must be **as optimized as
+possible**: every byte has an owner and a reason, nothing is computed twice,
+nothing is drawn when nothing changed, and every claim is a number. Motioner
+follows the same rule; the engine is held to an even higher bar because
+every app inherits it.
+
+Today nothing outside startup is measured. The engine has one benchmark
+(`ferrous_renderer/benches/pure2d_headless.rs`), no allocation accounting,
+no per-stage frame timing, no GPU timing and no memory inventory.
+Reference measurement by the reviewer (release, RTX 4050 laptop, start
+screen, 1600×900, 2026-11-17, nothing happening on screen):
+
+| Metric (start screen, idle 10 s) | Value |
+|---|---|
+| CPU time consumed | **797 ms per 10 s (~8 % of a core) while idle** |
+| Working set | 336 MB |
+| Private bytes | 457 MB |
+| Threads | 45 |
+
+A static start screen should cost ~0 CPU and ~0 GPU while idle, and far
+less memory. Fix the cause, not the symptom: the engine itself must make
+waste hard.
+
+## Rules
+
+Engine work goes to the dev clone as **generic** engine features (no
+Motioner/MDF concepts): rustdoc, `crates/<crate>/docs` pages, `mkdocs.yml`
+nav, engine tests and benches. Never edit `engine\ferrous` in the Motioner
+repo; the reviewer pushes the engine and bumps the pin. Commit to the engine
+clone on top of the current pin, no push; no commits in Motioner.
+
+Do not commit, stage, stash, reset, checkout, rebase or push in Motioner:
+the reviewer commits. Quality bar: top-tier studio. That means zero
+duplication, rustdoc on public items, typed errors, no panics on runtime
+paths, regression tests that fail without the change, and no warnings.
+Never write files with a BOM or CRLF.
+
+**Measure before and after every optimisation**, with the same scenario, in
+release, and record the numbers in the phase report. An optimisation
+without a number is not accepted. An optimisation that makes code
+unreadable must win by a clear margin (state it). Keep a
+`out/reports/phase18/ledger.md` table: change, scenario, before, after,
+commit.
+
+**Work one phase at a time and STOP after each phase.** Stop with the gate
+green and a short phase report in Spanish at
+`out/reports/PHASE-18-Pn-REPORT.md`. It must cover:
+- what changed;
+- the before and after numbers from the P0 harness;
+- the engine commit range;
+- the gate results;
+- the free space on C:.
+
+The user will reply "continúa con la fase N".
+
+Gate: `cargo fmt -- --check` (never `--all`), `cargo clippy --workspace
+--all-targets -j 2 -- -D warnings`, `cargo test --workspace -j 2
+--no-fail-fast`, `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps
+-j 2`, `python scripts/check_boundaries.py`, `python
+scripts/check_encoding.py`, `cargo machete crates`, `python
+.control/scripts/pctl.py validate`, `pctl doc-check-refs`. Use
+`CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`
+(8 GB machine, little free disk: run `cargo clean --release` between
+phases if C: drops under 6 GB). Engine clone: its own gate (clippy default
+and no-default, tests, wasm check, docs). To build Motioner against the
+clone before the pin bump, point the local submodule at your engine commit;
+no `[patch]` left behind.
+
+Order:
+
+```
+P0 instruments + baseline ─► P1 idle = zero ─► P2 zero allocations per frame
+   ─► P3 bytes: data layout and memory ownership ─► P4 CPU algorithms
+   ─► P5 GPU efficiency ─► P6 Motioner hot paths ─► P7 guards, docs, report
+```
+
+P3 and P4 touch mostly disjoint code (formats/ownership vs
+layout/text/tessellation) and may run as two subagents. The orchestrator
+alone edits shared files and integrates.
+
+## Phase P0 — Instruments and baseline (engine + scripts)
+
+Nothing is optimised in P0. Build the instruments the rest of the prompt
+depends on, all zero-cost when disabled.
+
+1. **Allocation accounting.** Add a counting global allocator behind a cargo
+   feature, e.g. `ferrous_core` feature `alloc-stats`. It counts allocations,
+   reallocations, frees and bytes, globally and per frame scope. Expose it
+   through an API such as `ferrous_core::alloc_stats::{snapshot, scope}`.
+   Use it from engine tests and benches and from Motioner's bench binary;
+   it is never on in normal release builds. Document the cost.
+2. **Frame trace.** Extend the startup trace (`ferrous_core::startup`) into a
+   per-frame stage timer, `FERROUS_TRACE_FRAMES=1`. Stages:
+   - event handling;
+   - app update;
+   - UI layout;
+   - render-command collection;
+   - batch build;
+   - prepare/upload;
+   - encode;
+   - submit;
+   - present / wait.
+
+   Per stage, record the median, p90 and p99, plus allocations and bytes
+   when `alloc-stats` is on. Output is a JSON summary on exit. The
+   disabled path costs one branch per stage.
+3. **GPU timing.** Add timestamp queries per pass when the adapter supports
+   `TIMESTAMP_QUERY` (and `TIMESTAMP_QUERY_INSIDE_PASSES` where needed),
+   resolved with a lag of a few frames so the CPU never stalls. Report the
+   GPU ms per pass in the same JSON. When the adapter lacks the feature,
+   degrade with a clear "unsupported" field.
+4. **Memory inventory.** Every GPU buffer, texture and atlas the engine
+   creates is registered with a label, a byte size and its owning
+   subsystem. `Renderer::memory_report()` returns the totals per subsystem
+   and the largest items. The report also covers CPU-side copies the
+   engine keeps: atlas pixels, decoded images, glyph tables and caches,
+   with their byte sizes. The process working set and private bytes are
+   sampled in the bench.
+5. **Benches.** Extend the divan benches per subsystem (headless, no window):
+   - UI layout of a large tree;
+   - render-command collection;
+   - `GuiBatch` build for N quads and N glyphs;
+   - text layout and shaping for short and long strings;
+   - MSDF glyph rasterisation;
+   - path tessellation (lyon) for simple, complex and stroked paths;
+   - Pure2D record and encode for a heavy scene;
+   - SVG mesh upload.
+
+   Each bench also reports allocations per iteration.
+6. **Scenario harness** `scripts/perf_bench.py` (Motioner, release). Each
+   scenario runs N times with a warm-up. For each scenario, report CPU% of
+   one core, GPU ms/frame, frames drawn and the stage breakdown.
+   Also report allocations per frame (a bench build with `alloc-stats`),
+   working set, private bytes, VRAM from the inventory, and thread count.
+
+   Scenarios:
+   - start screen idle 10 s;
+   - editor with the demo project idle 10 s;
+   - editor hovering and moving the mouse;
+   - timeline scrubbing;
+   - 1080p playback of the demo for 10 s, with dropped frames;
+   - a heavy UI: many panels and long text lists;
+   - a heavy composition: many shapes, text, gradients, masks and effects;
+   - an export of 120 frames (frames/s).
+
+   Add `--check budgets.json` for P7.
+7. **Baseline report.** Run every scenario and bench, plus a profile of the
+   two most expensive scenarios. Use any sampling profiler available on
+   Windows (e.g. `samply`, ETW/WPR or superluminal if installed); say which
+   one. Rank the top 20 costs by measured share. Write
+   `out/reports/PHASE-18-P0-REPORT.md` with the baseline table and that
+   ranking; later phases re-run the same harness.
+
+## Review findings after P0 (apply in the phase named)
+
+- **P1 and P4, profiles by function.** The P0 ETW captures could not be
+  symbolised (no PDB, no WPA), so the top-20 is by stage, not by function.
+  Before optimising in P1 and again in P4, get function-level profiles:
+  - build the bench binary with `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`
+    so rustc emits a PDB (and `CARGO_PROFILE_RELEASE_STRIP=none`);
+  - sample with a tool that resolves PDBs on Windows, e.g. `blondie` (ETW,
+    writes folded stacks or a flamegraph; needs an elevated shell, so ask the
+    user to run that one command) or `cargo flamegraph`, which uses blondie
+    on Windows.
+
+  Rank the top 20 by function with their shares, and keep the SVGs in
+  `out/reports/phase18/`. Mind the disk: C: had 265 MB free after the
+  reviewer's gate, so `cargo clean` before and after each profile build.
+- **P2, per-thread allocation counts.** `alloc_stats` uses process-wide
+  counters, so a `FrameScope` also counts the audio, decode, font and rayon
+  workers. Add thread-local counters (or main-thread vs others) so the "0
+  allocations per frame" tests measure the frame thread. Report worker
+  allocations separately, with their own budget.
+- **P1 and P4, heavy UI is CPU bound at ~100 % of a core.** Event handling
+  takes 22.3 ms/frame and command collection 18.8 ms/frame, against 1.8 ms
+  for the GPU pass. Start P1 by explaining why event handling costs 22 ms;
+  a hover must not walk the whole tree. P4 items 1–2 (incremental layout,
+  retained commands) target the 18.8 ms; record both in the ledger.
+- **P3, memory inventory gaps.** The 3-D passes, intermediate layers and
+  Motioner's CPU copies of images and glyphs are not in the inventory yet;
+  close those gaps first in P3.
+- **P7, engine lints.** `ferrous_engine` and `ferrous_ui_render` carry 27 and
+  13 pre-existing pedantic clippy warnings, and `cargo doc` has warnings.
+  Leave the engine with 0 clippy warnings at the engine's configured level and
+  rustdoc `-D warnings` clean.
+
+## Review findings after P1 (apply in the phase named)
+
+- **P2 first: explain the heavy-UI memory jump.** Private bytes in heavy_ui
+  went from 556 MB (P0) to 927 MB (P1), and the working set from 403 to 636
+  MB, with no explanation. Before any P2 work, bisect it across the six P1
+  engine commits and the Motioner changes (or prove it is the harness: the
+  `--continuous` path, trace buffers, GPU timing query sets, the waker
+  queue). Fix it, or account for every MB in the report. A change that adds
+  370 MB without a reason is not accepted under this prompt.
+- **P2/P6: per-frame editor logic.** The P1 function profile of heavy UI is
+  topped by editor logic, not drawing:
+  - `editor::rebind::infer_shift`;
+  - `PreviewApp::frame_facts`;
+  - `Editor::orphan_suggestions`;
+  - `rebind::Provenance::parse`;
+  - `CodePanel::build`;
+  - `resolved_faces`/`ensure_faces`/`font_for`;
+  - `layout_block`.
+
+  These are derived from the document and must be computed once per document
+  revision (or per selection change), cached, and reused by later frames.
+  Their inputs are the revision, the selection and the panel size; key the
+  cache on those. `siphash` shows up in the generic top: apply the fast-hasher
+  rule here. `project_root` and `poll_proxy_status` run every playback frame;
+  hoist them out of the frame.
+- **P2: hover redraws.** The 1144 frames in 30 s of hover were measured
+  before the pointer change and not repeated. Re-measure it with
+  `--allow-pointer`. Implement the P1 item 2 rule: a pointer move that
+  changes no hover target and no visible state does not request a frame.
+  Report the frames per second of mouse movement over static UI; the target
+  is 0 frames over empty or unchanged areas.
+- **P6: playback pacing.** Playback is paced by a fixed 16 ms deadline and
+  reaches 55.4 fps on 60 fps content. Pace by the composition frame rate
+  against the presentation clock (vsync or `Fifo`), so the result is 0
+  dropped frames at 60 fps when the frame cost allows. Report the dropped
+  frames and the frame-time p99.
+- **P2: file watcher.** `motioner-watch` sleeps 80 ms and stats every 250 ms
+  (12.5 wakeups/s while idle). Use OS change notifications instead
+  (ReadDirectoryChangesW through the `notify` crate, already in Cargo.lock
+  via `ferrous_assets`), with a debounce, so an idle app has 0 periodic
+  wakeups apart from the 30 s autosave.
+- **Harness:** `p0-baseline.json` was overwritten by a default output path.
+  Give each phase its own output name and refuse to overwrite a baseline
+  file without `--force`.
+
+## Review findings after P2 (apply in the phase named)
+
+- **Fixed in review: `frame_facts` cache key.** The cache was keyed on the
+  session generation and the view geometry, but `layer_flags` also reads
+  the solo and shy sets. Those are view-only and do not bump the
+  generation, so toggling solo/shy left the layer icons stale. The review
+  added `Editor::layer_flags_revision` to the key. **Rule for every cache
+  from now on:** the key covers every input the cached value reads, and a
+  test changes each input once and asserts that the cache refreshes.
+  Audit the P2 caches (`orphan_cache`, `code_panel_cache`, `facts_cache`,
+  LivePainter faces, mesh index cache) against this rule in P3.
+- **P3 first: the idle regression.** P1 measured start_idle at 0.03 % and
+  editor_idle at 0.06 %. P2 reports 0.42 % (tail 0.52 %) and 0.16 % (tail
+  0.21 %): 10× and 3× worse while the frame count stays at 1. Find what
+  wakes or spins: the `notify` thread, the audio worker, the font bake
+  worker, or the change in warm-up. Bring idle back to ≤ 0.05 % of a core,
+  or explain each remaining wakeup with its source and its period.
+- **P3/P4: static hover CPU.** Static hover costs 2.83 % of a core for 5
+  frames in 30 s, so the per-`CursorMoved` path (`hover_at`, `tooltip`,
+  the start-screen layout) is not free. Profile it and make a pointer move
+  over a static area cost under 0.5 % of a core.
+- **P3 baseline: export.** P0 export ran at 16.5 fps and P2 runs at 13.4 fps.
+  The report attributes the difference to machine state. Prove it: run the
+  P0 binary, the P1 binary and the current binary back to back in the same
+  session. If the current binary is slower, bisect it.
+
+## Review findings after P3 (apply in the phase named)
+
+- **Reverted in review: the canvas image proxy.** `ProxyTarget::Fit` used
+  the composition rect at fit zoom. The CPU pixels were then released, so
+  zooming to 100 % or more, or a node that scales an image up, showed a
+  blurry texture that could never be re-uploaded sharper. The editor
+  canvas and the blur preview are back on `ProxyTarget::Full`; the CPU
+  release stays. **P4 first:** size proxies per drawn image as world scale
+  × view zoom × DPI, capped at the source size. Re-upload when the needed
+  size grows past the texture (with hysteresis, for example ×1.25). If the
+  CPU pixels were released, re-decode from the source on a worker. Add a
+  test: a 4K image at 400 % zoom matches the `Full` render pixel for pixel
+  in the visible region.
+- **Disk.** C: reached 0 GB during P3. The main agent checks the free space
+  before every build and keeps one target dir at a time. At the end of a
+  phase, delete the phase binaries under `%TEMP%\opencode`
+  (`motioner-p*-bin`, `motioner-p3-baseline-bin`, scratch worktrees) after
+  copying any number the report needs. Report the free space before and
+  after.
+- **P4: MemoryHints.** `MemoryUsage` trades allocation-block size for more
+  allocations. Report the frame-time p99 and the allocation count of
+  wgpu-hal (or the device allocation count, where available) for playback
+  and heavy_composition, before and after the hint. Check also that resize
+  and layer-heavy scenes do not stall.
+- **P4: hover between panels.** Moving across panels costs 4.59 % of a core
+  with 1067 frames in 30 s. A frame is right when the highlight changes, but
+  that frame must be cheap: with retained commands (P4), a hover change
+  repaints only the affected widgets.
+
+## Review findings after P4 (apply in the phase named)
+
+- **P5 first: Motioner does not use the P4 engine wins.** Lanes A and B
+  (incremental layout, clip-aware index, retained batch ranges, single-node
+  hover repaint) live in `UiSystem`, but the Motioner editor paints panels
+  straight into `GuiBatch`, so heavy UI only gained from text. Fix this in
+  P6, planned now: either give Motioner's panel painter retained per-panel
+  (or per-row) batch ranges keyed by the revision of what each panel
+  shows, or move the panels onto `UiSystem`. Measure both on heavy UI and
+  keep the winner. An engine capability that no consumer uses is not a
+  finished optimisation.
+- **P5: heavy UI "3,000 visible rows".** 3,000 rows cannot all be visible
+  in a 900 px window. If they overlap or sit outside the panel clip, the
+  scenario is drawing invisible work: cull rows outside the scroll clip and
+  the window in the painter, then re-measure. If they really are visible,
+  explain the geometry. The 2 ms target stands.
+- **P5: regressions to explain.**
+  - Hover between panels went from 720 to 1,124 frames in 30 s, CPU from
+    8.67 % to 9.56 % and collection from 0.168 to 0.240 ms.
+  - Scrub CPU went from 7.23 % to 9.70 % with unchanged collection.
+
+  Find the cause of each (the per-image proxy bookkeeping, the dynamic-key
+  detection, `image_reload` polling, hover requests) and fix it, or prove
+  it is noise with three back-to-back runs per binary.
+- **Idle metric.** P1 reported idle CPU as the tail after the first frame
+  (0.03 %); P4 reports 1.70 % / 2.01 % for the whole run. Every report from
+  now on gives both, labelled, and treats a tail above 0.1 % as a finding.
+- **Machine: disk and RAM.** C: reached 0 bytes during the review gate. The
+  Windows page file (`pagefile.sys`, automatic) grew to 27 GB after a 28 GB
+  commit peak, and the opencode session database is 18.6 GB.
+  - Never run two cargo processes at the same time; that includes harness
+    builds during a gate.
+  - Keep `-j 2`, and kill harness and app processes when a measurement ends.
+  - Report the peak commit (RAM + page file) of the phase next to the free
+    space on C:.
+
+## Review findings after P5 (apply in the phase named)
+
+- **Fixed in review: the gate was not green.** `cargo fmt -- --check`
+  failed on `motioner_render/src/frame.rs`, and the doc comment of
+  `item_bounds` had been merged into the one of `local_bounds`, so
+  `item_bounds` had no doc. Both are fixed in `3e7864f`. From P6 on, the
+  report pastes the last line of each gate command, run in the clean
+  worktree (`git worktree add ../Motioner-gate HEAD`), not in the working
+  tree.
+- **P6: headline numbers need three runs.** The P5 table is one run per
+  binary, and hover (6.67 → 8.11 %), scrub (7.49 → 8.87 %) and playback
+  (18.0 → 19.0 %) all went up while binds went down. The three-run check
+  was done for the P4 regressions only. From P6 on, every CPU % in a
+  before/after table is the median of three back-to-back runs, with the
+  range next to it. P6 ends with hover and scrub at or below the P3 numbers
+  (720 frames / 8.67 %, 7.23 %).
+- **P6: the idle metric is still one number.** The P4 finding asked for
+  both idle values, labelled: the whole run and the tail after the first
+  frame. A tail above 0.1 % is a finding.
+- **P6: a real heavy-UI fixture.** The `heavy_ui` fixture paints 120
+  positions 25 times each, so it measures overdraw, not a long list. Keep
+  it for continuity and add `heavy_ui_list`: a timeline/layers panel with
+  3,000 distinct layers in a scroll view taller than the window, scrolled
+  at a steady rate in the scenario. P6.3 (virtualisation) and the retained
+  per-panel ranges are measured on it. Target: collection ≤ 2 ms and the
+  cost flat in the number of layers (1,000 vs 3,000 within noise).
+- **P6: culling cost.** `in_effected_layer` walks every layer for each
+  off-screen item, so a plan with many off-screen items and many layers is
+  O(items × layers) per frame. Compute the "inside an effect layer" flag
+  once per plan (a bit per item, or the layer ranges walked in order next
+  to the items) and keep culling O(items). Add tests for a rotated rect
+  that crosses the edge, a stroked path with a sharp miter just outside
+  the edge, and a masked item. `image_reload.rs` has a test named
+  `polling_with_no_worker_reports_nothing_in_flight` that repeats the test
+  above it; rename it to what it checks or remove it.
+- **P6: per-panel damage, then decide partial redraw again.** The
+  persistent target wins up to ~71 % damage, and Motioner's damage is the
+  whole window only because it repaints all its chrome. With the retained
+  per-panel ranges (P4 finding), report the damaged fraction of the
+  window for hover, scrub and playback. Wire `PersistentUiTarget` when the
+  median damage is below the break-even point, and keep the pixels
+  identical (golden + a hover screenshot test).
+- **P6 (engine lane): wire `LazyRenderTarget`** in Pure2D/Flat2D, so the
+  unused 11.52 MB colour+depth target is not allocated until a pass needs
+  it. Report VRAM before and after for every scenario.
+- **P6 (engine lane): adaptive layer scale.** A global 0.5 softens text,
+  but a layer whose effect chain starts with a blur of radius r loses
+  nothing visible at a scale of about `min(1, k / r)`. Render such layers
+  at the reduced scale by default (k measured so the blurred output stays
+  within the golden tolerance), keep `FERROUS_LAYER_SCALE` as an override,
+  and report VRAM and the layered pass time on the showcase.
+- **P6: playback latency.** Input-to-photon cannot be measured here, but
+  input-to-present can: timestamp the input event and the return of
+  `present()` in the frame trace, and report the p50/p99 per present mode
+  for scrub. Keep Fifo unless the numbers change the decision.
+- **Disk: third time at 0 bytes.** Before every cargo build, the main
+  agent checks the free space on C: and stops below 12 GB to free space
+  first (`cargo clean` of the target dir not in use, phase binaries,
+  `%TEMP%\opencode`). Build the engine tests with one target dir at a
+  time, crate by crate if needed. The report gives the lowest free space
+  seen, not only the end value.
+- **P7: wasm build.** The wasm check is blocked by `getrandom` features.
+  The engine must run everywhere, so P7 fixes it (the `wasm_js` backend
+  or the right feature on the crate that pulls it in) and adds the wasm
+  check to the engine gate.
+
+## Review findings after P6 (P7 starts with these fix lanes)
+
+P7 runs in two steps: first the fix lanes below, measured against
+`p6-after.json`, then the guards, docs and report of the P7 section. The
+guards must cover the new code, so the fixes come first.
+
+- **Fix 1: hover damages 100 % of the window.** Per-panel damage exists,
+  but a hover change still marks the whole window. Moving between two
+  widgets must damage only their panels (or rows). Hover CPU went from
+  5.87 % to 6.90 % against the P6 baseline. Being below the P3 number does
+  not make that a pass. Target: hover damage ≤ 10 % of the window and CPU at
+  or below 5.87 % (median of three).
+- **Fix 2: scrub regressed** (collection 1.77 → 2.87 ms, CPU 8.24 → 8.76 %).
+  The timeline panel key changes every scrub frame, so the retained range
+  misses and also pays the copy. Draw the playhead, the time readouts and
+  any other per-frame part of the timeline as a separate small range, and
+  keep them out of the panel key. Rows then hit the cache while scrubbing.
+  Target: collection ≤ 1.8 ms and CPU ≤ 7.23 % (P3).
+- **Fix 3: draw calls went back up.** heavy_ui went from 22 to 61 draws and
+  from 12 to 38 segments, which undoes the P5 work. `GuiBatch::extend_from`
+  appends the copied segments as they are. Merge a copied segment with the
+  previous one when the pipeline, texture slot set and clip match, so the
+  frame has as few segments as one fresh batch. Fix the 0.4 ms collection
+  regression (4.28 → 4.69 ms) at the same time. Target: draws and binds at
+  or below the P5 numbers in every scenario.
+- **Fix 4: prove the evaluation cache.** `evaluate_cached` is tested only on
+  small hand-built documents. Add a test that evaluates every example,
+  golden and perf fixture document frame by frame, cached and uncached, and
+  requires equal plans. Cover:
+  - overrides and inspector edits;
+  - hot reload;
+  - rigs and state machines;
+  - video items, text animations and expression-driven properties.
+
+  Add a test that every session mutation bumps `generation`. An input that
+  changes the plan but is not in the cache key is a correctness bug: fix it
+  in the key, never in the test.
+- **Fix 5: the DSL compile does not scale.** The 3,000-layer fixture takes
+  28.6 s in the MDF compiler before the first frame, and at most 3,000 nodes
+  should not take seconds. Profile it, remove the super-linear step, and add
+  a scaling test: 3,000 nodes compile in under 3.5× the time of 1,000, and
+  under 1 s in release.
+- **Fix 6: memory of the long list.** heavy_ui_list with 3,000 layers uses
+  793 MB private. Report the bytes per layer by owner (document, plan,
+  panel cache, text cache, GPU staging) and remove what does not scale with
+  the visible rows. Target: ≤ 400 MB, and private memory with 3,000 layers
+  within 50 MB of the number with 1,000.
+- **Fix 7: what P6.4 asked for and the report left out.**
+  - dropped frames for 4K30 playback (proxy);
+  - the decode-ahead hit rate for 1080p60 and 4K30.
+- **Fix 8: partial redraw, last call.** Damage is 41.6 % of the window while
+  scrubbing and 39.8 % during playback, below the 71 % break-even. Expose an
+  offscreen-present path in the engine runner (composition and GUI into the
+  persistent target, then copy the damaged rects and present) and wire
+  `PersistentUiTarget` for frames whose damage is under the measured
+  break-even. Pixels must stay identical (goldens plus a scrub screenshot
+  test). If the measured win on scrub is under 10 % of CPU, keep it off by
+  default and say so with the numbers.
+- **Disk floor broken again.** The lowest free space was 5.60 GB with a
+  12 GB floor. The floor is a stop rule, not a number to report: check
+  before every build, and free space before going on.
+- **UiSystem vs retained ranges.** The comparison asked for after P4 was
+  not made. Retained ranges stay, and D-0063 records the reason and what
+  would change the choice.
+
+## Execution model from P3 on (parallel subagents)
+
+Phases P3 to P7 run with subagents to cut wall time. The main agent
+orchestrates; subagents only edit.
+
+1. **Main agent, before any edit:**
+   1. measure the phase baseline with the harness (one named output file);
+   2. read the code the phase touches and split it into **lanes**, each
+      with an explicit list of the files it owns. No file belongs to two
+      lanes. The engine clone and Motioner are always separate lanes;
+   3. write the lane plan in the ledger: the lane, its files, its goal and
+      the number it must move.
+2. **Subagents, all lanes in parallel:**
+   - edit only the files their lane owns. A lane that needs a change
+     outside its files writes the request in its hand-off note and does not
+     make the change;
+   - run **no** cargo build, check, clippy, test or doc, because one shared
+     target dir and the tight disk on C: cannot take parallel builds.
+     `rustfmt <file>` on their own files is allowed;
+   - re-read their diff before handing off: signatures and call sites
+     match, every new cache key covers every input, and no `unwrap` on a
+     frame path;
+   - hand off a short note: the files changed, the intent of each change,
+     the risks, the cross-lane requests and the tests to add or update.
+3. **Main agent, after all lanes:**
+   1. apply the cross-lane requests;
+   2. run the full gate once and fix the failures (`cargo check` first,
+      then clippy, tests, doc, the scripts);
+   3. in parallel with the gate, run one read-only review subagent over the
+      whole diff with the hand-off notes;
+   4. measure the phase numbers with the harness and compare them with the
+      baseline from step 1;
+   5. write the report, then `cargo clean` and check the free space on C:.
+
+A lane whose change fails the gate and cannot be fixed quickly is reverted
+and reported. It does not block the other lanes.
+
+## Phase P1 — Idle = zero (engine + Motioner)
+
+When nothing changes, the app must not render, must not tick the GPU, and
+must use ~0 CPU.
+
+1. Make the engine's redraw model **event-driven by default for apps that
+   opt in**. Today the runner redraws at `target_fps` unless
+   `idle_timeout`/`idle_fps` are set, and Motioner sets neither. Add an
+   invalidation API and a runner policy that redraws only when one of
+   these happens:
+   - input arrives;
+   - the app calls `ctx.request_redraw()`;
+   - a scheduled wake fires: `ctx.redraw_at(Instant)` for animations,
+     caret blink, hover transitions and toasts;
+   - an async job completes (font, image or video decode, worker results);
+   - the window resizes, or its scale or theme changes.
+
+   While any animation is active the frame rate is the display's vsync;
+   otherwise the loop sleeps (`ControlFlow::Wait`/`WaitUntil`). Keep the
+   current continuous mode for games and demos (`RedrawPolicy::Continuous`
+   vs `RedrawPolicy::OnDemand`), and document both.
+2. Use the existing `UiTree` damage tracking (`damage_regions`,
+   `cached_cmds`) so that a UI state change marks exactly the nodes it
+   affects, and an unchanged UI produces no new frame. Hover changes that
+   alter nothing visible must not redraw.
+3. In Motioner, switch to `OnDemand`. Playback, scrubbing, drag and video
+   decode drive redraws; everything else wakes on events. Find and fix
+   every place that relies on continuous redraw: polling of workers, audio
+   align, autosave timers and file watchers. Each becomes an event, a wake
+   deadline or a proxy event (`EventLoopProxy`) from the worker.
+4. **Threads.** Audit the 45 threads: rayon pools, font workers, audio, the
+   watcher, wgpu and drivers. Size the pools to the work. Idle workers
+   block on channels, never spin or poll. Report the thread count and the
+   idle wakeups per second (e.g. from ETW, or by counting the frames drawn
+   plus worker loop iterations).
+5. **Targets:**
+   - start screen and editor idle: ≤ 0.5 % of a core, with 0 frames
+     presented during 10 s of idle and 0 GPU submits;
+   - hover across the UI: frames are drawn only when something visibly
+     changes;
+   - playback and scrub frame rates are unchanged or better;
+   - a caret-blink test shows the exact number of frames scheduled.
+
+   Add tests that drive the runner headlessly: an idle app presents 0
+   frames in N simulated seconds, and a `redraw_at` produces exactly one
+   frame at the deadline.
+
+## Phase P2 — Zero allocations per frame (engine + Motioner)
+
+Rule: in steady state, **a frame allocates nothing on the heap**. Buffers
+are reused with `clear()`, grown geometrically, and shrunk only by an
+explicit trim policy, e.g. after N frames at under 25 % use.
+
+1. Known offenders, each with a regression test:
+   - `GuiBatch` is rebuilt with `GuiBatch::new()`
+     (`ferrous_gui/src/system.rs`). Keep one batch per surface and clear it
+     each frame.
+   - `text_utils::draw_text_baseline` allocates a `Vec` of quads per call.
+     Write directly into the batch, or into a reused scratch buffer.
+   - In `GuiRenderer::prepare`, SVG commands rebuild
+     `all_vertices`/`all_indices` every frame. Keep scratch buffers, and
+     upload only the meshes whose content or transform changed. A position
+     offset belongs in the instance data or a uniform, not in a CPU re-bake
+     of every vertex.
+   - In `GuiRenderer::prepare`, the image bind group builds a `views` and
+     `samplers` `Vec` on change. That is acceptable only on change; keep it
+     out of the steady state.
+   - Motioner `draw_image` mesh path (`motioner_render/src/shapes.rs`,
+     `lib.rs`): reuse the vertex and index scratch buffers, and cache
+     `MeshSample::indices()` per topology. This finding was already listed
+     in prompt 16b E7. If E7 has not run yet, fix it here and mark it done
+     there.
+   - `Mesh::sample` clones `uvs` (and the points, for unkeyed meshes) on
+     every call (`motioner_core/src/mesh.rs`). Return borrowed UVs, and
+     sample into a caller-provided buffer.
+   - Strings: no `format!`, `to_string()` or `String` building on frame
+     paths (labels, ids, cache keys). Use interned ids, `&'static str` or
+     pre-formatted text cached by value.
+2. Sweep every per-frame path in `ferrous_engine`, `ferrous_renderer`,
+   `ferrous_ui_core`, `ferrous_ui_render`, `ferrous_gui`, `ferrous_font`,
+   and in Motioner `motioner_ui`, `motioner_render` and `motioner_eval`.
+   Look for `Vec::new` and `collect`, `clone` of heap data, `HashMap`
+   building, `Box`/`Arc` creation, and `String` work. Fix them all, or
+   justify each with a number in the report.
+3. Hash maps on hot paths use a fast non-cryptographic hasher (`rustc-hash`
+   or `ahash`, one choice for the whole workspace, recorded in the
+   decision), with keys that are integers or interned ids, not strings.
+4. **Tests that fail without the change:** with `alloc-stats`, after 10
+   warm-up frames, these scenarios allocate 0 times per frame:
+   - the engine headless UI frame;
+   - the Pure2D frame;
+   - the Motioner headless editor frame;
+   - the Motioner playback frame.
+
+   If any allocation remains, the test lists it by call site; use a
+   backtrace in the counting allocator when a debug flag is on. Any
+   allowed exception is listed by name with its reason.
+
+## Phase P3 — Bytes: data layout and memory ownership (engine)
+
+1. **Vertex and instance formats.** For every pipeline, list the vertex and
+   instance struct with its byte size and the count per frame in the heavy
+   scenarios. Compress where precision allows:
+   - colours as `Unorm8x4` (or `Unorm10_10_10_2`), not 4×f32;
+   - UVs as `Unorm16x2` or f16;
+   - local positions as f16/i16 with a per-draw origin where the range
+     allows;
+   - flags packed into bit fields;
+   - `u16` indices when a draw has under 65 536 vertices.
+
+   Prove pixel identity: the engine goldens and Motioner goldens stay
+   byte-identical, or document a sub-LSB difference that the user accepts.
+   Report the bytes per frame uploaded before and after.
+2. **Uploads.** Use a staging ring or `wgpu::util::StagingBelt` (measure it
+   against `queue.write_buffer`), and keep large per-frame uploads in one
+   buffer with sub-allocation. Upload only the dirty ranges.
+3. **Textures.**
+   - Atlases use the smallest format that holds the data: R8 for coverage
+     and SDF, RGBA8 only where MSDF needs it (measure MTSDF vs MSDF).
+   - Mipmaps only where they are sampled minified.
+   - No duplicate textures for the same asset (dedup by content hash).
+   - Video frames and images are sized to their displayed size in the
+     preview (proxies), at full size only for export.
+4. **CPU copies.** After a GPU upload, drop the CPU pixels of atlases and
+   images unless they are needed: readback, re-pack or export. State who
+   needs them. Glyph and layout caches have byte budgets with LRU
+   eviction, and they appear in the inventory.
+5. **Ownership.** Every cache in the engine has a byte budget, an eviction
+   policy and an inventory entry; there are no unbounded growth paths. Add a
+   test that runs the heavy scenario for N frames and asserts that the
+   inventory is flat after warm-up, so no leak can hide.
+6. **Targets:** set them from the P0 inventory and state them before
+   optimising. The expectation is that private bytes for the idle start
+   screen at least halve (457 MB today), and VRAM for the editor drops
+   measurably. Explain every remaining item over 5 MB.
+
+## Phase P4 — CPU algorithms (engine; own algorithms where they win)
+
+For each item: benchmark the current implementation, design the
+replacement, benchmark again, and keep it only if it wins clearly. Our own
+algorithm is welcome when it beats the library on our workloads; when it
+does not, keep the library and say so.
+
+1. **Incremental UI layout.** Only dirty subtrees are re-laid out, with
+   layout results cached per node and constraint. Use the
+   `ferrous_ui_core::spatial_index` for hit testing and visibility culling:
+   off-screen nodes in scroll views are neither collected nor batched.
+2. **Retained render commands.** `cached_cmds` per node is reused when the
+   node is clean, and batch segments for clean subtrees are reused as
+   ranges instead of being rebuilt.
+3. **Text.**
+   - Shaping and layout are cached by (font, size, features, text hash),
+     with a byte budget.
+   - Glyph runs are reused across frames.
+   - Measure-only paths (the layout engine asking for a text width) never
+     build quads.
+   - Line breaking is incremental for edits in text fields.
+   - Measure our own ASCII/Latin fast path against the general shaper.
+4. **Tessellation.**
+   - Tessellate paths in local space once per geometry change, keyed by a
+     geometry hash, and apply the transform on the GPU.
+   - For strokes and fills that only change by transform, never
+     re-tessellate.
+   - Consider analytic GPU rendering (SDF rounded rects, circles, lines and
+     arcs drawn in the fragment shader without tessellation) for the common
+     UI primitives. Measure it against lyon.
+5. **Atlas packing.** Measure the occupancy and repack cost of the glyph and
+   image atlases. Try a better packer (skyline or guillotine with
+   best-fit) if occupancy is under ~70 %.
+6. **Data-oriented hot loops.** Where a loop runs over thousands of items
+   (batch build, culling, transform), use a struct-of-arrays layout,
+   branch-free inner loops and `chunks_exact`, and let auto-vectorisation
+   work; check it with the benches. Use `rayon` only where a bench shows a
+   win on the 6-core laptop without hurting frame pacing.
+
+## Phase P5 — GPU efficiency (engine)
+
+1. **Draw calls and state changes.** Report draw calls, pipeline switches,
+   bind group switches and buffer binds per frame for each scenario. Sort
+   and merge them: one pipeline per primitive class, a texture array or
+   bindless-style slots (already partly there with `MAX_TEXTURE_SLOTS`),
+   and instancing everywhere it applies. Targets per scenario go in the
+   report.
+2. **Overdraw.** Measure it with a debug overdraw view (an engine feature,
+   toggled at runtime). Draw opaque UI quads front to back with early-z
+   where it pays off, skip fully covered nodes, and avoid full-screen
+   passes when the effect covers a small rect.
+3. **Partial redraw.** Use P1's damage rects to scissor-limit the encode to
+   the changed region. Measure "persistent offscreen target + copy of the
+   damaged rect + present" against a full redraw at 1600×900 and 4K. Keep
+   it only if it wins, and document the result.
+4. **Pass budget.** Report the GPU ms per pass for the heavy composition.
+   Optimise the top three: shader cost, MSAA only where needed, and
+   resolution of the intermediate targets.
+5. **Present.** Measure input-to-photon latency and frame pacing for
+   Fifo, FifoRelaxed and Mailbox, and choose per platform with a documented
+   reason.
+
+## Phase P6 — Motioner hot paths
+
+1. Evaluation per frame (`motioner_eval`): measure the evaluation of the
+   heavy composition. Cache the results of static subtrees between frames.
+   An unchanged node is not re-evaluated; property tracks with no key in
+   the range are constant.
+2. `motioner_render` (`tools.rs`, `paths.rs`, `fonts.rs`, `frame.rs` have
+   the most allocations and clones): apply the P2 rules and the P4 caches.
+3. Timeline and panels: virtualise long lists, so only the visible rows
+   are laid out and painted. Thumbnails are uploaded once and drawn from
+   the atlas.
+4. Playback: report dropped frames at 1080p60 and 4K30 (proxy), CPU and GPU
+   per frame, and decode-ahead hit rate. Export: frames per second for the
+   120-frame export, with readback using a ring of mapped buffers so the
+   GPU never waits on the CPU.
+
+## Phase P7 — Guards, docs, report
+
+1. **Budgets as tests.**
+   - `scripts/perf_bench.py --check budgets.json` fails on regressions
+     beyond the noise margin measured in P0.
+   - The zero-alloc tests from P2, the idle tests from P1 and the flat
+     inventory test from P3 run in the normal gate.
+   - Benches have recorded baselines, and the reviewer runs them with a
+     documented command.
+2. **Decision D-0063, "Performance policy":**
+   - on-demand redraw;
+   - zero allocations per frame;
+   - byte budgets for caches;
+   - compact formats;
+   - the hasher choice;
+   - when our own algorithms replace libraries;
+   - how to measure.
+
+   Close `T-PERF-0001` as superseded by it.
+3. **Docs.**
+   - An engine page `performance.md` in the mkdocs nav: the instruments,
+     the rules for contributors (with examples of right and wrong frame
+     code), how to read the frame trace and the memory report, and the
+     redraw policies.
+   - Motioner docs and CONTEXT numbers.
+4. **Final report** in Spanish, `out/reports/PHASE-18-REPORT.md`:
+   - a before and after table per scenario: CPU%, frames while idle, GPU
+     ms, allocations per frame, private bytes, VRAM, threads, draw calls,
+     dropped frames and export fps;
+   - the ledger of every optimisation with its numbers;
+   - what was tried and rejected, with the numbers;
+   - the engine commits to push;
+   - the backlog, with reasons.

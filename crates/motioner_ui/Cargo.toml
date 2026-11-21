@@ -1,0 +1,42 @@
+[package]
+name = "motioner_ui"
+description = "Live preview window for Motioner compositions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+motioner_core.workspace = true
+motioner_dsl.workspace = true
+motioner_eval.workspace = true
+motioner_render = { workspace = true, features = ["live"] }
+# The window is the one consumer of the engine's app runner and UI pass.
+ferrous_engine.workspace = true
+# Re-exported for the bench binary's counting allocator (feature `alloc-stats`).
+ferrous_core.workspace = true
+ferrous_renderer.workspace = true
+# Names the UI batch, quad and font types the chrome draws with.
+ferrous_gui.workspace = true
+ferrous_font.workspace = true
+# `SpriteInstance` for the motion-blur preview sprite.
+ferrous_2d.workspace = true
+# OS change notifications for the hot-reload watcher (no periodic stat).
+notify.workspace = true
+# Fast non-cryptographic hasher for hot-path maps.
+
+[features]
+default = []
+# Counts allocations for the steady-state profile (prompt 10 Phase 10).
+alloc-count = []
+# Counting global allocator for the bench binary (prompt 18 P0).
+alloc-stats = ["ferrous_core/alloc-stats"]
+
+[dev-dependencies]
+png.workspace = true
+sha2.workspace = true
+motioner_testkit.workspace = true
+
+[lints]
+workspace = true

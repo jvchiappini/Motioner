@@ -1,0 +1,3 @@
+comp(name="Fixture", width=1000, height=600, fps=60, duration=4.0, background="#FFFFFF")
+t = text("Readable", "Inter", 56, "#101010", "center")
+t.pos = (500, 300)

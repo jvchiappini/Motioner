@@ -7,9 +7,12 @@
 __pycache__/
 *.py[cod]
 
-# Motioner project runtime
-*.motioner/cache/
-*.motioner/backups/
+# Motioner project runtime (nested project folders included)
+**/*.motioner/cache/
+**/*.motioner/backups/
+# A project accidentally created at the repository root by a manual "New
+# project" run (prompt 17 S6); real projects live in examples/ or elsewhere.
+/*.motioner/
 
 # Project Control System runtime
 .control/.events.ndjson
@@ -31,3 +34,4 @@ desktop.ini
 
 # Logs and local artifacts
 *.log
+/out/

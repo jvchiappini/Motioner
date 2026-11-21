@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+     vector-effect="non-scaling-stroke">
+  <!-- One horizontal line with a thick authored stroke. The render test
+       squashes the instance and asserts the stroke keeps this width. -->
+  <path id="line" fill="none" stroke="#FFFFFF" stroke-width="10"
+        stroke-linecap="butt" d="M 20 100 L 180 100"/>
+</svg>

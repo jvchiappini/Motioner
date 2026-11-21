@@ -1,0 +1,374 @@
+//! Assets panel: the Layers/Assets tab strip, toolbar and the virtualised
+//! list or grid of project assets.
+
+use crate::assets::{AssetKindUi, AssetSummary, AssetView};
+use crate::layout::{Hit, LeftTab, Rect};
+use crate::paint::{Painter, PanelKind, PanelRevision};
+use crate::panels::View;
+use crate::text::Align;
+use crate::theme::{size, type_scale};
+
+/// Draws the two tabs and the trailing count in the left panel header.
+pub fn tabs(p: &mut Painter<'_>, v: &View<'_>, count: Option<&str>) {
+    let t = *p.theme;
+    let header = v.layout.layers.header;
+    p.fill(header, t.panel);
+    let style = p.style(type_scale::CAPTION, t.text_body).medium();
+    for tab in LeftTab::ALL {
+        let rect = v.layout.left_tab(tab);
+        let state = v.interaction(Hit::LeftTab(tab));
+        let active = v.left_tab == tab;
+        let fill = if active {
+            t.raised
+        } else if state.hovered {
+            t.row_hover
+        } else {
+            t.panel
+        };
+        p.fill_rounded(rect, fill, p.m.px(size::RADIUS_SM));
+        if active {
+            p.stroke_rounded(rect, t.accent, p.m.px(size::RADIUS_SM), p.m.px(1.0));
+        }
+        let ink = if active { t.text } else { t.text_muted };
+        let style = style.color(ink);
+        p.text_in(tab.label(), rect, Align::Center, &style);
+    }
+    if let Some(count) = count {
+        let muted = p.style(type_scale::CAPTION, t.text_disabled);
+        p.text_in(
+            count,
+            Rect::new(header.x, header.y, header.w - p.m.px(size::PAD), header.h),
+            Align::Right,
+            &muted,
+        );
+    }
+    p.hline(header.x, header.right(), header.bottom(), t.hairline);
+}
+
+/// Everything the assets panel reads, except the theme and DPI (in the key).
+fn revision(v: &View<'_>) -> u64 {
+    let mut rev = PanelRevision::new()
+        .u64(v.left_tab as u64)
+        .u64(v.assets.view() as u64)
+        .u64(v.assets.selected.map_or(u64::MAX, |index| index as u64))
+        .str(v.filter)
+        .f32(v.layer_scroll)
+        .u64(v.pressed.map_or(u64::MAX, Hit::stable_code))
+        .usize(v.assets.entries.len())
+        .usize(v.assets.entries.as_ptr() as usize);
+    for entry in &v.assets.entries {
+        rev = rev
+            .str(&entry.key)
+            .str(&entry.original)
+            .u64(entry.kind as u64)
+            .u64(entry.size_bytes)
+            .f64(entry.duration.unwrap_or(-1.0))
+            .usize(entry.used_by)
+            .usize(entry.peaks.len())
+            .usize(entry.peak_levels.len());
+        for peak in &entry.peaks {
+            rev = rev.f32(*peak);
+        }
+        for level in &entry.peak_levels {
+            rev = rev.usize(level.len());
+            for peak in level {
+                rev = rev.f32(*peak);
+            }
+        }
+    }
+    rev.finish()
+}
+
+/// Draws the assets panel.
+pub fn draw(p: &mut Painter<'_>, v: &View<'_>) {
+    let key = p.panel_key(PanelKind::Assets, revision(v), v.layout.layers.rect);
+    p.panel_hover(key, v.hover_key(PanelKind::Assets), |p| draw_body(p, v));
+}
+
+fn draw_body(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let panel = v.layout.layers;
+    p.fill(panel.rect, t.panel);
+    tabs(p, v, None);
+    toolbar(p, v);
+    p.vline(
+        panel.rect.right() - p.m.hairline(),
+        panel.rect.y,
+        panel.rect.bottom(),
+        t.hairline,
+    );
+
+    let body = panel.body;
+    if v.assets.entries.is_empty() {
+        let style = p.style(type_scale::BODY, t.text_muted);
+        p.text_in(
+            "Drop files here or press +",
+            Rect::new(
+                body.x + p.m.px(12.0),
+                body.y + p.m.px(16.0),
+                body.w,
+                p.m.px(20.0),
+            ),
+            Align::Left,
+            &style,
+        );
+        return;
+    }
+    p.push_clip(body);
+    match v.assets.view() {
+        AssetView::List => draw_list(p, v, body),
+        AssetView::Grid => draw_grid(p, v, body),
+    }
+    p.pop_clip();
+}
+
+fn toolbar(p: &mut Painter<'_>, v: &View<'_>) {
+    let t = *p.theme;
+    let (add, list, grid, unused) = v.layout.asset_toolbar();
+    let button = |p: &mut Painter<'_>, rect: Rect, hovered: bool| {
+        p.fill_rounded(
+            rect,
+            if hovered { t.row_hover } else { t.raised },
+            p.m.px(size::RADIUS_SM),
+        );
+    };
+    let add_state = v.interaction(Hit::AssetAdd);
+    button(p, add, add_state.hovered);
+    let plus = p.style(type_scale::BODY, t.text_body).medium();
+    p.text_in("+", add, Align::Center, &plus);
+
+    // One segmented control for the two views: a shared trough with the
+    // active segment filled, so no caption has to fit in a 44 px button.
+    let trough = Rect::new(list.x, list.y, grid.right() - list.x, list.h);
+    p.fill_rounded(trough, t.raised, p.m.px(size::RADIUS_SM));
+    for (view, rect) in [(AssetView::List, list), (AssetView::Grid, grid)] {
+        let state = v.interaction(Hit::AssetView(view));
+        let active = v.assets.view() == view;
+        if active {
+            p.fill_rounded(rect, t.selection, p.m.px(size::RADIUS_SM));
+        } else if state.hovered {
+            p.fill_rounded(rect, t.row_hover, p.m.px(size::RADIUS_SM));
+        }
+        let ink = if active { t.text } else { t.text_muted };
+        let icon = match view {
+            AssetView::List => crate::icons::Icon::List,
+            AssetView::Grid => crate::icons::Icon::Grid,
+        };
+        crate::icons::draw(p, icon, rect.inset(p.m.px(4.0)), ink, t.raised);
+    }
+    p.stroke_rounded(trough, t.hairline, p.m.px(size::RADIUS_SM), p.m.hairline());
+
+    let unused_state = v.interaction(Hit::AssetRemoveUnused);
+    button(p, unused, unused_state.hovered);
+    let icon = crate::icons::Icon::Clean;
+    crate::icons::draw(
+        p,
+        icon,
+        unused.inset(p.m.px(4.0)),
+        if unused_state.hovered {
+            t.text
+        } else {
+            t.text_muted
+        },
+        t.raised,
+    );
+}
+
+fn draw_list(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
+    let t = *p.theme;
+    let row_h = v.layout.row_h;
+    if row_h <= 0.0 {
+        return;
+    }
+    let offset = (body.y - v.layout.layers.body.y - p.m.px(size::GRID) + v.layer_scroll).max(0.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let first = (offset / row_h).floor() as usize;
+    let count = v.assets.visible_count(v.filter);
+    for position in first..count {
+        let rect = v.layout.asset_row(position, v.layer_scroll);
+        if rect.y > body.bottom() {
+            break;
+        }
+        if rect.bottom() < body.y {
+            continue;
+        }
+        let Some(index) = v.assets.list_index(position, v.filter) else {
+            continue;
+        };
+        let Some(entry) = v.assets.entries.get(index) else {
+            continue;
+        };
+        let selected = v.assets.selected == Some(index);
+        let state = v.interaction(Hit::AssetRow(index));
+        if selected {
+            p.fill_rounded(rect, t.selection, 0.0);
+        } else if state.hovered {
+            p.fill_rounded(rect, t.row_hover, 0.0);
+        }
+        let badge = Rect::new(
+            rect.x + p.m.px(size::PAD),
+            rect.center_y() - p.m.px(7.0),
+            p.m.px(24.0),
+            p.m.px(14.0),
+        );
+        kind_badge(p, badge, entry.kind, &t);
+        let pad = p.m.px(size::PAD);
+        let detail = p.style(type_scale::CAPTION, t.text_muted);
+        // At the minimum panel width, size and duration go first; the name and
+        // the usage token (with its tooltip) are the essential columns.
+        let detail_text = if rect.w < p.m.px(300.0) {
+            crate::assets::usage_label(entry)
+        } else {
+            v.assets.detail(index)
+        };
+        let detail_w = p
+            .measure(detail_text, &detail)
+            .min((rect.w * 0.45).max(0.0));
+        let text_x = badge.right() + pad;
+        let name = p.style(type_scale::BODY, t.text_body).medium();
+        p.text_in(
+            &entry.key,
+            Rect::new(
+                text_x,
+                rect.y,
+                (rect.right() - pad - detail_w - pad - text_x).max(0.0),
+                rect.h,
+            ),
+            Align::Left,
+            &name,
+        );
+        p.text_in(
+            detail_text,
+            Rect::new(rect.right() - pad - detail_w, rect.y, detail_w, rect.h),
+            Align::Right,
+            &detail,
+        );
+    }
+}
+
+fn draw_grid(p: &mut Painter<'_>, v: &View<'_>, body: Rect) {
+    let t = *p.theme;
+    let step = v.layout.asset_grid_step();
+    if step <= 0.0 {
+        return;
+    }
+    let offset = (body.y - v.layout.layers.body.y - p.m.px(size::GRID) + v.layer_scroll).max(0.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let first_row = (offset / step).floor() as usize;
+    let count = v.assets.visible_count(v.filter);
+    for position in first_row * 2..count {
+        let rect = v.layout.asset_cell(position, v.layer_scroll);
+        if rect.y > body.bottom() {
+            break;
+        }
+        if rect.bottom() < body.y {
+            continue;
+        }
+        let Some(index) = v.assets.list_index(position, v.filter) else {
+            continue;
+        };
+        let Some(entry) = v.assets.entries.get(index) else {
+            continue;
+        };
+        let state = v.interaction(Hit::AssetCell(index));
+        let fill = if v.assets.selected == Some(index) {
+            t.selection
+        } else if state.hovered {
+            t.row_hover
+        } else {
+            t.raised
+        };
+        p.fill_rounded(rect, fill, p.m.px(size::RADIUS_MD));
+        let strip = Rect::new(
+            rect.x + p.m.px(8.0),
+            rect.y + p.m.px(8.0),
+            rect.w - p.m.px(16.0),
+            p.m.px(28.0),
+        );
+        match entry.kind {
+            AssetKindUi::Audio if !entry.peak_levels.is_empty() => {
+                waveform(p, strip, entry, t.accent);
+            }
+            kind => {
+                let color = kind_color(kind, &t);
+                p.fill_rounded(strip, color, p.m.px(size::RADIUS_SM));
+                let label = p.style(type_scale::CAPTION, t.pasteboard);
+                p.text_in(kind.label(), strip, Align::Center, &label);
+            }
+        }
+        let name = p.style(type_scale::BODY, t.text_body).medium();
+        p.text_in(
+            &entry.key,
+            Rect::new(
+                rect.x + p.m.px(8.0),
+                strip.bottom() + p.m.px(4.0),
+                rect.w - p.m.px(16.0),
+                p.m.px(18.0),
+            ),
+            Align::Left,
+            &name,
+        );
+        let detail = p.style(type_scale::CAPTION, t.text_muted);
+        p.text_in(
+            v.assets.detail(index),
+            Rect::new(
+                rect.x + p.m.px(8.0),
+                strip.bottom() + p.m.px(20.0),
+                rect.w - p.m.px(16.0),
+                p.m.px(14.0),
+            ),
+            Align::Left,
+            &detail,
+        );
+    }
+}
+
+fn kind_badge(p: &mut Painter<'_>, rect: Rect, kind: AssetKindUi, t: &crate::theme::Theme) {
+    p.fill_rounded(rect, kind_color(kind, t), p.m.px(size::RADIUS_SM));
+    let style = p.style(type_scale::CAPTION, t.pasteboard);
+    let label = match kind {
+        AssetKindUi::Image => "IMG",
+        AssetKindUi::Font => "TTF",
+        AssetKindUi::Audio => "AUD",
+        AssetKindUi::Video => "VID",
+    };
+    p.text_in(label, rect, Align::Center, &style);
+}
+
+fn kind_color(kind: AssetKindUi, t: &crate::theme::Theme) -> [f32; 4] {
+    match kind {
+        AssetKindUi::Image => t.accent,
+        AssetKindUi::Font => t.keyframe,
+        AssetKindUi::Audio => t.success,
+        AssetKindUi::Video => t.warning,
+    }
+}
+
+fn waveform(p: &mut Painter<'_>, rect: Rect, entry: &AssetSummary, color: [f32; 4]) {
+    let columns = rect.w.max(1.0) as usize;
+    let peaks = crate::assets::level_for_columns(&entry.peak_levels, columns);
+    if peaks.is_empty() || rect.w <= 0.0 {
+        return;
+    }
+    let step = (rect.w / peaks.len() as f32).max(1.0);
+    let mut color = color;
+    color[3] = 0.75;
+    let centre = rect.center_y();
+    for (index, peak) in peaks.iter().enumerate() {
+        if *peak <= 0.0 {
+            continue;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let x = rect.x + index as f32 * step;
+        let height = rect.h * peak.clamp(0.0, 1.0);
+        p.fill(
+            Rect::new(
+                x,
+                centre - height * 0.5,
+                (step - 1.0).max(1.0),
+                height.max(1.0),
+            ),
+            color,
+        );
+    }
+}

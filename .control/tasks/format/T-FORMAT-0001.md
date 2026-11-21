@@ -1,18 +1,17 @@
 ---
 id: T-FORMAT-0001
 titulo: Specify project format v0
-estado: backlog
+estado: done
 prioridad: alta
 tipo: investigacion
 creado_por: agente
 asignado_a: agente
 creado: 2026-10-31
-actualizado: 2026-10-31
+actualizado: 2026-11-11
 depende_de: []
 bloqueado_por: null
 version_schema: 1
 ---
-
 ## Contexto
 
 Specify the on-disk project as described in D-0005 and REF-0001 section
