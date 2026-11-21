@@ -928,3 +928,40 @@ by the reviewer. These rules now apply:
   already in the lock. Memoise the layout by hash as G-0001 says, and
   report Phase 2 layout time for the start-screen recipe against the
   0.3 ms fallback threshold.
+
+## Review findings after Phase 0B and Phase 1 (reviewer, 2026-11-21)
+
+Accepted. The engine part is pushed as `12319e7` on `feat/guimaker`.
+The reviewer re-ran the GUIMaker gate, and these were green: fmt, clippy
+pedantic, tests, rustdoc, machete and the boundary check. Startup is fine:
+the median first presented frame is 480.8 ms, and "Not responding" never
+appeared. Phase 2 starts with these fix lanes:
+
+1. **Filled accent with white text.** Dark text on a light-blue button is
+   legal but unusual: pro tools (Figma, Unreal, VS Code, Blender) use light
+   text on a filled accent. Keep `accent` (`#5B8BFF` on dark) for focus,
+   links, selection outlines and accent text.
+   - Add `accent_fill`, `accent_fill_hover` and `accent_fill_pressed`,
+     derived from the same seed with a lower OKLCH lightness, plus
+     `text_on_accent_fill`, which is the light neutral.
+   - The guarantee is ≥ 4.5:1 in all three states and in all three themes.
+   - Filled (primary) buttons use the fill roles.
+   - Record the choice in `docs/theme.md`.
+2. **Literal guard.** The report says no literal values exist outside
+   `guimaker::theme`. Make the gate prove it: add a check (a script or a
+   test) that fails when a GUIMaker crate calls a literal `Color`
+   constructor (`hex`, `srgb`, `oklch` and the others) or a raw px number
+   for spacing or radius outside `theme`. Tests and the theme itself are
+   exempt. Phase 8's lint is for apps; this check is for the library.
+3. **Report tables.** The contrast tables in the Phase 1 report lost every
+   column except `text`. Paste the full `contrast_table` output from now
+   on, with every role on every surface.
+
+Phase 2 itself must also cover:
+- the controller move from G-0001 (spatial index and incremental layout
+  out of `ferrous_ui_core`), with the prompt 18 benches before and after
+  and one implementation left;
+- the start-screen recipe's layout time against the 0.3 ms threshold;
+- the prompt 19 debug hooks designed as data: stable ids and paths, rects,
+  resolved tokens, cache state, the repaint reason, and draw commands with
+  their attribution.
