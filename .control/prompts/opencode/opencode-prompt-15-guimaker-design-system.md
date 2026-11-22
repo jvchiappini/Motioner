@@ -1142,3 +1142,60 @@ Fix it before any Phase 5 work:
    Prove it with a test.
 4. **Close** with `perf_bench.py --check` green on all scenarios, three-run
    medians, and no relaxed budget.
+
+
+## Review findings after the Phase 4B fix (reviewer, 2026-11-22)
+
+**Accepted.** The bisect is good work. The `55d2b2a` (Phase 3) pin already
+fails the hover and scrub budgets on this host, and the frame counts follow
+how many posted moves Windows coalesced, so the engine did not regress. The
+redraw gate in `runner/events.rs` is the same at every pin. These parts of the
+harness change are right and stay:
+- `SendMessageW` for the moves;
+- `input_events_sent` in every run;
+- the cursor parked and then restored;
+- the scrub seeks over one TCP request and reply, instead of starting a
+  `motioner ctl` process for each seek;
+- the input-to-present probe moved into its own `heavy_ui_probe` run.
+
+**Not accepted. It is not committed and must be reworked.**
+
+1. **The workload was tuned until it passed.** `HOVER_MAX_EVENTS = 580` and
+   `SCRUB_MAX_REQUESTS = 220` cap the input, and the rest of the measured
+   window is left idle. The bisect logs (`cap900-*`, `check-green*`) show the
+   caps went down until the numbers fit. CPU averaged over a half-idle
+   window is a lighter workload than the one the budgets were taken from, so
+   this relaxes the budget without saying so.
+
+   Do this instead:
+   - Keep the input continuous for the whole measured window, at a fixed
+     cadence (16 ms for hover, 60 ms for scrub), using `SendMessageW` or TCP
+     so every event is processed once.
+   - The workload definition changed, so the hover and scrub budgets must be
+     derived again from three-run medians on a quiet host. Use explicit
+     budget-change lines that give the old value, the new value and the
+     reason ("benchmark definition changed: deterministic delivery").
+   - Add a host-independent metric, `cpu_ms_per_presented_frame`, together
+     with a budget for it. It is the number that actually catches an engine
+     regression.
+2. **The engine test proves nothing.**
+   `a_pointer_move_the_app_does_not_forward_presents_no_frame` never sends
+   a pointer move. It is the idle test under another name. Either feed a real
+   `CursorMoved` through the same decision path `Runner::window_event` uses
+   (extract it if you have to) and assert zero frames, or delete the test.
+3. **Encoding again.** The edit saved `scripts/perf_bench.py` with about
+   93,000 mojibake characters, in every comment banner and in the heavy_ui
+   fixture string. The fixture text feeds the benchmark, so this would have
+   changed what heavy_ui measures. The reviewer repaired the working tree,
+   restoring the banners and keeping the fixture line byte-identical to
+   `HEAD`. The session file also had CRLF line endings, which were normalised
+   to LF. `check_encoding.py` passed both times because it does not look for
+   mojibake. Two fixes:
+   - Add mojibake detection to `scripts/check_encoding.py` (the sequences
+     `Ã`, `Â` followed by a non-letter, and `â€`), with a test.
+   - `HEAD` already has one mojibake `â€”` in the heavy_ui fixture. Fix it to
+     `—` as part of the re-derivation in item 1 and note it there.
+4. **Host.** AutoCAD (`acad`) held about one core for the whole run. The
+   re-derivation and the final `--check` run only when the user says the host
+   is quiet: AutoCAD closed, no builds running. Check this with a 10 s idle
+   CPU sample before the runs, and report it.
