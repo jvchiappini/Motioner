@@ -1052,3 +1052,41 @@ From now on:
    pass because containers exist only after the first pass. That is fine
    for now. Record it in `docs/responsive.md`, and revisit it in Phase 9B
    if the start screen's first frame budget needs it.
+
+## Review findings after Phase 4 (reviewer, 2026-11-21)
+
+Phase 4 is accepted.
+
+| What | Result |
+|---|---|
+| Routing cost per event | 28 ns, flat from 100 to 10,000 nodes |
+| Allocations per event in steady state | 0 |
+| Tree flattening (10,000 rows) | 1,780 → 17.2 µs |
+| Input-to-present, hover | 0.88 / 1.68 ms (p50 / p99) |
+| Input-to-present, scrub | 2.73 / 4.07 ms (p50 / p99) |
+| Implementations of the scroll, virtual list and tree controllers | one, in GUIMaker |
+
+The heavy UI budget for input-to-present was re-derived from 356 samples:
+15.5 / 18.3 ms (p50 / p99) at about 50 fps, which is one frame of cadence.
+That is accepted, because the old 8.494 ms came from a single sample.
+
+The fix lanes for Phase 4B follow.
+
+1. **The engine's retained UI no longer gets input.** The runner stopped
+   dispatching to `ferrous_gui::UiSystem`, so `ferrous_editor` and every
+   engine app or web app built on `UiSystem` widgets draw but cannot be
+   clicked. That is the user's split (the engine is draw calls), but it
+   must not be silent.
+   - List every affected crate and example in the report.
+   - State in the `ferrous_gui` and `ferrous_engine` READMEs and docs that
+     the retained UI is draw-only and that input and controllers go
+     through GUIMaker.
+   - Add the port of `ferrous_editor` to GUIMaker to the Phase 11 backlog,
+     because the future Unreal-style editor replaces it.
+   - Retained-UI input is not restored in the engine.
+2. **Three runs for every input-to-present number.** `editor_hover` and
+   `timeline_scrub` were one run each. Report the median of three, the
+   same as `heavy_ui`.
+3. **A budget change gets its own line in the report.** Name the old
+   value, the new value, and the reason. P4 did this. Keep doing it, and
+   never relax a budget to make a check pass without that line.

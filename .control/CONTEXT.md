@@ -8,10 +8,11 @@ version_schema: 1
 ## Prompt 15 status (GUIMaker design system)
 
 Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B,
-Phase 1, Phase 2 and Phase 3 done; stopped for review.** No commits.
-FerrousEngine `feat/guimaker` from `59e1c3f` (dev clone, local changes); the
-Motioner submodule stays at `59e1c3f` (no pin bump). Motioner `feat/guimaker`
-at `40ef86d` + `.control/`.
+Phase 1, Phase 2, Phase 3 and Phase 4 done; stopped for review.** No commits.
+FerrousEngine `feat/guimaker` from `55d2b2a` (dev clone, local changes); the
+Motioner submodule stays at `55d2b2a` (no pin bump). Motioner `feat/guimaker`
+at `c1c7a22` + local `scripts/perf_bench.py`, `scripts/perf_budgets.json` and
+`.control/` changes.
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 
@@ -187,6 +188,45 @@ P3 (2026-11-21) — review fix lanes + 100 % responsive:
   validate and refs all exit 0. C: 25.35 GB free. No commits.
 - **Report:** `out/reports/PHASE-15-P3-REPORT.md` (Spanish) + the
   `out/reports/phase15/p3-*.json` payloads.
+
+P4 (2026-11-21) — review fixes + interaction (engine raw input, GUIMaker input):
+
+- **Engine (`ferrous_events`)** is raw-only now: `RawInput` (pointer, wheel,
+  keys/text, IME, clipboard, file drop, modifiers, focus), `InputConfig`
+  (500 ms / 4 px / 3 px), `Clock` + `SystemClock` + `ManualClock`; no
+  `ferrous_ui_core` dependency. `EventManager` and its linear hit test are
+  deleted. `ferrous_gui::UiSystem` keeps layout/paint only; the runner no
+  longer dispatches UI events, so the legacy `ferrous_editor` retained widgets
+  are static until phase 11 (Motioner is unaffected). `ScrollView`,
+  `VirtualList` and `TreeView` are deleted from `ferrous_ui_core`.
+- **GUIMaker (`input/`)**: gesture state machine (click/double/triple, long
+  press, drag threshold, hover intent), route with the index generation as the
+  hit-cache key, focus order with `.tab_index` and scopes, shortcut registry
+  with Global/Focused/Overlay scopes and conflicts, scroll controller (line/
+  pixel, Shift-horizontal, exponential momentum, `LayoutEngine::content_size`
+  bounds), virtual list O(1) window, tree arena/navigation/type-ahead,
+  grapheme-correct `TextEditor` (selection, word/line movement, Ctrl+A/C/X/V/
+  Z/Y, IME, clipboard trait, coalesced undo, blink, validation, Enter/Esc).
+  `unicode-segmentation 1.13` added with **G-0004**.
+- **Numbers:** routing median 28 ns per hover at 100/1 000/10 000 nodes, click
+  42 ns, wheel 52 ns, Tab 270 ns; 0 allocs / 0 bytes over 30 steady-state
+  events; tree flatten 10 000 rows 1 780 µs → 17.2 µs (before = reference
+  harness of the deleted HEAD code), move 7.5 ns, virtual window 9.1 ns flat to
+  10 000 and 13 ns at 10 000 000, scroll step 4 ns. Motioner: heavy_ui (3 runs,
+  356 samples) p50 15.517 / p99 18.271 ms with the budget re-derived from this
+  population (old 8.494 came from one sample; `frame_ms_p99` 9.618 vs 11.231
+  passes); editor_hover 0.877 / 1.684 (653 samples, budgets 1.183/1.899);
+  timeline_scrub 2.730 / 4.073 (254 samples, budgets 3.096/4.850).
+- **Gate:** GUIMaker fmt/clippy pedantic/rustdoc/185 tests/machete/literal
+  26 files 0/boundaries green; engine workspace check 0, wasm engine+web 0,
+  touched-crate tests 0, clippy 0 errors; Motioner in a clean
+  `Motioner-gate-p4` worktree (submodule at `55d2b2a`, engine `git diff HEAD
+  --binary` applied + new files copied, **no junctions**): fmt, clippy, 90 test
+  groups 0 failures, build, doc, machete, boundaries, encoding, 22 script
+  tests and pctl validate/refs all 0. C: 39+ GB free. No commits.
+- **Report:** `out/reports/PHASE-15-P4-REPORT.md` (Spanish) + the
+  `out/reports/phase15/p4-*` logs and payloads.
+- **Next:** phase 4B (canvas/scene picking) or phase 5 (drawing + screenshots).
 
 ## Prompt 18 status (engine performance)
 
