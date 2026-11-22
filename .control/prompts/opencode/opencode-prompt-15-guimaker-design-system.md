@@ -1236,3 +1236,75 @@ It was not relaxed. It is resolved by a check, not by a choice:
 it is noise and not a guard. Leave those three budgets out and report the
 value only. Apply it as a budget only when the run presents at least 30
 frames.
+
+
+## Review findings after Phase 5 (reviewer, 2026-11-22)
+
+**Step 0 is accepted and pushed.** The `55d2b2a` pin measures above the old
+budget too, so the budget line applies. The per-frame budget is now dropped
+on the idle scenarios.
+
+**Phase 5 is not accepted, and nothing of it is committed.** The reviewer ran
+the gates and looked at the screenshots:
+
+1. **The strict gate fails.** The report ran clippy without `-W clippy::pedantic`.
+   - `guimaker_ferrous` has 13 lib and 26 test errors: precision-losing casts,
+     strict float comparisons, missing doc backticks, and a function with 191
+     lines.
+   - `guimaker_gallery` has 22 lib and 23 test errors, mostly casts.
+   - `rustfmt --check` fails on the changed `ferrous_ui_render` files.
+   - The changed lines in `ferrous_ui_render/src/gui_batch.rs` add new
+     clippy warnings: an unused `mut` at line 1280, functions with 8 to 10
+     arguments, a `map_or`, a negated float comparison, and a complex type.
+
+   Fix every one of them. A cast needs a checked conversion or a scoped
+   `#[allow]` that states the invariant. Group the arguments into structs.
+2. **The goldens freeze visible bugs** (see `start-light` and
+   `components-light`):
+   - **Padding is ignored on text leaves.** In a padded text element, such
+     as every button and chip, the run is drawn at the border-box origin,
+     top-left: "Primary", "Create", "Browse…", "Toggle". The run must sit in
+     the content box, vertically centred on its line box. Fix this in
+     GUIMaker layout or in the display list, wherever the run rect comes
+     from. Add a display-list test that checks the run rect equals the
+     content box, for padded text with each alignment.
+   - **Labels on accent fills use the default text colour.** Black on blue
+     fails the theme's own 4.5:1 rule. A filled accent must pair with
+     `text_on_accent_fill`, through the theme pairing, not a manual tone.
+     Add a test over the display list: every text run must meet the theme
+     contrast against the fill painted behind it.
+   - **The chips' labels overflow their pills.**
+
+   Regenerate the goldens only after these are fixed, and log the reason in
+   `UPDATE_LOG.md`. The gallery and the start story must use the theme's
+   pairings. Do not hand-pick tones.
+3. **Fake engine features.** "Rounded clip" falls back to a rectangular
+   scissor, "backdrop blur" falls back to a tint, and unsupported icons fall
+   back to a rect. An engine API that does not do what its name says is not
+   a feature. Implement each one for real, or remove its API until it is
+   real:
+   - **Rounded clip:** an SDF clip mask (clip rect plus per-corner radii) in
+     `gui.wgsl` that applies to quads, text and images, with a pixel test at
+     the corner.
+   - **Backdrop blur:** `SceneTarget2d` now exists, so sample it, using a
+     two-pass downsample and blur at a bounded cost. Add a pixel test and a
+     GPU timing figure.
+   - **Icons:** render real vector icons through an engine path fill or a
+     fixed `ferrous_svg`. A rect is not an icon.
+4. **The perf `--check` is not valid.** It ran `--from-json
+   out/reports/phase18/p15-p4b-fix-2.json`, which was measured before
+   Phase 5. Phase 5 changes `gui.wgsl`, `gui_batch` and `gui_renderer`, and
+   Motioner's UI draws through them. Build Motioner release in a clean
+   worktree with the Phase 5 engine changes applied to the submodule
+   (`git diff HEAD --binary` plus `git apply`, no links). Run every scenario
+   three times on a quiet host, then run `--check` on that fresh JSON.
+5. **Small items:**
+   - The engine `out/` folder is untracked. Write the shots to an ignored
+     path, or add `out/` to the engine `.gitignore`.
+   - The start story shows "11:42". Confirm the time comes from the
+     injected clock, so a golden run at another hour stays identical, and
+     add a test for it.
+
+The GPU picking is accepted as designed. CPU stays the default for point and
+small marquee picks; GPU is used for bulk id-buffer and region picks, and
+the crossover is documented.
