@@ -1,4 +1,4 @@
-# opencode prompt 15 â€” GUIMaker: a UI library that is beautiful by default and easier than HTML + CSS
+# opencode prompt 15 — GUIMaker: a UI library that is beautiful by default and easier than HTML + CSS
 
 You are the orchestrator of a very long, multi-phase job in two
 repositories:
@@ -29,7 +29,7 @@ repositories:
   breaks.
 - A project that uses Ferrous without GUIMaker compiles none of it.
 
-### Status and refresh (reviewer, 2026-11-21) â€” read this first
+### Status and refresh (reviewer, 2026-11-21) — read this first
 
 This prompt has **not been run**. The old GUIMaker repository stopped at
 `9dcbc28` (2026-03-11) and is retired. **Repository decision
@@ -146,10 +146,10 @@ are different problems and live in different places:
 | **Gesture recognition**: click, double/triple click, long press, drag threshold, pointer coalescing, key repeat | GUIMaker (`guimaker::input`) | a UI controller; the `canvas` element hands the same recognised gestures to the app, so it is still implemented once |
 | Render flags, redraw scheduler, damage regions (Phase 0B) | FerrousEngine | the engine owns frames |
 | **Hit testing and its spatial index** (grid/BVH over the laid-out rects, incremental updates), hover detection, scroll controllers (wheel, trackpad, inertia, scrollbars, auto-scroll), virtual lists | GUIMaker | UI controllers; engine scene picking may reuse the index as a GPU-free GUIMaker crate only if that avoids a second implementation |
-| **Scene / canvas picking**: objects with transforms and rotation, path fill containment, stroke distance, text bounds, clips and masks, z-order, ID-buffer picking, marquee and lasso queries, snapping queries, screen â†” world transforms, pan/zoom-to-cursor camera helpers, 3D raycasts | FerrousEngine (2D scene / renderer crates) | it knows the geometry it draws |
+| **Scene / canvas picking**: objects with transforms and rotation, path fill containment, stroke distance, text bounds, clips and masks, z-order, ID-buffer picking, marquee and lasso queries, snapping queries, screen ↔ world transforms, pan/zoom-to-cursor camera helpers, 3D raycasts | FerrousEngine (2D scene / renderer crates) | it knows the geometry it draws |
 | UI tree: layout, responsive rules, tokens, components | GUIMaker | |
 | **UI routing**: which widget gets an event, hover/press state, focus and `Tab` order, shortcuts scopes, overlays and focus traps | GUIMaker | screen-space rects of its own tree |
-| Text-editing engine (`Ctrl+A`, selection, undoâ€¦) | GUIMaker | a UI concern on top of engine key events and clipboard |
+| Text-editing engine (`Ctrl+A`, selection, undo…) | GUIMaker | a UI concern on top of engine key events and clipboard |
 | `canvas` / `viewport` element | GUIMaker reserves the rect, routes events inside it, in local coordinates, to the app | the bridge between both worlds |
 | What a pick *means* (select an MDF node, drag a gizmo handle, edit a keyframe) | the app (Motioner) | domain logic |
 
@@ -211,13 +211,13 @@ controls behave like native ones. Concretely:
    9B). An idle window costs 0 % CPU and 0 % GPU.
 
 ### Resource budgets (every phase measures against them; release build, the
-start-screen recipe at 1920Ã—1080, scale 1.5, on this 8 GB machine)
+start-screen recipe at 1920×1080, scale 1.5, on this 8 GB machine)
 
 | What | Budget |
 |---|---|
 | Idle (no input, no animation) | 0 frames rendered, ~0 % CPU, ~0 % GPU, no timers waking the thread more than once per caret blink |
-| Idle with a focused text field | only the caret's rect repainted at the blink interval; â‰¤ 2 wake-ups/s |
-| Pointer move | hit test < 5 Âµs with 10 000 interactive nodes; no work if the hovered element does not change |
+| Idle with a focused text field | only the caret's rect repainted at the blink interval; ≤ 2 wake-ups/s |
+| Pointer move | hit test < 5 µs with 10 000 interactive nodes; no work if the hovered element does not change |
 | Hover / typing | redraw only the damaged region; CPU per frame (build + layout + routing + command list) < 0.3 ms; GPU per frame < 0.5 ms |
 | Steady state | **zero heap allocations per frame** in the GUIMaker core (counted by a test allocator); buffers and arenas reused |
 | Layout | unchanged subtrees are not re-laid out (memoised by a hash of style + content + available size); a 10 000-row virtual list scrolls with < 1 ms CPU per frame |
@@ -246,7 +246,7 @@ and sends "continue with Phase N".
   same time. Stop if free space on C: drops below 5 GB (you may clean caches
   outside the repositories).
 - **The GUIMaker crates** (new, so held to the strictest bar):
-  - `cargo fmt -p guimaker -p guimaker_ferrous â€¦` with `--check`;
+  - `cargo fmt -p guimaker -p guimaker_ferrous …` with `--check`;
   - `cargo clippy -p guimaker* --all-targets -- -W clippy::pedantic -D
     warnings`, and every `#[allow]` has a reason;
   - their tests;
@@ -268,7 +268,7 @@ and sends "continue with Phase N".
   stay in `motioner_ui`.
 - **Determinism.** Layout and paint depend only on the view, the theme, the
   viewport size, the scale factor and an injected clock (`Instant` is never
-  read inside the library). Same inputs â†’ byte-identical display list and
+  read inside the library). Same inputs → byte-identical display list and
   screenshot. Animations advance from the clock the host passes in.
 - Shell gotchas: Bash heredocs containing `'''` break here (write files with
   the editor tool); PowerShell 5.1 drops unescaped `"` in native arguments;
@@ -287,7 +287,7 @@ GUIMaker gate: `cargo fmt -- --check`,
 `cargo test --workspace -j 2 --no-fail-fast`,
 `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps -j 2`,
 `cargo machete`.
-Motioner gate (phases 10â€“11): the full gate of prompt 11 (fmt, clippy, test,
+Motioner gate (phases 10–11): the full gate of prompt 11 (fmt, clippy, test,
 doc, `scripts/check_boundaries.py`, machete, `pctl validate`).
 
 Stop conditions: C: below 5 GB; a gate you cannot make green after two honest
@@ -297,7 +297,7 @@ documented fallback and continue).
 
 ---
 
-## Phase 0 â€” Audit and the founding decision (no library code yet)
+## Phase 0 — Audit and the founding decision (no library code yet)
 
 1. Read, and summarise in the session notes with file:line references:
    Motioner `start.rs`, `theme.rs`, `paint.rs`, `text.rs`, `icons.rs`,
@@ -340,7 +340,7 @@ documented fallback and continue).
      (hover/press animation, focus, scroll offsets, text-edit cursors,
      open popovers) lives in a store keyed by a stable id path
      (explicit `.key(...)` for lists). Interaction returns **typed messages**
-     (`Ui<Msg>` â†’ `Vec<Msg>`), Elm style, so apps keep their own command
+     (`Ui<Msg>` → `Vec<Msg>`), Elm style, so apps keep their own command
      layer (Motioner's `StartAction` / `Command` map 1:1). No `Rc<RefCell>`,
      no callbacks that capture app state.
    - **Engine dependency:** GUIMaker uses workspace path dependencies.
@@ -355,7 +355,7 @@ documented fallback and continue).
      backend, so the core is testable headless with a deterministic fake
      *metrics table built from a real font file*, not a mock of rendering.
 
-## Phase 0B â€” Engine: the "Not responding" freeze at startup
+## Phase 0B — Engine: the "Not responding" freeze at startup
 
 The user reports that Motioner and other FerrousEngine apps often sit in
 Windows' "Not responding" state for a while on launch and then run perfectly.
@@ -364,10 +364,10 @@ likely cause is visible in `FerrousEngine/crates/ferrous_engine/src/runner/
 events.rs:72` (`resumed`): the window is created **visible**, then on the
 same thread, without pumping messages, the runner does `GraphicsState::new
 (...).block_on()` (adapter, device, surface, every pipeline and shader
-module, HDRI if configured), `Font::load_bytes` â†’ `FontAtlas::new`, which
+module, HDRI if configured), `Font::load_bytes` → `FontAtlas::new`, which
 runs `generate_msdf` on the CPU for the whole `latin_western()` set
 (`ferrous_font/src/atlas.rs:134`), and then the app's `setup` (Motioner
-loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
+loads fonts, the project, thumbnails…). Prove it before fixing it:
 
 1. **Measure**: add `tracing` spans (or the engine's existing timing) around
    each startup step and log a startup timeline: process start, window
@@ -385,7 +385,7 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
      ~100 ms;
    - move heavy CPU work off the main thread: MSDF atlas generation in
      parallel (per-glyph work is independent; `rayon` only with a decision)
-     or lazily â€” rasterise ASCII first and the rest of the set on demand or
+     or lazily — rasterise ASCII first and the rest of the set on demand or
      in a background thread, uploading as glyphs arrive; cache generated
      atlases on disk keyed by font hash + glyph set + size + generator
      version;
@@ -405,7 +405,7 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
    the low-power adapter for 2D/UI apps (configurable), and not allocate 3D,
    HDRI or post-processing resources in `Flat2D`/`Pure2D` modes.
 5. **Render flags and the redraw scheduler** (generic engine API; GUIMaker
-   and apps drive it). A still window sometimes must update a few things â€”
+   and apps drive it). A still window sometimes must update a few things —
    a blinking caret, a spinner, a progress bar, a playing video or preview,
    a clock, a thumbnail that finished loading on a worker, a file watcher.
    Instead of "render every frame" or "never", every source declares what it
@@ -416,7 +416,7 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
      capped and paused when the window is hidden or minimised), and
      `Dirty` (one repaint after a change);
    - a thread-safe **redraw handle** (`RedrawProxy`, cloneable, `Send`) that
-     workers use to mark a region dirty and wake the loop â€” no polling;
+     workers use to mark a region dirty and wake the loop — no polling;
    - the scheduler computes the next deadline as the minimum over all flags
      and sleeps with `ControlFlow::WaitUntil(deadline)`; at wake-up it
      repaints **only the union of regions whose flags fired** (a caret blink
@@ -428,9 +428,9 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
      which region); the debug overlay and the frame counters show it, so
      an unexpected redraw is a one-glance diagnosis. A test fails if an idle
      view renders any frame without a flag that explains it.
-   GUIMaker components set their flags themselves (text field â†’ `Periodic`
-   while focused, spinner â†’ `Continuous { 60 }` only while visible, hover
-   transitions â†’ `Animating { until }`); app code only sets flags for its
+   GUIMaker components set their flags themselves (text field → `Periodic`
+   while focused, spinner → `Continuous { 60 }` only while visible, hover
+   transitions → `Animating { until }`); app code only sets flags for its
    own live content (Motioner: the playing preview).
 6. **Acceptance**: time from launch to first visible frame and to "fully
    interactive", cold and warm, before and after, plus idle numbers, in the report; the window
@@ -438,7 +438,7 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
    message thread blocks longer than a budget during startup (measured with
    the startup timeline). Engine docs: a "Startup performance" page.
 
-## Phase 1 â€” Design system: tokens and themes
+## Phase 1 — Design system: tokens and themes
 
 `guimaker::theme`, the only place with literal design values.
 
@@ -454,7 +454,7 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
   with two passes), decide in G-0002 to ship a real family (Inter or Geist,
   OFL) with at least Regular/Medium/SemiBold and a mono (JetBrains Mono or
   Geist Mono, OFL). Delete the faux-bold trick where the real weight exists.
-- **Radius** `None/Xs/Sm/Md/Lg/Xl/Full`; **elevation** 0â€“4, each = a pair of
+- **Radius** `None/Xs/Sm/Md/Lg/Xl/Full`; **elevation** 0–4, each = a pair of
   soft shadows (key + ambient) plus a surface tint in dark themes; **borders**
   hairline/regular; **motion** durations (`Instant`, `Fast` 90 ms, `Base`
   140 ms, `Slow` 240 ms) and easings (standard, emphasized, spring-ish
@@ -468,8 +468,8 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
   light and dark. An app picks an accent and gets a coherent palette; it can
   still override any role.
 - **Guarantees as tests**: WCAG contrast for every text role on every surface
-  it may sit on (body â‰¥ 7:1, muted â‰¥ 4.5:1, faint â‰¥ 3:1 for large/secondary
-  only), focus ring â‰¥ 3:1 against neighbours, sRGBâ†”linear conversion done once
+  it may sit on (body ≥ 7:1, muted ≥ 4.5:1, faint ≥ 3:1 for large/secondary
+  only), focus ring ≥ 3:1 against neighbours, sRGB↔linear conversion done once
   (the D-0021 double-encoding bug must be impossible: one `Color` type,
   constructors say which space).
 - Themes as data: `Theme` is serde-serialisable (RON or TOML; decide) so apps
@@ -479,7 +479,7 @@ loads fonts, the project, thumbnailsâ€¦). Prove it before fixing it:
 Tests: ramps are monotonic in lightness, contrast table, round-trip of theme
 files, density switch changes metrics only.
 
-## Phase 2 â€” View tree, styling API and layout
+## Phase 2 — View tree, styling API and layout
 
 The heart of the library. Write the **public API sample first**
 (`crates/guimaker/examples/README` or rustdoc on the crate root), get it to
@@ -509,7 +509,7 @@ read well, then implement.
   gradient, image with `fit` (`Cover/Contain/Fill`), text run, icon, clip
   push/pop with radius, layer opacity, backdrop blur request). The backend
   maps it; the core never names an engine type.
-- **Inspect**: `ui.inspect()` â†’ stable, indented text dump (kind, key, rect,
+- **Inspect**: `ui.inspect()` → stable, indented text dump (kind, key, rect,
   resolved style tokens, text) used by tests and by models. Document it as
   the first thing to read when a layout looks wrong.
 
@@ -518,17 +518,17 @@ read well, then implement.
   size, min/max, grow share, content size, parent clamp). `ui.explain(key)`
   prints that chain in plain English, e.g. "`sidebar` is 280 px because
   `width(Px(280))` wins over the parent's 240 px; it overflows `shell` by
-  40 px and overlaps `content` (x 240â€“280). Fix: `width(Fraction(0.25))` with
-  `min(Sâ€¦)`, or collapse it below the `Md` breakpoint".
+  40 px and overlaps `content` (x 240–280). Fix: `width(Fraction(0.25))` with
+  `min(S…)`, or collapse it below the `Md` breakpoint".
 
-Tests: layout snapshots via `inspect` at 3 sizes Ã— 2 scales; hit testing
+Tests: layout snapshots via `inspect` at 3 sizes × 2 scales; hit testing
 under clips and overlays; text clamp/ellipsis; pixel snapping; `explain`
 output pinned for a few deliberate mistakes.
 
-## Phase 3 â€” 100 % responsive
+## Phase 3 — 100 % responsive
 
 - **Container-based breakpoints** (like CSS container queries, not only window
-  size): `Xs < 480 â‰¤ Sm < 768 â‰¤ Md < 1024 â‰¤ Lg < 1440 â‰¤ Xl`, values tunable
+  size): `Xs < 480 ≤ Sm < 768 ≤ Md < 1024 ≤ Lg < 1440 ≤ Xl`, values tunable
   in the theme. Any modifier takes a responsive value:
   `.columns(resp![Xs: 1, Md: 2, Lg: 3])`, `.direction(resp![Xs: Column, Md:
   Row])`, `.hidden_below(Md)`, `.pad(resp![Xs: S4, Lg: S8])`.
@@ -543,13 +543,13 @@ output pinned for a few deliberate mistakes.
 - **Text never breaks layout**: long words break or ellipsise, labels in
   rows shrink before their siblings by declared priority (`.priority(n)`).
 - **DPI**: everything in logical units, snapped to physical pixels; tested at
-  1Ã—, 1.25Ã—, 1.5Ã—, 2Ã—.
+  1×, 1.25×, 1.5×, 2×.
 - **Responsive test sweep**: a helper renders a view at a list of widths
-  (360, 480, 640, 768, 1024, 1280, 1440, 1920, 2560, 3840) Ã— scales and runs
+  (360, 480, 640, 768, 1024, 1280, 1440, 1920, 2560, 3840) × scales and runs
   the overlap/overflow checks at every one; every recipe passes the sweep.
   A gallery mode shows a story with a draggable width handle.
 
-## Phase 4 â€” Interaction: engine input and gestures, UI routing, text editing
+## Phase 4 — Interaction: engine input and gestures, UI routing, text editing
 
 Follow the ownership table at the top. Motioner already has
 `crates/motioner_ui/src/text_edit.rs` and pointer/drag code in
@@ -604,13 +604,13 @@ supplies raw events and the clock:
   arrow-key navigation inside lists, menus, grids, radio groups and tabs,
   `Enter`/`Space` activation, `Esc` closes the top overlay, type-ahead in
   lists and menus.
-- **Shortcuts**: a registry (`Ctrl+S`, `Ctrl+Shift+P`â€¦) with scopes (global,
+- **Shortcuts**: a registry (`Ctrl+S`, `Ctrl+Shift+P`…) with scopes (global,
   focused element, overlay), conflict detection reported by the lint, and
   display strings for menus and `kbd` (platform-correct).
 - **Text-editing engine** (`TextEditor` state + pure functions, used by
   `text_field`, `textarea`, `number_field`, search boxes, the command palette
   and any app):
-  - caret movement by char, word (`Ctrl+â†/â†’`), line (`Home`/`End`), document
+  - caret movement by char, word (`Ctrl+←/→`), line (`Home`/`End`), document
     (`Ctrl+Home/End`), up/down keeping the preferred column in multi-line;
   - selection with `Shift` + any movement, `Ctrl+A`, mouse drag, double-click
     word, triple-click line, `Shift+click` extend, auto-scroll while dragging
@@ -626,11 +626,11 @@ supplies raw events and the clock:
     scroll of long single-line text keeping the caret visible;
   - validation hooks (numeric, max length, pattern) and `Enter` submit /
     `Esc` revert for fields.
-- Exhaustive tests: a table of (text, caret, selection, key) â†’ expected state
+- Exhaustive tests: a table of (text, caret, selection, key) → expected state
   for every shortcut above, plus pointer sequences for double/triple click and
   drag selection.
 
-## Phase 4B â€” Engine: canvas and scene picking
+## Phase 4B — Engine: canvas and scene picking
 
 Generic picking for anything the engine draws, so editors and games built on
 FerrousEngine never write their own (Motioner's `app/canvas.rs`,
@@ -647,12 +647,12 @@ and list what they compute by hand today).
 - GPU ID-buffer picking as an alternative for very dense scenes (render ids
   to a small offscreen target on demand only, read back one pixel/region);
   document when each method wins, with benches.
-- Camera helpers: screen â†” world transforms, zoom to cursor, pan, fit to
+- Camera helpers: screen ↔ world transforms, zoom to cursor, pan, fit to
   bounds, with the same math the renderer uses (one source of truth).
 - 3D: ray from cursor, raycast against meshes/AABBs if the 3D side lacks it
   (only what is generic; keep scope tight).
 - Uses the generic spatial index (rebuilt incrementally when objects move);
-  budget: a point pick < 20 Âµs with 10 000 shapes, a marquee over 10 000
+  budget: a point pick < 20 µs with 10 000 shapes, a marquee over 10 000
   shapes < 1 ms; zero allocations per query with a reused result buffer.
 - Docs page "Picking" in the engine, an example (click-to-select, marquee,
   drag) and tests with rotated, nested and clipped shapes.
@@ -660,9 +660,9 @@ and list what they compute by hand today).
   queries; what a hit *means* (selection, gizmo handle, snapping rules)
   stays in Motioner.
 
-## Phase 5 â€” FerrousEngine drawing and the screenshot loop
+## Phase 5 — FerrousEngine drawing and the screenshot loop
 
-- `guimaker_ferrous`: draw commands â†’ engine API (reuse the frame batch as
+- `guimaker_ferrous`: draw commands → engine API (reuse the frame batch as
   the engine does since `e482b3c`), text through `ferrous_font` with kerning
   and real weights, SVG/vector icons, images and textures, clips. A mapping,
   nothing more.
@@ -673,7 +673,7 @@ and list what they compute by hand today).
   GUIMaker only asks for them.
   A CLI in the gallery: `gallery shot <story> --size 1280x800 --scale 1.5
   --theme light --out out/x.png`.
-- **Engine gaps â†’ generic engine features** in the dev clone, only if the
+- **Engine gaps → generic engine features** in the dev clone, only if the
   audit proved them missing: e.g. rounded clip masks, multiple soft shadows
   per rect, backdrop blur for overlays, gradient borders, per-corner radii in
   the shader. Each with docs and tests; the backend uses a documented fallback
@@ -682,7 +682,7 @@ and list what they compute by hand today).
   pixel-count budget), goldens stored in the repo, a single command to
   update them with a reason.
 
-## Phase 6 â€” Components (each one finished, not sketched)
+## Phase 6 — Components (each one finished, not sketched)
 
 Every component: all states (rest, hover, pressed, focus-visible, disabled,
 selected/checked, loading where it applies), keyboard support built on the
@@ -715,25 +715,25 @@ a 3-line example.
   body, footer actions, sizes, backdrop dim + blur), `command_palette`
   (fuzzy filter, keyboard-first), `toast` stack.
 - Icons: one coherent vector set (start from Motioner's `icons.rs` 16-unit
-  grid, moved here and made generic; Motioner then imports it â€” no copy
+  grid, moved here and made generic; Motioner then imports it — no copy
   remains). At least the 60 icons a desktop app needs (file, folder, plus,
   search, settings, chevrons, close, play/pause, undo/redo, trash, copy,
-  image, film, music, font, clock, star, more, external, check, warningâ€¦).
+  image, film, music, font, clock, star, more, external, check, warning…).
 
-## Phase 7 â€” Motion and polish
+## Phase 7 — Motion and polish
 
 - Transitions on style properties (colour, elevation, opacity, transform)
   driven by the injected clock; enter/exit animations for overlays (fade +
-  scale 0.98â†’1, slide for toasts); list item insertion fade.
+  scale 0.98→1, slide for toasts); list item insertion fade.
 - `prefers_reduced_motion` theme flag turns them into instant changes.
 - Smooth scrolling with overlay scrollbars that appear on hover/scroll.
 - Focus ring that animates in, only for keyboard focus (`focus-visible`
   semantics).
-- A "polish pass" over the gallery at 1Ã—, 1.5Ã— and 2Ã—: optical alignment of
+- A "polish pass" over the gallery at 1×, 1.5× and 2×: optical alignment of
   icons with text, consistent icon sizes per type role, hairlines crisp,
   shadows soft and never banded. Fix what the screenshots show.
 
-## Phase 8 â€” Design lint and diagnostics (the guard rail for models)
+## Phase 8 — Design lint and diagnostics (the guard rail for models)
 
 `guimaker::lint(&laid_out_tree, &theme) -> Vec<Finding>` with severity, the
 offending key paths, the rects, the **cause** (the `explain` chain from
@@ -750,9 +750,9 @@ explanation of the element under the cursor.
 - text clipped or truncated without an explicit `lines(n)` / ellipsis;
 - contrast below the role threshold on the actual background under it;
 - `Px` escape hatches and spacing not on the token scale;
-- near-miss alignment (edges 1â€“3 px apart that should match);
+- near-miss alignment (edges 1–3 px apart that should match);
 - inconsistent radii or elevations among siblings of the same kind;
-- hit targets smaller than 24Ã—24 px; icon-only button without tooltip;
+- hit targets smaller than 24×24 px; icon-only button without tooltip;
 - more than one `Primary` action in the same group; empty containers;
 - content wider than its `max_width` column; horizontal overflow;
 - breakage only at some widths (the lint runs across the Phase 3 sweep and
@@ -762,7 +762,7 @@ explanation of the element under the cursor.
 Plus `gallery lint <story> [--sweep]` and a test helper `assert_clean(view)`.
 Every gallery story and recipe must lint clean across the sweep.
 
-## Phase 9 â€” Recipes, docs and the HTML + CSS comparison
+## Phase 9 — Recipes, docs and the HTML + CSS comparison
 
 - **Recipes** (gallery stories and copyable code, each lint clean, each with
   goldens in dark and light): app launcher / start screen, New-item dialog
@@ -775,9 +775,9 @@ Every gallery story and recipe must lint clean across the sweep.
   screenshots and lint, and **`design-guide.md` written for models**: "before
   writing a screen, pick the closest recipe"; hierarchy rules (one primary
   action, type roles per level, at most two text tones per block); spacing
-  rules (S2 inside controls, S3â€“S4 between related items, S6â€“S8 between
+  rules (S2 inside controls, S3–S4 between related items, S6–S8 between
   groups, S12+ between sections); when to use cards vs lists; the
-  write â†’ screenshot â†’ lint â†’ fix loop. Update `README.md` and rewrite
+  write → screenshot → lint → fix loop. Update `README.md` and rewrite
   `docs/roadmap.md` to the new reality.
 - **Comparison**: write the start-screen recipe once in GUIMaker and once in
   plain HTML + CSS (a static `out/compare/start.html` with the same tokens,
@@ -785,7 +785,7 @@ Every gallery story and recipe must lint clean across the sweep.
   numeric literals, and side-by-side screenshots. Target: fewer lines than
   HTML + CSS together, **zero** numeric literals in the GUIMaker view.
 
-## Phase 9B â€” The lightest UI library: optimisation and comparison
+## Phase 9B — The lightest UI library: optimisation and comparison
 
 1. **Instrumentation** in GUIMaker (behind a feature, zero cost when off):
    per-frame counters (nodes built, nodes re-laid out, draw commands,
@@ -813,7 +813,7 @@ Every gallery story and recipe must lint clean across the sweep.
 5. Optimise until every row of the budget table is met; the bench numbers go
    in the GUIMaker README.
 
-## Phase 10 â€” Motioner on GUIMaker: the plumbing only (the frontend is not part of this prompt)
+## Phase 10 — Motioner on GUIMaker: the plumbing only (the frontend is not part of this prompt)
 
 **The user assigned the Motioner frontend to a separate Claude session after
 this prompt.** That covers:
@@ -852,10 +852,10 @@ the frontend session possible, with no duplicated code left:
      (launcher, app shell, dialogs, inspector forms, lists, timeline rows);
    - what is still hand-placed and where;
    - the gaps the library has for those screens;
-   - screenshots `out/ui/p15-10-now-*.png` of every screen at 1280Ã—800 and
-     1920Ã—1080, at scale 1 and 1.5, as the "before" for that session.
+   - screenshots `out/ui/p15-10-now-*.png` of every screen at 1280×800 and
+     1920×1080, at scale 1 and 1.5, as the "before" for that session.
 
-## Phase 11 â€” Dogfood: the GUIMaker designer, and the backlog
+## Phase 11 — Dogfood: the GUIMaker designer, and the backlog
 
 - Revive the designer as `crates/guimaker_designer` on the library, as the
   best stress test. Read the old one in the read-only clone for ideas, but
@@ -881,7 +881,7 @@ the frontend session possible, with no duplicated code left:
   - accessibility tree export;
   - RTL and IME text input.
 
-## Phase 12 â€” Report
+## Phase 12 — Report
 
 `pctl session-log` in Motioner and a session note in `crates/guimaker/docs`. Final report
 **in Spanish**: what changed per phase; before/after screenshots of the start
@@ -946,7 +946,7 @@ appeared. Phase 2 starts with these fix lanes:
    - Add `accent_fill`, `accent_fill_hover` and `accent_fill_pressed`,
      derived from the same seed with a lower OKLCH lightness, plus
      `text_on_accent_fill`, which is the light neutral.
-   - The guarantee is â‰¥ 4.5:1 in all three states and in all three themes.
+   - The guarantee is ≥ 4.5:1 in all three states and in all three themes.
    - Filled (primary) buttons use the fill roles.
    - Record the choice in `docs/theme.md`.
 2. **Literal guard.** The report says no literal values exist outside
@@ -987,7 +987,7 @@ Measured:
 - 0 allocations in steady state;
 - GUIMaker layout at 8,192 nodes: 3.885 ms, against 6.328 ms for the
   engine's full pass;
-- the spatial index query: 37.0 â†’ 33.3 ns.
+- the spatial index query: 37.0 → 33.3 ns.
 
 Phase 3 starts with these:
 
@@ -1050,7 +1050,7 @@ From now on:
 2. **Remove the linear hit test.** It is in `ferrous_events`, marked
    `TODO(prompt 15, phase 4)`, and Phase 4 removes it, as required after
    Phase 2.
-3. **Cold frame.** The cold frame (0.26â€“0.48 ms) pays a second responsive
+3. **Cold frame.** The cold frame (0.26–0.48 ms) pays a second responsive
    pass because containers exist only after the first pass. That is fine
    for now. Record it in `docs/responsive.md`, and revisit it in Phase 9B
    if the start screen's first frame budget needs it.
@@ -1063,7 +1063,7 @@ Phase 4 is accepted.
 |---|---|
 | Routing cost per event | 28 ns, flat from 100 to 10,000 nodes |
 | Allocations per event in steady state | 0 |
-| Tree flattening (10,000 rows) | 1,780 â†’ 17.2 Âµs |
+| Tree flattening (10,000 rows) | 1,780 → 17.2 µs |
 | Input-to-present, hover | 0.88 / 1.68 ms (p50 / p99) |
 | Input-to-present, scrub | 2.73 / 4.07 ms (p50 / p99) |
 | Implementations of the scroll, virtual list and tree controllers | one, in GUIMaker |
