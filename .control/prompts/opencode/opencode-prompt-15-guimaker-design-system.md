@@ -1199,3 +1199,40 @@ harness change are right and stay:
    re-derivation and the final `--check` run only when the user says the host
    is quiet: AutoCAD closed, no builds running. Check this with a 10 s idle
    CPU sample before the runs, and report it.
+
+
+## Review after the Phase 4B fix, second pass (reviewer, 2026-11-22)
+
+**Accepted and pushed** as engine `dd382bd` and Motioner `c091fca`, `edf7343`,
+`996d552` and `19bb2e5`. The reviewer ran the gate again: the engine files
+changed, the workspace, wasm32, and the full Motioner gate in a clean worktree
+are all green. What is in:
+- **Continuous, deterministic input.** The hover and scrub budgets were
+  derived again, each change has an explicit budget-change line, and the max
+  is the median × 1.15, the same as before.
+- **`cpu_ms_per_presented_frame`** on every scenario.
+- **A real `CursorMoved` test** with a positive control. `event_requests_frame`
+  is shared with `Runner::window_event`.
+- **The mojibake guard.** It found and repaired real bugs: the window title,
+  the menu labels (`Open project…`) and several doc comments.
+- **A stale `Cargo.lock`.** It still listed `ferrous_events` as a dependency,
+  which the `e07d3fc` pin no longer has. That entry was dropped.
+
+**One budget is still red: `heavy_ui_list_1000.cpu_percent`.** It measures
+10.453 against a max of 9.673, and the reruns stayed between 10.1 and 10.8.
+It was not relaxed. It is resolved by a check, not by a choice:
+1. On the same quiet host, build Motioner release at the `55d2b2a` pin
+   (Phase 3) and at the current pin. Run `heavy_ui_list_1000` three times on
+   each and report the median CPU and `cpu_ms_per_presented_frame`.
+2. **If `55d2b2a` is also above 9.673,** the host baseline moved since
+   prompt 18 P7 and the code did not regress. Derive the budget again with
+   the line `heavy_ui_list_1000.cpu_percent: 9.673 -> X (host baseline moved
+   since prompt 18 P7; 55d2b2a measures Y)`.
+3. **If `55d2b2a` passes,** it is a regression. Bisect it and fix it before
+   any Phase 5 code lands.
+
+**Nit.** `cpu_ms_per_presented_frame` on the idle scenarios (`start_idle`,
+`editor_idle`, `editor_hover_static`) divides CPU by a handful of frames, so
+it is noise and not a guard. Leave those three budgets out and report the
+value only. Apply it as a budget only when the run presents at least 30
+frames.
