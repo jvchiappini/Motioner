@@ -8,11 +8,11 @@ version_schema: 1
 ## Prompt 15 status (GUIMaker design system)
 
 Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B,
-Phase 1, Phase 2, Phase 3 and Phase 4 done; stopped for review.** No commits.
-FerrousEngine `feat/guimaker` from `55d2b2a` (dev clone, local changes); the
-Motioner submodule stays at `55d2b2a` (no pin bump). Motioner `feat/guimaker`
-at `c1c7a22` + local `scripts/perf_bench.py`, `scripts/perf_budgets.json` and
-`.control/` changes.
+Phase 1, Phase 2, Phase 3, Phase 4 and Phase 4B done; stopped for review.**
+No commits. FerrousEngine `feat/guimaker` from `5c851f6` (dev clone, local
+changes); the Motioner submodule stays at `5c851f6` (no pin bump). Motioner
+`feat/guimaker` at `afab0c0` + local `.control/tasks/guimaker/T-GUI-0001` and
+the phase 11 backlog line.
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 
@@ -226,7 +226,49 @@ P4 (2026-11-21) — review fixes + interaction (engine raw input, GUIMaker input
   tests and pctl validate/refs all 0. C: 39+ GB free. No commits.
 - **Report:** `out/reports/PHASE-15-P4-REPORT.md` (Spanish) + the
   `out/reports/phase15/p4-*` logs and payloads.
-- **Next:** phase 4B (canvas/scene picking) or phase 5 (drawing + screenshots).
+
+P4B (2026-11-21) — reviewer fix lanes + shared spatial index + scene picking:
+
+- **Retained UI documented draw-only** (not restored): `ferrous_gui`
+  README/docs, `ferrous_engine` root README/docs, `FerrousApp::configure_ui`
+  rustdoc and the app-trait page. Affected listed: `ferrous_editor` (the only
+  app; port is **T-GUI-0001** and the phase 11 backlog line in the prompt),
+  any external app implementing `configure_ui`, `ferrous_web` users of the
+  trait, `ferrous_gui`; tests use layout/paint only; no examples exist.
+- **Spatial index moved down:** `ferrous_core::spatial::{Aabb, SpatialIndex}`
+  is the one uniform grid (CSR, point `O(cell)`, rect with reused stamps,
+  last-hit cache). `guimaker::spatial::HitIndex` is a thin `NodeId` adapter;
+  `ferrous_2d::picking` uses the same index.
+- **Picking:** `PickItem` (full affine incl. skew, z, clips, flags), exact
+  rounded rect/circle/path (non-zero + even-odd, stroke)/text/image alpha;
+  `pick`, `pick_all`, `marquee` Intersect/Contain, `lasso`, `nearest_point`,
+  `nearest_edge`; `PickCamera` (screen↔world, zoom-to-cursor, pan, fit);
+  `IdBuffer` CPU reference + GPU policy. Docs `ferrous_2d/picking.md`, example
+  `examples/picking.rs`, 19 tests, alloc test 0/0 over 90 queries.
+- **Numbers (release):** point pick 10k shapes **61 ns/query** (<20 µs),
+  marquee 10k **5.4 µs** (<1 ms), contain 93 µs, lasso 14.9 µs, nearest 174 ns,
+  rebuild 462 µs, id-buffer reference 114/467 µs (64/128). Spatial bench 33.3 →
+  **33.0 ns**; routing hover 28.1 → **18.0 ns**, click 42.2 → **27.9**, wheel
+  51.5 → **38.5**, Tab 270 → **76.4** (none slower).
+- **Motioner 3-run medians (new release binary from a clean worktree):**
+  heavy_ui 15.292/18.145 (347 samples, budgets 17.845/21.012, frame 9.697 ≤
+  11.231), editor_hover 0.977/1.615 (1 049, 1.183/1.899, frame 1.566), scrub
+  2.738/4.123 (245, 3.096/4.850, frame 26.782). Input budgets pass; full
+  `--check` fails only on CPU/tail (hover 9.399/6.799 vs 6.813/4.174; scrub
+  8.892/4.892 vs 7.998/3.685), reported, no budget relaxed. Budget lines:
+  heavy p50 8.494 → 17.845, p99 8.494 → 21.012 (one-sample artefact; 347-356
+  samples), frame p99 unchanged.
+- **Deviation:** no 2D GPU id-buffer pass this session (the UI id pipeline
+  exists, no 2D scene target); CPU reference + policy + measured cost, deferred
+  to phase 5/9B.
+- **Gate:** GUIMaker fmt/clippy pedantic (`--no-deps`)/rustdoc/185 tests/
+  machete/literal 26/boundaries (`guimaker: 1 engine dep`) 0; engine workspace
+  check 0, wasm 0, `ferrous_core`+`ferrous_2d` clippy `-D warnings` 0, tests 0,
+  rustdoc 2d clean and core clean with known allows; known machete core
+  (anyhow, thiserror) and 2d (log), gui 3 unchanged; Motioner clean worktree
+  (no junctions): fmt/clippy/90 groups/build/doc/machete/boundaries/encoding/
+  22 script tests 0; pctl validate/refs 0. C: 34.9 GB. No commits.
+- **Report:** `out/reports/PHASE-15-P4B-REPORT.md` + `phase15/p4b-*` logs.
 
 ## Prompt 18 status (engine performance)
 

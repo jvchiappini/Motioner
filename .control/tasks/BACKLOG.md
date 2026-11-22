@@ -21,6 +21,7 @@
 - **T-ARCH-0003** — Maintain the Motioner system blueprint `[media]` (actualizado 2026-10-31)
 - **T-DSL-0005** — Close minor findings and test gaps from the core/eval/dsl review `[media]` (actualizado 2026-10-31)
 - **T-DSL-0025** — Prompt 13b leftovers: theme x preset matrix, bounds parity, scene ranges, render_variants, example goldens `[media]` (actualizado 2026-11-07)
+- **T-GUI-0001** — Port ferrous_editor to GUIMaker (replace the draw-only retained UiSystem) `[media]` (actualizado 2026-11-21)
 - **T-PHYS-0001** — GPU particles and rigid-body physics (post-1.0 spike) `[media]` (actualizado 2026-11-03)
 - **T-PUB-0001** — Installer (MSI/NSIS), portable ZIP and .motioner file association `[media]` (actualizado 2026-11-04)
 - **T-UI-0011** — Render and draw recent-project thumbnails in the start screen `[media]` (actualizado 2026-11-04)
