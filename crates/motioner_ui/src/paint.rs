@@ -19,7 +19,8 @@ use std::collections::HashMap;
 
 use ferrous_font::Font;
 use ferrous_gui::{
-    GuiBatch, GuiQuad, Rect as ClipRect, BORDER_BIT, GRADIENT_BIT, GRADIENT_V_BIT, SHADOW_BIT,
+    GuiBatch, GuiQuad, LineSpec, Rect as ClipRect, BORDER_BIT, GRADIENT_BIT, GRADIENT_V_BIT,
+    SHADOW_BIT,
 };
 
 use crate::layout::{Hit, Rect};
@@ -1000,8 +1001,12 @@ impl<'a> Painter<'a> {
     /// fragment distance to the segment, so diagonals are anti-aliased without
     /// stair-stepping through axis-aligned quads.
     pub fn line(&mut self, from: (f32, f32), to: (f32, f32), width: f32, color: [f32; 4]) {
-        self.batch
-            .line([from.0, from.1], [to.0, to.1], width, color);
+        self.batch.line(LineSpec {
+            from: [from.0, from.1],
+            to: [to.0, to.1],
+            width,
+            color,
+        });
     }
 
     /// A filled circle.
