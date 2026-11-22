@@ -1092,3 +1092,53 @@ The fix lanes for Phase 4B follow.
 3. **A budget change gets its own line in the report.** Name the old
    value, the new value, and the reason. P4 did this. Keep doing it, and
    never relax a budget to make a check pass without that line.
+
+## Review findings after Phase 4B (reviewer, 2026-11-22)
+
+The Phase 4B code is accepted. The engine is pushed as `e07d3fc` and
+Motioner pins it. Accepted results:
+
+- **One spatial grid:** `ferrous_core::spatial` is shared by GUIMaker
+  routing and by engine picking, and no bench got slower. Hover routing went
+  from 28.1 to 18.0 ns and Tab from 270 to 76 ns.
+- **Picking:** it meets its budgets and has docs, an example and tests.
+- **GPU id-buffer:** this is a conscious, documented deviation. It moves to
+  Phase 5 and 9B, once the engine has a 2D scene target.
+- **GUIMaker clippy pedantic** runs with `--no-deps`, so the lint does not
+  land on `ferrous_core`'s old debt. Accepted.
+
+### Blocking: CPU regression in hover and scrub
+
+`perf_bench.py --check` fails on CPU:
+
+| Scenario | Metric | Budget | Measured |
+|---|---|---|---|
+| `editor_hover` | `cpu_percent` | 6.813 | 9.399 |
+| `editor_hover` | `tail` | 4.174 | 6.799 |
+| `timeline_scrub` | `cpu_percent` | 7.998 | 8.892 |
+| `timeline_scrub` | `tail` | 3.685 | 4.892 |
+
+Hover was 5.509 % in Phase 3, so this is a regression, not noise. "The
+machine was loaded" is not a finding. The report also says the new binary
+draws more frames in the same time: 1,119 hover frames against 735 in
+Phase 4. Under on-demand redraw, frames are only drawn when something
+changed, so extra frames are the bug to find.
+
+Fix it before any Phase 5 work:
+
+1. **Bisect** with the same harness and the same machine state. Build
+   Motioner release at the pins `55d2b2a` (Phase 3), `5c851f6` (Phase 4)
+   and `e07d3fc` (Phase 4B), and run `editor_hover` and `timeline_scrub`
+   three times each. Report CPU, tail, the frames presented and the input
+   events sent.
+2. **Check the harness first.** If the Phase 4 change to `perf_bench.py`
+   (the 30-sample minimum, the probes) sends more input events, the
+   budgets are no longer comparable. In that case:
+   - make the CPU scenarios send exactly the input they sent before;
+   - put the input-to-present probes in their own runs.
+3. **If the engine causes it,** for example the runner change that stopped
+   dispatching to `UiSystem` and now redraws on every raw event, fix the
+   engine so that a pointer move that changes nothing presents nothing.
+   Prove it with a test.
+4. **Close** with `perf_bench.py --check` green on all scenarios, three-run
+   medians, and no relaxed budget.
