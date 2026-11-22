@@ -1424,3 +1424,41 @@ writing goldens. Then add the mechanical guards to the gallery tests:
 - the icon size must match the type role of the sibling text;
 - the cells of a table column must share one x and one width;
 - a submenu must not change its parent's layout.
+
+
+## Scope split: backend for opencode, visual design for Claude (user decision, 2026-11-22)
+
+The user decided that opencode writes the backend and the long code: the
+engine, the layout mechanics, the component behaviour and the APIs. Claude
+does the visual design later, in the frontend session: the look of every
+component, the icon artwork, spacing and proportions, and the final goldens.
+
+That changes the Phase 6 findings, and Phases 7 to 11:
+
+**Opencode fixes these (mechanics and rendering):**
+- the shadow banding and the backdrop blur sampling its own shadow or target
+  (the engine), with pixel tests;
+- per-side border widths and a round-cap arc stroke, as generic engine
+  features with pixel tests;
+- submenus as anchored overlays that never change the parent's layout;
+  shortcut column alignment as a layout mechanism;
+- table shared column widths (fixed, fraction, fit) as a layout mechanism;
+- a real caret rect and selection rects from the shaped glyph positions;
+- a negative gap in layout;
+- icons take their colour from their context tone, and their size comes
+  from a theme token per type role;
+- the swapped Back and Forward icons and the duplicate Remove (data bugs);
+- the mechanical guards in the gallery tests (no pure black or white, icon
+  size from the role token, one x and width per table column, a submenu
+  never changes its parent, the shadow ramp step at or under 2/255).
+
+**Claude does these later (visual):**
+- the icon redraws, the menu, table, toolbar, app_shell and form_row look;
+- the button size steps;
+- the visual QA checklist;
+- the final goldens.
+
+Opencode's goldens are regression snapshots only. Regenerate them after the
+mechanics change, and do not polish their look. Phase 7's "polish pass" is
+reduced the same way: opencode builds the transition, reduced-motion,
+scrollbar and focus-ring machinery, and Claude tunes how they look.
