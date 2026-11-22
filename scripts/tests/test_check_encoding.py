@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import check_encoding
 
+PROMPT = ".control/prompts/opencode/opencode-prompt-15-guimaker-design-system.md"
+
 
 class ClassificationTest(unittest.TestCase):
     def test_clean_utf8_is_accepted(self) -> None:
@@ -37,6 +39,35 @@ class ClassificationTest(unittest.TestCase):
             ["UTF-8 BOM", "CR (CRLF line endings)"],
         )
 
+    def test_mojibake_is_rejected(self) -> None:
+        cases = {
+            "A-tilde": "\u00c3\u00a9\n",
+            "a-circumflex + euro": "\u00e2\u20ac\u201d\n",
+            "A-circumflex": "\u00c2\u00b1\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                problems = check_encoding.problems_for(text.encode(), "notes.md")
+                self.assertTrue(
+                    any(problem.startswith("mojibake") for problem in problems),
+                    problems,
+                )
+
+    def test_a_tilde_before_a_letter_is_not_mojibake(self) -> None:
+        self.assertEqual(
+            check_encoding.problems_for("\u00c3a\n".encode(), "notes.md"), []
+        )
+
+    def test_the_prompt_review_section_is_allowlisted(self) -> None:
+        text = (
+            "## Review findings after the Phase 4B fix\n\n"
+            "the sequences `\u00c3`, `\u00c2` and `\u00e2\u20ac` on purpose\n\n"
+            "## A later section\n\n"
+            "\u00c3\u00a9\n"
+        )
+        problems = check_encoding.problems_for(text.encode(), PROMPT)
+        self.assertTrue(any("line 7" in problem for problem in problems), problems)
+
     def test_engine_and_binaries_are_skipped(self) -> None:
         self.assertFalse(check_encoding.is_checked("engine/ferrous/README.md"))
         self.assertTrue(check_encoding.is_checked("crates/motioner_dsl/src/lib.rs"))
@@ -48,12 +79,19 @@ class ClassificationTest(unittest.TestCase):
             (root / "clean.md").write_bytes(b"text\n")
             (root / "crlf.md").write_bytes(b"text\r\n")
             (root / "bom.md").write_bytes(b"\xef\xbb\xbftext\n")
+            (root / "mojibake.md").write_bytes("\u00c3\u00a9\n".encode())
             (root / "blob.bin").write_bytes(b"\x00\r\n")
             findings = check_encoding.worktree_problems(
-                root, ["clean.md", "crlf.md", "bom.md", "blob.bin"]
+                root, ["clean.md", "crlf.md", "bom.md", "mojibake.md", "blob.bin"]
             )
-        # CRLF becomes LF when Git commits it; a BOM does not.
-        self.assertEqual(findings, {"bom.md": ["UTF-8 BOM"]})
+        # CRLF becomes LF when Git commits it; a BOM and mojibake do not.
+        self.assertEqual(
+            findings,
+            {
+                "bom.md": ["UTF-8 BOM"],
+                "mojibake.md": ["mojibake (double-encoded UTF-8) at line 1"],
+            },
+        )
 
 
 if __name__ == "__main__":

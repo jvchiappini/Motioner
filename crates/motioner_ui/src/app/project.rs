@@ -28,9 +28,9 @@ impl PreviewApp {
         let path = self.editor.session().path();
         let name = crate::project_display_name(path);
         if self.editor.session().is_dirty() {
-            format!("â€¢ {name} â€” Motioner")
+            format!("• {name} — Motioner")
         } else {
-            format!("{name} â€” Motioner")
+            format!("{name} — Motioner")
         }
     }
 

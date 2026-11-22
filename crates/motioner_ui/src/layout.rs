@@ -12,7 +12,7 @@
 //! +-----------+------------------------------------------+-----------+
 //! | layers    | canvas (pasteboard + composition)        | inspector |
 //! +-----------+------------------------------------------+-----------+
-//! | timecode        |<  <   (>)   >  >|   loop          fps Â· frames |
+//! | timecode        |<  <   (>)   >  >|   loop          fps · frames |
 //! | names column    | ruler                                          |
 //! |                 | tracks                                         |
 //! +------------------------------------------------------------------+
@@ -291,10 +291,10 @@ impl MenuAction {
     pub const fn label(self) -> &'static str {
         match self {
             Self::New => "New project",
-            Self::Open => "Open projectâ€¦",
+            Self::Open => "Open project…",
             Self::Save => "Save",
-            Self::SaveAs => "Save a copyâ€¦",
-            Self::Import => "Import assetâ€¦",
+            Self::SaveAs => "Save a copy…",
+            Self::Import => "Import asset…",
             Self::Reveal => "Reveal in Explorer",
             Self::Close => "Close project",
         }
@@ -654,7 +654,7 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// Computes the layout for a window of `width` Ã— `height` physical pixels.
+    /// Computes the layout for a window of `width` × `height` physical pixels.
     ///
     /// Panels keep their requested sizes when they fit and shrink otherwise,
     /// so the canvas keeps at least the minimum canvas size (160 px, scaled) in both

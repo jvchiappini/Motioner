@@ -1,7 +1,7 @@
 //! Vector path geometry: authored points, flattening, trimming and dashing.
 //!
 //! A [`PathGeometry`] is the authored outline of a path node: a list of
-//! [`PathPoint`]s (a corner or a point with relative BÃ©zier handles), a
+//! [`PathPoint`]s (a corner or a point with relative Bézier handles), a
 //! closed flag and the stroke cap/join style. It is pure data: flattening,
 //! arc-length trimming and dashing live here so the renderer, the selection
 //! bounds, hit testing and the tests all share one implementation (D-0029).
@@ -117,9 +117,9 @@ impl LineJoin {
 pub struct PathPoint {
     /// Position in the node's local space.
     pub position: Vec2,
-    /// Incoming BÃ©zier handle offset.
+    /// Incoming Bézier handle offset.
     pub handle_in: Vec2,
-    /// Outgoing BÃ©zier handle offset.
+    /// Outgoing Bézier handle offset.
     pub handle_out: Vec2,
 }
 

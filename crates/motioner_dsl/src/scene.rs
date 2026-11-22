@@ -1992,7 +1992,7 @@ impl Scene {
     /// `node.wiggle(property, seed, frequency, amplitude, start, end)`.
     ///
     /// Emits one `sine_in_out` key per `1/frequency` seconds, with the value
-    /// `base Â± amplitude` from a documented `SplitMix64` stream. The same seed
+    /// `base ± amplitude` from a documented `SplitMix64` stream. The same seed
     /// always produces the same keys. `base` is the property's current static
     /// value (existing keyframes are not sampled).
     fn wiggle(&mut self, id: NodeId, args: CallArgs, site: &WriteSite) -> HostResult<Value> {

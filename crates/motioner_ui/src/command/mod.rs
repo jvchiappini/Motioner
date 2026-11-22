@@ -371,7 +371,7 @@ pub enum Command {
         /// New identity.
         to: String,
     },
-    /// Delete an orphaned override (Ã— in the orphans list).
+    /// Delete an orphaned override (× in the orphans list).
     DeleteOrphan {
         /// The orphan's identity.
         id: String,
