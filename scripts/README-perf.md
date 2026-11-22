@@ -74,6 +74,7 @@ python scripts/perf_bench.py `
   "scenarios": {
     "editor_hover": {
       "cpu_percent": {"max": 10.675},
+      "cpu_ms_per_presented_frame": {"max": 0.2},
       "fps": {"min": 31.495},
       "damage_fraction": {"max": 1.0},
       "gpu_frame.draw_calls": {"max": 64.4}
@@ -91,9 +92,9 @@ python scripts/perf_bench.py `
   then `baseline * (1 +/- margin)`, raised to an optional `floor`. The
   top-level `noise_margin` is the fallback.
 - `--write-budgets` writes explicit `max`/`min` values:
-  - `cpu_percent`, `collection_ms`, `frame_ms_p99`, `input_to_present_p50`,
-    `input_to_present_p99` and `damage_fraction` use
-    `max(0.02, value * 1.15)`;
+  - `cpu_percent`, `cpu_ms_per_presented_frame`, `collection_ms`,
+    `frame_ms_p99`, `input_to_present_p50`, `input_to_present_p99` and
+    `damage_fraction` use `max(0.02, value * 1.15)`;
   - `damage_fraction` is clamped to 1.0;
   - `idle_cpu_percent` and `tail_cpu_percent` use a 1 % absolute floor (the
     NVIDIA driver wakes 0.1-0.85 % of a core on the reference machine);
@@ -118,6 +119,42 @@ layer list scroll, the heavy composition and the 120-frame export.
 demo's test video and its proxy when available) and previews it at
 `--window-size 1920x1080`, so the preview proxy path is exercised. It records
 `dropped_frames` and the decode-ahead hit rate.
+
+## Deterministic input (prompt 15 P4B fix)
+
+The CPU scenarios used to post with `PostMessageW`, and Windows coalesced a
+different fraction of the moves depending on how fast the build pumped its
+message queue: the identical 30 s run presented 743 or 1 156 hover frames and
+CPU followed the frame count. The harness fixes the delivery and keeps the
+workload for the whole measured window:
+
+- `post_mouse_move` uses `SendMessageW`: every move is processed once;
+- `editor_hover` waits `HOVER_SETTLE_S = 2 s` for the project to open, parks
+  the real cursor outside the window (a physical mouse over the app injects
+  extra moves), restores it, and then sends a move every 16 ms
+  (`HOVER_INTERVAL_S`) until the process exits. There is no event cap, so the
+  tail is the same workload as the rest of the window;
+- `timeline_scrub` sends a `seek()` every 60 ms (`SCRUB_INTERVAL_S`) through
+  the control endpoint until the process exits. Each seek is one TCP
+  request/reply on a single localhost connection (the endpoint protocol is one
+  request per connection), not a `motioner ctl` process per seek: the
+  process-per-seek loop paced at ~110 ms and kept the seek load in the tail;
+- the input-to-present probe lives in its own `heavy_ui_probe` run; the
+  `heavy_ui` CPU/frame numbers come from a run with no synthetic input, and
+  the harness copies the probe's input fields into `heavy_ui` before `--check`;
+- every run reports `input_events_sent` next to `frames`, so a bisect can see
+  whether the input population changed.
+
+Every result also carries `cpu_ms_per_presented_frame` (total CPU seconds over
+the presented frames, or the drawn frames when a headless run presents none).
+It does not move with how long the machine took to present, so it is the guard
+that catches an engine regression under host load, together with the CPU and
+tail percentages.
+
+The heavy_ui fixture line had one pre-existing double-encoded em dash; it is
+now a plain em dash. `scripts/check_encoding.py` rejects that class of mojibake
+from now on, with the prompt-15 review section allowlisted because it quotes
+the broken sequences on purpose.
 
 The harness now parses two optional engine lines:
 

@@ -29,9 +29,9 @@ The scenarios:
 
 1. start screen idle 30 s;
 2. editor with ``examples/demo.motioner`` idle 30 s;
-3. editor hover (the cursor is moved across the window);
+3. editor hover (continuous 16 ms pointer moves across the window);
 4. editor hover inside one static panel area;
-5. timeline scrubbing through the control endpoint;
+5. timeline scrubbing (continuous 60 ms seeks through the control endpoint);
 6. 1080p playback of the demo for 10 s;
 7. 4K30 playback: a generated 3840x2160 ``.motioner`` project with a video,
    previewed at ``--window-size 1920x1080`` so the preview proxy is used
@@ -79,15 +79,25 @@ aggregation and ranges) and prints the damaged fraction as a percentage of
 the window and the input-to-present p50/p99 in ms.  When an older binary does
 not emit the fields the harness prints ``not reported`` instead of failing.
 
+Deterministic input (prompt 15 P4B fix).  The hover and scrub CPU scenarios
+deliver input for the whole measured window at a fixed cadence: 16 ms for
+hover (``SendMessageW``, so every move is processed once) and 60 ms for scrub
+(one seek per TCP request/reply).  There is no request cap, so the tail is the
+same workload as the rest of the window and CPU is not diluted by an idle
+tail.  The input-to-present probe is a separate ``heavy_ui_probe`` run.
+
 Input-to-present population (prompt 15 phase 4).  A p99 over one event is not
-a measurement, so every measured run must feed at least
-``MIN_INPUT_SAMPLES`` (30) input instants to presented frames.  ``heavy_ui``
-therefore runs a pointer probe (``--allow-pointer``): one ``WM_MOUSEMOVE``
-every ~16 ms between two points in the title bar, while the scene stays
-still.  A run with fewer samples prints an explicit FINDING and
-``--check`` fails every ``input_to_present*`` metric for that scenario
-("fewer than 30 samples").  The probe is part of the same run, so
-``heavy_ui.frame_ms_p99`` is re-checked with it enabled.
+a measurement, so every probed run must feed at least ``MIN_INPUT_SAMPLES``
+(30) input instants to presented frames.  ``heavy_ui`` therefore has a separate
+``heavy_ui_probe`` run (``--allow-pointer``): one zero-delta ``WM_MOUSEWHEEL``
+every ~16 ms in the title bar, while the scene stays still.  A probed run with
+fewer samples prints an explicit FINDING and ``--check`` fails every
+``input_to_present*`` metric for that scenario ("fewer than 30 samples").  The
+harness copies the probe's input fields into ``heavy_ui`` before ``--check``;
+the CPU/frame numbers stay in the probe-free run.  A scenario without a probe
+keeps its recorded input budget, but a p50/p99 over fewer than 30 samples is
+one event, so the checker does not enforce it; a real population (>= 30
+samples) is enforced even without a probe.
 
 The heavy UI layers fixtures are generated under ``FIXTURES`` as real
 ``.motioner`` project directories (``project.motion`` plus
@@ -113,6 +123,7 @@ fail the run.
       "scenarios": {
         "editor_hover": {
           "cpu_percent": {"max": 10.675},
+          "cpu_ms_per_presented_frame": {"max": 0.2},
           "fps": {"min": 31.495},
           "damage_fraction": {"max": 1.0},
           "gpu_frame.draw_calls": {"max": 64.4}
@@ -133,8 +144,9 @@ the failure list is printed and the process returns 1.
 ``--write-budgets PATH`` derives that file from the measured (or
 ``--from-json`` recorded) results.  ``--margin`` defaults to 0.15, the P0
 spread ceiling.  Near-zero metrics get an absolute floor instead of a useless
-percentage: collection, frame-time p99, input-to-present and damage use at
-least 0.02 (a damage fraction is clamped to 1.0), idle/tail CPU uses 1 % of a
+percentage: collection, frame-time p99, input-to-present, damage and
+``cpu_ms_per_presented_frame`` use at least 0.02 (a damage fraction is clamped
+to 1.0), idle/tail CPU uses 1 % of a
 core (the NVIDIA driver wakes 0.1-0.85 % on the reference machine),
 ``private_mb`` at least 1.0 and ``vram_mb`` at least 0.1.  Throughput
 (``fps``) becomes a ``min`` at ``value * (1 - margin)``; ``dropped_frames`` is
@@ -171,6 +183,7 @@ import json
 import math
 import os
 import shutil
+import socket
 import statistics
 import subprocess
 import sys
@@ -195,6 +208,40 @@ IDLE_EXCLUDE_S = 0.5
 # A single input-to-present sample is not a measurement: every run that reports
 # the metric must feed at least this many input events to the presented frames.
 MIN_INPUT_SAMPLES = 30
+# Only these scenarios run an input probe, so only they must meet
+# ``MIN_INPUT_SAMPLES``. Other scenarios still check their recorded
+# input-to-present values, but a probe-less run cannot be failed for having no
+# population (it never had one).
+PROBED_SCENARIOS = frozenset({"heavy_ui", "heavy_ui_probe"})
+# Input events the harness actually posted during one measured run. The CPU
+# scenarios are sensitive to this: a faster app processes the same 16 ms loop
+# more often, so a bisect must report the population, not just the rate.
+INPUT_SENT = [0]
+INPUT_LOCK = threading.Lock()
+
+
+def count_input() -> None:
+    """Counts one posted input event (thread safe)."""
+    with INPUT_LOCK:
+        INPUT_SENT[0] += 1
+
+
+# Input is continuous for the whole measured window at a fixed cadence.
+# `SendMessageW` delivers every move once (a posted move can be coalesced with
+# the next one), so the workload is deterministic and CPU is not diluted by an
+# idle tail. 16 ms is the cadence the hover budget is defined at.
+HOVER_INTERVAL_S = 0.016
+# Let the preview open the project before the synthetic moves start: posting as
+# soon as the window is visible measured the start screen on some runs and the
+# editor on others, which is the source of the bimodal hover frame count.
+HOVER_SETTLE_S = 2.0
+# One seek per 60 ms over a TCP request/reply, for the whole measured window.
+# Each seek is one request and reply on a single localhost connection (the
+# control endpoint speaks one request per connection), not a `motioner ctl`
+# process per seek; the process-per-seek loop was paced at ~110 ms and kept
+# the seek load in the tail. The input-to-present probe runs separately in
+# `heavy_ui_probe`, never inside the CPU scenario.
+SCRUB_INTERVAL_S = 0.06
 
 USER32 = ctypes.windll.user32
 KERNEL32 = ctypes.windll.kernel32
@@ -217,8 +264,12 @@ USER32.SetForegroundWindow.argtypes = [wt.HWND]
 USER32.SetWindowPos.argtypes = [wt.HWND, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
 USER32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 USER32.GetCursorPos.argtypes = [ctypes.c_void_p]
+USER32.GetSystemMetrics.argtypes = [ctypes.c_int]
+USER32.GetSystemMetrics.restype = ctypes.c_int
 USER32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
 USER32.PostMessageW.restype = wt.BOOL
+USER32.SendMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+USER32.SendMessageW.restype = ctypes.c_ssize_t
 
 WM_MOUSEMOVE = 0x0200
 WM_MOUSEWHEEL = 0x020A
@@ -240,7 +291,13 @@ def post_mouse_move(hwnd: int, x: int, y: int) -> None:
     normal `CursorMoved` with the same coordinates.
     """
     lparam = ((y & 0xFFFF) << 16) | (x & 0xFFFF)
-    USER32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+    # SendMessage, not PostMessage: a posted move may be coalesced with the
+    # next one in the window queue, so the same stream delivered a different
+    # number of moves depending on how fast the build pumped messages. A
+    # synchronous send is processed exactly once, which makes the CPU scenario
+    # a fixed workload; the harness paces itself with HOVER_INTERVAL_S.
+    USER32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+    count_input()
 
 
 def enable_dpi_awareness() -> None:
@@ -326,6 +383,44 @@ def raise_window(hwnd: int) -> None:
     USER32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
 
 
+def park_cursor_outside(box: tuple[int, int, int, int]) -> POINT | None:
+    """Parks the real cursor away from the app and returns its old position.
+
+    A physical mouse moving over the measured window injects extra CursorMoved
+    events; on an active desktop the same synthetic stream then produced 615 or
+    962 hover frames. The scroll scenario already parks the cursor and restores
+    it; do the same for hover and scrub so the only pointer source is the
+    harness.
+    """
+    left, top, right, bottom = box
+    screen_w = USER32.GetSystemMetrics(0)
+    screen_h = USER32.GetSystemMetrics(1)
+    candidates = [
+        (max(0, left - 8), max(0, top - 8)),
+        (min(screen_w - 1, right + 8), max(0, top - 8)),
+        (max(0, left - 8), min(screen_h - 1, bottom + 8)),
+        (min(screen_w - 1, right + 8), min(screen_h - 1, bottom + 8)),
+    ]
+    target = next(
+        (
+            (x, y)
+            for (x, y) in candidates
+            if not (left <= x <= right and top <= y <= bottom)
+        ),
+        None,
+    )
+    original = POINT()
+    have_original = bool(USER32.GetCursorPos(ctypes.byref(original)))
+    if target is not None:
+        USER32.SetCursorPos(target[0], target[1])
+    return original if have_original else None
+
+
+def restore_cursor(original: POINT | None) -> None:
+    if original is not None:
+        USER32.SetCursorPos(original.x, original.y)
+
+
 def hover_loop(pid: int, stop: threading.Event) -> None:
     """Move a synthetic pointer over the app's client area until `stop`.
 
@@ -345,13 +440,20 @@ def hover_loop(pid: int, stop: threading.Event) -> None:
     if box is None:
         return
     left, top, right, bottom = box
-    while not stop.is_set():
-        for step in range(20):
+    original = park_cursor_outside(box)
+    try:
+        if stop.wait(HOVER_SETTLE_S):
+            return
+        step = 0
+        while not stop.is_set():
             x = int((right - left) * (0.1 + 0.8 * (step % 10) / 9.0))
             y = int((bottom - top) * (0.15 + 0.7 * ((step // 10) % 2)))
             post_mouse_move(hwnd, x, y)
-            if stop.wait(0.016):
+            step += 1
+            if stop.wait(HOVER_INTERVAL_S):
                 return
+    finally:
+        restore_cursor(original)
 
 
 def hover_static_loop(pid: int, stop: threading.Event) -> None:
@@ -430,6 +532,7 @@ def post_mouse_wheel(hwnd: int, screen_x: int, screen_y: int, delta: int) -> Non
     wparam = (delta & 0xFFFF) << 16
     lparam = ((screen_y & 0xFFFF) << 16) | (screen_x & 0xFFFF)
     USER32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+    count_input()
 
 
 def scroll_layers_loop(pid: int, stop: threading.Event) -> None:
@@ -477,25 +580,43 @@ def scroll_layers_loop(pid: int, stop: threading.Event) -> None:
 
 
 def scrub_loop(binary: Path, endpoint: Path, stop: threading.Event) -> None:
-    """Send seek() commands through the control endpoint until `stop`."""
+    """Send seek() commands through the control endpoint for the whole run.
+
+    Each seek is one TCP request/reply on a single localhost connection,
+    waiting for the server's answer: the editor executes the seek and requests
+    the frame, so the loop is paced by the app and the fixed 60 ms cadence.
+    There is no request cap; the input runs for the whole measured window.
+    """
     deadline = time.perf_counter() + 8.0
     while time.perf_counter() < deadline and not endpoint.exists() and not stop.is_set():
         time.sleep(0.05)
     frame = 0
     while not stop.is_set():
-        subprocess.run(
-            [str(binary), "ctl", "--endpoint", str(endpoint), f"seek({frame})"],
-            cwd=str(ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            text = endpoint.read_text(encoding="utf-8")
+            fields = {
+                key: value
+                for line in text.splitlines()
+                if "=" in line
+                for key, value in [line.split("=", 1)]
+            }
+            with socket.create_connection(
+                ("127.0.0.1", int(fields["port"])), timeout=5.0
+            ) as stream:
+                stream.sendall(
+                    (fields["token"] + "\n" + f"seek({frame})").encode("utf-8")
+                )
+                stream.shutdown(socket.SHUT_WR)
+                stream.recv(4096)
+        except (OSError, KeyError, ValueError):
+            pass
+        count_input()
         frame = (frame + 30) % 300
-        if stop.wait(0.03):
+        if stop.wait(SCRUB_INTERVAL_S):
             return
 
 
-# â”€â”€ fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── fixtures ───────────────────────────────────────────────────────────────
 
 
 def heavy_ui_fixture() -> Path:
@@ -512,7 +633,7 @@ def heavy_ui_fixture() -> Path:
         x = 20 + (index % 8) * 190
         y = 20 + (index % 120) * 7
         lines.append(
-            f'{name} = text("Row {index:04d} â€” a long list label with values 0123456789", '
+            f'{name} = text("Row {index:04d} — a long list label with values 0123456789", '
             f'size=12, color="#d8d8e0", align="left")'
         )
         lines.append(f"{name}.pos = ({x}, {y})")
@@ -628,7 +749,7 @@ def playback_4k_fixture() -> Path:
     return root
 
 
-# â”€â”€ scenario definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── scenario definitions ───────────────────────────────────────────────────
 
 
 def scenario_specs() -> dict[str, dict]:
@@ -665,7 +786,7 @@ def scenario_specs() -> dict[str, dict]:
             "timeout": 40,
         },
         "editor_hover": {
-            "description": "editor hover (cursor moved across the window)",
+            "description": "editor hover (continuous 16 ms pointer moves across the window)",
             "args": lambda _p: [
                 "preview",
                 "examples/demo.motioner",
@@ -697,7 +818,7 @@ def scenario_specs() -> dict[str, dict]:
             "timeout": 40,
         },
         "timeline_scrub": {
-            "description": "timeline scrubbing through the control endpoint",
+            "description": "timeline scrubbing: continuous 60 ms seeks through the control endpoint",
             "args": lambda endpoint: [
                 "preview",
                 "examples/demo.motioner",
@@ -745,7 +866,25 @@ def scenario_specs() -> dict[str, dict]:
             "4k": True,
         },
         "heavy_ui": {
-            "description": "heavy UI: 3000-row text composition with a pointer probe",
+            "description": "heavy UI: 3000-row text composition",
+            "args": lambda _p: [
+                "preview",
+                str(heavy),
+                "--paused",
+                "--continuous",
+                "--exit-after-frames",
+                "600",
+                "--window-size",
+                "1600x900",
+            ],
+            "expected_frames": 600,
+            "timeout": 90,
+        },
+        "heavy_ui_probe": {
+            "description": (
+                "heavy UI input-to-present: the same run with a zero-delta "
+                "wheel probe; its samples feed heavy_ui's input budget"
+            ),
             "args": lambda _p: [
                 "preview",
                 str(heavy),
@@ -831,7 +970,7 @@ def scenario_specs() -> dict[str, dict]:
     }
 
 
-# â”€â”€ process measurement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── process measurement ────────────────────────────────────────────────────
 
 
 def parse_json_lines(
@@ -1087,6 +1226,8 @@ def run_once(
     reader.start()
 
     stop = threading.Event()
+    with INPUT_LOCK:
+        INPUT_SENT[0] = 0
     workers: list[threading.Thread] = []
     if spec.get("hover") and allow_pointer:
         workers.append(threading.Thread(target=hover_loop, args=(process.pid, stop), daemon=True))
@@ -1163,6 +1304,7 @@ def run_once(
         process.wait(timeout=30)
         end_at = time.perf_counter()
         reader.join(timeout=10)
+        input_events_sent = INPUT_SENT[0]
     wall = end_at - started
     if last_cpu is None:
         last_cpu = start_cpu
@@ -1275,6 +1417,16 @@ def run_once(
         round(tail_cpu_percent, 3) if tail_cpu_percent is not None else None
     )
     excluded_value = round(idle_excluded_s, 3) if idle_excluded_s is not None else None
+    # CPU milliseconds per presented frame: total CPU time over the frames the
+    # run presented (or drew, when a headless run presents none). Unlike a
+    # percentage it does not move with how long the machine took to present, so
+    # it is the guard that catches an engine regression under load.
+    presented_frames = presented if presented > 0 else frames
+    cpu_ms_per_presented_frame = (
+        round(cpu_seconds * 1000.0 / presented_frames, 3)
+        if presented_frames > 0
+        else None
+    )
     stages_ms = {
         key: round(value, 4)
         for key, value in {
@@ -1299,6 +1451,7 @@ def run_once(
         "wall_s": round(wall, 3),
         "cpu_s": round(cpu_seconds, 3),
         "cpu_percent": round(cpu_seconds / wall * 100.0, 3) if wall > 0 else 0.0,
+        "cpu_ms_per_presented_frame": cpu_ms_per_presented_frame,
         "frames": frames,
         "presented": presented,
         "gpu_submits": gpu_submits,
@@ -1335,6 +1488,8 @@ def run_once(
         "input_to_present_samples": (
             None if input_to_present_samples is None else int(input_to_present_samples)
         ),
+        "input_events_sent": input_events_sent,
+        "input_probed": bool(spec.get("input_probe")),
         "input_to_present_insufficient": (
             input_to_present_samples is not None
             and int(input_to_present_samples) < MIN_INPUT_SAMPLES
@@ -1371,6 +1526,7 @@ def run_once(
 
 RANGE_METRICS = (
     "cpu_percent",
+    "cpu_ms_per_presented_frame",
     "idle_cpu_s",
     "idle_cpu_percent",
     "idle_after_first_cpu_percent",
@@ -1401,6 +1557,7 @@ RANGE_METRICS = (
     "input_to_present_p90",
     "input_to_present_p99",
     "input_to_present_samples",
+    "input_events_sent",
     "decode_ahead_requests",
     "decode_ahead_hits",
     "decode_ahead_misses",
@@ -1467,6 +1624,7 @@ def aggregate(runs: list[dict]) -> dict:
     return {
         "runs": len(runs),
         "cpu_percent": med("cpu_percent"),
+        "cpu_ms_per_presented_frame": med("cpu_ms_per_presented_frame"),
         "wall_s": med("wall_s"),
         "frames": med("frames"),
         "presented": med("presented"),
@@ -1499,6 +1657,8 @@ def aggregate(runs: list[dict]) -> dict:
         "input_to_present_p90": med("input_to_present_p90"),
         "input_to_present_p99": med("input_to_present_p99"),
         "input_to_present_samples": med("input_to_present_samples"),
+        "input_events_sent": med("input_events_sent"),
+        "input_probed": any(bool(run.get("input_probed")) for run in runs),
         "input_to_present_insufficient": bool(
             med("input_to_present_samples") is not None
             and med("input_to_present_samples") < MIN_INPUT_SAMPLES
@@ -1579,6 +1739,13 @@ def print_result(name: str, description: str, result: dict) -> None:
         f"presented {result['presented']}  submits {result['gpu_submits']}  "
         f"dropped {result['dropped_frames']}  fps {ranged('fps', result['fps'])}"
     )
+    cpu_per_frame = result.get("cpu_ms_per_presented_frame")
+    if cpu_per_frame is not None:
+        print(
+            "  cpu per presented frame "
+            f"{ranged('cpu_ms_per_presented_frame', cpu_per_frame, ' ms')}"
+        )
+    print(f"  input events sent {result.get('input_events_sent')}")
     frames_after_first = result.get(
         "idle_after_first_frames", result.get("idle_frames_after_first")
     )
@@ -1777,15 +1944,29 @@ def check_budgets(results: dict[str, dict], budgets: dict) -> list[str]:
             failures.append(f"{scenario}: budget is not an object")
             continue
         insufficient = bool(measured.get("input_to_present_insufficient"))
-        if insufficient and any(
-            metric.startswith("input_to_present") for metric in metrics
+        probed = bool(measured.get("input_probed", scenario in PROBED_SCENARIOS))
+        samples = measured.get("input_to_present_samples")
+        has_population = (
+            isinstance(samples, (int, float)) and samples >= MIN_INPUT_SAMPLES
+        )
+        if (
+            insufficient
+            and probed
+            and any(metric.startswith("input_to_present") for metric in metrics)
         ):
             failures.append(
                 f"{scenario}.input_to_present: fewer than {MIN_INPUT_SAMPLES} "
                 "samples (one sample is not a measurement)"
             )
         for metric, entry in metrics.items():
-            if insufficient and metric.startswith("input_to_present"):
+            if metric.startswith("input_to_present") and not (
+                probed or has_population
+            ):
+                # A probe-less scenario with fewer than MIN_INPUT_SAMPLES has no
+                # population; its p50/p99 is a single event, not a measurement.
+                # The budget entry stays recorded, but it is not enforceable.
+                continue
+            if insufficient and probed and metric.startswith("input_to_present"):
                 # Reported once above; a p99 with five samples is noise.
                 continue
             if not isinstance(entry, dict):
@@ -1829,6 +2010,7 @@ def check_budgets(results: dict[str, dict], budgets: dict) -> list[str]:
 # turn into a meaningless 0 * 1.15 budget.
 MAX_FLOOR_METRICS = {
     "cpu_percent": 0.02,
+    "cpu_ms_per_presented_frame": 0.02,
     # Idle/tail CPU is near zero and the NVIDIA driver wakes 0.1-0.85 % of a
     # core on the reference machine; a 0.02 % floor would flake on the
     # baseline, so the absolute floor is 1 % of a core.
@@ -2059,6 +2241,9 @@ def main(argv: list[str]) -> int:
                 for _ in range(args.runs)
             ]
             result = aggregate(runs)
+            # Keep the individual runs so a report can show the three values
+            # behind the median (the aggregate only keeps the median/ranges).
+            result["run_details"] = runs
             if args.alloc_binary is not None and not spec.get("export"):
                 alloc_args = spec["args"](endpoint)
                 if "--exit-after-frames" in alloc_args:
@@ -2079,6 +2264,24 @@ def main(argv: list[str]) -> int:
                 result["allocated_bytes_per_frame"] = alloc.get("allocated_bytes_per_frame")
             results[name] = result
             print_result(name, spec["description"], result)
+
+        if "heavy_ui" in results and "heavy_ui_probe" in results:
+            # The CPU/frame run has no synthetic input; the probe run supplies
+            # the input-to-present population for the same scenario.
+            for key in (
+                "input_to_present",
+                "input_to_present_median",
+                "input_to_present_p50",
+                "input_to_present_p90",
+                "input_to_present_p99",
+                "input_to_present_samples",
+                "input_to_present_insufficient",
+                "input_events_sent",
+                "input_probed",
+            ):
+                if key in results["heavy_ui_probe"]:
+                    results["heavy_ui"][key] = results["heavy_ui_probe"][key]
+            results["heavy_ui"]["input_measured_in"] = "heavy_ui_probe"
 
         payload = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

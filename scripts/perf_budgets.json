@@ -54,6 +54,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 1.15
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 610.938
       }
     },
     "editor_idle": {
@@ -104,14 +107,17 @@
       },
       "gpu_frame.ui_segments": {
         "max": 16.1
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 664.844
       }
     },
     "editor_hover": {
       "cpu_percent": {
-        "max": 6.813
+        "max": 9.034
       },
       "tail_cpu_percent": {
-        "max": 4.174
+        "max": 7.629
       },
       "collection_ms": {
         "max": 0.168
@@ -154,6 +160,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 18.4
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 2.49
       }
     },
     "editor_hover_static": {
@@ -201,14 +210,17 @@
       },
       "gpu_frame.ui_segments": {
         "max": 18.4
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 101.278
       }
     },
     "timeline_scrub": {
       "cpu_percent": {
-        "max": 7.998
+        "max": 15.277
       },
       "tail_cpu_percent": {
-        "max": 3.685
+        "max": 10.092
       },
       "collection_ms": {
         "max": 1.995
@@ -251,6 +263,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 18.4
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 9.542
       }
     },
     "playback_1080p": {
@@ -298,6 +313,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 18.4
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 4.163
       }
     },
     "playback_4k30": {
@@ -345,6 +363,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 18.4
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 5.451
       }
     },
     "heavy_ui": {
@@ -398,6 +419,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 16.1
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 11.95
       }
     },
     "heavy_ui_list": {
@@ -445,6 +469,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 16.1
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 2.18
       }
     },
     "heavy_ui_list_1000": {
@@ -492,6 +519,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 16.1
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 2.108
       }
     },
     "heavy_composition": {
@@ -539,6 +569,9 @@
       },
       "gpu_frame.ui_segments": {
         "max": 16.1
+      },
+      "cpu_ms_per_presented_frame": {
+        "max": 2.606
       }
     }
   }
