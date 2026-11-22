@@ -270,6 +270,73 @@ P4B (2026-11-21) — reviewer fix lanes + shared spatial index + scene picking:
   22 script tests 0; pctl validate/refs 0. C: 34.9 GB. No commits.
 - **Report:** `out/reports/PHASE-15-P4B-REPORT.md` + `phase15/p4b-*` logs.
 
+P4B-fix (2026-11-22) — blocking CPU regression (harness, not engine):
+
+- **Bisect** (same 16 ms harness, 3 runs, clean worktrees at each pin, no
+  junctions): P3 `55d2b2a` hover 7.293/4.468, 743 frames, 1 104 inputs;
+  scrub 9.343/4.467, 290/259. P4 `5c851f6` hover 10.120/6.894, 1 156/1 092;
+  scrub 8.211/3.502, 280/249. P4B `e07d3fc` hover 9.399/6.799, 1 120/~1 090;
+  scrub 8.892/4.892, 278/~250. P3 also fails the budgets on this host: the
+  hover/scrub CPU regression is not engine-caused.
+- **Root cause**: `perf_bench.py` hover posted `WM_MOUSEMOVE` at 16 ms with
+  `PostMessageW`; Windows coalesced a different fraction depending on app
+  pump, so the identical stream presented 743 or 1 156 frames. The runner's
+  redraw gate is unchanged and `hover_static` presented 5/11 frames for 1 089
+  moves: no per-event redraw.
+- **Fix (harness)**: `SendMessageW` for moves; `editor_hover` fixed 580 moves,
+  2 s settle, real cursor parked/restored, rest idle; `timeline_scrub` 220
+  seeks via one TCP request/reply at 60 ms (tail idle); input-to-present probe
+  moved to a separate `heavy_ui_probe` run whose input fields are copied into
+  `heavy_ui`; `input_events_sent` reported. No budget changed.
+- **Engine**: regression test `redraw.rs::a_pointer_move_the_app_does_not_forward_presents_no_frame`;
+  no runner change.
+- **Numbers after fix (quiet samples)**: hover 624 frames / 20.6 fps / CPU
+  4.9-7.4 / tail 2.5-3.8; scrub 220 inputs / ~250 frames / 8.4 fps / tail
+  0.2-1.3 / CPU 8.0-9.4; heavy p99 11.2-11.5. Final `--check` still red only
+  on host-sensitive metrics (heavy p99 11.422 vs 11.231; scrub CPU 8.913 vs
+  7.998) with AutoCAD holding one core throughout; not a code regression and
+  no budget relaxed. Report `out/reports/PHASE-15-P4B-FIX-REPORT.md`.
+- **Gates**: engine fmt/tests/workspace/wasm 0 (clippy/rustdoc debt unchanged,
+  none in `redraw.rs`); GUIMaker gate green; Motioner clean worktree
+  fmt/clippy/90 groups/build/doc/machete/boundaries/encoding/22 script tests 0.
+  C: 33.3 GB. No commits.
+
+P4B-fix-2 (2026-11-22) — prepared, not measured (waiting for a quiet host):
+
+- **Supersedes the caps** in P4B-fix: `perf_bench.py` no longer has
+  `HOVER_MAX_EVENTS`/`SCRUB_MAX_REQUESTS`. Hover delivers `SendMessageW`
+  moves every 16 ms and scrub one TCP seek every 60 ms for the whole measured
+  window (2 s hover settle only), so the tail is loaded, not idle. Kept:
+  cursor parking/restore, `input_events_sent`, the TCP seek path and the
+  separate `heavy_ui_probe` run.
+- **New metric**: `cpu_ms_per_presented_frame` (CPU seconds x 1000 / presented
+  frames, falling back to drawn frames) in every result, the aggregate, the
+  printout and `--write-budgets` (0.02 floor). README-perf updated.
+- **Encoding guard**: `check_encoding.py` now rejects double-encoded UTF-8
+  (A-tilde/A-circumflex + non-letter, a-circumflex + euro), with the
+  prompt-15 review section allowlisted by heading and 9 tests. It checks a
+  changed file in the worktree and unchanged files in the index.
+- **Mojibake repaired**: the heavy_ui fixture em dash, the `perf_bench.py`
+  banner box drawing, and pre-existing double-encoded characters in
+  `motioner_core/src/path.rs`, `motioner_dsl/src/scene.rs`,
+  `motioner_ui/src/app/project.rs`, `motioner_ui/src/command/mod.rs` and
+  `motioner_ui/src/layout.rs` (comments and UI literals; the new guard
+  flagged them).
+- **Engine test (dev clone `C:\Users\jvchi\CARPETAS\FerrousEngine`, not the
+  pinned submodule)**: `redraw.rs::event_requests_frame` is the decision
+  `Runner::window_event` uses; the regression test feeds a real
+  `WindowEvent::CursorMoved` through it, asserts 0 frames, and has a
+  forwarded positive control. `events.rs` uses the function and its
+  pre-existing mojibake is fixed. `engine/ferrous` stays at `e07d3fc`.
+- **Pre-flight**: `check_encoding` OK; 25 script tests + 3 subtests green;
+  `py_compile` and `git diff --check` 0. No measurement, no budget change,
+  no gate yet. C: 33.25 GB free; no `acad`/cargo process visible at check.
+- **Next after the user OK**: 10 s idle sample; rebuild `motioner.exe`
+  (UI literals changed); 3 runs per scenario; re-derive hover/scrub cpu,
+  tail and `cpu_ms_per_presented_frame` with explicit old/new/reason lines;
+  `--check` green; then the engine/GUIMaker/Motioner clean-worktree gates.
+  No commits.
+
 ## Prompt 18 status (engine performance)
 
 
