@@ -148,7 +148,9 @@ percentage: collection, frame-time p99, input-to-present, damage and
 ``cpu_ms_per_presented_frame`` use at least 0.02 (a damage fraction is clamped
 to 1.0), idle/tail CPU uses 1 % of a
 core (the NVIDIA driver wakes 0.1-0.85 % on the reference machine),
-``private_mb`` at least 1.0 and ``vram_mb`` at least 0.1.  Throughput
+``private_mb`` at least 1.0 and ``vram_mb`` at least 0.1.  The per-frame CPU
+metric is budgeted only when the run presents at least 30 frames; the idle
+scenarios report it without a guard.  Throughput
 (``fps``) becomes a ``min`` at ``value * (1 - margin)``; ``dropped_frames`` is
 pinned at ``max: 0``.  The noisy ``export_120`` scenario is skipped with a
 note rather than a loose budget.  ``--from-json`` reads a recorded result
@@ -1972,6 +1974,12 @@ def check_budgets(results: dict[str, dict], budgets: dict) -> list[str]:
             if not isinstance(entry, dict):
                 failures.append(f"{scenario}.{metric}: budget entry is not an object")
                 continue
+            if metric == "cpu_ms_per_presented_frame":
+                presented = measured.get("presented")
+                if not isinstance(presented, (int, float)) or presented < 30:
+                    # The value is reported, but a ratio over a handful of
+                    # frames is noise and is not a guard.
+                    continue
             value = resolve_metric(measured, metric)
             if value is MISSING or value is None:
                 failures.append(f"{scenario}.{metric}: not measured")
@@ -2057,6 +2065,13 @@ def derive_budgets(results: dict[str, dict], margin: float) -> dict:
             continue
         limits: dict[str, dict[str, float]] = {}
         for metric, floor in MAX_FLOOR_METRICS.items():
+            if metric == "cpu_ms_per_presented_frame":
+                presented = measured.get("presented")
+                if not isinstance(presented, (int, float)) or presented < 30:
+                    # A handful of frames makes this a ratio of noise. Report
+                    # the value on every run, but only guard it when the run
+                    # presents at least 30 frames.
+                    continue
             value = measured.get(metric)
             if not isinstance(value, (int, float)):
                 continue

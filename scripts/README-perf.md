@@ -95,6 +95,9 @@ python scripts/perf_bench.py `
   - `cpu_percent`, `cpu_ms_per_presented_frame`, `collection_ms`,
     `frame_ms_p99`, `input_to_present_p50`, `input_to_present_p99` and
     `damage_fraction` use `max(0.02, value * 1.15)`;
+  - `cpu_ms_per_presented_frame` is a budget only when the run presents at
+    least 30 frames; `start_idle`, `editor_idle` and `editor_hover_static`
+    report the value without a guard (a handful of frames is noise);
   - `damage_fraction` is clamped to 1.0;
   - `idle_cpu_percent` and `tail_cpu_percent` use a 1 % absolute floor (the
     NVIDIA driver wakes 0.1-0.85 % of a core on the reference machine);
