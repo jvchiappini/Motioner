@@ -1095,7 +1095,6 @@ dependencies = [
  "ferrous_assets",
  "ferrous_core",
  "ferrous_ecs",
- "ferrous_events",
  "ferrous_font",
  "ferrous_gpu",
  "ferrous_gui",
@@ -1114,16 +1113,6 @@ dependencies = [
  "web-time",
  "wgpu",
  "windows-sys 0.59.0",
- "winit",
-]
-
-[[package]]
-name = "ferrous_events"
-version = "0.1.0"
-dependencies = [
- "ferrous_ui_core",
- "glam 0.29.3",
- "serde",
  "winit",
 ]
 
@@ -1157,7 +1146,6 @@ dependencies = [
  "bytemuck",
  "ferrous_assets",
  "ferrous_core",
- "ferrous_events",
  "ferrous_font",
  "ferrous_layout",
  "ferrous_ui_core",
