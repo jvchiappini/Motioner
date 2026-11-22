@@ -79,6 +79,16 @@ aggregation and ranges) and prints the damaged fraction as a percentage of
 the window and the input-to-present p50/p99 in ms.  When an older binary does
 not emit the fields the harness prints ``not reported`` instead of failing.
 
+Input-to-present population (prompt 15 phase 4).  A p99 over one event is not
+a measurement, so every measured run must feed at least
+``MIN_INPUT_SAMPLES`` (30) input instants to presented frames.  ``heavy_ui``
+therefore runs a pointer probe (``--allow-pointer``): one ``WM_MOUSEMOVE``
+every ~16 ms between two points in the title bar, while the scene stays
+still.  A run with fewer samples prints an explicit FINDING and
+``--check`` fails every ``input_to_present*`` metric for that scenario
+("fewer than 30 samples").  The probe is part of the same run, so
+``heavy_ui.frame_ms_p99`` is re-checked with it enabled.
+
 The heavy UI layers fixtures are generated under ``FIXTURES`` as real
 ``.motioner`` project directories (``project.motion`` plus
 ``compositions/main.motion``): one hidden rect node per layer row, no
@@ -182,6 +192,9 @@ FIXTURES = WORK / "fixtures"
 # tears down the GPU, audio and workers and would otherwise be counted as
 # idle work in the final sample.
 IDLE_EXCLUDE_S = 0.5
+# A single input-to-present sample is not a measurement: every run that reports
+# the metric must feed at least this many input events to the presented frames.
+MIN_INPUT_SAMPLES = 30
 
 USER32 = ctypes.windll.user32
 KERNEL32 = ctypes.windll.kernel32
@@ -371,6 +384,41 @@ def hover_static_loop(pid: int, stop: threading.Event) -> None:
             return
 
 
+def input_probe_loop(pid: int, stop: threading.Event) -> None:
+    """Deliver one pointer move per ~16 ms so frames answer real input.
+
+    The input-to-present metric needs a population, not one sample: a scenario
+    with no input (heavy_ui) used to report ``samples: 1`` and the p99 was that
+    single event. This probe raises the window and posts ``WM_MOUSEMOVE``
+    between two points two logical pixels apart in the title bar, so every
+    presented frame answers an input instant while the scene stays still. Only
+    runs with ``--allow-pointer``.
+    """
+    hwnd = None
+    while not stop.is_set() and hwnd is None:
+        hwnd = find_window(pid)
+        if hwnd is None:
+            time.sleep(0.05)
+    if hwnd is None:
+        return
+    raise_window(hwnd)
+    box = client_box(hwnd)
+    if box is None:
+        return
+    left, top, right, bottom = box
+    x0 = max(8, min(64, right - left - 8))
+    y0 = max(4, min(16, bottom - top - 4))
+    screen_x = left + x0
+    screen_y = top + y0
+    # A zero-delta wheel is an input event that changes nothing on screen. A
+    # pointer move is opt-out (redraw_on_pointer_move) and would not mark the
+    # input instant, which is why the first version produced three samples.
+    while not stop.is_set():
+        post_mouse_wheel(hwnd, screen_x, screen_y, 0)
+        if stop.wait(0.016):
+            return
+
+
 def post_mouse_wheel(hwnd: int, screen_x: int, screen_y: int, delta: int) -> None:
     """Deliver one `WM_MOUSEWHEEL` with screen coordinates to `hwnd`.
 
@@ -447,7 +495,7 @@ def scrub_loop(binary: Path, endpoint: Path, stop: threading.Event) -> None:
             return
 
 
-# ── fixtures ───────────────────────────────────────────────────────────────
+# â”€â”€ fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def heavy_ui_fixture() -> Path:
@@ -464,7 +512,7 @@ def heavy_ui_fixture() -> Path:
         x = 20 + (index % 8) * 190
         y = 20 + (index % 120) * 7
         lines.append(
-            f'{name} = text("Row {index:04d} — a long list label with values 0123456789", '
+            f'{name} = text("Row {index:04d} â€” a long list label with values 0123456789", '
             f'size=12, color="#d8d8e0", align="left")'
         )
         lines.append(f"{name}.pos = ({x}, {y})")
@@ -580,7 +628,7 @@ def playback_4k_fixture() -> Path:
     return root
 
 
-# ── scenario definitions ───────────────────────────────────────────────────
+# â”€â”€ scenario definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def scenario_specs() -> dict[str, dict]:
@@ -697,7 +745,7 @@ def scenario_specs() -> dict[str, dict]:
             "4k": True,
         },
         "heavy_ui": {
-            "description": "heavy UI: 3000-row text composition",
+            "description": "heavy UI: 3000-row text composition with a pointer probe",
             "args": lambda _p: [
                 "preview",
                 str(heavy),
@@ -710,6 +758,7 @@ def scenario_specs() -> dict[str, dict]:
             ],
             "expected_frames": 600,
             "timeout": 90,
+            "input_probe": True,
         },
         "heavy_ui_list": {
             "description": (
@@ -782,7 +831,7 @@ def scenario_specs() -> dict[str, dict]:
     }
 
 
-# ── process measurement ────────────────────────────────────────────────────
+# â”€â”€ process measurement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def parse_json_lines(
@@ -1049,6 +1098,10 @@ def run_once(
         workers.append(
             threading.Thread(target=scroll_layers_loop, args=(process.pid, stop), daemon=True)
         )
+    if spec.get("input_probe") and allow_pointer:
+        workers.append(
+            threading.Thread(target=input_probe_loop, args=(process.pid, stop), daemon=True)
+        )
     if spec.get("control"):
         workers.append(
             threading.Thread(
@@ -1282,6 +1335,10 @@ def run_once(
         "input_to_present_samples": (
             None if input_to_present_samples is None else int(input_to_present_samples)
         ),
+        "input_to_present_insufficient": (
+            input_to_present_samples is not None
+            and int(input_to_present_samples) < MIN_INPUT_SAMPLES
+        ),
         "damage_fraction": _round_or_none(damage_fraction),
         "damage_fraction_p90": _round_or_none(damage_fraction_p90),
         "damage_fraction_p99": _round_or_none(damage_fraction_p99),
@@ -1442,6 +1499,10 @@ def aggregate(runs: list[dict]) -> dict:
         "input_to_present_p90": med("input_to_present_p90"),
         "input_to_present_p99": med("input_to_present_p99"),
         "input_to_present_samples": med("input_to_present_samples"),
+        "input_to_present_insufficient": bool(
+            med("input_to_present_samples") is not None
+            and med("input_to_present_samples") < MIN_INPUT_SAMPLES
+        ),
         "damage_fraction": med("damage_fraction"),
         "damage_fraction_p90": med("damage_fraction_p90"),
         "damage_fraction_p99": med("damage_fraction_p99"),
@@ -1587,6 +1648,13 @@ def print_result(name: str, description: str, result: dict) -> None:
             f"p99 {input_to_present.get('p99')} ms  "
             f"(samples {input_to_present.get('samples')})"
         )
+        samples = input_to_present.get("samples")
+        if samples is not None and int(samples) < MIN_INPUT_SAMPLES:
+            print(
+                "  FINDING: only "
+                f"{samples} input-to-present samples (< {MIN_INPUT_SAMPLES}); "
+                "p50/p99 are not a measurement"
+            )
     else:
         print(f"  input-to-present{present_label}: not reported")
     damage = result.get("damage_fraction")
@@ -1708,7 +1776,18 @@ def check_budgets(results: dict[str, dict], budgets: dict) -> list[str]:
         if not isinstance(metrics, dict):
             failures.append(f"{scenario}: budget is not an object")
             continue
+        insufficient = bool(measured.get("input_to_present_insufficient"))
+        if insufficient and any(
+            metric.startswith("input_to_present") for metric in metrics
+        ):
+            failures.append(
+                f"{scenario}.input_to_present: fewer than {MIN_INPUT_SAMPLES} "
+                "samples (one sample is not a measurement)"
+            )
         for metric, entry in metrics.items():
+            if insufficient and metric.startswith("input_to_present"):
+                # Reported once above; a p99 with five samples is noise.
+                continue
             if not isinstance(entry, dict):
                 failures.append(f"{scenario}.{metric}: budget entry is not an object")
                 continue
@@ -1960,7 +2039,10 @@ def main(argv: list[str]) -> int:
         for name in names:
             spec = specs[name]
             if (
-                spec.get("hover") or spec.get("hover_static") or spec.get("wheel")
+                spec.get("hover")
+                or spec.get("hover_static")
+                or spec.get("wheel")
+                or spec.get("input_probe")
             ) and not args.allow_pointer:
                 print(
                     f"\n{name}: skipped "

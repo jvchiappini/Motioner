@@ -361,10 +361,16 @@
         "max": 0.038
       },
       "input_to_present_p50": {
-        "max": 8.494
+        "max": 17.845,
+        "baseline": 15.517,
+        "noise_margin": 0.15,
+        "note": "prompt 15 P4: 356-sample population (was one sample at 8.494)"
       },
       "input_to_present_p99": {
-        "max": 8.494
+        "max": 21.012,
+        "baseline": 18.271,
+        "noise_margin": 0.15,
+        "note": "prompt 15 P4: 356-sample population; the 50 fps cadence dominates"
       },
       "private_mb": {
         "max": 468.28
