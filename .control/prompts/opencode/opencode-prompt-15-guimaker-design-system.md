@@ -1308,3 +1308,42 @@ the gates and looked at the screenshots:
 The GPU picking is accepted as designed. CPU stays the default for point and
 small marquee picks; GPU is used for bulk id-buffer and region picks, and
 the crossover is documented.
+
+
+## Review after Phase 5, second pass, and the deferred perf rule (reviewer, 2026-11-22)
+
+**Phase 5 is accepted.** It is pushed as engine `4b94774` (render features
+and picking) and `76d6cc8` (the GUIMaker crates). The reviewer ran the
+strict gate with pedantic on `guimaker`, `guimaker_ferrous`,
+`guimaker_gallery` and `ferrous_svg`, the engine tests, the workspace
+check, wasm32 and the Motioner clean-worktree gate.
+
+The goldens were inspected: the labels are centred, the text on accent
+fills is white, and the chips fit their labels. The clip, blur and icon
+effects are real and covered by pixel tests.
+
+**Small leftover for Phase 6, lane 0:** on wasm32, `const CLIP` in
+`ferrous_ui_render/src/pipelines/{quad,svg,text}.rs` is unused, which is a
+new warning. Check whether the web shader path applies the rounded clip at
+all. If it does not, wire it in so that web matches native, and prove it
+with a test or a shader-source assertion.
+
+**Deferred perf rule (user decision, 2026-11-22).** The user is working on
+this machine and will not close apps between phases. From now on:
+- No phase runs the full `perf_bench.py` suite or a fresh `--check`.
+- Each phase still runs the host-independent guards:
+  - the GUIMaker criterion benches and alloc tests;
+  - the engine micro benches touched by the phase;
+  - the GPU timings from the pixel tests.
+
+  Report them against the previous phase.
+- Each phase records the release-ready engine pin in the report, so a later
+  bisect has every phase boundary.
+- One **perf sweep** runs before Phase 9B, or earlier when the user says the
+  host is free:
+  - the idle sample: total under 8 %, no core above 25 %, sampled with
+    psutil only;
+  - every scenario three times, with `--check` on the fresh JSON;
+  - any budget miss is bisected across the recorded phase pins.
+
+Phase 5's fresh check is the first item of that sweep.
