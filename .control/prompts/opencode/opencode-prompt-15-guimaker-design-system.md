@@ -1347,3 +1347,80 @@ this machine and will not close apps between phases. From now on:
   - any budget miss is bisected across the recorded phase pins.
 
 Phase 5's fresh check is the first item of that sweep.
+
+
+## Review findings after Phase 6 (reviewer, 2026-11-22)
+
+**Not accepted. Nothing is committed.** Keep the working tree and fix it in
+place. Lane 0 (the web rounded clip) is good. The breadth of the component
+set is good. But the shots show real bugs, the report calls several fakes
+"documented approximations", and Phase 6 is titled "each one finished, not
+sketched". The reviewer opened `app-shell`, `dialog`, `text-field`, `table`,
+`menu`, `icons` and `button`.
+
+**Rendering bugs (engine or backend):**
+1. **`dialog`:** the elevation shadow shows visible concentric bands, and
+   the dialog body shows grey smears. The backdrop blur seems to sample the
+   dialog's own shadow, or the target it is drawing into. Shadows must be
+   smooth: use dithering or a proper Gaussian, and sample only the layers
+   below the dialog. Add a pixel test: no step between neighbouring pixels
+   bigger than 2/255 across a shadow ramp, and a uniform interior.
+
+**Component bugs:**
+2. **`menu` and `context_menu`:**
+   - The open submenu is laid out inline. It pushes the parent rows down,
+     which leaves a gap under "Export". A submenu is an overlay anchored to
+     its row.
+   - The highlighted row ("Snapping") does not span the menu width.
+   - The shortcut column is not a column. Shortcuts follow the label;
+     align them right in one column.
+   - The submenu affordance is a large play triangle; use a chevron sized
+     to the text.
+3. **`table`:**
+   - The rows are separate cards with gaps between them, not a table.
+   - The columns are sized per row, not shared.
+   - The first column uses a different type size.
+   - The sort indicator is a large solid triangle.
+
+   Use shared column widths (fixed, fraction or fit), one row surface with
+   hairline separators or zebra striping, the same type role in every cell,
+   and a small chevron for the sort indicator.
+4. **`text_field`:** the caret is a `|` character, and the focused field
+   shows none. Draw a real caret rect at the `TextEditor` position, taken
+   from the shaped glyph positions, and real selection rects. Blinking can
+   wait for Phase 7.
+5. **`app_shell`:**
+   - The toolbar has a second bordered box inside the title bar.
+   - The inspector `form_row` breaks "Inspector / Name" over two lines next
+     to a squashed field.
+6. **Icons:**
+   - "Back" draws → and "Forward" draws ←.
+   - "Remove" appears twice, with two different glyphs.
+   - The icons render pure black, ignoring the text tone. An icon must take
+     its colour from the tone of its context, the way text does.
+   - Icon sizes are not tied to the type role: the X in the fields and the
+     dialog is about twice the text size, while the settings icon is tiny.
+     Set one icon size per type role.
+   - Several glyphs are crude or broken at 1.5×: More, Warning, Pin,
+     Hidden, Snapping, Mask. Redraw them on the 16-unit grid at a
+     consistent stroke weight.
+7. **`button`:** the sizes change only the padding. Small, Medium and Large
+   must also step the type role and the icon size.
+
+**Fakes listed as approximations. Make them real:**
+- `progress_ring`: a real arc, built from an engine path stroke (round cap,
+  angle from the value).
+- Per-side borders: add them as a generic engine feature (border widths per
+  side in `GuiQuad` and the shader), then use them in `callout`.
+- `avatar_group` overlap: support a negative gap in layout.
+- `spinner` may stay static until Phase 7, but the story must say so.
+
+**Process:** The main agent looked at the shots and still wrote these
+goldens. Add a written visual QA step: for every story, list the checks
+(alignment, a shared baseline, icon colour and size, column alignment,
+overlay anchoring, smooth shadows) with pass or fail. Fix every fail before
+writing goldens. Then add the mechanical guards to the gallery tests:
+- no text or icon may use pure black or pure white; colours come from tones;
+- the icon size must match the type role of the sibling text;
+- the cells of a table column must share one x and one width;
+- a submenu must not change its parent's layout.
