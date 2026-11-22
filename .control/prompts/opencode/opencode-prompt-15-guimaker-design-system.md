@@ -1,4 +1,4 @@
-﻿# opencode prompt 15 â€” GUIMaker: a UI library that is beautiful by default and easier than HTML + CSS
+# opencode prompt 15 â€” GUIMaker: a UI library that is beautiful by default and easier than HTML + CSS
 
 You are the orchestrator of a very long, multi-phase job in two
 repositories:
