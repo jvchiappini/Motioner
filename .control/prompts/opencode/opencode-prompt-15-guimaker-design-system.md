@@ -1899,3 +1899,86 @@ changed file.
      at that moment, which means something else in the run (a subagent, a
      script or a checkout) was touching the Motioner tree. Find out what it
      was, and say so in the report.
+
+### Review after Phase 8B, third pass
+
+**Accepted and pushed** (engine `e426d17`):
+- **C. The MSDF cell does not grow with the DPI scale.** `cell_for_em`
+  replaces `ScaledAtlases`, decision G-0006. The atlas is 5.31 MB at every
+  scale.
+- **B2. `units_per_em`.** `FontParser` already normalizes every face into
+  em (G-0007), and a test with Dubai (`units_per_em` 1000) proves it. The
+  reviewer's finding 2 of the second pass was wrong.
+- **D.** Investigated, and not reproducible.
+
+**Findings:**
+1. **G-0006 does not compare against a supersampled reference.**
+   - `BakedAtlas::build_with_size` clamps the cell to 8..128, so the
+     "512-texel reference" in `tests/msdf_dpi.rs:17` is really a 128-texel
+     bake. That is why the 128-texel cell shows exactly 0.00000 error.
+   - The table measures a 64-texel cell against a 128-texel cell, and only
+     for `H`, which has no curves.
+   - The decision probably stands, but the numbers need fixing:
+     - build the reference without the clamp (call `generate_msdf`
+       directly) or from analytic coverage of the outline;
+     - add curved and thin glyphs (`a`, `e`, `g`, `s`, `動`);
+     - correct the table and the doc comment in `scaled.rs`.
+2. **The Arabic gap test pins the hack, not the gap.**
+   `arabic_is_drawn_in_isolated_visual_order` still uses the reversed
+   string and asserts "drawn in the given order". Write it with the
+   logical "تجربة", and make it assert that the drawn glyph order is the
+   logical order and that no joined form appears. That is the real gap, and
+   the test will break the day bidi and joining land.
+3. **Deferred for the third time: real popups (A).** Also deferred: runtime
+   fallback (B1), Arabic bidi and joining (B3), and colour emoji (B4).
+   These are now their own phase, **Phase 8C**, with A and B1 first. Don't
+   take on more lanes than you can deliver. Two lanes delivered end to end
+   are worth more than five that come back deferred.
+4. **The Motioner gate in a worktree ran only part of the gate**: fmt,
+   check, encoding, validate, refs and one test. The full gate means
+   clippy `-D warnings`, the whole test suite, doc, boundaries, machete,
+   pytest, validate and refs.
+
+### Phase 8C: real popups and runtime fallback (two lanes only)
+
+**A. Real popup windows**, the engine side of Phase 8B lane A:
+- the app queues commands through `ctx` (`ctx.popups()`, open, move,
+  resize, hide, close) and gets a `PopupId` back at once;
+- the runner drains the queue in the next callback that has
+  `&ActiveEventLoop` (`about_to_wait`, or the top of `window_event`), and
+  creates owned, borderless windows that do not steal activation and are
+  not shown on the taskbar;
+- `WindowMap` is built in `resumed`, so routing is live;
+- each popup gets its own `wgpu::Surface` on the shared device, glyph
+  atlas and icon cache, and a popup that is not dirty renders 0 frames;
+- one helper builds `AppContext`, used by both the main path and the
+  popup path;
+- `GuiHost` paints popup-hosted overlays into the popup. The gallery
+  switches to `desktop()` only after that works;
+- Windows first. Other platforms degrade to `single_window()` through
+  `HostCapabilities`, with that documented;
+- tests:
+  - a runner unit test with the mock backend covering the queue;
+  - an integration check that opens the gallery, opens a menu at the
+    right edge and takes an OS-level screenshot (the
+    `screenshot`/PrintWindow path or a desktop capture). Attach it;
+- measure the time to first frame for a new popup and for a pooled one,
+  plus the extra RSS and VRAM per popup.
+
+**B1. Runtime lazy fallback:**
+- `ctx.request_glyphs(chars)`, or automatic detection in the GUI text
+  path, collects characters missing from the atlas;
+- before the next draw the runner re-bakes the composite atlas
+  (`build_multi` with `system::find_for`) and re-binds it with
+  `GuiRenderer::set_font_atlas`;
+- glyphs already in the atlas keep their UVs, or the whole frame re-lays
+  out in the same frame, so nothing draws half-updated;
+- the atlas cache keys stay stable;
+- an ASCII-only app loads no fallback face and does not scan the OS fonts;
+- a test goes through the runner and host frame path, not the screenshot
+  harness. A frame with "動画" draws ink at the CJK glyphs' rectangles, and
+  the second frame with the same text causes no re-bake;
+- measure the atlas bytes and the re-bake time before and after.
+
+B3 (bidi and Arabic joining) and B4 (colour emoji) move to Phase 9B, with
+the growing atlas and RGBA pages.

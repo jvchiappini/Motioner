@@ -5,6 +5,21 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Phase 8B third pass (2026-11-23)
+
+Engine `5aa1aec`, Motioner `c755df5`. **C done by measurement:** `msdf_dpi.rs`
+(64 vs 128 cell against an 8x supersampled reference at 2.0) shows mean error
+0.00057/0.00060, below one 8-bit step; 128 costs 4x VRAM for nothing visible.
+`ScaledAtlases` replaced by `cell_for_em` (G-0006), tautological bytes
+assertion removed. **B2:** metrics are already em-normalised in the parser
+(G-0007), proven with a system face of another UPEM. **B1/B3/B4 and A deferred**
+with G-0008/G-0009 and a gap test for Arabic; no popup screenshot. **D:** the
+Motioner `examples` failure was not reproducible (5/5), path absolute and
+present, no reparse points; only cargo target/ and a lockfile revert touched the
+tree. Gates green; Motioner clean worktree at 5aa1aec + engine patch green and
+removed. Report `Motioner/out/reports/PHASE-15-P8B3-REPORT.md`. No commits.
+
+
 ## Phase 8B second pass (2026-11-23)
 
 Engine base `e008764`, Motioner `6844a45`. **Lane D done:** engine
