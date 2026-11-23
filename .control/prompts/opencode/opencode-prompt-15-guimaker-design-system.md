@@ -762,6 +762,124 @@ explanation of the element under the cursor.
 Plus `gallery lint <story> [--sweep]` and a test helper `assert_clean(view)`.
 Every gallery story and recipe must lint clean across the sweep.
 
+## Phase 8B: popups outside the window, font fallback, live DPI change
+
+Added by the user on 2026-11-22. This is backend only: the reviewer does the
+look later. It follows the ownership split. The engine owns windows, the OS
+and the drawing. GUIMaker decides where an overlay goes and which window it
+lives in. Each of the three items is generic (no Motioner names) and gets
+regression tests.
+
+1. **Overlays that leave the main window** (menus, submenus, context menus,
+   tooltips, combo/select dropdowns, popovers).
+   - **Engine** (generic, documented in the engine docs):
+     - a popup window API on desktop: borderless, no taskbar entry, owned by
+       its parent and never stealing activation from it. It can be shown at
+       a screen position, resized, hidden and destroyed;
+     - per-platform transparency for the rounded corners and shadow
+       (Windows first; macOS and X11/Wayland behind the same API, with a
+       documented fallback where unsupported);
+     - a monitor query: the work area (without the taskbar) and the scale
+       factor of the monitor under a screen point.
+
+     The popup shares the parent's GPU device and atlases. It never gets a
+     second device, a second glyph atlas or a second icon cache. Input on
+     the popup is reported in the popup's own coordinates, tagged with the
+     window id.
+   - **GUIMaker:**
+     - **Placement.** A placement solver, `place(anchor_rect, preferred_side,
+       content_size, work_area) -> Placement`, flips to the opposite side,
+       then shifts along the edge, then clamps with an internal scroll when
+       the content cannot fit. It is a pure function with unit tests for
+       every edge, for the corners, for a submenu near the right edge
+       (opens to the left) and for a dropdown taller than the screen
+       (scrolls).
+     - **Window choice.** An overlay that fits inside the main window stays
+       in it, so there is no popup window and no extra cost. Only an
+       overlay that does not fit is hosted in a popup window. The overlay
+       tree, focus, keyboard navigation and dismissal stay one system across
+       windows:
+       - click outside closes the menu chain;
+       - Escape closes one level;
+       - focus returns to the opener.
+     - **Web (`ferrous_web`) and single-window hosts.** Popups are
+       unavailable there, so the solver clamps to the canvas. This is a
+       documented capability flag, not a separate code path in the
+       components.
+   - **Tests:**
+     - solver unit tests;
+     - a headless test that a menu anchored 20 px from the right edge of the
+       window chooses the popup host and keeps the parent layout unchanged;
+     - an idle test: an open popup that is not changing renders 0 frames,
+       like the main window.
+   - **Perf.** Opening and closing a popup is measured: the time to the
+     first popup frame and the extra RSS. Hidden popups are reused from a
+     small pool rather than recreated.
+
+2. **Font fallback** (emoji, CJK, Arabic/Hebrew glyph coverage, symbols).
+   - **Engine** (`ferrous_font` / the text system, generic):
+     - a fallback chain per font family;
+     - per-glyph resolution during shaping: a run is split where the primary
+       font lacks the glyph and continues in the first font that has it;
+     - the system fonts as the last resort, through an OS font lookup
+       (DirectWrite on Windows, CoreText on macOS, fontconfig on Linux) or
+       a font-database crate (decision record first, with size and licence);
+     - colour emoji (COLR/CBDT or bitmap) drawn into an RGBA atlas page next
+       to the coverage atlas.
+
+     Fallback fonts are loaded lazily on first use and never at startup, so
+     cold-start must not regress. The atlas eviction from Phase 9B applies to
+     them.
+   - **GUIMaker.** The theme can name the fallback chain per type role. Text
+     measurement, the caret and selection rects, and ellipsis all use the
+     resolved runs.
+   - **Tests:**
+     - mixed strings ("Intro 🎬 動画 تجربة ✓") measure and draw without tofu
+       (no `.notdef` glyph in the shaped output);
+     - caret positions step over a multi-codepoint emoji as one grapheme;
+     - a startup test proves no fallback font is opened when the text
+       doesn't need it.
+   - **Out of scope.** Bidirectional layout and RTL caret logic stay in the
+     backlog. This item only guarantees that the glyphs exist.
+
+3. **Live DPI and scale change.**
+   - **Engine:**
+     - forward `ScaleFactorChanged` and per-monitor DPI (Windows
+       per-monitor v2 awareness in the manifest/runner) as one event with
+       the new scale and the suggested window size;
+     - re-rasterize the glyph atlas and the icon cache for the new scale
+       (the old scale's entries are evicted, never kept);
+     - resize the surface without a black frame.
+   - **GUIMaker.** On a scale change:
+     - re-run layout in logical units;
+     - snap hairlines and borders to the new device pixels;
+     - re-resolve icon sizes;
+     - keep scroll offsets, focus, text selection and open overlays (an
+       overlay in a popup window moves with the monitor change of its
+       parent, or closes if its anchor leaves the screen).
+
+     A window spanning two monitors uses the scale the OS reports for it.
+   - **Tests:**
+     - a headless test renders a story at 1.0, then switches to 1.5 and 2.0
+       on the same `GuiHost`; it asserts crisp hairlines (the Phase 6 guard),
+       the icon size equal to the role token times the scale, and unchanged
+       scroll offset, focus and selection;
+     - the atlas byte count after the switch is not larger than after a
+       fresh start at that scale.
+   - **Manual check, written in the report:** drag the gallery between two
+     monitors with different scales if the host has them; otherwise say so.
+
+**Acceptance:**
+- every test above is green;
+- the strict pedantic gate covers every new or changed crate, including the
+  engine files;
+- `cargo check --workspace --all-targets` and the wasm32 checks show no new
+  warnings;
+- the host-independent perf guards (divan, alloc, GPU timings) show no
+  regression against the previous phase;
+- the goldens are regenerated only where the output really changed, as
+  regression snapshots.
+
 ## Phase 9 — Recipes, docs and the HTML + CSS comparison
 
 - **Recipes** (gallery stories and copyable code, each lint clean, each with
@@ -1462,3 +1580,65 @@ Opencode's goldens are regression snapshots only. Regenerate them after the
 mechanics change, and do not polish their look. Phase 7's "polish pass" is
 reduced the same way: opencode builds the transition, reduced-motion,
 scrollbar and focus-ring machinery, and Claude tunes how they look.
+
+## Review after the Phase 6 fix (reviewer, 2026-11-22)
+
+The Phase 6 mechanics are accepted, and the engine part is pushed once the
+reviewer's gate is green. These are now correct:
+- the anchored submenu, with 0 px change to the parent;
+- the shortcut column;
+- the shared table tracks;
+- the caret and selection rects;
+- the per-side borders, the round-cap arc and the negative gap;
+- icon tone inheritance and the icon size from the role token;
+- the shadow ordering and dither.
+
+Fix these first in the next run, before Phase 7:
+
+1. **The backdrop blur samples nothing.** `shot.rs:158` clears the target
+   and hands it over as the backdrop source, so the blur reads a black
+   clear. The area behind the dialog is flat black in
+   `out/shots/p6/dialog-*.png`. The guard passes, but the effect is not
+   verified, which makes it the same kind of fake as in Phase 5.
+   - The host must first render the layers below the overlay into the
+     scene target, then set that target as the backdrop source, then draw
+     the overlay.
+   - The dialog story must put real content behind the scrim, for example
+     a card grid or the start-screen recipe.
+   - Add a pixel test: the region behind the dialog must not be flat. It
+     must match a CPU Gaussian of the content below within the golden
+     tolerance, and the dialog's own pixels never appear in the source.
+   - The same applies to every host that uses `BackdropBlurSpec`, not only
+     the gallery.
+2. **Seams between table cells.** The selected row and the header show 1 to
+   2 px vertical seams at every column boundary (`table-dark-*.png`, x ≈ 190
+   and 336 at 1.5×). The row background is painted per cell.
+   - Paint the row and header background as one rect behind the row's
+     cells. The cells carry no background of their own.
+   - Add a guard: the selected row's fill is uniform across the full row
+     width, apart from the 2 px antialias at the rounded ends.
+3. **`cargo machete crates/ferrous_svg` exits 1.** `glam` and `usvg` are
+   unused, and have been since 4b94774. The reviewer's Phase 5 gate missed
+   the exit code. Remove them, or use them, and add `ferrous_svg` to the
+   phase gate's machete list.
+4. **Divan against Phase 5** shows several rows slower:
+   - click +26 %;
+   - focus +19 %;
+   - hover frame +23 %;
+   - relayout +15 %;
+   - layout 8192 +17 %.
+
+   The host is busy, so this may be noise, but medians from two separate
+   sessions cannot tell noise from a regression. Run an **interleaved A/B**:
+   build the bench at the Phase 5 pin (76d6cc8) and at the current tree,
+   then alternate the runs 3 times each in the same session and compare
+   the medians. A row that stays more than 10 % slower in all 3 pairs is a
+   regression: find it and fix it. Otherwise record it as noise, with the
+   numbers.
+5. **Line endings.** `.control/sessions/S-2026-11-21-001.md` was written
+   with CRLF again. Write it with Python, using `newline="
+"`.
+
+These are visual, not mechanical, and stay with Claude: the icon artwork
+(Clear and Delete share a glyph, the Keyframed glyph), the size of the sort
+arrow in the table header, and the menu's check glyph.

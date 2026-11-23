@@ -1,5 +1,5 @@
 ---
-actualizado: 2026-11-21
+actualizado: 2026-11-22
 actualizado_por: agente
 version_schema: 1
 ---
@@ -336,6 +336,72 @@ P4B-fix-2 (2026-11-22) — prepared, not measured (waiting for a quiet host):
   tail and `cpu_ms_per_presented_frame` with explicit old/new/reason lines;
   `--check` green; then the engine/GUIMaker/Motioner clean-worktree gates.
   No commits.
+
+P6 (2026-11-22) — components, lane 0, deferred perf rule:
+
+- **Lane 0:** the web quad shader did not apply the rounded clip. `quad.rs`
+  now assembles `gui_clip_common.wgsl` into both bodies; `gui_web.wgsl`
+  samples `clip_coverage` in every fragment path. `pipelines::quad` test
+  proves it; `ferrous_ui_render` wasm check has **0 warnings** (the CLIP,
+  `MAX_TEXTURE_SLOTS` and dummy-vector wasm warnings are gone).
+- **Components (50 stories):** core `StateSpec`/`VisualStyle`/`StateRoles`/
+  `StateTones` + `selected` + focus ring + animated transitions on the
+  injected clock + `Color::lerp`; `Node.has_visual`; the animator is skipped
+  for plain nodes. Lanes: actions, inputs, display, containers, overlays,
+  plus the 79-icon set in `guimaker::icons`. Motioner re-exports the enum and
+  renders the shared paths through `Painter::svg_path`; no copy remains. The
+  Motioner boundary rule now allows **only** `motioner_ui -> guimaker`.
+- **Gallery:** one story per component, `shots`/`goldens` batch commands,
+  104 goldens (52 stories x light/dark, 1280x800 @1.5), contrast and text-box
+  guards over every component, responsive/density sweep (subpixel slop).
+- **Numbers:** input click 28.68 (P5 28.29), hover 19.31 (18.33), wheel 38.06
+  (38.84), focus 88.84 (151.3 same host); layout hover frame 11.99 us (11.09,
+  +8.1 %), cold 507 (557), full 190 (210), 8192 5.58 (6.43), spatial 3.35
+  (3.31); alloc 0/0; GPU blur 0.858 ms/frame (0.979).
+- **Gate:** guimaker/gallery fmt + pedantic clippy + doc + 206 lib + 108 doc +
+  104 goldens + machete + boundaries + literals; engine workspace check and
+  wasm engine/web; Motioner clean worktree (engine copied, no links) fmt on
+  the 11 members, clippy, full tests, doc, build, machete, boundaries,
+  encoding, 25 script tests, validate/refs. Engine **76d6cc8 + dirty**;
+  Motioner **2edffe1 + dirty**. No commits.
+- **Report:** `out/reports/PHASE-15-P6-REPORT.md` (Spanish), shots in
+  `FerrousEngine/out/shots/`, goldens in `crates/guimaker_gallery/goldens/`.
+
+P6b (2026-11-22) — review mechanics only (scope split; no visual polish):
+
+- **Engine:** elevation shadows now paint **before** the surface
+  (`frame.rs`), which removes the grey smear; shadow alpha gets a 4x4 Bayer
+  dither in `gui.wgsl`/`gui_web.wgsl`. `GuiQuad` borders take per-edge widths
+  (`PER_SIDE_BORDER_BIT`, `uv0=[left,top]`, `uv1=[right,bottom]`). A new
+  `DrawCommand::Path` maps onto `GuiBatch::polyline` (round-capped `LINE_BIT`)
+  for the ring. The gallery clears the target first and binds that snapshot
+  as the backdrop source, so a dialog blurs the layers below it, never its own
+  shadow. Pixel tests: shadow ramp step <= 2/255, uniform card/dialog
+  interior, arc at the value angle, left-only callout rule.
+- **Layout/components:** `NodeKind::Overlay` + `Style.anchor` anchor a submenu
+  to a sibling after layout (zero parent impact); reserved check/chevron slots
+  and one fixed right-aligned shortcut column; table is one grid with
+  `ColumnWidth::{Fixed,Fraction,Fit}` shared tracks and one type role; negative
+  `gap_px` (avatar group); `progress_ring` strokes a real arc; `callout` uses
+  the per-edge border. Text nodes draw selection rects and a caret from the
+  shaped glyphs (`style.caret`/`selection`, no `|`). Tone is inherited unless
+  `.tone()` was explicit; icons size from `TypeRole::icon_size`; Back/Forward
+  swapped paths restored and `Clean` renamed "Clear".
+- **Numbers (divan/alloc/GPU, same host):** click 35.62 (P5 28.29), hover
+  19.71 (18.33), wheel 43.54 (38.84), focus 179.4 (151.3); cold frame 600.6
+  (557.5), full 204.9 (210.5), hover frame 13.69 (11.09), relayout 44.62
+  (38.92), 2048 1.221 ms (1.316), 8192 7.516 (6.431), spatial 3.308 (3.308);
+  alloc 0/0; GPU blur 0.406 ms (0.979). No perf_bench run by rule.
+- **Gate:** guimaker/ferrous/gallery fmt + pedantic clippy (`--no-deps`) +
+  rustdoc + 206 lib + 109 doc + 7 mechanics + 104 goldens + guards; engine
+  workspace check (no new warnings), wasm engine/web; Motioner clean worktree
+  `Motioner-gate-p6b` with the engine copied (no links): fmt on the 11
+  members, clippy `-D warnings`, full tests (0 failures), build, doc,
+  boundaries, encoding, 25 script tests, validate/refs. Machete keeps the
+  known engine debt. C: 32.2 GB before the gate. Engine **76d6cc8 + dirty**;
+  Motioner **6639bc5 + dirty**. No commits.
+- **Shots:** `FerrousEngine/out/shots/p6/` (`dialog-*`, `menu-*`, `table-*`,
+  `text-field-*`, `icons-*`). Goldens regenerated as regression snapshots.
 
 ## Prompt 18 status (engine performance)
 
