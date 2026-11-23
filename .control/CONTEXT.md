@@ -5,14 +5,50 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+
+## Phase 6 fix + Phase 7 (2026-11-22)
+
+The five Phase 6 review items are fixed. (1) The backdrop blur is real: the
+mapper no longer skips `BackdropBlur`, it defers the quad to the owning rect
+and uses a translucent tint (`BACKDROP_TINT_ALPHA`), `shot.rs` renders the
+prefix into the target, sets it as the backdrop source and then draws the
+suffix, `dialog_story` now has a 3x2 card grid behind the dialog, and
+`the_dialog_card_blurs_the_content_below` compares the card padding strip
+with the shader's 9-tap CPU gaussian. (2) The table header/row background is
+one spanning rect per row, cells carry no background, and `overlap_layer`
+lets the design sweep accept the intentional overlap; the uniform-fill pixel
+guard is `a_selected_table_row_has_no_seams`. (3) `usvg` and `glam` are gone
+from `ferrous_svg`. (4) The interleaved A/B against `76d6cc8` shows no row
+more than 10 % slower in all three pairs (details in the file above). (5) The
+session file is LF (0 CR).
+
+Phase 7 machinery: scalar style transitions on the injected clock (`OPACITY`,
+`SCALE`, `ELEVATION`, `FOCUS_RING`), `motion::EnterExit` (opacity + 0.98->1
+scale + toast slide), `Theme::prefers_reduced_motion` + `Theme::duration`,
+smooth scrolling with overlay scrollbars, a focus-visible ring that animates
+only for keyboard focus, and a real caret blink. `Ui` exposes
+`frames_painted`/`frames_repainted`; the tests prove 0 frames idle and 11
+frames over 5.008 s with a focused caret (1 initial + 10 half-cycle toggles).
+No visual tuning; the `dialog`/`table` goldens are regression snapshots with
+the reason in `goldens/UPDATE_LOG.md`.
+
+Gate: pedantic clippy clean on `guimaker`, `guimaker_ferrous`,
+`guimaker_gallery` and `ferrous_svg`; fmt clean; workspace check, wasm32
+`ferrous_engine`/`ferrous_web`, alloc/motion/mechanics tests and the full
+GUIMaker suites green; `ferrous_svg` machete clean. Motioner gate in a clean
+submodule worktree (no links) green: members fmt, clippy, tests, build, doc
+with `-D warnings`, `machete crates`, boundaries, encoding, 25 unittests,
+`pctl validate` and `pctl doc-check-refs`. No commits.
+
 ## Prompt 15 status (GUIMaker design system)
 
-Session `S-2026-11-21-001` (open). **Phase 0 reviewed and pushed; Phase 0B,
-Phase 1, Phase 2, Phase 3, Phase 4 and Phase 4B done; stopped for review.**
-No commits. FerrousEngine `feat/guimaker` from `5c851f6` (dev clone, local
-changes); the Motioner submodule stays at `5c851f6` (no pin bump). Motioner
-`feat/guimaker` at `afab0c0` + local `.control/tasks/guimaker/T-GUI-0001` and
-the phase 11 backlog line.
+Session `S-2026-11-21-001` (open). **Phase 6 accepted; the five Phase 6
+review fixes and the Phase 7 machinery are done; stopped for review.** No
+commits. FerrousEngine `feat/guimaker` at `eef1e581` plus local changes
+(the same commit as `origin/feat/guimaker`); Motioner `feat/guimaker` at
+`4902190` with the engine submodule dirty. New report:
+`out/reports/PHASE-15-P7-REPORT.md` (Spanish); A/B in
+`out/reports/phase15/p6c-ab.txt`; shots in `out/ui/p15-p6c-*`.
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 

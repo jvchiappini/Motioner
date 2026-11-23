@@ -1642,3 +1642,65 @@ Fix these first in the next run, before Phase 7:
 These are visual, not mechanical, and stay with Claude: the icon artwork
 (Clear and Delete share a glyph, the Keyframed glyph), the size of the sort
 arrow in the table header, and the menu's check glyph.
+
+## Review after the Phase 6 follow-ups and Phase 7 (reviewer, 2026-11-22)
+
+**Accepted:**
+- one background rect per table row (no seams, checked in the shot);
+- `ferrous_svg` machete;
+- the interleaved A/B method;
+- the line endings;
+- the Phase 7 machinery: transitions on the injected clock, `EnterExit`,
+  `prefers_reduced_motion`, smooth scroll with an overlay thumb, the
+  focus-visible ring and the caret blink, with idle at 0 frames and one wake
+  per blink phase.
+
+The reviewer commits the engine work as it stands, after the gate, with
+these open items:
+
+1. **Work went into the wrong engine tree again.** All engine edits were
+   made in Motioner's submodule `engine/ferrous`, not in the dev clone
+   `C:\Users\jvchi\CARPETAS\FerrousEngine`. The reviewer copied the 28 real
+   files across by hand.
+
+   The submodule also showed about 80 files as modified by line endings
+   alone (CRLF churn on every file that was touched).
+
+   Rules from now on:
+   - edit engine code only in the dev clone;
+   - the submodule is read-only, and moves only through the reviewer's pin
+     bump;
+   - lane worktrees are made from the dev clone, under
+     `C:\Users\jvchi\CARPETAS\FerrousEngine\out\worktrees\`.
+2. **Leftover worktrees.** Six worktrees are still registered on the
+   submodule: `out/worktrees/lane-a`, `lane-b-cur`, `lane-b-p5`, `lane-c`,
+   `lane-d` and `motioner-gate`.
+   - Run `dir /AL /S /B` on each and report the output; it must be empty.
+   - Then `git worktree remove --force` each one, and `git worktree prune`.
+   - From now on, remove your worktrees at the end of the run.
+3. **The backdrop blur samples the wrong texture.**
+   - **Symptom.** In `out/ui/p15-p6c-dialog-dark.png`, the dialog interior
+     shows rows of blurred glyphs repeated about every 36 px. They appear
+     below the field, behind the buttons and at the right edge of the card,
+     where the content below is plain coloured panels with no text.
+   - **Likely cause.** This looks like the glyph atlas, or another bound
+     texture, sampled instead of, or mixed into, the blurred backdrop.
+     Another possibility is a UV packing clash with the `PER_SIDE_BORDER_BIT`
+     uv0/uv1 layout.
+   - **Why the test missed it.** `the_dialog_card_blurs_the_content_below`
+     only compares the padding strip.
+   - **Fix and guard.**
+     - Find the root cause with file:line.
+     - Extend the test: compare **every** pixel of the card interior that
+       is not covered by a child, not only the padding strip.
+     - Add a negative control: the same story with the glyph atlas cleared
+       to a solid colour must give identical backdrop pixels.
+4. **Divan regressions not covered by the A/B.** The A/B compared eef1e58
+   with 76d6cc8, but in the integrated Phase 7 tree:
+   - `start_screen_relayout_frame` is 88.8 µs, 2× the Phase 6 44.47 µs;
+   - `focus_step_10000` is 192.5 ns, against 107.6 ns.
+
+   Run the same interleaved A/B on the new tree against eef1e58, 3 pairs.
+   A row that stays more than 10 % slower in all 3 pairs is a regression:
+   profile it and fix it. The likely suspects are the per-frame work of the
+   animator, scroll smoothing or the focus-ring slot on every relayout.
