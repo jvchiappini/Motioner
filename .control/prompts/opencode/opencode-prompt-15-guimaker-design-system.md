@@ -1704,3 +1704,47 @@ these open items:
    A row that stays more than 10 % slower in all 3 pairs is a regression:
    profile it and fix it. The likely suspects are the per-frame work of the
    animator, scroll smoothing or the focus-ring slot on every relayout.
+
+## Review after Phase 8 (reviewer, 2026-11-23)
+
+The engine part is pushed as `dacd67d`.
+
+**Accepted:**
+- engine work in the dev clone only, with the submodule left clean;
+- the leftover worktrees removed after the `dir /AL` check;
+- the A/B against eef1e58: no regression, and the 88.8 µs figure was a
+  noisy single run;
+- Phase 8: the lint, its 18 rules each with a positive unit test,
+  `assert_clean`, the sweep's first-width reporting, the CLI and the F12
+  overlay. The real mechanics were fixed rather than the rules silenced.
+
+**Open, to fix before Phase 8B: the backdrop blur fix hid the bug instead
+of fixing it.**
+- The diagnosis was right: the blurred-glyph rows are the background's
+  own text, repeated at the tap spacing (about 36 px = 24 logical × 1.5).
+- The response was wrong: the text was removed from `dialog_story`, and the
+  undersampling was called a look change that is out of scope.
+- A blur that turns one line of text into several sharp copies is a
+  rendering bug, not a look choice. It will show in every real use: a
+  Motioner dialog sits over panels full of labels.
+
+The fix:
+1. **A properly sampled blur in the engine.** Keep the cost at or under
+   the current 0.4 ms per frame.
+   - The source is prefiltered down to the blur resolution: progressive 2×
+     box downsamples, or a 13-tap downsample.
+   - Then a separable Gaussian with taps at most 1 texel apart at that
+     level, or dual Kawase.
+   - Record the choice in the engine docs, with the GPU timing.
+2. **Restore text behind the dialog in `dialog_story`:** the titles and the
+   body lines on the panels, as before.
+3. **An impulse-response test** (CPU reference, plus a GPU pixel test).
+   - Draw a single bright 1 px horizontal line, then a 1 px vertical line,
+     behind a backdrop card.
+   - The blurred profile across the line must be unimodal: one peak,
+     falling monotonically on both sides within ±1/255 of quantisation
+     noise. There must be no secondary peaks, which are the copies.
+   - Its width must match the requested radius within 20 %.
+4. Keep the full-interior comparison against the CPU Gaussian and the
+   solid-atlas negative control. Update the CPU reference to the new
+   kernel.

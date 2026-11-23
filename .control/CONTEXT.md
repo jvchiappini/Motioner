@@ -6,6 +6,38 @@ version_schema: 1
 # Context memory (maintained by the agent)
 
 
+
+## Phase 7 review fixes + Phase 8 lint (2026-11-22)
+
+**Tree rule.** All engine edits are in the dev clone
+`C:\Users\jvchi\CARPETAS\FerrousEngine` (worktrees under its `out/`, all
+removed). The Motioner submodule is read-only and stays clean at `b2f5635`.
+
+**P7 review.** (1) The backdrop glyph rows were the dialog story's background
+text, not the atlas: `gui.wgsl` group 2 binding 1 was the correct V blur target,
+no `PER_SIDE_BORDER_BIT` clash, and the prefix contained the card titles. The
+background is now plain colour panels; the test checks every interior pixel not
+covered by a child (44,481 px) and a solid-atlas negative control gives 0
+mismatches. (2) The interleaved A/B vs `eef1e58` shows no row >10 % slower in
+all three pairs; relayout is 44.47 us (not 88.8) and focus_step is faster.
+(3) The six old worktrees were checked with `dir /AL /S /B` (no links), removed
+and pruned.
+
+**Phase 8.** `guimaker::lint` (`lint.rs`) has 18 rules, severities, stable
+paths, rects, the `explain` cause chain and model-facing fixes;
+`assert_clean(view, theme)`. The sweep carries `Case.lint`, `first_widths()`
+and names the first width per rule/path. The gallery gains
+`lint <story> [--sweep] [--json]` and a F12 `DebugOverlay` (red overlaps,
+orange overflow, the sentence under the cursor). Every story and the 10x4
+sweep have **0 blocking findings**; only `Info` remains (near-miss alignment,
+Px escape hatches, inconsistent radius/elevation). No rule was silenced: fixed
+the false positives (fixed empty cells, disabled controls, anchored overlays,
+1.5 px physical snap) and the real mechanics (24 px hit targets, explicit
+ellipsis, slider fill clip, no empty callout actions, primary groups, grouped
+button sizes). Gate green: fmt, pedantic clippy on the four crates, rustdoc
+`-D warnings`, workspace check, wasm32, all tests, machete, literal guard,
+boundaries; Motioner in a clean linked-free worktree green.
+
 ## Phase 6 fix + Phase 7 (2026-11-22)
 
 The five Phase 6 review items are fixed. (1) The backdrop blur is real: the
@@ -42,13 +74,13 @@ with `-D warnings`, `machete crates`, boundaries, encoding, 25 unittests,
 
 ## Prompt 15 status (GUIMaker design system)
 
-Session `S-2026-11-21-001` (open). **Phase 6 accepted; the five Phase 6
-review fixes and the Phase 7 machinery are done; stopped for review.** No
-commits. FerrousEngine `feat/guimaker` at `eef1e581` plus local changes
-(the same commit as `origin/feat/guimaker`); Motioner `feat/guimaker` at
-`4902190` with the engine submodule dirty. New report:
-`out/reports/PHASE-15-P7-REPORT.md` (Spanish); A/B in
-`out/reports/phase15/p6c-ab.txt`; shots in `out/ui/p15-p6c-*`.
+Session `S-2026-11-21-001` (open). **Phase 7 accepted and pushed (engine
+`b2f5635`, Motioner `15b76ad`); the P7 review fixes and Phase 8 lint are done;
+stopped for review.** No commits. Engine code lives ONLY in the dev clone
+`C:\Users\jvchi\CARPETAS\FerrousEngine`; the submodule
+`Motioner\engine\ferrous` is clean at `b2f5635` and is read-only. New report:
+`out/reports/PHASE-15-P8-REPORT.md` (Spanish); A/B in
+`C:\Users\jvchi\CARPETAS\FerrousEngine\out\reports\phase15\p7b-ab.txt` (dev clone).
 
 P0 (2026-11-21) — audit, boundary rule, G-0001, before screenshots:
 
