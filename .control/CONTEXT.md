@@ -5,6 +5,27 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Phase 8B second pass (2026-11-23)
+
+Engine base `e008764`, Motioner `6844a45`. **Lane D done:** engine
+`scripts/check_encoding.py` + 10 tests + CI step, 0 findings (15 BOMs stripped).
+**Lane C done:** `BakedAtlas::build_with_size`/`FontKey::of_with_size`,
+`ScaledAtlases` (one active atlas, evicts the old scale), `tests/scale.rs`
+1.0->1.5->2.0 keeps hairlines/icon/scroll/focus/selection, atlas bytes
+5.31/11.94/21.23 MB. **Lane B done as a single composite atlas** (not pages):
+`BakedAtlas::build_multi` + `Font::load_multi` + `shot.rs::story_font` (keeps
+latin_western first so Latin goldens stay byte-identical), pixel test
+`fallback_draw.rs` at 3 scales. Colour emoji still missing. **Lane A partial:**
+`windows.rs` window map + pooling + `PopupBackend`/mock + routing by window id +
+`on_popup_event`; the real winit backend, the gallery popup draw and the manual
+shot are NOT done. Report `Motioner/out/reports/PHASE-15-P8B2-REPORT.md`.
+Gates green on the engine; Motioner fmt/check/encoding/validate/refs green,
+`motioner_dsl --test lint` flaky on an examples path (passes alone). No commits.
+**Reviewer:** C is NOT done (MSDF needs no per-DPI re-bake; 4x bytes), B draws
+only in the shot harness (runtime still latin_western), Arabic string was
+pre-reversed. See prompt 15 "Review after Phase 8B, second pass".
+
+
 ## Phase 8B backend + blur fix (2026-11-23)
 
 **Blur fixed, not hidden.** Root cause: the separable pass sampled the full-res

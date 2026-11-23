@@ -1811,3 +1811,91 @@ The engine part is pushed as `a3fdec8`, and the mojibake repair as `e008764`.
 - **Guards not run.** The divan and alloc runs were skipped, and the
   Motioner gate ran in the live tree, not a clean worktree (the report also
   named a stale pin). Both are required every phase.
+
+### Review after Phase 8B, second pass
+
+**Accepted and pushed** (engine `fe8b5fb`, `46b66cb`, `5aa1aec`). The
+reviewer fixed two things: a module order that was not rustfmt-clean in
+`ferrous_engine/src/lib.rs`, and an unused variable in the `system.rs` test.
+New engine code gets `rustfmt --check --config skip_children=true` on every
+changed file.
+
+**Accepted:**
+- **D.** The engine encoding guard (`scripts/check_encoding.py` with its
+  tests and its CI step), plus 15 stray BOMs removed.
+- **B, in part.** `BakedAtlas::build_multi` and `Font::load_multi`. The
+  screenshot harness now draws CJK, Arabic and symbol glyphs, and
+  `tests/fallback_draw.rs` checks that they cover pixels.
+- **A, skeleton only.** `windows.rs` (`WindowMap`, `PopupBackend`, pooling,
+  stable ids, routing) and `on_popup_event`.
+- **C, in part.** The scale test that checks scroll, focus, selection and
+  overlays are kept across `1.0 → 1.5 → 2.0`.
+
+**Findings:**
+1. **Fallback is drawn only in the screenshot harness.** The runner still
+   bakes `latin_western` at startup (`runner/events.rs:275`) and nothing
+   adds glyphs later, so in a real app `動` still draws `.notdef`. Required:
+   - the runtime atlas resolves missing characters lazily, the first time a
+     text run uses them (`system::find_for`, then re-bake or extend, then
+     re-bind the atlas);
+   - a test through the host or runner frame path, not the screenshot
+     harness;
+   - ASCII-only apps still load no fallback face.
+2. **`build_multi` mixes units.** Each fallback face's advances and bounds
+   are in that face's own `units_per_em`, but layout scales every glyph by
+   the first face's `units_per_em` and ascent. It works only while both
+   faces happen to use 2048. Required:
+   - normalize every face's metrics into the primary face's units, or keep
+     a per-glyph scale;
+   - a test with a face whose `units_per_em` differs, asserting the advance
+     in em.
+3. **The Arabic test string is pre-reversed, and nothing is shaped.**
+   - `\u{0629}\u{0628}\u{0631}\u{062C}\u{062A}` is "ةبرجت", which is
+     "تجربة" typed backwards so that left-to-right drawing looks right.
+   - The letters are drawn in their isolated forms.
+   - There is no bidi reordering and no Arabic joining.
+
+   Required: minimal UAX #9 run reordering (paragraph level, with RTL runs
+   reversed for display while the caret and selection stay in logical
+   order), plus Arabic joining through GSUB `init`/`medi`/`fina`/`isol`. The
+   test must use the logical-order string. If either part is deferred,
+   write a decision note and make the test assert the gap, not hide it.
+4. **Re-rasterizing the atlas per DPI scale is the wrong fix, and the
+   reviewer's spec asked for it.** MSDF does not depend on resolution. At
+   2.0 every glyph is drawn larger, so the screen-space pixel range grows
+   and edges get sharper, not softer. Baking at 128 texels quadruples the
+   atlas (5.3 → 21.2 MB) with no measured gain. The test
+   `bytes <= fresh_bytes` is tautological, because both sides call the same
+   function. Required:
+   - a pixel comparison at 2.0 for Caption and Body text: a 64-texel cell
+     against a 128-texel cell, measuring the edge error against a
+     supersampled reference;
+   - if 128 is not measurably better, the cell size does not grow with DPI.
+     It grows only when the drawn em is larger than a documented multiple
+     of the cell. Remove or reshape `ScaledAtlases` to match;
+   - the same check for the icon cache.
+5. **Popups are still not real.**
+   - `Runner.windows` is always `None`, so the routing never runs.
+   - `deliver_popup_event` duplicates the whole `AppContext` construction.
+     Factor it into one helper.
+   - The real backend has a standard shape in winit 0.30, and "the runner
+     does not keep the `ActiveEventLoop`" is not a blocker:
+     - the app queues popup commands through `ctx`, getting a `PopupId`
+       back at once;
+     - the runner drains the queue in the next callback that has
+       `&ActiveEventLoop` (`about_to_wait` or `window_event`);
+     - each popup gets its own surface on the shared device.
+   - The screenshot of the popup outside the window is still required.
+6. **Colour emoji** in an RGBA page is still missing. The clapper board is
+   drawn as a monochrome glyph.
+7. **Gates.**
+   - The Motioner gate skipped the clean worktree a second time.
+     Initializing the submodule in a worktree is part of the procedure, not
+     a reason to skip it.
+   - `every_formatted_example_is_lint_clean` failed once with
+     `examples directory: NotFound`. The path is absolute, built from
+     `CARGO_MANIFEST_DIR` (`crates/motioner_dsl/tests/lint.rs:25`), and the
+     test passes on every reviewer run. So `examples/` was really missing
+     at that moment, which means something else in the run (a subagent, a
+     script or a checkout) was touching the Motioner tree. Find out what it
+     was, and say so in the report.
