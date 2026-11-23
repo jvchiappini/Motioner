@@ -1748,3 +1748,66 @@ The fix:
 4. Keep the full-interior comparison against the CPU Gaussian and the
    solid-atlas negative control. Update the CPU reference to the new
    kernel.
+
+## Review after Phase 8B, first pass (reviewer, 2026-11-23)
+
+The engine part is pushed as `a3fdec8`, and the mojibake repair as `e008764`.
+
+**Accepted:**
+- **The backdrop blur:**
+  - a 2×2 box prefilter chain, then a 1-texel Gaussian;
+  - the impulse response is unimodal, with FWHM = radius;
+  - 0.059 ms per frame;
+  - the text is back behind the dialog, and the shot shows a smooth blur;
+- the placement solver, `OverlayHost` and the unified dismissal;
+- font fallback measurement and run splitting, with the lazy OS scan and
+  G-0005;
+- the scale-change event.
+
+**Reviewer fixes in a3fdec8 and e008764** (do not undo them):
+1. **The default host capability hid menus.**
+   `HostCapabilities::default()` was `desktop()`, popups on, while the
+   engine has no popup window. Every overlay that did not fit was therefore
+   neither painted in the window nor anywhere else
+   (`out/shots/p8b/menu-popup-near-edge.png` shows only the anchor).
+   - The default is now `single_window()`.
+   - The edge test sets `desktop()` explicitly.
+   - A new test, `the_default_host_keeps_an_overflowing_menu_visible_in_the_window`,
+     covers the default.
+   - A host opts into popups only once it really draws them.
+2. `examples/p8b_shots.rs` was not rustfmt-clean. The phase gate ran fmt
+   only on `-p guimaker`.
+3. The new doc for `on_scale_factor_changed` was spliced into the middle
+   of `on_resize`'s doc comment (`traits.rs`), which left `on_resize`
+   undocumented. It is moved back.
+4. **Mojibake.** `guimaker/src/lib.rs`, `view.rs` and the blur test's "±"
+   were written double-encoded this phase. 14 more engine files carried
+   older mojibake (mkdocs.yml since P4B, and several docs). All are
+   repaired. **Add `scripts/check_encoding.py` to the engine**, with the
+   same mojibake detection as Motioner's, and put it in the engine gate.
+
+**Still open from Phase 8B:**
+- **A. Popup windows.** The runner is single-window and the app gets no
+  `ActiveEventLoop`, and that is exactly the engine work this lane asks
+  for.
+  - Make the runner own a window map: the main window plus popups, sharing
+    one device.
+  - Route events by window id.
+  - Give the app a popup handle API.
+  - Headless tests cover the GUIMaker side, which is done. For the engine
+    side, add a runner unit test with a mock window map, and a manual check
+    written in the report (open the gallery, open a menu at the right edge,
+    attach a screenshot).
+  - Only then does the gallery host switch to `desktop()`.
+- **C. Fallback glyphs are measured but not drawn.** The shot
+  `mixed-scripts-*.png` shows only "Intro".
+  - Draw multi-page atlases (one bind group per page, or an array
+    texture).
+  - Add colour emoji in an RGBA page.
+  - Add a pixel test that the CJK and emoji glyphs cover pixels.
+- **D. Live DPI change.** Still missing:
+  - re-rasterizing the atlas and icons per scale, with eviction;
+  - the 1.0 → 1.5 → 2.0 test on one host.
+- **Guards not run.** The divan and alloc runs were skipped, and the
+  Motioner gate ran in the live tree, not a clean worktree (the report also
+  named a stale pin). Both are required every phase.

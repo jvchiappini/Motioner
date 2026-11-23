@@ -1,9 +1,44 @@
 ---
-actualizado: 2026-11-22
+actualizado: 2026-11-23
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
+
+## Phase 8B backend + blur fix (2026-11-23)
+
+**Blur fixed, not hidden.** Root cause: the separable pass sampled the full-res
+scene at 5 taps spaced `radius/4` quarter texels; a 1 px text line was copied per
+tap (~36 px). Fix: 2x box prefilter chain (levels 1..5) + a Gaussian at the level
+whose texel is nearest `sigma = radius/2.5`, taps 1 texel apart, weights from the
+CPU for the exact sigma. Files: `assets/shaders/backdrop_blur.wgsl`,
+`ferrous_ui_render/src/pipelines/blur.rs`, `gui_renderer.rs`
+(`set_backdrop_source`, `set_blur_level`, `encode_backdrop_blur`), doc
+`ferrous_ui_render/docs/backdrop-blur.md`. Impulse: one peak 64/255, FWHM
+16.00 px for radius 16, no secondary peaks, GPU <= 4/255 from CPU. Blur cost
+0.0751/0.0310/0.0587 ms (median 0.059, upper bound) via
+`examples/blur_timing.rs`. `dialog_story` has its titles/body back; goldens
+regenerated for dialog only.
+
+**Phase 8B delivered:** Lane B fully (`guimaker::overlay::place`,
+`Placement::hosted_in`, capability flag, layout host decision, popup-hosted
+nodes not painted, `dismiss_overlay_level/chain` + opener focus, hit-cache
+epoch). Lane C partially: fallback chain (`Theme::font_fallbacks`), per-glyph
+run splitting in `guimaker_ferrous/src/text.rs`, lazy OS lookup
+(`ferrous_font/src/system.rs`, G-0005, no new crate), mixed-script test passes
+with Arial Unicode + Segoe UI Symbol; **drawing** fallback runs is missing
+(one font bind group), and so is colour emoji. Lane D partially: one
+`on_scale_factor_changed` callback + `AppContext::scale_factor` + no-op resize
+skip; atlas re-raster and the 1.0/1.5/2.0 GuiHost test are missing. Lane A
+(popup windows) not delivered: the runner is single-window and the app never
+sees an ActiveEventLoop.
+
+Gate green: fmt/clippy pedantic/doc on the three GUIMaker crates, workspace
+check, wasm engine+web, all tests, machete x4, literals 49/0, boundaries.
+Motioner fmt fails only on the read-only engine submodule's pre-existing debt;
+check/encoding/validate/refs green. Report
+`Motioner/out/reports/PHASE-15-P8B-REPORT.md`. No commits.
+
 
 
 
