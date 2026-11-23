@@ -1015,15 +1015,48 @@ impl<'a> Painter<'a> {
         self.fill_rounded(Rect::new(cx - radius, cy - radius, d, d), color, radius);
     }
 
-    /// A circle outline `width` pixels thick, inside `radius`.
-    pub fn ring(&mut self, cx: f32, cy: f32, radius: f32, width: f32, color: [f32; 4]) {
-        let d = radius * 2.0;
-        self.stroke_rounded(
-            Rect::new(cx - radius, cy - radius, d, d),
+    /// Fills an SVG path, scaled into `rect`, with the given linear colour.
+    ///
+    /// The path is parsed and tessellated by `ferrous_svg`, then its bounds are
+    /// mapped onto the target box. An unparseable or empty path draws nothing.
+    pub fn svg_path(&mut self, data: &str, rect: Rect, color: [f32; 4]) {
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let Ok(mut mesh) = ferrous_svg::SvgMesh::from_str(data) else {
+            return;
+        };
+        if mesh.vertices.is_empty() {
+            return;
+        }
+        let mut min = [f32::INFINITY, f32::INFINITY];
+        let mut max = [f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for vertex in &mesh.vertices {
+            min[0] = min[0].min(vertex.position[0]);
+            min[1] = min[1].min(vertex.position[1]);
+            max[0] = max[0].max(vertex.position[0]);
+            max[1] = max[1].max(vertex.position[1]);
+        }
+        let span_x = (max[0] - min[0]).max(f32::EPSILON);
+        let span_y = (max[1] - min[1]).max(f32::EPSILON);
+        for vertex in &mut mesh.vertices {
+            vertex.position = [
+                (vertex.position[0] - min[0]) / span_x * rect.w,
+                (vertex.position[1] - min[1]) / span_y * rect.h,
+            ];
+        }
+        mesh.bounding_box = ferrous_svg::SvgRect {
+            x: 0.0,
+            y: 0.0,
+            width: rect.w,
+            height: rect.h,
+        };
+        self.batch.push_svg(ferrous_ui_render::SvgCommand {
+            mesh,
+            pos: [rect.x, rect.y],
             color,
-            radius,
-            width,
-        );
+            z: 0.0,
+        });
     }
 
     /// Fills a convex polygon given in pixels (any winding).

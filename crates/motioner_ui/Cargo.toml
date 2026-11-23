@@ -20,6 +20,9 @@ ferrous_renderer.workspace = true
 # Names the UI batch, quad and font types the chrome draws with.
 ferrous_gui.workspace = true
 ferrous_font.workspace = true
+ferrous_svg.workspace = true
+ferrous_ui_render.workspace = true
+guimaker.workspace = true
 # `SpriteInstance` for the motion-blur preview sprite.
 ferrous_2d.workspace = true
 # OS change notifications for the hot-reload watcher (no periodic stat).

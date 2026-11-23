@@ -375,7 +375,7 @@ fn draw_row(p: &mut Painter<'_>, v: &View<'_>, index: usize, row: &OutlineRow, r
     } else {
         t.text_muted
     };
-    icons::draw(p, Icon::for_kind(row.kind), icon, ink, t.panel);
+    icons::draw(p, icons::for_kind(row.kind), icon, ink, t.panel);
     let mut icon_right = icon.right();
     // A masked node and a mask source both carry the mask badge; a source that
     // is a child is already indented under the node that uses it.

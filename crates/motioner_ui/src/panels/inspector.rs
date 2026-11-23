@@ -603,7 +603,7 @@ fn header(p: &mut Painter<'_>, rect: Rect, copy: Rect, v: &View<'_>) {
     if let Some(row) = v.selected.and_then(|index| v.outline.get(index)) {
         icons::draw(
             p,
-            Icon::for_kind(row.kind),
+            icons::for_kind(row.kind),
             tile.inset(p.m.px(8.0)),
             t.accent,
             t.raised,

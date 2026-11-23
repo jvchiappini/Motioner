@@ -1647,6 +1647,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36119f3a540b086b4e436bb2b588cf98a68863470e0e880f4d0842f112a3183a"
 
 [[package]]
+name = "guimaker"
+version = "0.1.0"
+dependencies = [
+ "ferrous_core",
+ "glam 0.29.3",
+ "ron",
+ "serde",
+ "taffy",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2372,6 +2384,9 @@ dependencies = [
  "ferrous_font",
  "ferrous_gui",
  "ferrous_renderer",
+ "ferrous_svg",
+ "ferrous_ui_render",
+ "guimaker",
  "motioner_core",
  "motioner_dsl",
  "motioner_eval",

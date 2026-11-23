@@ -18,7 +18,8 @@ application or the test kit. `motioner_app` may depend on `motioner_ui`.
 renderer, I/O, UI, tools or application. `motioner_tools` orchestrates the
 document, DSL, evaluator, renderer, I/O and analysis, but never the UI,
 application or test kit.
-egui, eframe and guimaker stay forbidden for every crate.
+egui and eframe stay forbidden for every crate. `motioner_ui` may use
+`guimaker` for the one shared icon set (Phase 6); no other crate may.
 """
 
 from __future__ import annotations
@@ -31,7 +32,8 @@ FORBIDDEN_PREFIXES = ("wgpu", "ferrous_", "ferrous", "egui", "guimaker", "eframe
 
 ALLOWED_PREFIXES = {
     "motioner_render": ("wgpu", "ferrous"),
-    "motioner_ui": ("wgpu", "ferrous"),
+    # `guimaker` is allowed only for the shared vector icon set (prompt 15 P6).
+    "motioner_ui": ("wgpu", "ferrous", "guimaker"),
 }
 
 FORBIDDEN_EDGES = {

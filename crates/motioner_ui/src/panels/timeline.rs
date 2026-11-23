@@ -1007,7 +1007,7 @@ fn name_cell(
             let _ = tl;
             icons::draw(
                 p,
-                Icon::for_kind(outline.kind),
+                icons::for_kind(outline.kind),
                 icon,
                 if dim { t.text_disabled } else { t.text_muted },
                 t.panel,
