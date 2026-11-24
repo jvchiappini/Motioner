@@ -2081,3 +2081,158 @@ exact compiler or OS error with file:line.
      - the extra RSS and VRAM per popup;
      - the CPU and frame count of an idle popup over 5 s, which must be 0
        frames.
+
+### Review after Phase 8D
+
+**Accepted and pushed** (engine `85f3daa`). All three milestones were delivered,
+and the popups are finally real:
+- **`Runner::with_ctx`** replaces the 7 hand-built `AppContext` literals.
+- **`PopupQueue`**, including `Redraw`.
+- **`WinitPopups`**: owned, borderless, not on the taskbar, inactive at creation,
+  on the shared device, with `PreMultiplied` alpha and an `Opaque` fallback.
+- The queue drains in `about_to_wait`, and `WindowMap` is built in `resumed`.
+- **Pooling.** A popup that was just opened cannot be stolen.
+- **A per-popup `GuiRenderer`** that shares the glyph atlas and rebinds only when
+  the atlas `Arc` changes.
+- **`draw_popup`**, plus `GuiHost::sync_popups` and `on_popup_event`.
+- **The `p8d_popup` desktop capture** shows the menu outside the window.
+- **The numbers:**
+  - the idle popup rendered 0 frames;
+  - VRAM is about 1 MiB per popup.
+- **The full Motioner gate ran in a clean worktree.** Thank you.
+
+**Reviewer fix:** in `runner/popups.rs`, the dead `let _ = gfx;` binding was
+replaced with a plain `is_none()` guard.
+
+**Findings:**
+1. **The popup is not clamped to the monitor.**
+   - `layout.rs:803` uses the window viewport as the work area. The
+     popup-hosted rect is `placement.preferred`, which is unclamped. Nothing
+     clamps it to the monitor.
+   - In `popup-outside.png` the menu runs past the right edge of the screen.
+   - A popup must stay inside the work area of the monitor it opens on, and
+     that work area excludes the taskbar.
+2. **No real input was ever sent.**
+   - `p8d_popup` opens the menu by setting `self.open = true`.
+   - Clicking an item, Escape, an outside click and an app switch were never
+     driven through the OS.
+   - Clicking a normal top-level window activates it. A click on the popup
+     therefore deactivates the main window: its title bar greys out, and the
+     keyboard moves to the popup. Real menus use `WS_EX_NOACTIVATE`.
+   - A menu must also close when the app loses activation. Today
+     `FocusLost` closes nothing.
+3. **The pool has no cap.** Every popup-hosted node keeps its hidden window
+   forever, at about 50 MB of RSS each.
+4. **A first popup is heavy: +50.9 MB RSS and 83 ms.** This is far from the
+   "lightest UI library" target. Nobody knows yet where the 50 MB go: the
+   DXGI swapchain, pipelines compiled again for each `GuiRenderer`, the driver,
+   or something else. Measure first, then cut.
+5. **Popups repaint whenever the main window repaints.** `repaint` is the main
+   window's `repainted` flag, so hovering anywhere in the main window redraws
+   every visible popup even when its display-list range did not change.
+6. **The popups miss window move, minimize and per-monitor DPI.**
+   - Moving the main window while a menu is open leaves the popup where it
+     was until some other frame runs.
+   - Minimizing does not hide the popups.
+   - `render_popup` uses the main window's `scale_factor`, which is wrong when
+     the popup sits on a monitor with a different DPI.
+7. **The desktop capture is a privacy problem.** `CopyFromScreen` copies
+   whatever is behind the window: in this run, another app's private content.
+   The file is git-ignored, but evidence must never capture third-party
+   windows. Capture only our own surfaces.
+8. **The popup memory is not in `memory-report`.** The 1 MiB per popup is
+   computed only by the example.
+9. **Time to first frame is measured from window creation**, not from the
+   input that opened the menu. The user sees input-to-present, so measure
+   that.
+
+### Phase 8E: popup correctness and cost
+
+The order below is required. Use subagents for the lanes marked parallel. The
+main agent runs the single final gate.
+
+**Lane A: correctness (main agent; touches the runner and windows.rs)**
+1. **Monitor work area.**
+   - Add `AppContext::work_area()`: the work area of the monitor the main
+     window is on, in window-local logical coordinates.
+   - On Windows, use `MonitorFromWindow` and `GetMonitorInfoW` (`rcWork`) through
+     `windows-sys`, which `ferrous_engine` already depends on (add the
+     `Win32_Graphics_Gdi` feature if it is missing).
+   - Elsewhere, use winit's `current_monitor()` position and size.
+   - Pass it to the layout as `HostCapabilities` or a new `set_work_area`. A
+     popup-hosted overlay is solved and clamped against that rect: flip,
+     shift, then internal scroll. The window viewport stays the work area
+     only for in-window overlays.
+2. **No activation.**
+   - After creation, set `WS_EX_NOACTIVATE` on the popup HWND
+     (`SetWindowLongPtrW`).
+   - The main window stays the foreground window and keeps the keyboard.
+     Escape reaches the main window and still closes the menu.
+3. **Dismiss rules.** When the main window gets `Focused(false)` and the newly
+   focused window is not one of our popups, close every dismissable overlay:
+   menus, selects and popovers. Dialogs stay.
+4. **Window lifecycle.**
+   - `WindowEvent::Moved` on the main window re-syncs the popup positions in
+     the same callback (queue `Move` and request a frame).
+   - Minimizing hides the popups. Restoring shows them again if the overlay is
+     still open.
+   - Each popup uses its own window's `scale_factor()`, and
+     `ScaleFactorChanged` on a popup reconfigures it.
+5. **Pool cap.** Keep at most 2 hidden popups. `hide` beyond the cap destroys
+   the window. Put it in one constant with a comment.
+6. **Popup dirtiness.** Redraw a popup only when the hash of its encoded
+   command range, its size or its position changed, or when an animation
+   inside it is running. Add a unit test: hovering in the main window
+   produces 0 popup frames.
+
+**Lane B: cost (parallel subagent; read and measure first, then edit only
+`gui_renderer.rs` and `windows.rs` backend creation)**
+1. **Break the +50.9 MB and 83 ms down**, step by step, in a release build:
+   1. `create_window` alone;
+   2. plus `create_surface` and `configure`;
+   3. plus `GuiRenderer::new`;
+   4. plus the first `prepare`, `render` and `present`.
+
+   Write the table.
+2. **Share what can be shared.** Add `GuiRenderer::new_sharing(&main)`, which
+   reuses the main renderer's shader modules, pipeline layouts, bind group
+   layouts, pipelines and samplers, so a popup creates only its own buffers
+   and bind groups. Use `desired_maximum_frame_latency: 1` and the smallest
+   valid swapchain image count.
+3. **The targets:** a new popup adds at most 8 MB of RSS, and its first frame
+   takes at most 20 ms from the input event to present. Where a target cannot
+   be met, give the measured reason (for example "the DXGI flip swapchain
+   costs X MB on this driver") and what would remove it.
+4. **Pre-warming.** Decide, with numbers, whether creating one hidden popup
+   during the first idle period after startup is worth its RSS.
+5. **Memory report.** Add popup memory to `memory-report` under a `popups`
+   subsystem: instances, SVG and swapchain for each popup.
+
+**Lane C: evidence (parallel subagent; the example and the capture only)**
+1. **Real input.** Rewrite `p8d_popup` to drive real OS input with
+   `SendInput` on Windows:
+   - click File, then click Rename. Assert that the app message fired, the
+     menu closed and the popup is hidden;
+   - reopen, then press Escape: the menu closes;
+   - reopen, then click empty space in the main window: the menu closes;
+   - reopen, then activate another window of our own test process (a
+     small helper window, never a third-party app): the menu closes;
+   - after the click on Rename, `GetForegroundWindow()` is still the main
+     window.
+2. **A privacy-safe capture.** No more `CopyFromScreen`. Read back our own
+   surfaces: the main swapchain texture and each popup's. Compose them at
+   their screen offsets on a flat neutral background the size of the monitor
+   work area. Also save the popup and work-area rects as JSON, and assert
+   that the popup rect lies inside the work area.
+3. **A right-edge case and a bottom-edge case.** The menu flips or shifts and
+   stays fully on screen. Attach both PNGs.
+4. **Numbers:** input-to-present for a new popup and for a pooled one, over
+   five runs (median and range); RSS and VRAM per popup; the idle popup over
+   5 s (0 frames); and 0 popup frames while hovering the main window.
+
+**Gate:**
+- the same engine gate as Phase 8D;
+- the full Motioner gate in a clean worktree;
+- the divan benches compared against `85f3daa`.
+
+Report every finding above as fixed, or as not fixed with the exact reason.
