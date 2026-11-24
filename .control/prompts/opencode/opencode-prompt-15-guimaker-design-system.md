@@ -1982,3 +1982,102 @@ changed file.
 
 B3 (bidi and Arabic joining) and B4 (colour emoji) move to Phase 9B, with
 the growing atlas and RGBA pages.
+
+### Review after Phase 8C
+
+**Accepted and pushed** (engine `b37b26d`):
+- **B1, runtime lazy fallback** (`runtime_font.rs`, `AppContext::request_glyphs`,
+  the re-bake in `runner/frame.rs` before `draw_ui`).
+- **The corrected G-0006.** The reference is now an unclamped 512-texel
+  `generate_msdf` bake, measured on H, a, e, g, s and 動. The largest mean
+  gain from a 128-texel cell is 2.67 %.
+- **The Arabic gap test**, which now uses the logical string.
+- The report was honest that lane A was not done. Thank you.
+
+**Reviewer fix: an uncovered character kept the app awake forever.**
+- The problem: when no face covers a character (an unassigned code point, or
+  a rare symbol), `ensure` added it to `chars` without baking it. `has` stayed
+  false, so every frame did the same thing again: requested it, re-scanned the
+  OS fonts, re-baked the whole atlas (260 ms in debug) and set
+  `redraw_request`. The app never reached 0 idle frames.
+- The fix: `RuntimeFont` now keeps an `unresolved` set. `has` treats those
+  characters as handled, and they draw `.notdef`. `ensure` re-bakes only when
+  at least one new character is drawable.
+- The test: `runtime_fallback.rs` now asserts that U+0378 never re-bakes.
+
+**Still open, Phase 9B:**
+- The re-bake is synchronous on the frame thread, about 260 ms in debug. That
+  is a visible hitch. Move it to the startup bake worker: draw `.notdef` until
+  the worker finishes, then swap the atlas and redraw once.
+- The re-bake rebuilds the whole atlas. The growing atlas in 9B adds only the
+  new cells.
+- `runtime_fallback.rs` calls `RuntimeFont` directly. It does not go through
+  `Runner` or `GuiHost`. Add a runner-level test when the runner gets a
+  headless harness.
+- `AppContext` is now built by hand in 7 places. Factor it into one helper:
+  that is step 1 of Phase 8D.
+
+### Phase 8D: real popup windows (one lane, step by step)
+
+Lane A failed four times, so this phase gives the plan step by step. Do
+every step. If a step turns out to be impossible, stop there, and report the
+exact compiler or OS error with file:line.
+
+1. **One `AppContext` builder.** Replace the 7 hand-built `AppContext { .. }`
+   literals in `runner/events.rs` and `runner/frame.rs` with one
+   `Runner::with_ctx(|app, ctx| ..)` helper. Add the field
+   `popups: &mut PopupQueue` to `AppContext`.
+2. **The command queue.** `PopupQueue` lives in `windows.rs`. It records
+   `Open(spec) -> PopupId` (the id is reserved at once), `Move`, `Resize`,
+   `Show`, `Hide` and `Close`. The app calls `ctx.popups.open(spec)`.
+3. **The winit backend.** Add `WinitPopups`, which implements the real side
+   of `PopupBackend`. For each popup it holds an `Arc<Window>`, a
+   `wgpu::Surface<'static>` and its `SurfaceConfiguration`.
+   - Create the window with:
+     - `with_decorations(false)`, `with_visible(false)`,
+       `with_transparent(true)`, `with_resizable(false)` and
+       `with_active(false)`;
+     - on Windows, through `winit::platform::windows::WindowAttributesExtWindows`:
+       `with_owner_window(main_hwnd)` and `with_skip_taskbar(true)`.
+   - Create the surface the same way `graphics.rs:669` does, on the shared
+     instance and device.
+   - Use alpha mode `PreMultiplied` when the surface supports it, and
+     otherwise `Opaque`. In the opaque case the popup paints its own
+     background, which is the documented fallback.
+4. **Draining the queue.** In `about_to_wait_impl` (`runner/frame.rs:718`),
+   and only there, because it has `&ActiveEventLoop`, the runner drains the
+   queue into `WinitPopups`. Build `WindowMap` in `resumed`
+   (`runner/events.rs:176`) from the main window id, so `route` is live.
+   Hidden popups are pooled.
+5. **Drawing.** Add the trait method
+   `FerrousApp::draw_popup(&mut self, popup: PopupId, dc: &mut DrawContext)`,
+   which does nothing by default.
+   - When `RedrawRequested` arrives for a popup id, the runner:
+     1. acquires that surface's texture;
+     2. runs one `GuiRenderer` per popup, which shares the glyph atlas view
+        and the icon atlas but owns its own instance buffers;
+     3. calls `draw_popup`, then prepares, renders and presents.
+   - An idle popup renders 0 frames, because it follows the same
+     redraw-request rules as the main window.
+6. **`GuiHost`.**
+   - When the overlay solver returns `Placement::Popup`, the host:
+     1. opens or reuses a popup at the solver's screen rectangle;
+     2. encodes that overlay's display-list range into the popup's batch,
+        offset to the popup origin;
+     3. leaves the overlay out of the main batch.
+   - Escape, outside clicks and the menu's own clicks arrive through
+     `on_popup_event` and go into the same GUIMaker input path, translated
+     to window coordinates. Closing the overlay hides the popup.
+   - Only after this does the gallery switch to `desktop()`.
+7. **Tests and evidence.**
+   - A runner unit test: the queue is drained by the mock backend, ids stay
+     stable, and pooling works.
+   - The gallery example `p8d_popup`: it opens a menu at the right edge,
+     waits two frames, then saves a **desktop** capture (PowerShell
+     `[System.Drawing.Graphics]::CopyFromScreen` over the window's bounds
+     plus 300 px). Attach the PNG, with the menu visible outside the window.
+   - Numbers:
+     - the time to first frame for a new popup and for a pooled popup;
+     - the extra RSS and VRAM per popup;
+     - the CPU and frame count of an idle popup over 5 s, which must be 0
+       frames.
