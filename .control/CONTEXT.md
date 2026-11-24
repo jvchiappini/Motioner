@@ -1,9 +1,60 @@
 ---
-actualizado: 2026-11-23
+actualizado: 2026-11-24
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
+
+## Phase 8E: popup correctness and cost (2026-11-24)
+
+Engine changes reviewed and committed as `6f6a745` (base `85f3daa`);
+the Motioner pin was bumped by the reviewer. Phase 8D's nine findings: 1, 2, 3,
+5, 6, 7, 8 fixed; 4 only partly (targets measured, not met) and 9 fixed by
+measuring input→present.
+
+- **Work area.** `AppContext::work_area()` (window-local logical, uses
+  `window.scale_factor()`, not the runner's stale cached factor) and
+  `work_area_screen()`; Windows `MonitorFromWindow`+`GetMonitorInfoW` `rcWork`,
+  winit monitor elsewhere. `Ui::set_work_area`; popups are solved/clamped
+  against it (flip, shift, clamp, scroll) while in-window overlays keep the
+  viewport. Test `a_popup_hosted_menu_is_clamped_to_the_monitor_work_area`.
+- **No activation.** `WS_EX_NOACTIVATE` after create; a main-window
+  `Focused(false)` is suppressed when `GetForegroundWindow` is the main window
+  or one of our popups. `InputEvent::FocusLost` now closes dismissable overlays
+  (`dismiss_dismissable_overlays` stops at a trapping dialog scope).
+- **Lifecycle.** `Moved` shifts visible popups by the same delta + requests a
+  frame; `Occluded`/minimize hides popups and restore re-shows them (logical
+  visibility kept); popup `ScaleFactorChanged` reconfigures; `render_popup`
+  uses the popup's own scale.
+- **Pool cap 2** (`POPUP_POOL_CAP`, `trim_pool`), tested. **Identity is the
+  overlay's stable `path_hash`, not the transient `NodeId`** (new
+  `PopupBatch.path`): reopening a menu reuses its window instead of leaking a
+  pooled one. **Per-popup dirtiness**: `Ui::overlay_fingerprint` folds each
+  subtree node's command hash + rect; `overlay_animating` is subtree-only.
+  Test `hovering_the_main_window_does_not_dirty_an_open_popup`.
+- **Cost (release, 320x200):** step table a/b/c/d = 5.2/64.2/4.3→1.0/0.5 ms;
+  first popup +38.8 MB, later new popups +10.8-11.6 MB; input→present new
+  69.6-75.0 ms, pooled 2.9-3.6 ms. 8 MB target NOT met (DXGI flip swapchain +
+  driver/DWM bookkeeping); 20 ms NOT met for a new popup (surface+configure
+  ~61-66 ms); pooled/pre-warmed meets it (~3 ms, hidden popup +10.6 MB).
+  `GuiRenderer::new_sharing(&main)` shares layouts/shaders/pipelines/samplers
+  via `Arc` snapshots (`new_sharing_global` wires it because the engine cannot
+  borrow `UiPass.renderer`); popups now register under a `popups` subsystem
+  (`popup:{handle}:instances|svg|swapchain`, unregistered on destroy/trim).
+- **Evidence.** `p8d_popup` now drives real `SendInput` (File→Rename, Escape,
+  outside click, helper-process activation) and asserts
+  `GetForegroundWindow` is still the main window; capture reads back the main
+  and popup swapchains and composes them over a neutral work-area-sized
+  background (no `CopyFromScreen`); right/bottom-edge PNGs + rect JSON assert
+  `inside: true`; idle 5 s 0 popup frames; hover 0 popup frames.
+- **Gates.** Engine: guimaker/gallery fmt + pedantic clippy + rustdoc + 255/20
+  unit + 109 doc + 11 mechanics + goldens + machete + literals 49/0 +
+  boundaries + encoding; workspace check; wasm engine+web; divan vs `85f3daa`
+  (noise-level, see `out/reports/phase15/p8e-divan-*.txt`). Motioner in a
+  clean worktree (`Motioner-gate-p8e`, engine patch applied, removed after):
+  fmt, boundaries, encoding + 25 tests, machete, clippy, tests, build, doc,
+  pctl validate/refs — all exit 0. **No commits.**
+
 
 ## Phase 8B third pass (2026-11-23)
 

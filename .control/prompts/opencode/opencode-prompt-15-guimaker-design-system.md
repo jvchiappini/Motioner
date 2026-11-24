@@ -2236,3 +2236,107 @@ main agent runs the single final gate.
 - the divan benches compared against `85f3daa`.
 
 Report every finding above as fixed, or as not fixed with the exact reason.
+
+### Review after Phase 8E
+
+**Accepted and pushed** (engine `6f6a745`). All nine findings from Phase 8D
+are closed or explained:
+- **Monitor work area.** `AppContext::work_area()` uses `rcWork` through
+  `GetMonitorInfoW`. In the right-edge and bottom-edge captures the menu flips
+  and stays fully on screen, and `popup-rects.json` reports `inside: true`.
+- **`WS_EX_NOACTIVATE`** is set on the popups. After a real `SendInput` click on
+  Rename, `GetForegroundWindow()` is still the main window.
+- **Dismiss on activation loss.** `dismiss_dismissable_overlays` keeps modal
+  dialogs open.
+- **The window lifecycle:** Moved, minimize and restore, and per-popup DPI.
+- **The pool cap:** `POPUP_POOL_CAP = 2`, with a test.
+- **Popup dirtiness:** 0 popup frames over 878 frames of hovering the main
+  window.
+- **A privacy-safe capture:** our own swapchains are read back and composed on a
+  neutral background. No third-party window appears.
+- **A `popups` subsystem in `memory-report`.**
+- **Input-to-present timing.**
+- **Honest cost numbers.** The 8 MB and 20 ms targets were missed, but the
+  breakdown shows where the cost goes.
+
+**Findings:**
+1. **`new_sharing_global` is a process-wide registry keyed by
+   `Weak<Device>`.** Global mutable state in the renderer is the wrong shape
+   for an engine meant to run many devices and many apps per process. Do the
+   one-line fix the report itself proposes: add `UiPass::gui_renderer()` and
+   pass `&GuiRenderer` through `PopupContext` into `new_sharing`. Then delete
+   the registry.
+2. **Pipelines are not shared in Motioner's real configuration.** The main UI
+   renders to an `Rgba16Float` MSAA-4 target, while the popups render to sRGB
+   without MSAA, so the pipelines are rebuilt. Either:
+   - build the popup pipeline variant once per device and cache it, so the
+     second popup and later ones share it; or
+   - give the popups the same intermediate target.
+
+   Measure both, then pick one.
+3. **The new-popup cost is the swapchain**: +11 to 14 MB and 61 to 66 ms in
+   `create_surface` and `configure`, and +39 to 52 MB for the first one. The
+   pool hides this on reopen, but the first menu of the session still pays
+   75 ms, which is a visible stall. Two experiments, both measured against the
+   current path:
+   - **(a) A layered window without a swapchain.**
+     - Render the popup to an offscreen texture on the shared device, read it
+       back (a 500×225 menu is about 450 KB) and present it with
+       `UpdateLayeredWindow`. This creates no DXGI swapchain, and a menu
+       repaints only on hover changes.
+     - Measure RSS, the time to first frame, and the per-repaint cost on
+       hover.
+   - **(b) Backend comparison.** Measure the per-surface cost under DX12 and
+     under Vulkan (`WGPU_BACKEND`).
+
+   Keep whichever is lighter as the Windows default, and the other as a
+   fallback. Write it down as a decision.
+4. **The menu is far wider than its content.** The popup is 500×225 for three
+   short items, and an empty band sits under Delete. Size the menu to its
+   content: the widest item, plus padding, plus room for the shortcut column,
+   at a theme minimum width. The rows should fill the height. This is
+   mechanics (the measured content size), not looks.
+5. **Pre-warming is opt-in and off by default.** That is correct. Document the
+   switch and its cost in the GUIMaker docs.
+6. **The popup depth target (256 KB) is not in `memory-report`, and buffer
+   growth beyond 1024/4096 is not re-registered.** Register both.
+7. **Process: the build caches were deleted without asking.** While C: had
+   219 MB free, `Motioner/target` and the engine's release and doc caches
+   (about 10 GB) were deleted. They are rebuildable, but nothing may be
+   deleted without the user's explicit OK. When the disk is full, stop and
+   report the free space and the candidates for deletion.
+8. **Process: the report says "Motioner working tree untouched", but
+   `.control/CONTEXT.md` and the session log were modified.** That is fine to
+   do, but report it accurately.
+
+### Phase 8F: popup follow-ups, then Phase 9
+
+Phase 8F is short. Finish it first, and then go straight on to Phase 9
+(recipes, docs, and the HTML and CSS comparison) in the same session.
+
+**Lane A (main agent): findings 1, 2 and 6.**
+- `UiPass::gui_renderer()` goes through `PopupContext` into `new_sharing`, and
+  `new_sharing_global` and its registry are deleted.
+- The popup pipeline variant is cached per device.
+- The depth target and buffer growth are registered in `memory-report`.
+
+**Lane B (parallel subagent, Windows backend only): finding 3.**
+- Build experiment (a), the layered window, behind a `PopupPresent` enum.
+- Run experiment (b), the backend comparison.
+- Record the table and choose the default in decision G-0010.
+
+**Lane C (parallel subagent, guimaker only): finding 4.**
+- Content-sized menus and selects, with a unit test.
+- The pre-warm docs from finding 5.
+- Re-shoot the three captures (normal, right edge and bottom edge) with the
+  privacy-safe compositor.
+
+**Then Phase 9,** as specified above, with its own lanes.
+
+**Gate:**
+- one final gate for both phases;
+- the full Motioner gate in a clean worktree;
+- divan compared against this phase's base.
+
+**Disk rule.** If C: drops below 5 GB, stop. Report the free space and the
+candidate caches, and wait for the user. Delete nothing yourself.
