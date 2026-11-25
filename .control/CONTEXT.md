@@ -5,6 +5,64 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Phase 8F + Phase 9 (2026-11-24)
+
+Engine changes are uncommitted on `6f6a745` in the dev clone; Motioner source is
+untouched. `.control/CONTEXT.md` and the session log were edited (no commit).
+No files or caches were deleted. Two worktrees were created and left in place:
+`FerrousEngine/out/worktrees/p8f-baseline` (divan baseline) and
+`Motioner-gate-p8f` (clean Motioner gate; engine patch applied locally).
+
+**Phase 8F.** (1) `UiPass::gui_renderer()` (`ferrous_renderer/.../ui_pass.rs`)
+is threaded through `PopupContext.main` into `new_sharing`; the process-wide
+`new_sharing_global` registry and its `Drop` were deleted. A popup's
+`GuiRenderer` is now created in `WinitPopups::create` (no lazy compile on the
+first frame). (2) The popup pipeline variant is cached on the main renderer
+(`variant_cache: Mutex<Vec<SharedGui>>`, `shared_for_target`): first sRGB/1
+popup pays 4.56 ms, later popups 0.28-0.39 ms (was 4.47/1.60 ms). The
+intermediate-HDR-target alternative was rejected: it adds ~1.3-3.6 MB per
+popup and a resolve per repaint. (3) `register_popup_gui` now reports
+`popup:{h}:depth` and is re-run after `prepare` and on reconfigure, so buffer
+growth/depth are truthful. (4) `p8e_popup_cost` proves `variant_reused=true`
+and `popup_depth_bytes=256000`.
+
+**Lane B (Windows backend).** `PopupPresent { Swapchain, Layered }`, env
+`FERROUS_POPUP_PRESENT`; Windows default **Layered** (G-0010). Layered renders
+to an offscreen texture on the shared device, reads it back and calls
+`UpdateLayeredWindow`, no DXGI swapchain. Measured (320x200, DX12/Vulkan):
+swapchain new 52.6-69.2 ms / 10.8-11.3 MB; layered 8.5-9.6 ms / 0.51-0.52 MB;
+pooled 2.6-5.5 ms; repaint 0.30-0.41 ms (swapchain 0.28-6.96 ms). The
+remaining once-per-process sRGB/1 variant compile is 145 ms DX12 / 5.2 ms
+Vulkan and is shared by both paths.
+
+**Lane C (guimaker).** Menus/selects request `SizeSpec::Hug`: width = widest
+measured label + 152 (panel/row/check/shortcut/chevron/gaps), min 96, cap 480;
+height = real rows + dividers + 8 padding, so no empty band. Test
+`menu_sizing.rs` (201x129 for 3 items at 1x). Pre-warm documented
+(`docs/prewarming.md`, nav). Re-shot the three captures with the content-sized
+menu: 248x161 physical (was 500x225), all `inside: true`, idle 0, hover 0.
+
+**Phase 9.** Eight recipes in `guimaker/src/recipes.rs` (new-item dialog,
+settings, file browser, empty first run, editor shell, command palette, toasts;
+launcher = the existing `start_screen`) as gallery stories with 16 new
+goldens (dark/light 1280x800 @1.5) and `docs/recipes.md`. Docs set:
+getting-started, concepts, components, theming, backend contract, screenshots,
+design-guide (for models), README and roadmap; one GUIMaker nav block.
+Comparison: `out/compare/start.html` + `REPORT.md` + `start-compare.png`;
+GUIMaker 242 lines/26 numeric literals (start alone 151/13) vs HTML+CSS
+139/60. The line and zero-literal targets are **not met**; both measured and
+reported, not hidden.
+
+**Gate.** Engine: guimaker crates fmt/pedantic clippy/rustdoc/tests/machete,
+workspace check, wasm engine+web, literals 50/0, boundaries, encoding,
+goldens (169 s), recipes test, divan vs `6f6a745` (host noisy; current not
+slower). Motioner in `Motioner-gate-p8f` with the engine patch: fmt,
+boundaries, encoding+25 tests, machete, clippy, workspace tests, build, doc,
+pctl validate/refs; all exit 0, with `CARGO_PROFILE_DEV_DEBUG=0` and the
+existing target reused to stay well above the 5 GB disk rule (9.6 GB free at
+close). **No commits.**
+
+
 ## Phase 8E: popup correctness and cost (2026-11-24)
 
 Engine changes reviewed and committed as `6f6a745` (base `85f3daa`);

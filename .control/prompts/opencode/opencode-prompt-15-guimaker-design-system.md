@@ -2340,3 +2340,101 @@ Phase 8F is short. Finish it first, and then go straight on to Phase 9
 
 **Disk rule.** If C: drops below 5 GB, stop. Report the free space and the
 candidate caches, and wait for the user. Delete nothing yourself.
+
+### Review after Phase 8F and Phase 9
+
+**Accepted and pushed** (engine `c377604 + 431947e`).
+
+**Phase 8F:**
+- **`new_sharing_global` is gone.** `UiPass::gui_renderer()` is passed through
+  `PopupContext.main`.
+- **The sRGB/1 pipeline variant is built once per device.**
+- **G-0010: Windows popups present through a layered window,** with no DXGI
+  swapchain. Compared with the swapchain path:
+
+  | | new popup | RSS | repaint |
+  |---|---|---|---|
+  | layered | about 9 ms | +0.5 MB | 0.3 ms |
+  | swapchain | 53 to 69 ms | about +11 MB | |
+
+  This closes the Phase 8E cost targets: under 8 MB and under 20 ms. Well done.
+- **Content-sized menus:** 248×161 instead of 500×225.
+- **The pre-warm docs.**
+- **The depth target and buffer growth are in `memory-report`.**
+- **Process: nothing was deleted, and the `.control` edits were reported
+  accurately.** Thank you.
+
+**Phase 9:**
+- **The recipes:** seven new recipes plus the launcher. Each has a story, dark
+  and light goldens, and a lint and sweep test.
+- **The docs.** They include `design-guide.md` for models and a rewritten
+  roadmap.
+- **The HTML and CSS comparison.** Side by side, the screenshots are almost
+  identical.
+
+**Findings:**
+1. **The Phase 9 targets were missed, honestly reported.**
+   - The view is 242 lines, against 139 for HTML and CSS. The start screen
+     alone is 151.
+   - The view has 26 numeric literals.
+   - Both are fixable in the library, not in the view:
+     - named tokens for the priority weights, line caps, the 0.55/0.45 split
+       and the fluid slope;
+     - `.grow()` without an argument;
+     - a `clock_label` helper;
+     - compact builder forms where several calls repeat. For example, one
+       `field(label, value)` for the four label-and-input pairs, and one
+       `list_row(title, subtitle, trailing)` for the recent projects.
+   - The target stands: at most 139 lines and **zero** numeric literals in the
+     view. Any helper you add must be general library API, documented and
+     usable by every app, not a start-screen special case.
+2. **`p8d_popup` still computes VRAM with the swapchain formula.** Report what
+   `memory-report` says for `popup:{h}:offscreen`.
+3. **The layered readback waits on the whole device queue.**
+   - `present_offscreen` polls the device until the copy finishes. In
+     Motioner the main window queues a heavy 3D viewport, so a hover repaint
+     on a menu would wait for the viewport's GPU work.
+   - Measure it: a menu hover while the main window renders a heavy scene.
+   - If the wait shows, map asynchronously and call `UpdateLayeredWindow` in
+     the next callback once the map is ready. Until then, keep the previous
+     popup image on screen.
+   - This goes into Phase 9B.
+4. **The goldens take 169.87 s.** Find out where that time goes before the 9B
+   sweep: GPU init per test, PNG encoding, or serial runs. A gate that slow
+   gets skipped.
+5. **Two worktrees were left in place:** `FerrousEngine/out/worktrees/p8f-baseline`
+   and `Motioner-gate-p8f`. Asking was correct. The user decides.
+
+### Phase 9 fix, then Phase 9B
+
+**Phase 9 fix (main agent):**
+- findings 1 and 2;
+- re-run `scripts/compare_start.py`;
+- update `out/compare/REPORT.md` with the new counts and a fresh side-by-side
+  screenshot.
+
+**Phase 9B (as specified above, plus the following):**
+- **The comparison set:** egui, iced, Slint and Dear ImGui (through imgui-rs
+  with the wgpu renderer), plus WebView2 if time allows. They all build the
+  same start screen in `bench/guimaker_compare/`, outside the workspace.
+- **The measurement rules:**
+  - release builds on the same machine, with the same vsync mode, window size
+    and DPI;
+  - five runs each, reporting the median and the range;
+  - the host is kept free for the measurements: the user will close other
+    apps when you say the measurement step is about to start, so stop and
+    ask first;
+  - save the raw numbers as JSON under `bench/guimaker_compare/results/`, so
+    later phases can detect a regression.
+- **A feature table next to the numbers.** For each library:
+  - CJK and emoji with no setup;
+  - popups outside the window;
+  - idle CPU and idle frames;
+  - per-monitor DPI;
+  - IME.
+- **Finding 3 (async readback) and finding 4 (golden time).**
+- **The perf sweep deferred from the earlier phases:** the full divan suite and
+  idle, hover and typing CPU and GPU, run on the free host before any
+  optimisation, as the baseline.
+- **The rule stands.** Wherever GUIMaker is not the lightest, profile and fix
+  it, or record the precise measured reason.
