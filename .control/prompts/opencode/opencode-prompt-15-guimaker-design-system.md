@@ -2438,3 +2438,128 @@ candidate caches, and wait for the user. Delete nothing yourself.
   optimisation, as the baseline.
 - **The rule stands.** Wherever GUIMaker is not the lightest, profile and fix
   it, or record the precise measured reason.
+
+### Review after the Phase 9 fix and Phase 9B
+
+**Accepted and pushed** (engine `416b15c`):
+- **Phase 9 fix: both comparison targets are met.** The view is 119 lines,
+  against 139 for HTML + CSS, and has 0 numeric literals. This used general
+  library API (`format::clock_hh_mm`, named tokens such as `Lines::ONE`).
+- **Fair benches.**
+  - The iced bench no longer subscribes to `window::frames()`.
+  - The Slint bench now builds.
+  - egui is measured with both glow and wgpu.
+  - ImGui is built.
+  - The raw JSON is under `bench/guimaker_compare/results/`.
+- **Async layered readback** (`LayeredReadback`, the generation gate). With a
+  600k-quad main scene, a menu hover no longer waits 7.16 ms for the device.
+- **The goldens run in 46 s instead of 170 s,** byte-identical, through a
+  shared `StoryTarget`.
+- **`MemoryHints::MemoryUsage` is already the Flat2D default,** and the A/B
+  proves it: −126 MB.
+- **G-0011 keeps Vulkan as the Windows default**, measured.
+- GUIMaker beats egui/wgpu on RSS and idle frames, and matches it on startup.
+
+**The standing goal is not met yet.** Slint and egui/glow are lighter than
+GUIMaker on most rows:
+
+| | startup | idle frames | 30 s tail | RSS | binary |
+|---|---|---|---|---|---|
+| GUIMaker | 560 ms | 3 | 0.376 % | 227.5 MB | 11.07 MB |
+| Slint | 307 ms | 1 | 0.109 % | 144.5 MB | 4.20 MB |
+| egui/glow | 256 ms | 5 | 0.054 % | 144.5 MB | 4.54 MB |
+
+The rule is to profile and fix. A driver floor counts as a measured reason
+only after the alternatives below have been measured.
+
+**Findings:**
+1. **Hover redraws the whole frame on every pointer move.** This is a
+   GUIMaker gap, not a like-for-like problem.
+   - Sweeping the body gives 675 frames and 10.7 % CPU.
+   - iced, Slint and ImGui give 1 frame, because nothing visible changes.
+   - A pointer move that changes no hover target, cursor shape or tooltip must
+     not request a frame.
+2. **The DX12 renderer takes 6.2 s.** This was not investigated. The engine
+   never sets `Dx12Compiler`, so wgpu uses FXC, which is known to be very slow
+   on large shaders. The DX12 surface is 3.7× faster than Vulkan's (50 ms
+   against 183 ms), so DX12 might win startup once its pipelines are fast.
+3. **The Flat2D startup builds every pipeline up front.** A UI app should build
+   only what its first frame draws, and compile the rest on a worker thread,
+   or lazily on first use.
+4. **Nobody has tried the GL backend.** egui/glow and Slint both start in about
+   250 to 300 ms, with about 145 MB, on OpenGL. wgpu has a GLES backend on
+   Windows (WGL, or ANGLE). Measure it for Flat2D UI apps before accepting the
+   Vulkan floor.
+5. **The binary size comparison is not fair yet.**
+   `bench/guimaker_compare/Cargo.toml` has no `[profile.release]`.
+   - Give every bench the same profile: `lto = "fat"`, `codegen-units = 1`,
+     `strip = true` and `panic = "abort"`.
+   - Report it at `opt-level = 3` and at `"s"`.
+   - Compile only the wgpu backends the platform uses, and leave the 3D
+     renderer out of a Flat2D build, behind a cargo feature.
+6. **There are 3 idle frames at startup, where 1 is the target.** Find out
+   what draws the other two (a scheduled wake, the font bake swap, a resize?)
+   and remove them. The 30 s tail is 0.376 %, against 0.109 % for Slint. Find
+   the wakes that belong to us.
+7. **There is no typing bench, and no like-for-like hover bench.** Add the same
+   text input and the same hoverable button to every bench app, then measure
+   typing at 10 characters per second and a button hover.
+8. **WebView2 does not build** because of a `gdk-sys` links conflict. Use wry
+   with winit instead of tao, or `webview2-com` directly. This one is
+   optional.
+9. **Artefacts left in place:**
+   - `FerrousEngine/target-p9b-base` (232 MB);
+   - `FerrousEngine/out/worktrees/p9b-base` (102 MB);
+   - `Motioner-gate-p9b` (12 GB).
+
+   `target-p9b-base` is untracked at the engine root. Put such directories
+   under `out/` (ignored) from now on. The user decides whether they are
+   deleted.
+
+### Phase 9C: close the gap to Slint and egui/glow
+
+**The goal:** GUIMaker is lighter than or equal to the lightest library on
+every row, or each remaining row has a measured floor *after* the
+alternatives were tried.
+
+Use lanes with parallel subagents that only edit. The main agent runs the one
+final gate.
+
+**Lane A: damage-driven input (main agent).** Finding 1.
+- A pointer move requests a frame only when it changes something:
+  - the hovered or pressed target;
+  - the cursor icon;
+  - a tooltip timer;
+  - drag or scroll state.
+- Unit test: sweeping a static body gives 0 extra frames.
+- Bench: the body sweep gives 1 frame and less than 1 % CPU.
+
+**Lane B: startup (subagent).** Findings 2, 3 and 4.
+- DX12 with DXC (`Dx12Compiler::DynamicDxc`, or the static DXC feature)
+  against FXC.
+- Lazy or worker-compiled pipelines for Flat2D.
+- The wgpu GL backend.
+- Measure each on cold and warm startup. Pick the Windows default for Flat2D
+  apps in a new decision (G-0012). It may differ from the 3D default.
+
+**Lane C: size and idle (subagent).** Findings 5 and 6.
+- The shared release profile.
+- Feature-gated backends and 3D.
+- 1 idle frame at startup.
+- A 30 s idle tail with our own wakes removed.
+
+**Lane D: benches (subagent).** Findings 7 and 8.
+- Typing and button hover in every bench app.
+- WebView2 if possible.
+
+**Measurement:** stop and ask the user to free the host before the final runs.
+Use the same rules as Phase 9B, then update `MEASURED.md`, `FEATURES.md` and
+the table in this prompt's report.
+
+**Gate:**
+- the engine gate;
+- the full Motioner gate in a clean worktree;
+- divan compared against this phase's base.
+
+**Disk:** keep baselines and targets under `out/`. Stop below 5 GB, and
+delete nothing.

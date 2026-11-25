@@ -1,9 +1,62 @@
 ---
-actualizado: 2026-11-24
+actualizado: 2026-11-25
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
+
+## Phase 9 fix + Phase 9B (2026-11-25, complete)
+
+Engine dev clone dirty on `431947e`; Motioner submodule untouched; **no
+commits, no deletions**. New artefacts left for the reviewer:
+`FerrousEngine/out/worktrees/p9b-base` (divan baseline at 431947e),
+`FerrousEngine/target-p9b-base` and `Motioner-gate-p9b` (clean Motioner gate
+with the engine patch). C: 39.5 GB free.
+
+**Phase 9 fix.** `compare_start.py` measures `start_screen` only: **119 lines,
+0 numeric literals** vs HTML+CSS 139/60 (PASS/PASS); the engine render is
+byte-identical to the start golden (0 px). General API: `format::clock_hh_mm`,
+`Priority`/`Lines`/`Split`, `FluidText::between`/`DEFAULT_SLOPE`,
+`Element::grow()`, `components::{field,list_row,nav_link,content_column,brand,
+section_heading,caption}`. Snapshots regenerated for the lost field keys;
+`out/compare/REPORT.md` + PNGs updated.
+
+**Findings.** 2: `memory::inventory` + `Renderer::memory_entries`;
+`p8d_popup` reports `popup:*:offscreen` from the memory report. 4: goldens
+**169.87 -> 46.10 s (-72.9 %)**, all pass, byte-identical, via `shot::StoryTarget`.
+3: `LayeredReadback` maps off-thread; generation-gated `flush_frame`; A/B
+600k-quad scene **sync 7.159 ms -> async submit 0.001 ms** (total 8.955 ms).
+
+**Fair benches.** iced: removed `window::frames()` -> **1 frame, 0.163 %**
+(was 44.3 %, 5389). Slint: `title` string instead of `\{index}` -> **307 ms,
+1 frame**. egui: added a wgpu variant (559.5 ms/355 MB vs glow 256.1/144.5).
+ImGui: token API + wgpu 29 fixes -> **813.7 ms, 1 frame, 198 MB**. WebView2 not
+built: `wry 0.57`+`tao 0.38` `gdk-sys` `links` conflict.
+
+**Final 5-run table** (6 s idle): GUIMaker 560.5 ms / 1.220 % / 3 frames /
+227.5 MB / 11.07 MB; egui glow 256.1 / 0.326 / 5 / 144.5 / 4.54; egui wgpu
+559.5 / 1.213 / 5 / 355.0 / 9.61; iced 762.4 / 1.008 / 1 / 238.2 / 10.08;
+Slint 307.3 / 0.000 / 1 / 144.5 / 4.20; ImGui 813.7 / 1.340 / 1 / 198.2 / 7.11.
+30 s tail: 0.376 / 0.054 / 0.428 / 0.163 / 0.109 / 0.217 %. GPU dedicated:
+85.13 / 59.02 / 86.35 / 73.68 / 63.41 / 270.00 MB. GUIMaker wins against
+egui/wgpu (same startup, -127 MB) and iced/ImGui; loses to egui/glow and Slint
+on startup/RSS/binary (Vulkan driver floor + engine size; G-0011: DX12 surface
+49.9 vs 183.2 ms but renderer 6166.7 ms, so Vulkan stays default). MemoryHints
+already default for Flat2D; A/B **228.6 vs 354.7 MB (-126.1 MB)**; own GPU
+inventory 8.00 MB (atlas 5.31, GUI 2.33, 2D 0.37), process RSS 227.5, dedicated
+85.13; 60 MB target not met (driver baseline). Hover: GUIMaker 10.672 %/675
+frames, egui 38.662/1930, egui-wgpu 21.771/1890; iced/Slint/ImGui 1 frame (no
+body hover state, not like-for-like). Typing not applicable (read-only fields).
+
+**Gate green.** Engine: fmt, pedantic clippy (guimaker --no-deps), rustdoc -D,
+118+0+2 tests, goldens, core 4, engine 94, renderer 18, workspace check, wasm
+engine+web, machete, literals 51/0, boundaries, encoding, divan vs 431947e (no
+row >10 % slower; layout 200.5 us, cold 583.4 us, hover 13.69 us). Motioner in
+`Motioner-gate-p9b` with the engine patch: fmt members, machete crates,
+boundaries, encoding, clippy -D, full tests (5.8 min), build, doc -D, validate,
+refs, 25 script tests ? all exit 0. Open: WebView2, startup/RSS/binary vs
+egui-glow/Slint, 60 MB target, like-for-like hover/typing. Full report
+`FerrousEngine/out/reports/PHASE-15-P9B-REPORT.md`.
 
 ## Phase 8F + Phase 9 (2026-11-24)
 
