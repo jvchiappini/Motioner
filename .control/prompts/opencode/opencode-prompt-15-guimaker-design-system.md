@@ -2563,3 +2563,322 @@ the table in this prompt's report.
 
 **Disk:** keep baselines and targets under `out/`. Stop below 5 GB, and
 delete nothing.
+
+### Review after Phase 9C
+
+**Accepted and pushed** (engine `7caea00`):
+- **Damage-driven pointer moves.** The body sweep went from 675 frames and
+  10.7 % CPU to **1 frame and 0.34 %**, with a unit test.
+- **One idle frame at startup,** down from 3.
+- **The shared release profile,** with sizes at `opt-level` 3 and `"s"`.
+- **The same editable field and hoverable button in every bench app.**
+- **WebView2 builds** (wry + winit).
+- **`AppConfig::dx12_compiler`** is threaded into both instance creation sites.
+
+**The standing goal is still not met, and the comparison is not
+apples-to-apples yet.** Against egui with wgpu, the only other library on our
+backend, we tie on startup (560.8 against 560.2 ms) and win on RSS (226.5
+against 356.2 MB), idle frames, binary size and GPU memory. Every comparison
+with a lighter library mixes up the library cost with the backend cost.
+
+**Findings, verified against the code:**
+1. **`skip_show_redraw` can eat a real frame** (`runner/events.rs`,
+   `runner/frame.rs`).
+   - The flag drops the next `RedrawRequested`, whoever asked for it. winit
+     merges redraw requests, so an app request made between the first present
+     and the OS paint is lost. A startup animation or spinner then stops until
+     the next input event.
+   - If the platform sends no paint after the show, the flag stays set and eats
+     the first real redraw. That can happen on non-Windows platforms, or when
+     the show is already painted.
+   - Fix: skip only when nothing has requested a frame since the first
+     present, and clear the flag on the first other event. Limit it to the
+     platform that needs it. Add a test where an app requests a frame in its
+     first `tick`.
+2. **`pointer_move_changes` duplicates the routing hit test.**
+   - It re-implements pick plus the disabled filter, and has a no-op line:
+     `set_generation(index.generation())`.
+   - Its doc says it checks the cursor icon and tooltip, but it never does.
+   - Make the router and this check share one function, so the two cannot
+     disagree. Add a host-level test that goes through `GuiHost`, not only `Ui`.
+3. **Button hover takes 111 frames, where egui takes 4 and the others 1.**
+   - `Ui::animating()` stays true after the 90 ms transition. Find which of
+     these keeps it on: `visuals.any_animating(now_ms)` with a clock that does
+     not advance, a tooltip timer, or `ring_animating`.
+   - A settled visual must report not-animating. Add a unit test that hovers a
+     button, advances the clock past the transition, and expects
+     `!animating()`.
+4. **GUIMaker received 0 typed characters.** This is a product bug until
+   proven otherwise.
+   - Find out whether the window is activated and foreground after
+     `show_ready`, the way it is when a user launches the app. If not, fix it,
+     because a launched app must take focus.
+   - The bench field also uses a workaround:
+     - the field's message is `StartMsg::Settings`;
+     - the focus flag is kept in the model;
+     - the text arrives through a new `GuiApp::on_text` hook.
+
+     egui's `TextEdit` is the library's real editable widget. Ours must be too:
+     use the standard `TextFieldModel` focus and edit path that apps use.
+     Then decide, with a reason, whether `on_text` stays as public API.
+5. **The DX12 result is not measured to the rules.**
+   - Each compiler ran **once**, where the rule is five runs.
+   - FXC took 6166.7 ms in Phase 9B and 9578.4 ms in Phase 9C. That noise is
+     larger than the claimed 2255 ms DXC gain.
+   - Nothing proves `dxcompiler.dll` was loaded. Without it, wgpu silently
+     falls back to FXC.
+   - Nobody broke the 7 to 9 s down per pipeline. Seven seconds for a 2D UI
+     points at large 3D shaders being compiled in a Flat2D app.
+   - The `dxc` cargo feature gates only an env parse and adds no dependency.
+     Remove the gate.
+6. **G-0012 is rejected as written.**
+   - It calls GL "a hard floor", but the floor is our own requirement:
+     the GUI image path asks for `TEXTURE_BINDING_ARRAY`.
+   - It closes DX12 before lazy pipelines exist.
+   - The rule from Phase 9B stands: a floor counts only *after* the
+     alternatives are built and measured.
+
+   G-0012 is reopened. Phase 9D measures the alternatives and writes G-0013.
+7. **The comparison is not apples-to-apples.**
+   - **DPI.** GUIMaker renders 1600×1000 physical pixels at the monitor's 1.25
+     scale. The other apps force 1.5, which gives 1920×1200. So the GPU memory
+     reason given ("the 1600×1000 physical window") is wrong: ours is the
+     smallest window.
+   - **Startup.** The harness polls two files every 50 ms, so every startup is
+     quantised to 50 ms. Each app also prints at a different moment: egui's
+     `startup_ms` prints in the first `update`, before its first present, while
+     ours prints after the present.
+   - **Backends.** egui/glow and Slint (femtovg) are on OpenGL, and GUIMaker is
+     on Vulkan. The table compares GL against Vulkan and calls the difference
+     library overhead. egui/wgpu, on Vulkan, shows the same 560 ms as us.
+   - **Self-reported counts.** Frames are counted inside each app, with no
+     external check.
+   - **Old library versions.** The benches use egui 0.29, Slint 1.7 and
+     iced 0.13. Use the current stable release of each, and record the
+     versions.
+   - **Fonts are not equal.** egui ships only its default fonts, and GUIMaker
+     loads its CJK and emoji fallback. Measure RSS at equal font sets, and
+     report the full-feature numbers separately.
+   - **No backend floor.** There is no raw-API baseline (an app that only
+     clears the screen) for each backend. Without it no number can show what
+     the library itself costs.
+8. **The 30 s idle tail's top thread is still unnamed:** 0.203 s per 30 s.
+   Name it, and fix it if it is ours.
+9. **Artefacts left in place:**
+   - `FerrousEngine/out/worktrees/p9c-base`;
+   - `out/target-p9c-base`;
+   - `out/bench/opt3` and `out/bench/opts`;
+   - `Motioner/out/worktrees/p9c-gate`.
+
+   They are all under `out/`, as asked. The user decides whether they are
+   deleted.
+
+### Phase 9D: the most efficient UI library on every backend, proven apples-to-apples
+
+**The goal:** prove, with external measurements under identical conditions,
+that GUIMaker costs less than every other library:
+- **on its own backend:** the overhead above that backend's raw-API floor;
+- **overall:** with each library on the fastest backend it supports on the
+  OS.
+
+Every row that is not a win needs a measured reason, and the alternatives
+must have been built and measured first.
+
+Use lanes with parallel subagents that only edit. The main agent runs the
+measurements and the one final gate.
+
+#### Lane P0: correctness first (main agent)
+
+Fix findings 1 to 4 and 8, each with a test, before any measurement. A fast
+number from a broken frame scheduler does not count.
+
+#### Lane A: a real Flat2D renderer (subagent)
+
+The Phase 9C blocker is the job of this phase:
+- the two eager `Renderer2d`;
+- the public, non-optional pipeline fields;
+- `renderer_core.rs:3151`.
+
+The work:
+1. **Lazy pipelines.** Build each pipeline on its first use, and build only
+   what the first frame draws. Keep the rest lazy, or compile it on a worker
+   thread off the first-frame path. Add one startup-trace mark per pipeline,
+   with its name and compile time, so a slow shader can be seen.
+2. **A minimal Flat2D object set.**
+   - One `Renderer2d`, not two.
+   - No camera, 3D, HDR target or `PipelineLayouts` that the UI never uses.
+   - The UI draws straight to the sRGB swapchain.
+   - Flat2D must not allocate a 3D object, and a test proves it through
+     `memory-report`.
+3. **A non-bindless GUI image path.** When the adapter lacks
+   `TEXTURE_BINDING_ARRAY | SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING`,
+   use an atlas plus one bind group per texture. Flat2D must not request those
+   features unless it uses them. This is not only for this bench: GL, WebGL2,
+   older Android and GLES devices need it, and the engine must run everywhere.
+4. **Goldens stay byte-identical** on Vulkan. Add the same goldens on DX12 and
+   GL with a documented tolerance.
+
+#### Lane B: the fastest backend per OS (subagent edits, main agent measures)
+
+The user's question: Vulkan, DX12 and GL do not cost the same, so start with
+the fastest on each OS. The answer has to be measured.
+
+1. **Per-backend startup breakdown** after Lane A, for Vulkan, DX12 and GL.
+   Record these marks:
+   - process entry;
+   - window;
+   - instance;
+   - adapter;
+   - device;
+   - surface;
+   - each pipeline;
+   - first present.
+
+   Run cold and warm, five runs each, in alternating order.
+   - Cold means a fresh, empty pipeline-cache directory, set through
+     configuration and placed under `out/`. Do not delete the existing cache.
+   - **DX12:** FXC against DXC, with a log line that proves
+     `dxcompiler.dll` loaded.
+   - **Vulkan:** list the host's implicit layers with
+     `VK_LOADER_DEBUG=layer`. Measure the instance with them and with
+     `VK_LOADER_LAYERS_DISABLE=~implicit~`. The engine must never disable a
+     user's layers by default. This is only to explain the 190 ms.
+2. **Overlap.** Create the instance from process entry on the probe thread,
+   in parallel with event-loop and window creation, if it is not already.
+   Measure the saving.
+3. **"Start fast, then switch."** Investigate these three options. Each gets
+   a measured verdict in G-0013.
+   - **(a) Switch GPU APIs mid-run** (for example GL, then Vulkan): the device,
+     every resource and the surface would be recreated. Expect a rejection:
+     - the second API's init is paid anyway;
+     - both drivers would sit in RAM;
+     - on Windows, a window given a GL pixel format cannot reliably host a
+       DXGI flip swapchain.
+
+     Confirm this with a small measurement or a precise reference. Do not
+     build it.
+   - **(b) CPU first frame, then the GPU.** Rasterise the first `Frame` on the
+     CPU and present it through the existing layered or GDI path while the GPU
+     initialises, then hand over to the GPU.
+     - Build a time-boxed spike behind a cargo feature.
+     - Measure the time to the first content frame.
+     - Measure the binary and RSS cost.
+     - Check pixel parity with the GPU frame.
+     - Measure the handover glitch.
+
+     A software path is also a real fallback (RDP, VMs, no GPU), so record
+     that value too.
+   - **(c) A cached choice per machine.** Record the measured startup for each
+     backend, keyed by adapter and driver version. Next time, use the fastest
+     known one. Only keep it if it measurably helps.
+4. **wgpu version.** The engine is on wgpu 23, and the ImGui bench already
+   uses wgpu 29.
+   - In a spike worktree under `out/`, measure the bench startup and size on
+     the current wgpu: static DXC, the GL backend and DX12 pipelines.
+   - Report the migration scope (API breaks, number of call sites).
+   - Do not migrate the engine in this phase. G-0013 recommends whether to.
+5. **G-0013: the default backend for each OS for Flat2D apps, and for 3D.**
+   - **Windows:** Vulkan, DX12 or GL, measured on this host.
+   - **macOS and iOS:** Metal.
+   - **Linux:** Vulkan or GL, and **Android:** Vulkan or GLES, reasoned, with
+     anything not measurable here marked unmeasured.
+   - **Web:** WebGPU or WebGL2.
+
+   Then set the defaults to match.
+
+#### Lane C: size (subagent)
+
+1. Add a Flat2D-only cargo feature set:
+   - the 3D renderer behind a feature;
+   - wgpu with `default-features = false` and only the backends each target
+     uses;
+   - naga with the WGSL front end and only the needed back end, or shaders
+     precompiled at build time;
+   - the SVG parser and image decoders behind features.
+2. Report `cargo bloat --crates` for GUIMaker and egui/glow side by side, at
+   `opt-level` 3 and `"s"`.
+3. The bench builds each library with its minimal features. egui already uses
+   `glow` and `default_fonts` only, so GUIMaker must get the same treatment.
+
+#### Lane D: the apples-to-apples protocol (subagent edits `bench/`, main agent runs)
+
+This lane replaces the current method. Write it down in
+`bench/guimaker_compare/PROTOCOL.md` and make the harness enforce it.
+
+1. **External measurement.** The harness measures every app the same way,
+   from outside the process:
+   - startup is process creation to the app window's first present;
+   - frames are counted from the presents.
+
+   Use PresentMon or ETW (`wpr`, which ships with Windows). **Ask the user
+   before installing PresentMon.** If they decline, use `wpr`. Keep the
+   self-reported counts only as a cross-check, and drop the 50 ms file
+   polling.
+2. **Identical conditions.**
+   - Every app follows the monitor DPI. None forces 1.5. All render the same
+     physical size, at 1.25 on this host.
+   - FIFO vsync, 1 sample, an 8-bit sRGB swapchain, and the same image count
+     where it can be configured.
+   - The same fonts: every app loads the same Roboto bytes. RSS is reported at
+     equal fonts, then with each library's default CJK and emoji support.
+   - The current stable release of every library, recorded in a versions table.
+3. **Same pixels.** The harness captures **only each app's own window**, with
+   `PrintWindow` on its HWND, never the desktop or another window. It diffs
+   that capture against GUIMaker's and reports the difference. A bench that
+   draws less does not count as lighter.
+4. **Backend tiers.** Report one table per tier, so the library overhead is
+   separated from the API cost. Include the floor in each tier.
+
+   | Tier | Libraries |
+   |---|---|
+   | Vulkan (wgpu) | GUIMaker, egui-wgpu, iced, ImGui |
+   | DX12 (wgpu) | the same |
+   | GL | GUIMaker (after Lane A), egui/glow, Slint femtovg |
+   | Software | Slint software, iced tiny-skia, GUIMaker CPU (if the Lane B(b) spike lands) |
+
+   Then add one "each library's best backend on this OS" table.
+5. **The raw-API floor.** For each backend, add a minimal app that only clears
+   the screen: wgpu on Vulkan, wgpu on DX12, wgpu on GL, and glow.
+   - Report each library as floor + overhead for startup, RSS, GPU memory,
+     idle CPU and binary.
+   - **The headline number is GUIMaker's overhead above its floor.**
+6. **CPU.**
+   - Count wakeups per second per thread from ETW context switches, not only
+     psutil's percentage.
+   - Name every thread.
+   - Measure GPU memory with the same source for every app: the per-process
+     GPU memory counters, or DXGI `QueryVideoMemoryInfo`.
+7. **The scenarios**, all with 5 runs, the median and the range, and the
+   order alternated:
+   - idle 6 s and 30 s;
+   - a body hover sweep;
+   - a button hover;
+   - typing at 10 characters per second, after a real click on the field;
+   - resize;
+   - open and close a menu.
+
+   Stop and ask the user to free the host before the measurement runs.
+
+**Targets:**
+- GUIMaker has the lowest overhead above the floor on every row of its tier.
+- On the "best backend" table, it is lighter than or equal to the lightest
+  library on every row, or a row has a measured reason with the alternatives
+  built.
+- Button hover: 1 frame.
+- Typing: every character, and 1 frame per character.
+- Idle tail: none of our own wakes.
+
+**Update** `MEASURED.md`, `FEATURES.md`, G-0013, `startup.md`, and the table
+in this prompt's report.
+
+**Gate:**
+- the engine gate;
+- the full Motioner gate in a clean worktree;
+- divan against this phase's base;
+- the goldens on every backend that runs.
+
+**Disk:** keep spikes, baselines and targets under `out/`. Stop below 5 GB.
+Delete nothing.
+
+**Report** the old against the new numbers for each tier, the floor table,
+G-0013, and every row that is not a win with its measured reason.

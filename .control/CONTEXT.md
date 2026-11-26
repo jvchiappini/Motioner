@@ -5,6 +5,55 @@ version_schema: 1
 ---
 # Context memory (maintained by the agent)
 
+## Phase 9C: close the gap to Slint and egui/glow (2026-11-25)
+
+Engine changes reviewed and committed as `7caea00` (base `416b15c`); the Motioner pin was bumped by the reviewer; no deletions. New artefacts under `out/`: `out/worktrees/p9c-base`,
+`out/target-p9c-base`, `out/bench/opt3`, `out/bench/opts`; the Motioner gate at
+`Motioner/out/worktrees/p9c-gate`. C: 33.4 GB.
+
+**Lane A (fixed).** `Ui::pointer_move_changes` (`guimaker/src/frame.rs`) +
+`GuiHost::on_window_event` (`guimaker_gallery/src/host.rs`) request a frame on a
+pointer move only when the hovered/pressed target, cursor, tooltip, drag or
+scroll changes. Unit test `a_pointer_move_only_repaints_when_the_target_changes`;
+the bench app uses `with_redraw_on_pointer_move(false)`. Body sweep **1 frame /
+0.341 %** (was 675 / 10.672 %).
+
+**Lane B (measured).** `AppConfig::dx12_compiler` + `FERROUS_DX12_COMPILER`
+(`builder.rs`, `graphics.rs`); DX12 FXC 9578 ms -> DXC 7323 ms (-23.5 %) but
+Vulkan 492 ms; GL rejected (no `TEXTURE_BINDING_ARRAY` feature); lazy 2D
+pipelines blocked (two eager `Renderer2d`, public pipeline fields at 19/62
+sites, `renderer_core.rs:3151`). G-0012 keeps Vulkan for Flat2D (reopened by the
+review: 1 run per compiler, DXC load unproven, GL floor is our own bindless
+requirement; Phase 9D writes G-0013).
+
+**Lane C (partly).** Shared bench `[profile.release]` opt3 + opt-s sizes:
+GUIMaker 7.997/6.025 MB, egui 3.511/3.258, egui-wgpu 6.926/5.651, iced
+6.918/5.330, Slint 3.158/2.783, ImGui 5.186/3.813. Feature-gated/3D compile-out
+not done (blocker). 3 idle frames -> **1** (watchdog replaces `redraw_at`, show
+`RedrawRequested` skipped, no-op Resized/ScaleFactorChanged skipped); 30 s tail
+0.218 % (top thread 0.203 s/30 s, UI 0.0).
+
+**Lane D (partly).** Same editable field + hoverable button in every app; native
+apps received 50 chars at 10 cps; GUIMaker received 0 (injected focus did not
+land; `GuiApp::on_text` + field exist). Button hover: GUIMaker 111 frames /
+0.67 % vs egui 4, iced/Slint/ImGui 1 (hovered button keeps `Ui::animating`).
+WebView2 builds with wry+winit (no tao; `gdk-sys` conflict gone).
+
+**Final 5-run idle:** GUIMaker 560.8 ms/0.681 %/1 frame/226.5 MB/GPU 102.1;
+egui glow 256.5/0.000/4/141.5/59.5; egui wgpu 560.2/0.913/38/356.2/82.1; iced
+762.8/0.977/1/229.9/73.7; Slint 306.4/0.342/1/125.7/63.5; ImGui
+765.9/0.977/1/190.3/282.5; WebView2 460.6/0.347/346/24.8 (host only).
+**Goal not fully met**; floors: Vulkan driver+renderer, MemoryUsage driver
+baseline, un-gated engine binary, button-hover repaint and typing focus.
+
+**Gate green:** engine (fmt/clippy guimaker+--no-deps/rustdoc/118+1 golden+2+
+core 4/engine 96/renderer 18/workspace/wasm/machete/literals 51/0/boundaries/
+encoding/divan vs 416b15c no row >10 % slower) and Motioner in
+`out/worktrees/p9c-gate` with the engine patch (members fmt/machete/boundaries/
+encoding/clippy -D/full tests 6 min/build/doc -D/validate/refs/25 script tests).
+Report `out/reports/PHASE-15-P9C-REPORT.md`; numbers
+`bench/guimaker_compare/results/MEASURED.md` + `FEATURES.md`.
+
 ## Phase 9 fix + Phase 9B (2026-11-25, complete)
 
 Engine dev clone dirty on `431947e`; Motioner submodule untouched; **no
