@@ -2746,31 +2746,10 @@ the fastest on each OS. The answer has to be measured.
 2. **Overlap.** Create the instance from process entry on the probe thread,
    in parallel with event-loop and window creation, if it is not already.
    Measure the saving.
-3. **"Start fast, then switch."** Investigate these three options. Each gets
-   a measured verdict in G-0013.
-   - **(a) Switch GPU APIs mid-run** (for example GL, then Vulkan): the device,
-     every resource and the surface would be recreated. Expect a rejection:
-     - the second API's init is paid anyway;
-     - both drivers would sit in RAM;
-     - on Windows, a window given a GL pixel format cannot reliably host a
-       DXGI flip swapchain.
-
-     Confirm this with a small measurement or a precise reference. Do not
-     build it.
-   - **(b) CPU first frame, then the GPU.** Rasterise the first `Frame` on the
-     CPU and present it through the existing layered or GDI path while the GPU
-     initialises, then hand over to the GPU.
-     - Build a time-boxed spike behind a cargo feature.
-     - Measure the time to the first content frame.
-     - Measure the binary and RSS cost.
-     - Check pixel parity with the GPU frame.
-     - Measure the handover glitch.
-
-     A software path is also a real fallback (RDP, VMs, no GPU), so record
-     that value too.
-   - **(c) A cached choice per machine.** Record the measured startup for each
-     backend, keyed by adapter and driver version. Next time, use the fastest
-     known one. Only keep it if it measurably helps.
+3. **No backend switching.** The user decided: do not build or investigate
+   switching GPU APIs mid-run, a CPU first frame, or a cached per-machine
+   backend choice. Pick one default backend per OS by measurement (item 5) and
+   prove the efficiency on it.
 4. **wgpu version.** The engine is on wgpu 23, and the ImGui bench already
    uses wgpu 29.
    - In a spike worktree under `out/`, measure the bench startup and size on
@@ -2834,7 +2813,6 @@ This lane replaces the current method. Write it down in
    | Vulkan (wgpu) | GUIMaker, egui-wgpu, iced, ImGui |
    | DX12 (wgpu) | the same |
    | GL | GUIMaker (after Lane A), egui/glow, Slint femtovg |
-   | Software | Slint software, iced tiny-skia, GUIMaker CPU (if the Lane B(b) spike lands) |
 
    Then add one "each library's best backend on this OS" table.
 5. **The raw-API floor.** For each backend, add a minimal app that only clears
