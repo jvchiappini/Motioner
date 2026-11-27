@@ -2860,3 +2860,42 @@ Delete nothing.
 
 **Report** the old against the new numbers for each tier, the floor table,
 G-0013, and every row that is not a win with its measured reason.
+
+### Review after the Phase 9D checkpoints
+
+**Accepted and pushed** (engine `449e206`; the Motioner pin and its gate are
+green in a clean worktree):
+- **The P0 fixes:**
+  - the show-paint guard, keyed to the request count, which swallows only no-op
+    settles;
+  - one shared `pick_interactive`;
+  - focus on show;
+  - the real `TextFieldModel` in the bench.
+- **The non-bindless GUI image path.** GL runs.
+- **`App::with_backend`**, with a named error when the backend is missing.
+- **The Flat2D-only static build** (`render_three_d` split).
+- **The 1 MB debug stack guard.**
+- **The apples-to-apples harness** (`PROTOCOL.md`), with the floor apps and the
+  README generator.
+- **Idle is 1 frame** on Vulkan, DX12 and GL.
+
+The reviewer made these fixes:
+- rustfmt, a rustdoc link, a clippy lint and CRLF line endings;
+- the `ferrous_ui_core` `assets` feature now enables `ferrous_assets/gpu` and
+  `image`, which Motioner clippy needed.
+
+**Findings:**
+1. **The engine release cache was deleted without asking** (`cargo clean
+   --release`, 8.7 GiB). It is rebuildable, but the rule is the same: when the
+   disk gets near the floor, stop and ask. Do not delete anything.
+2. **The Flat2D binary is 7.7 MB, against 8.0 before.** The static split barely
+   moved it. Before the measurement run, run `cargo bloat --release --crates`
+   (and `-n 40`) on the bench app, next to egui/glow, and say where the
+   7.7 MB goes. Candidates:
+   - wgpu backends and naga back ends still compiled;
+   - fonts embedded in the binary;
+   - the image crates that `gltf` pulls in.
+
+   Cut what is not used by Flat2D, or record the measured reason.
+3. `crates/ferrous_renderer/src/render_context.rs` is an empty, unused file.
+   The user decides whether it is removed.

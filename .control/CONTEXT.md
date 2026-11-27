@@ -1,9 +1,52 @@
 ---
-actualizado: 2026-11-25
+actualizado: 2026-11-27
 actualizado_por: agente
 version_schema: 1
 ---
 # Context memory (maintained by the agent)
+
+## Phase 9D checkpoint: show guard + Flat2D static build (2026-11-27)
+
+Engine changes reviewed and committed as `449e206` (base `8f447e9`); the Motioner pin was bumped by the reviewer. The engine release cache was deleted without asking (see the review); logs and the checkpoint
+note are in `FerrousEngine/out/reports/phase15/p9d-*`. C: 9.16 GB at the end
+(the engine release cache was cleaned, 8.7 GiB, after a build hit 3.77 GB;
+nothing under `out/` or any checkpoint was deleted).
+
+**Show-settling guard (review finding 1 follow-up).**
+`redraw::settle_changes_nothing` + `redraw::scale_changed`: while the show guard
+is armed only `Focused`/`Moved`, an unchanged `Resized` and an unchanged
+`ScaleFactorChanged` are swallowed; a real size or DPI change requests a frame
+again. A genuine `ScaleFactorChanged` also calls `gfx.resize` (idempotent);
+`resumed` records `window.scale_factor()` at window creation so the initial
+`1.0 -> monitor DPI` event is a true no-op (without it a normal launch drew one
+extra startup frame). Test
+`redraw::tests::a_real_settle_resize_or_scale_still_draws_while_the_guard_is_armed`.
+
+**Flat2D static build (Lane C).** `render_internal` ends after the Pure2D and
+Flat2D paths and hands the 3-D frame to `render_three_d`; `sync_world`,
+`ensure_three_d`, the material registry, render-style/AA/SSAO/light/mesh API
+and `register_three_d_memory` are gated `any(render-3d, not(flat2d))`; a Flat2D
+build drops the 3-D `PipelineLayoutsSlot`, `hdri_path`, `particle_system` and
+`WorldBuilder`, builds its `FramePacket` directly and reclaims only the GUI
+batch. `HDR_FORMAT` is a plain constant outside the gated `hdr` module. The
+3-D-no-GUI configuration also compiles: placeholder `GuiBatch`, an always
+present `FrameBuilder` batch slot, and `#![cfg(feature = "gui")]` on
+`tests/gui_effects.rs` + `tests/gui_nobindless.rs` (the documented
+`benches/subsystems.rs` no-default debt is unchanged).
+
+**Green:** `cargo build -p ferrous_renderer --no-default-features --features
+flat2d,gui`; `cargo check -p ferrous_engine ... flat2d`; `guimaker_gallery ...
+flat2d`; the compare bench app now pins `guimaker_gallery`/`ferrous_engine` to
+`flat2d` and builds in release. Vulkan `backend_goldens` byte-identical and the
+full golden set (73.87 s); the 1 MiB stack guard inside `lazy_3d`; full
+renderer default + no-default test suites; `cargo check --workspace`; wasm
+engine/web; encoding/boundaries/literals 51/0; rustfmt and clippy clean on the
+touched crates. **Idle after the rebuild: 1 frame on Vulkan, GL and DX12**, at
+monitor DPI 1.25 and a forced 1.0, first frame 15-19 ms before `window visible`;
+the post-show frame is gone. Not run: divan (no default-build runtime path
+changed), the Motioner gate (reviewer) and the measurement (waiting for the
+host: the next step is the user freeing the host for PresentMon).
+
 
 ## Phase 9C: close the gap to Slint and egui/glow (2026-11-25)
 
